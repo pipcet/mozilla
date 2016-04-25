@@ -715,7 +715,7 @@ ossys_call64(JSContext *cx, unsigned argc, Value *vp)
         return false;
     }
 
-    if (!prepare64(args[0], &buf, &buflen, false))
+    if (!prepare64(cx, args[0], &buf, &buflen, false))
         return false;
 
     unsigned long sysargs[7];
@@ -732,7 +732,7 @@ ossys_call64(JSContext *cx, unsigned argc, Value *vp)
     if (buflen >= 8)
         *(unsigned long **)buf = ret;
 
-    if (!prepare64(args[0], &buf, &buflen, true))
+    if (!prepare64(cx, args[0], &buf, &buflen, true))
         return false;
 
     return true;
