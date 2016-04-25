@@ -19,5 +19,5 @@ addons:
             - libmpc-dev
 script:
     - sudo apt-get install autoconf2.13
-    - mkdir build
-    - (cd build; CC=clang ../../js/src/configure --disable-debug --disable-tests --without-system-zlib; make)
+    - mkdir mybuild
+    - (cd mybuild; CC=clang ../../js/src/configure --disable-debug --disable-tests --without-system-zlib; make)
