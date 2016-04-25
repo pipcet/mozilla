@@ -592,7 +592,7 @@ ossys_call(JSContext* cx, unsigned argc, Value* vp)
                 sysargs[j++] = 0;
             else {
                 void *buf = args[i].toObject().as<TypedArrayObject>().viewDataUnshared();
-                buf += off;
+                buf = (void *)((char *)buf + off);
                 sysargs[j++] = (unsigned long)buf;
             }
             i++;
