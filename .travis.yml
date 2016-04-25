@@ -1,0 +1,23 @@
+language: c
+os:
+    - linux
+sudo: required
+addons:
+    apt:
+        packages:
+            - autoconf
+            - autoconf2.13
+            - autoconf2.64
+            - automake
+            - clang
+            - libtool
+            - m4
+            - texinfo
+            - makeinfo
+            - libgmp-dev
+            - libmpfr-dev
+            - libmpc-dev
+script:
+    - sudo apt-get install autoconf2.13
+    - mkdir build
+    - (cd build; CC=clang ../../js/src/configure --disable-debug --disable-tests --without-system-zlib; make)
