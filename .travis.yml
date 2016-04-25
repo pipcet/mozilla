@@ -20,4 +20,4 @@ addons:
 script:
     - sudo apt-get install autoconf2.13
     - mkdir mybuild
-    - (cd mybuild; CC=clang ../../js/src/configure --disable-debug --disable-tests --without-system-zlib; make)
+    - (cd mybuild; CC=clang ../js/src/configure --disable-debug --disable-tests --without-system-zlib; make)
