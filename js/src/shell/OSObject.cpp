@@ -569,6 +569,186 @@ static const JSFunctionSpecWithHelp osfile_unsafe_functions[] = {
 };
 
 static bool
+ossys_call(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    unsigned long sysargs[6];
+
+    if (args.length() < 1 || args.length() > 12) {
+        JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr, JSSMSG_INVALID_ARGS, "sys.call");
+        return false;
+    }
+
+    size_t j = 0;
+    for (size_t i = 0; i < args.length(); i++) {
+        if (args[i].isNumber())
+            sysargs[j++] = args[i].toInt32();
+        else {
+            if (!args[i].isObject())
+                return false;
+            size_t off = args[i+1].toInt32();
+
+            if (off == 0)
+                sysargs[j++] = 0;
+            else {
+                void *buf = args[i].toObject().as<TypedArrayObject>().viewDataUnshared();
+                buf += off;
+                sysargs[j++] = (unsigned long)buf;
+            }
+            i++;
+        }
+    }
+
+    errno = 0;
+    int ret = syscall(sysargs[0], sysargs[1], sysargs[2],
+                      sysargs[3], sysargs[4], sysargs[5]);
+
+    if (errno != 0)
+        ret = -errno;
+
+    args.rval().setInt32(ret);
+    return true;
+}
+
+static bool
+prepare64(JSContext *cx, HandleValue v, unsigned char **bufp, unsigned long *buflenp, bool do_free)
+{
+    unsigned char *buf = NULL;
+    unsigned long buflen = 0;
+    int i0 = 0, i;
+    bool isArray;
+    uint32_t length;
+    bool must_free = false;
+
+    if (!v.isObject())
+        return false;
+
+    if (!JS_IsArrayObject(cx, v.toObject(), &isArray))
+        return false;
+
+    if (!isArray)
+        return false;
+
+    RootedValue v0(cx);
+    if (!JS_GetElement(cx, v.toObject(), 0, &v0)) {
+        *bufp = buf;
+        return true;
+    }
+
+    if (v0.isObject() && v0.toObject().is<TypedArrayObject>) {
+        RootedValue v1(cx);
+        if (!JS_GetElement(cx, v.toObject(), 1, &v1))
+            return false;
+
+        unsigned long offset = JS::ToInt32(v1);
+        buf = (unsigned char *)v0.toObject().as<TypedArrayObject>().viewDataEither();
+        buf += offset;
+
+        i0 = 2;
+    }
+
+    if (!JS_GetArrayLength(cx, v.toObject(), &length))
+        return false;
+
+    if (do_free == false) {
+        for (i = i0; i < length; i++) {
+            RootedValue vi(cx);
+            if (!JS_GetElement(cx, v.toObject(), i, &vi))
+                return false;
+
+            buflen += (vi.isObject() || vi.isString()) ? 8 : 4;
+        }
+
+        if (!buf) {
+            buf = JS_malloc(cx, buflen);
+            must_free = true;
+        }
+
+        *buflenp = buflen;
+    } else {
+        buf = *bufp;
+        buf = *buflenp;
+    }
+
+    for (i = i0; i < length; i++) {
+        RootedValue vi(cx);
+        if (!JS_GetElement(cx, v.toObject(), i, &vi))
+            return false;
+
+        if (vi.isString()) {
+            if (do_free == false) {
+                char *str = JS_EncodeStringToUTF8();
+
+                *(char **)(buf + bufi) = str;
+            } else {
+                JS_free(cx, *(char **)(buf + bufi));
+            }
+            bufi += 8;
+        } else if (vi.isObject()) {
+            prepare64(cx, vi, (char **)(buf + bufi), do_free);
+            bufi += 8;
+        } else {
+            *(unsigned **)(buf + bufi) = JS::ToInt32(vi);
+            bufi += 4;
+        }
+    }
+
+    if (do_free == false) {
+        *bufp = buf;
+    } else {
+        if (must_free)
+            free(*bufp);
+    }
+
+    return true;
+}
+
+static bool
+ossys_call64(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    unsigned char *buf;
+    unsigned long buflen;
+
+    if (args.length() != 1) {
+        JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr, JSSMSG_INVALID_ARGS, "sys.call64");
+        return false;
+    }
+
+    if (!prepare64(args[0], &buf, &buflen, false))
+        return false;
+
+    unsigned long sysargs[7];
+    memset(sysargs, 0, sizeof sysargs);
+    memcpy(sysargs, buf, buflen < sizeof sysargs ? buflen : sizeof sysargs);
+
+    errno = 0;
+    long ret = syscall(args[0], args[1], args[2], args[3], args[4], args[5], args[6]);
+    if (errno != 0)
+        ret = -errno;
+
+    args.rval().setInt32((int32_t)ret);
+
+    if (buflen >= 8)
+        *(unsigned long **)buf = ret;
+
+    if (!prepare64(args[0], &buf, &buflen, true))
+        return false;
+
+    return true;
+}
+
+static const JSFunctionSpecWithHelp ossys_unsafe_functions[] = {
+    JS_FN_HELP("call", ossys_call, 6, 0,
+"call(number, ...)",
+"  Perform syscall."),
+    JS_FN_HELP("call64", ossys_call64, 6, 0,
+"call64(array)",
+"  Perform syscall."),
+    JS_FS_HELP_END
+};
+
+static bool
 ospath_isAbsolute(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -939,6 +1119,12 @@ DefineOS(JSContext* cx, HandleObject global,
         if (!JS_DefineFunctionsWithHelp(cx, osfile, osfile_unsafe_functions))
             return false;
     }
+
+    RootedObject ossys(cx, JS_NewPlainObject(cx));
+    if (!ossys ||
+        !JS_DefineFunctionsWithHelp(cx, ossys, ossys_unsafe_functions) ||
+        !JS_DefineProperty(cx, obj, "sys", ossys, 0))
+        return false;
 
     if (!GenerateInterfaceHelp(cx, osfile, "os.file"))
         return false;
