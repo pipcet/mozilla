@@ -615,6 +615,7 @@ prepare64(JSContext *cx, HandleValue v, unsigned char **bufp, unsigned long *buf
 {
     unsigned char *buf = NULL;
     unsigned long buflen = 0;
+    unsigned long bufi = 0;
     int i0 = 0, i;
     bool isArray;
     uint32_t length;
@@ -623,72 +624,78 @@ prepare64(JSContext *cx, HandleValue v, unsigned char **bufp, unsigned long *buf
     if (!v.isObject())
         return false;
 
-    if (!JS_IsArrayObject(cx, v.toObject(), &isArray))
+    if (!JS_IsArrayObject(cx, v, &isArray))
         return false;
 
     if (!isArray)
         return false;
 
     RootedValue v0(cx);
-    if (!JS_GetElement(cx, v.toObject(), 0, &v0)) {
+    RootedObject a(cx, &v.toObject());
+    if (!JS_GetElement(cx, a, 0, &v0)) {
         *bufp = buf;
         return true;
     }
 
-    if (v0.isObject() && v0.toObject().is<TypedArrayObject>) {
+    if (v0.isObject() && v0.toObject().is<TypedArrayObject>()) {
         RootedValue v1(cx);
-        if (!JS_GetElement(cx, v.toObject(), 1, &v1))
+        if (!JS_GetElement(cx, a, 1, &v1))
             return false;
 
-        unsigned long offset = JS::ToInt32(v1);
-        buf = (unsigned char *)v0.toObject().as<TypedArrayObject>().viewDataEither();
+        int32_t offset;
+        if (!JS::ToInt32(cx, v1, &offset))
+            return false;
+
+        buf = static_cast<unsigned char *>(v0.toObject().as<TypedArrayObject>().viewDataUnshared());
         buf += offset;
 
         i0 = 2;
     }
 
-    if (!JS_GetArrayLength(cx, v.toObject(), &length))
+    if (!JS_GetArrayLength(cx, a, &length))
         return false;
 
     if (do_free == false) {
         for (i = i0; i < length; i++) {
             RootedValue vi(cx);
-            if (!JS_GetElement(cx, v.toObject(), i, &vi))
+            if (!JS_GetElement(cx, a, i, &vi))
                 return false;
 
             buflen += (vi.isObject() || vi.isString()) ? 8 : 4;
         }
 
         if (!buf) {
-            buf = JS_malloc(cx, buflen);
+            buf = (unsigned char *)JS_malloc(cx, buflen);
             must_free = true;
         }
 
-        *buflenp = buflen;
+        if (buflenp)
+            *buflenp = buflen;
     } else {
         buf = *bufp;
-        buf = *buflenp;
     }
 
     for (i = i0; i < length; i++) {
         RootedValue vi(cx);
-        if (!JS_GetElement(cx, v.toObject(), i, &vi))
+        if (!JS_GetElement(cx, a, i, &vi))
             return false;
 
         if (vi.isString()) {
             if (do_free == false) {
-                char *str = JS_EncodeStringToUTF8();
+                RootedString s(cx, vi.toString());
+                char *str = JS_EncodeStringToUTF8(cx, s);
 
                 *(char **)(buf + bufi) = str;
             } else {
-                JS_free(cx, *(char **)(buf + bufi));
+                JS_free(cx, *(unsigned char **)(buf + bufi));
             }
             bufi += 8;
         } else if (vi.isObject()) {
-            prepare64(cx, vi, (char **)(buf + bufi), do_free);
+            prepare64(cx, vi, (unsigned char **)(buf + bufi), NULL, do_free);
             bufi += 8;
         } else {
-            *(unsigned **)(buf + bufi) = JS::ToInt32(vi);
+            if (!JS::ToInt32(cx, vi, (int32_t *)buf + bufi))
+                return false;
             bufi += 4;
         }
     }
@@ -723,14 +730,14 @@ ossys_call64(JSContext *cx, unsigned argc, Value *vp)
     memcpy(sysargs, buf, buflen < sizeof sysargs ? buflen : sizeof sysargs);
 
     errno = 0;
-    long ret = syscall(args[0], args[1], args[2], args[3], args[4], args[5], args[6]);
+    long ret = syscall(sysargs[0], sysargs[1], sysargs[2], sysargs[3], sysargs[4], sysargs[5], sysargs[6]);
     if (errno != 0)
         ret = -errno;
 
     args.rval().setInt32((int32_t)ret);
 
     if (buflen >= 8)
-        *(unsigned long **)buf = ret;
+        *(unsigned long *)buf = ret;
 
     if (!prepare64(cx, args[0], &buf, &buflen, true))
         return false;
