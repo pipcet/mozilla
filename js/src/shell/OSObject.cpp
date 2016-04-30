@@ -848,6 +848,36 @@ static const JSFunctionSpecWithHelp ospath_functions[] = {
 };
 
 static bool
+os_getenvironment(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() != 0) {
+        JS_ReportError(cx, "os.getenvironment requires no arguments");
+        return false;
+    }
+    RootedObject ret(cx, JS_NewArrayObject(cx, 0));
+    char **envp = environ;
+    int32_t index = 0;
+
+    while(*envp) {
+        RootedString value(cx, JS_NewStringCopyZ(cx, *envp));
+
+        if (!value)
+            return false;
+
+        if (!JS_SetElement(cx, ret, index, value))
+            return false;
+
+        envp++;
+        index++;
+    }
+
+    args.rval().setObject(*ret);
+
+    return true;
+}
+
+static bool
 os_getenv(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -1088,6 +1118,10 @@ static const JSFunctionSpecWithHelp os_functions[] = {
     JS_FN_HELP("getenv", os_getenv, 1, 0,
 "getenv(variable)",
 "  Get the value of an environment variable."),
+
+    JS_FN_HELP("getenvironment", os_getenvironment, 1, 0,
+"getenvironment()",
+"  Get the value of all environment variables."),
 
     JS_FN_HELP("getpid", os_getpid, 0, 0,
 "getpid()",
