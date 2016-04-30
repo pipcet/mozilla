@@ -637,6 +637,7 @@ prepare64(JSContext *cx, HandleValue v, unsigned char **bufp, unsigned long *buf
         return true;
     }
 
+    /*
     if (v0.isObject() && v0.toObject().is<TypedArrayObject>()) {
         RootedValue v1(cx);
         if (!JS_GetElement(cx, a, 1, &v1))
@@ -651,6 +652,7 @@ prepare64(JSContext *cx, HandleValue v, unsigned char **bufp, unsigned long *buf
 
         i0 = 2;
     }
+    */
 
     if (!JS_GetArrayLength(cx, a, &length))
         return false;
@@ -666,6 +668,9 @@ prepare64(JSContext *cx, HandleValue v, unsigned char **bufp, unsigned long *buf
 
         if (!buf) {
             buf = (unsigned char *)JS_malloc(cx, buflen);
+            if (!buf)
+                return false;
+            memset (buf, 0, buflen);
             must_free = true;
         }
 
@@ -690,11 +695,24 @@ prepare64(JSContext *cx, HandleValue v, unsigned char **bufp, unsigned long *buf
                 JS_free(cx, *(unsigned char **)(buf + bufi));
             }
             bufi += 8;
+        } else if (vi.isObject() && vi.toObject().is<TypedArrayObject>()) {
+            void *lbuf = vi.toObject().as<TypedArrayObject>().viewDataUnshared();
+            RootedValue vi1(cx);
+            if (!JS_GetElement(cx, a, i+1, &vi1))
+                return false;
+
+            int32_t off;
+            if (!JS::ToInt32(cx, vi1, &off))
+                return false;
+
+            *(void **)(buf + bufi) = (void *)((char *)lbuf + off);
+            bufi += 8;
+            i++;
         } else if (vi.isObject()) {
             prepare64(cx, vi, (unsigned char **)(buf + bufi), NULL, do_free);
             bufi += 8;
         } else {
-            if (!JS::ToInt32(cx, vi, (int32_t *)buf + bufi))
+            if (!JS::ToInt32(cx, vi, (int32_t *)(buf + bufi)))
                 return false;
             bufi += 4;
         }
