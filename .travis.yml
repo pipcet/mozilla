@@ -1,7 +1,6 @@
 language: c
 os:
     - linux
-sudo: required
 addons:
     apt:
         packages:
@@ -18,7 +17,6 @@ addons:
             - libmpfr-dev
             - libmpc-dev
 script:
-    - sudo apt-get install autoconf2.13 yasm
     - (cd js/src; autoconf2.13)
     - mkdir mybuild
     - (cd mybuild; CC=clang ../js/src/configure --disable-debug --disable-tests --without-system-zlib; make)
