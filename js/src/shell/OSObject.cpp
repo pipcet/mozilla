@@ -766,6 +766,8 @@ ossys_call64(JSContext *cx, unsigned argc, Value *vp)
 static bool
 ossys_fork(JSContext* cx, unsigned argc, Value* vp)
 {
+    CallArgs args = CallArgsFromVp(argc, vp);
+
     args.rval().setInt32((int32_t)fork());
 
     return true;
