@@ -763,6 +763,14 @@ ossys_call64(JSContext *cx, unsigned argc, Value *vp)
     return true;
 }
 
+static bool
+ossys_fork(JSContext* cx, unsigned argc, Value* vp)
+{
+    args.rval().setInt32((int32_t)fork());
+
+    return true;
+}
+
 static const JSFunctionSpecWithHelp ossys_unsafe_functions[] = {
     JS_FN_HELP("call", ossys_call, 6, 0,
 "call(number, ...)",
@@ -770,6 +778,9 @@ static const JSFunctionSpecWithHelp ossys_unsafe_functions[] = {
     JS_FN_HELP("call64", ossys_call64, 6, 0,
 "call64(array)",
 "  Perform syscall."),
+    JS_FN_HELP("fork", ossys_fork, 0, 0,
+"fork()",
+"  Perform fork()."),
     JS_FS_HELP_END
 };
 
