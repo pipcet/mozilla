@@ -418,7 +418,6 @@ nsresult nsJSChannel::Init(nsIURI *aURI)
     nsCOMPtr<nsIChannel> channel;
 
     nsCOMPtr<nsIPrincipal> nullPrincipal = nsNullPrincipal::Create();
-    NS_ENSURE_TRUE(nullPrincipal, NS_ERROR_FAILURE);
 
     // If the resultant script evaluation actually does return a value, we
     // treat it as html.
@@ -660,8 +659,7 @@ nsJSChannel::AsyncOpen(nsIStreamListener *aListener, nsISupports *aContext)
         method = &nsJSChannel::NotifyListener;            
     }
 
-    nsCOMPtr<nsIRunnable> ev = NS_NewRunnableMethod(this, method);
-    nsresult rv = NS_DispatchToCurrentThread(ev);
+    nsresult rv = NS_DispatchToCurrentThread(mozilla::NewRunnableMethod(this, method));
 
     if (NS_FAILED(rv)) {
         loadGroup->RemoveRequest(this, nullptr, rv);

@@ -127,8 +127,8 @@ GetAndInitWARPDisplay(GLLibraryEGL& egl, void* displayType)
     if (display == EGL_NO_DISPLAY) {
         const EGLint err = egl.fGetError();
         if (err != LOCAL_EGL_SUCCESS) {
-            printf_stderr("Unexpected error: 0x%04x", err);
-            MOZ_CRASH("Unexpected error.");
+	    gfxCriticalError() << "Unexpected GL error: " << gfx::hexa(err);
+            MOZ_CRASH("GFX: Unexpected GL error.");
         }
         return EGL_NO_DISPLAY;
     }
@@ -179,7 +179,7 @@ GetAndInitDisplayForAccelANGLE(GLLibraryEGL& egl)
             return GetAndInitDisplay(egl, LOCAL_EGL_D3D11_ONLY_DISPLAY_ANGLE);
 
         if (gfxPrefs::WebGLANGLETryD3D11() &&
-            gfxPlatform::CanUseDirect3D11ANGLE())
+            gfxPlatform::GetPlatform()->CanUseDirect3D11ANGLE())
         {
             ret = GetAndInitDisplay(egl, LOCAL_EGL_D3D11_ELSE_D3D9_DISPLAY_ANGLE);
         }

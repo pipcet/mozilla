@@ -147,6 +147,9 @@ typedef void
 extern JS_FRIEND_API(void)
 JS_SetAccumulateTelemetryCallback(JSRuntime* rt, JSAccumulateTelemetryDataCallback callback);
 
+extern JS_FRIEND_API(bool)
+JS_GetIsSecureContext(JSCompartment* compartment);
+
 extern JS_FRIEND_API(JSPrincipals*)
 JS_GetCompartmentPrincipals(JSCompartment* compartment);
 
@@ -507,9 +510,6 @@ VisitGrayWrapperTargets(JS::Zone* zone, GCThingCallback callback, void* closure)
 extern JS_FRIEND_API(JSObject*)
 GetWeakmapKeyDelegate(JSObject* key);
 
-JS_FRIEND_API(JS::TraceKind)
-GCThingTraceKind(void* thing);
-
 /**
  * Invoke cellCallback on every gray JS_OBJECT in the given zone.
  */
@@ -719,6 +719,9 @@ FunctionHasNativeReserved(JSObject* fun);
 
 JS_FRIEND_API(bool)
 GetObjectProto(JSContext* cx, JS::HandleObject obj, JS::MutableHandleObject proto);
+
+extern JS_FRIEND_API(JSObject*)
+GetStaticPrototype(JSObject* obj);
 
 JS_FRIEND_API(bool)
 GetOriginalEval(JSContext* cx, JS::HandleObject scope,
@@ -1318,11 +1321,11 @@ class MOZ_STACK_CLASS AutoStableStringChars
       : s_(cx), state_(Uninitialized)
     {}
 
-    MOZ_WARN_UNUSED_RESULT
+    MOZ_MUST_USE
     bool init(JSContext* cx, JSString* s);
 
     /* Like init(), but Latin1 chars are inflated to TwoByte. */
-    MOZ_WARN_UNUSED_RESULT
+    MOZ_MUST_USE
     bool initTwoByte(JSContext* cx, JSString* s);
 
     bool isLatin1() const { return state_ == Latin1; }
@@ -2892,26 +2895,6 @@ extern JS_FRIEND_API(JSObject*)
 ToWindowIfWindowProxy(JSObject* obj);
 
 } /* namespace js */
-
-extern JS_FRIEND_API(void)
-JS_StoreObjectPostBarrierCallback(JSContext* cx,
-                                  void (*callback)(JSTracer* trc, JSObject* key, void* data),
-                                  JSObject* key, void* data);
-
-extern JS_FRIEND_API(void)
-JS_StoreStringPostBarrierCallback(JSContext* cx,
-                                  void (*callback)(JSTracer* trc, JSString* key, void* data),
-                                  JSString* key, void* data);
-
-/**
- * Forcibly clear postbarrier callbacks queued by the previous two methods.
- * This should be used when the object owning the postbarriered pointers is
- * being destroyed outside of a garbage collection.
- *
- * This currently works by performing a minor GC.
- */
-extern JS_FRIEND_API(void)
-JS_ClearAllPostBarrierCallbacks(JSRuntime *rt);
 
 class NativeProfiler
 {

@@ -45,18 +45,23 @@ config = {
         'platform_overrides': {
             'linux': {
                 'src_mozconfig': 'browser/config/mozconfigs/linux32/release',
+                'force_clobber': True,
             },
             'linux64': {
                 'src_mozconfig': 'browser/config/mozconfigs/linux64/release',
+                'force_clobber': True,
             },
             'macosx64': {
                 'src_mozconfig': 'browser/config/mozconfigs/macosx-universal/release',
+                'force_clobber': True,
             },
             'win32': {
                 'src_mozconfig': 'browser/config/mozconfigs/win32/release',
+                'force_clobber': True,
             },
             'win64': {
                 'src_mozconfig': 'browser/config/mozconfigs/win64/release',
+                'force_clobber': True,
             },
             'linux-debug': {
                 'update_channel': 'default',
@@ -114,18 +119,23 @@ config = {
         'platform_overrides': {
             'linux': {
                 'src_mozconfig': 'browser/config/mozconfigs/linux32/beta',
+                'force_clobber': True,
             },
             'linux64': {
                 'src_mozconfig': 'browser/config/mozconfigs/linux64/beta',
+                'force_clobber': True,
             },
             'macosx64': {
                 'src_mozconfig': 'browser/config/mozconfigs/macosx-universal/beta',
+                'force_clobber': True,
             },
             'win32': {
                 'src_mozconfig': 'browser/config/mozconfigs/win32/beta',
+                'force_clobber': True,
             },
             'win64': {
                 'src_mozconfig': 'browser/config/mozconfigs/win64/beta',
+                'force_clobber': True,
             },
             'linux-debug': {
                 'update_channel': 'default',
@@ -184,6 +194,9 @@ config = {
         'repo_path': 'try',
         'clone_by_revision': True,
         'clone_with_purge': True,
+        # FUTURE this should be a unified repo because Try pushes may e.g.
+        # be on Aurora or Beta revisions.
+        'clone_upstream_url': 'https://hg.mozilla.org/mozilla-central',
         'tinderbox_build_dir': '%(who)s-%(got_revision)s',
         'to_tinderbox_dated': False,
         'include_post_upload_builddir': True,

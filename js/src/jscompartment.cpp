@@ -456,7 +456,7 @@ JSCompartment::wrap(JSContext* cx, MutableHandleObject obj, HandleObject existin
     RootedObject existing(cx, existingArg);
     if (existing) {
         // Is it possible to reuse |existing|?
-        if (!existing->getTaggedProto().isLazy() ||
+        if (existing->hasStaticPrototype() ||
             // Note: Class asserted above, so all that's left to check is callability
             existing->isCallable() ||
             obj->isCallable())
@@ -504,6 +504,16 @@ JSCompartment::wrap(JSContext* cx, MutableHandle<PropertyDescriptor> desc)
     }
 
     return wrap(cx, desc.value());
+}
+
+bool
+JSCompartment::wrap(JSContext* cx, MutableHandle<GCVector<Value>> vec)
+{
+    for (size_t i = 0; i < vec.length(); ++i) {
+        if (!wrap(cx, vec[i]))
+            return false;
+    }
+    return true;
 }
 
 ClonedBlockObject*

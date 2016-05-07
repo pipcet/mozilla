@@ -479,7 +479,7 @@ intrinsic_FinishBoundFunctionInit(JSContext* cx, unsigned argc, Value* vp)
     if (!GetPrototype(cx, targetObj, &proto))
         return false;
 
-    if (bound->getProto() != proto) {
+    if (bound->staticPrototype() != proto) {
         if (!SetPrototype(cx, bound, proto))
             return false;
     }
@@ -2240,7 +2240,7 @@ WarnOnceAboutFlagsArgument(JSContext* cx, unsigned argc, Value* vp)
 // Additionally, a set of C++-implemented helper functions is defined on the
 // self-hosting global.
 static const JSFunctionSpec intrinsic_functions[] = {
-    JS_INLINABLE_FN("std_Array",                 ArrayConstructor,             1,0, Array),
+    JS_INLINABLE_FN("std_Array",                 array_construct,              1,0, Array),
     JS_FN("std_Array_join",                      array_join,                   1,0),
     JS_INLINABLE_FN("std_Array_push",            array_push,                   1,0, ArrayPush),
     JS_INLINABLE_FN("std_Array_pop",             array_pop,                    0,0, ArrayPop),
@@ -2903,7 +2903,7 @@ CloneObject(JSContext* cx, HandleNativeObject selfHostedObject)
     RootedObject clone(cx);
     if (selfHostedObject->is<JSFunction>()) {
         RootedFunction selfHostedFunction(cx, &selfHostedObject->as<JSFunction>());
-        bool hasName = selfHostedFunction->atom() != nullptr;
+        bool hasName = selfHostedFunction->name() != nullptr;
 
         // Arrow functions use the first extended slot for their lexical |this| value.
         MOZ_ASSERT(!selfHostedFunction->isArrow());
@@ -2919,7 +2919,7 @@ CloneObject(JSContext* cx, HandleNativeObject selfHostedObject)
         // self-hosting compartment has to be stored on the clone.
         if (clone && hasName) {
             clone->as<JSFunction>().setExtendedSlot(LAZY_FUNCTION_NAME_SLOT,
-                                                    StringValue(selfHostedFunction->atom()));
+                                                    StringValue(selfHostedFunction->name()));
         }
     } else if (selfHostedObject->is<RegExpObject>()) {
         RegExpObject& reobj = selfHostedObject->as<RegExpObject>();
@@ -3001,9 +3001,9 @@ JSRuntime::createLazySelfHostedFunctionClone(JSContext* cx, HandlePropertyName s
     if (!selfHostedFun)
         return false;
 
-    if (!selfHostedFun->hasGuessedAtom() && selfHostedFun->atom() != selfHostedName) {
+    if (!selfHostedFun->hasGuessedAtom() && selfHostedFun->name() != selfHostedName) {
         MOZ_ASSERT(selfHostedFun->getExtendedSlot(HAS_SELFHOSTED_CANONICAL_NAME_SLOT).toBoolean());
-        funName = selfHostedFun->atom();
+        funName = selfHostedFun->name();
     }
 
     fun.set(NewScriptedFunction(cx, nargs, JSFunction::INTERPRETED_LAZY,

@@ -70,20 +70,19 @@ var Reader = {
 
   observe: function Reader_observe(aMessage, aTopic, aData) {
     switch (aTopic) {
-      case "Reader:FetchContent": {
-        let data = JSON.parse(aData);
-        this._fetchContent(data.url, data.id);
-        break;
-      }
-
       case "Reader:RemoveFromCache": {
         ReaderMode.removeArticleFromCache(aData).catch(e => Cu.reportError("Error removing article from cache: " + e));
         break;
       }
 
       case "Reader:AddToCache": {
+        let tab = BrowserApp.getTabForId(aData);
+        if (!tab) {
+          throw new Error("No tab for tabID = " + aData + " when trying to save reader view article");
+        }
+
         // If the article is coming from reader mode, we must have fetched it already.
-        this._getArticle(aData).then((article) => {
+        this._getArticleData(tab.browser).then((article) => {
           ReaderMode.storeArticleInCache(article);
         }).catch(e => Cu.reportError("Error storing article in cache: " + e));
         break;
@@ -215,46 +214,6 @@ var Reader = {
   },
 
   /**
-   * Downloads and caches content for a reading list item with a given URL and id.
-   */
-  _fetchContent: function(url, id) {
-    this._downloadAndCacheArticle(url).then(article => {
-      if (article == null) {
-        Messaging.sendRequest({
-          type: "Reader:UpdateList",
-          id: id,
-          status: this.STATUS_FETCH_FAILED_UNSUPPORTED_FORMAT,
-        });
-      } else {
-        Messaging.sendRequest({
-          type: "Reader:UpdateList",
-          id: id,
-          url: truncate(article.url, MAX_URI_LENGTH),
-          title: truncate(article.title, MAX_TITLE_LENGTH),
-          length: article.length,
-          excerpt: article.excerpt,
-          status: this.STATUS_FETCHED_ARTICLE,
-        });
-      }
-    }).catch(e => {
-      Cu.reportError("Error fetching content: " + e);
-      Messaging.sendRequest({
-        type: "Reader:UpdateList",
-        id: id,
-        status: this.STATUS_FETCH_FAILED_TEMPORARY,
-      });
-    });
-  },
-
-  _downloadAndCacheArticle: Task.async(function* (url) {
-    let article = yield ReaderMode.downloadAndParseDocument(url);
-    if (article != null) {
-      yield ReaderMode.storeArticleInCache(article);
-    }
-    return article;
-  }),
-
-  /**
    * Gets an article for a given URL. This method will download and parse a document
    * if it does not find the article in the cache.
    *
@@ -280,6 +239,23 @@ var Reader = {
       return null;
     });
   }),
+
+  _getArticleData: function(browser) {
+    return new Promise((resolve, reject) => {
+      if (browser == null) {
+        reject("_getArticleData needs valid browser");
+      }
+
+      let mm = browser.messageManager;
+      let listener = (message) => {
+        mm.removeMessageListener("Reader:StoredArticleData", listener);
+        resolve(message.data.article);
+      };
+      mm.addMessageListener("Reader:StoredArticleData", listener);
+      mm.sendAsyncMessage("Reader:GetStoredArticleData");
+    });
+  },
+
 
   /**
    * Migrates old indexedDB reader mode cache to new JSON cache.

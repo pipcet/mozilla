@@ -40,7 +40,7 @@ Structure::
                                     // UNIX epoch.
       "defaultSearch": <string>, // Identifier of the default search engine,
                                  // e.g. "yahoo".
-
+      "distributionId": <string>, // Distribution identifier (optional)
       "experiments": [<string>, …], // Optional, array of identifiers
                                     // for the active experiments
     }
@@ -56,6 +56,14 @@ of limited user data. To avoid this, we limit the length of the field. We're
 more likely have collisions for models within a manufacturer (e.g. "Galaxy S5"
 vs. "Galaxy Note") than we are for shortened manufacturer names so we provide
 more characters for the model than the manufacturer.
+
+distributionId
+~~~~~~
+The ``distributionId`` contains the distribution ID as specified by
+preferences.json for a given distribution. More information on distributions
+can be found `here <https://wiki.mozilla.org/Mobile/Distribution_Files>`_.
+
+It is optional.
 
 defaultSearch
 ~~~~~~~~~~~~~
@@ -100,6 +108,15 @@ sending it: we only want to send consistent values.
 
 Version history
 ---------------
-* v3: ``profileDate`` will return package install time when times.json is not available
-* v2: added ``defaultSearch``
+* v4: ``profileDate`` will return package install time when times.json is not available
+* v3: added ``defaultSearch``
+* v2: added ``distributionId``
 * v1: initial version
+
+Notes
+~~~~~
+
+* ``distributionId`` (v2) actually landed after ``profileDate`` (v4) but was
+  uplifted to 46, whereas ``profileDate`` landed on 47. The version numbers in
+  code were updated to be increasing (bug 1264492) and the version history docs
+  rearranged accordingly.

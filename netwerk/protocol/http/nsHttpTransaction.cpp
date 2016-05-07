@@ -181,27 +181,32 @@ nsHttpTransaction::Classify()
     if (!(mCaps & NS_HTTP_ALLOW_PIPELINING))
         return (mClassification = CLASS_SOLO);
 
-    if (mRequestHead->PeekHeader(nsHttp::If_Modified_Since) ||
-        mRequestHead->PeekHeader(nsHttp::If_None_Match))
+    if (mRequestHead->HasHeader(nsHttp::If_Modified_Since) ||
+        mRequestHead->HasHeader(nsHttp::If_None_Match))
         return (mClassification = CLASS_REVALIDATION);
 
-    const char *accept = mRequestHead->PeekHeader(nsHttp::Accept);
-    if (accept && !PL_strncmp(accept, "image/", 6))
+    nsAutoCString accept;
+    bool hasAccept = NS_SUCCEEDED(mRequestHead->GetHeader(nsHttp::Accept, accept));
+    if (hasAccept && StringBeginsWith(accept, NS_LITERAL_CSTRING("image/"))) {
         return (mClassification = CLASS_IMAGE);
+    }
 
-    if (accept && !PL_strncmp(accept, "text/css", 8))
+    if (hasAccept && StringBeginsWith(accept, NS_LITERAL_CSTRING("text/css"))) {
         return (mClassification = CLASS_SCRIPT);
+    }
 
     mClassification = CLASS_GENERAL;
 
-    int32_t queryPos = mRequestHead->RequestURI().FindChar('?');
+    nsAutoCString requestURI;
+    mRequestHead->RequestURI(requestURI);
+    int32_t queryPos = requestURI.FindChar('?');
     if (queryPos == kNotFound) {
-        if (StringEndsWith(mRequestHead->RequestURI(),
+        if (StringEndsWith(requestURI,
                            NS_LITERAL_CSTRING(".js")))
             mClassification = CLASS_SCRIPT;
     }
     else if (queryPos >= 3 &&
-             Substring(mRequestHead->RequestURI(), queryPos - 3, 3).
+             Substring(requestURI, queryPos - 3, 3).
              EqualsLiteral(".js")) {
         mClassification = CLASS_SCRIPT;
     }
@@ -299,7 +304,7 @@ nsHttpTransaction::Init(uint32_t caps,
     //   containing a message-body MUST include a valid Content-Length header
     //   field unless the server is known to be HTTP/1.1 compliant.
     if ((requestHead->IsPost() || requestHead->IsPut()) &&
-        !requestBody && !requestHead->PeekHeader(nsHttp::Transfer_Encoding)) {
+        !requestBody && !requestHead->HasHeader(nsHttp::Transfer_Encoding)) {
         requestHead->SetHeader(nsHttp::Content_Length, NS_LITERAL_CSTRING("0"));
     }
 
@@ -869,7 +874,7 @@ nsHttpTransaction::SaveNetworkStats(bool enforce)
 
     // Create the event to save the network statistics.
     // the event is then dispatched to the main thread.
-    RefPtr<nsRunnable> event =
+    RefPtr<Runnable> event =
         new SaveNetworkStatsEvent(mAppId, mIsInIsolatedMozBrowser, mActiveNetworkInfo,
                                   mCountRecv, mCountSent, false);
     NS_DispatchToMainThread(event);
@@ -924,6 +929,12 @@ nsHttpTransaction::Close(nsresult reason)
             PR_Now(), 0, EmptyCString());
     }
 
+    // we must no longer reference the connection!  find out if the
+    // connection was being reused before letting it go.
+    bool connReused = false;
+    if (mConnection) {
+        connReused = mConnection->IsReused();
+    }
     mConnected = false;
     mTunnelProvider = nullptr;
 
@@ -977,7 +988,7 @@ nsHttpTransaction::Close(nsresult reason)
 
         if (!mReceivedData &&
             ((mRequestHead && mRequestHead->IsSafeMethod()) ||
-             !reallySentData)) {
+             !reallySentData || connReused)) {
             // if restarting fails, then we must proceed to close the pipe,
             // which will notify the channel that the transaction failed.
 
@@ -2081,7 +2092,7 @@ nsHttpTransaction::GetResponseEnd()
 // nsHttpTransaction deletion event
 //-----------------------------------------------------------------------------
 
-class DeleteHttpTransaction : public nsRunnable {
+class DeleteHttpTransaction : public Runnable {
 public:
     explicit DeleteHttpTransaction(nsHttpTransaction *trans)
         : mTrans(trans)

@@ -512,10 +512,6 @@
 @RESPATH@/components/htmlMenuBuilder.js
 @RESPATH@/components/htmlMenuBuilder.manifest
 
-@RESPATH@/components/RequestSync.manifest
-@RESPATH@/components/RequestSyncManager.js
-@RESPATH@/components/RequestSyncScheduler.js
-
 @RESPATH@/components/PermissionSettings.js
 @RESPATH@/components/PermissionSettings.manifest
 @RESPATH@/components/ContactManager.js
@@ -538,13 +534,6 @@
 
 @RESPATH@/components/TVSimulatorService.js
 @RESPATH@/components/TVSimulatorService.manifest
-
-#ifndef RELEASE_BUILD
-@RESPATH@/components/InterAppComm.manifest
-@RESPATH@/components/InterAppCommService.js
-@RESPATH@/components/InterAppConnection.js
-@RESPATH@/components/InterAppMessagePort.js
-#endif
 
 #ifdef MOZ_ACTIVITIES
 @RESPATH@/components/SystemMessageCache.js
@@ -831,10 +820,6 @@ bin/libfreebl_32int64_3.so
 @BINPATH@/breakpadinjector.dll
 #endif
 #endif
-
-@RESPATH@/components/DataStore.manifest
-@RESPATH@/components/DataStoreImpl.js
-@RESPATH@/components/dom_datastore.xpt
 
 @RESPATH@/components/dom_audiochannel.xpt
 

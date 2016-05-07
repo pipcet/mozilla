@@ -1190,7 +1190,7 @@ GetParen(JSLinearString* matched, JS::Value capture, JSSubString* out)
 template <typename CharT>
 static bool
 InterpretDollar(JSLinearString* matched, JSLinearString* string, size_t position, size_t tailPos,
-                AutoValueVector& captures, JSLinearString* replacement,
+                MutableHandle<GCVector<Value>> captures, JSLinearString* replacement,
                 const CharT* replacementBegin, const CharT* currentDollar,
                 const CharT* replacementEnd,
                 JSSubString* out, size_t* skip)
@@ -1265,7 +1265,7 @@ InterpretDollar(JSLinearString* matched, JSLinearString* string, size_t position
 template <typename CharT>
 static bool
 FindReplaceLengthString(JSContext* cx, HandleLinearString matched, HandleLinearString string,
-                        size_t position, size_t tailPos, AutoValueVector& captures,
+                        size_t position, size_t tailPos, MutableHandle<GCVector<Value>> captures,
                         HandleLinearString replacement, size_t firstDollarIndex, size_t* sizep)
 {
     CheckedInt<uint32_t> replen = replacement->length();
@@ -1304,7 +1304,7 @@ FindReplaceLengthString(JSContext* cx, HandleLinearString matched, HandleLinearS
 
 static bool
 FindReplaceLength(JSContext* cx, HandleLinearString matched, HandleLinearString string,
-                  size_t position, size_t tailPos, AutoValueVector& captures,
+                  size_t position, size_t tailPos, MutableHandle<GCVector<Value>> captures,
                   HandleLinearString replacement, size_t firstDollarIndex, size_t* sizep)
 {
     return replacement->hasLatin1Chars()
@@ -1322,7 +1322,7 @@ FindReplaceLength(JSContext* cx, HandleLinearString matched, HandleLinearString 
 template <typename CharT>
 static void
 DoReplace(HandleLinearString matched, HandleLinearString string,
-          size_t position, size_t tailPos, AutoValueVector& captures,
+          size_t position, size_t tailPos, MutableHandle<GCVector<Value>> captures,
           HandleLinearString replacement, size_t firstDollarIndex, StringBuffer &sb)
 {
     JS::AutoCheckCannotGC nogc;
@@ -1355,6 +1355,28 @@ DoReplace(HandleLinearString matched, HandleLinearString string,
     sb.infallibleAppend(currentChar, replacement->length() - (currentChar - replacementBegin));
 }
 
+static bool
+NeedTwoBytes(HandleLinearString string, HandleLinearString replacement,
+             HandleLinearString matched, Handle<GCVector<Value>> captures)
+{
+    if (string->hasTwoByteChars())
+        return true;
+    if (replacement->hasTwoByteChars())
+        return true;
+    if (matched->hasTwoByteChars())
+        return true;
+
+    for (size_t i = 0, len = captures.length(); i < len; i++) {
+        Value capture = captures[i];
+        if (capture.isUndefined())
+            continue;
+        if (capture.toString()->hasTwoByteChars())
+            return true;
+    }
+
+    return false;
+}
+
 /* ES 2016 draft Mar 25, 2016 21.1.3.14.1. */
 bool
 js::RegExpGetSubstitution(JSContext* cx, HandleLinearString matched, HandleLinearString string,
@@ -1378,7 +1400,7 @@ js::RegExpGetSubstitution(JSContext* cx, HandleLinearString matched, HandleLinea
     if (!GetLengthProperty(cx, capturesObj, &nCaptures))
         return false;
 
-    AutoValueVector captures(cx);
+    Rooted<GCVector<Value>> captures(cx, GCVector<Value>(cx));
     if (!captures.reserve(nCaptures))
         return false;
 
@@ -1414,14 +1436,14 @@ js::RegExpGetSubstitution(JSContext* cx, HandleLinearString matched, HandleLinea
 
     // Step 11.
     size_t reserveLength;
-    if (!FindReplaceLength(cx, matched, string, position, tailPos, captures, replacement,
+    if (!FindReplaceLength(cx, matched, string, position, tailPos, &captures, replacement,
                            firstDollarIndex, &reserveLength))
     {
         return false;
     }
 
     StringBuffer result(cx);
-    if (string->hasTwoByteChars() || replacement->hasTwoByteChars()) {
+    if (NeedTwoBytes(string, replacement, matched, captures)) {
         if (!result.ensureTwoByteChars())
             return false;
     }
@@ -1430,10 +1452,10 @@ js::RegExpGetSubstitution(JSContext* cx, HandleLinearString matched, HandleLinea
         return false;
 
     if (replacement->hasLatin1Chars()) {
-        DoReplace<Latin1Char>(matched, string, position, tailPos, captures,
+        DoReplace<Latin1Char>(matched, string, position, tailPos, &captures,
                               replacement, firstDollarIndex, result);
     } else {
-        DoReplace<char16_t>(matched, string, position, tailPos, captures,
+        DoReplace<char16_t>(matched, string, position, tailPos, &captures,
                             replacement, firstDollarIndex, result);
     }
 
@@ -1609,12 +1631,12 @@ js::RegExpInstanceOptimizableRaw(JSContext* cx, JSObject* rx, JSObject* proto, u
         return true;
     }
 
-    if (rx->hasLazyPrototype()) {
+    if (!rx->hasStaticPrototype()) {
         *result = false;
         return true;
     }
 
-    if (rx->getTaggedProto().toObjectOrNull() != proto) {
+    if (rx->staticPrototype() != proto) {
         *result = false;
         return true;
     }
@@ -1711,7 +1733,16 @@ js::intrinsic_GetStringDataProperty(JSContext* cx, unsigned argc, Value* vp)
     CallArgs args = CallArgsFromVp(argc, vp);
     MOZ_ASSERT(args.length() == 2);
 
-    RootedNativeObject obj(cx, &args[0].toObject().as<NativeObject>());
+    RootedObject obj(cx, &args[0].toObject());
+    if (!obj->isNative()) {
+        // The object is already checked to be native in GetElemBaseForLambda,
+        // but it can be swapped to the other class that is non-native.
+        // Return undefined to mark failure to get the property.
+        args.rval().setUndefined();
+        return true;
+    }
+
+    RootedNativeObject nobj(cx, &obj->as<NativeObject>());
     RootedString name(cx, args[1].toString());
 
     RootedAtom atom(cx, AtomizeString(cx, name));
@@ -1719,7 +1750,7 @@ js::intrinsic_GetStringDataProperty(JSContext* cx, unsigned argc, Value* vp)
         return false;
 
     RootedValue v(cx);
-    if (HasDataProperty(cx, obj, AtomToId(atom), v.address()) && v.isString())
+    if (HasDataProperty(cx, nobj, AtomToId(atom), v.address()) && v.isString())
         args.rval().set(v);
     else
         args.rval().setUndefined();

@@ -18,6 +18,7 @@ import org.json.JSONObject;
 import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.db.URLMetadata;
+import org.mozilla.gecko.favicons.FaviconGenerator;
 import org.mozilla.gecko.favicons.Favicons;
 import org.mozilla.gecko.favicons.LoadFaviconTask;
 import org.mozilla.gecko.favicons.OnFaviconLoadedListener;
@@ -63,6 +64,8 @@ public class Tab {
     private SiteLogins mSiteLogins;
     private BitmapDrawable mThumbnail;
     private final int mParentId;
+    // Indicates the url was loaded from a source external to the app. This will be cleared
+    // when the user explicitly loads a new url (e.g. clicking a link is not explicit).
     private final boolean mExternal;
     private boolean mBookmark;
     private int mFaviconLoadId;
@@ -83,6 +86,7 @@ public class Tab {
     private volatile int mRecordingCount;
     private volatile boolean mIsAudioPlaying;
     private String mMostRecentHomePanel;
+    private boolean mShouldShowToolbarWithoutAnimationOnFirstSelection;
 
     private int mHistoryIndex;
     private int mHistorySize;
@@ -465,8 +469,9 @@ public class Tab {
                                 return;
                             }
 
-                            // Total failure: display the default favicon.
-                            favicon = Favicons.defaultFavicon;
+                            // Total failure: generate a default favicon.
+                            FaviconGenerator.generate(mAppContext, mUrl, this);
+                            return;
                         }
 
                         mFavicon = favicon;
@@ -548,7 +553,7 @@ public class Tab {
         });
 
         if (AboutPages.isAboutReader(url)) {
-            ReadingListHelper.cacheReaderItem(pageUrl, mAppContext);
+            ReadingListHelper.cacheReaderItem(pageUrl, mId, mAppContext);
         }
     }
 
@@ -894,5 +899,13 @@ public class Tab {
 
     public TabEditingState getEditingState() {
         return mEditingState;
+    }
+
+    public void setShouldShowToolbarWithoutAnimationOnFirstSelection(final boolean shouldShowWithoutAnimation) {
+        mShouldShowToolbarWithoutAnimationOnFirstSelection = shouldShowWithoutAnimation;
+    }
+
+    public boolean getShouldShowToolbarWithoutAnimationOnFirstSelection() {
+        return mShouldShowToolbarWithoutAnimationOnFirstSelection;
     }
 }

@@ -16,11 +16,11 @@ namespace mozilla {
 namespace _ipdltest {
 
 ipc::RacyInterruptPolicy
-MediateRace(const MessageChannel::Message& parent,
-            const MessageChannel::Message& child)
+MediateRace(const MessageChannel::MessageInfo& parent,
+            const MessageChannel::MessageInfo& child)
 {
     return (PTestInterruptRaces::Msg_Child__ID == parent.type()) ?
-        ipc::RIPParentWins : ipc::RIPChildWins;
+                ipc::RIPParentWins : ipc::RIPChildWins;
 }
 
 //-----------------------------------------------------------------------------
@@ -36,7 +36,6 @@ bool
 TestInterruptRacesParent::RecvStartRace()
 {
     MessageLoop::current()->PostTask(
-        FROM_HERE,
         NewRunnableMethod(this, &TestInterruptRacesParent::OnRaceTime));
     return true;
 }
@@ -53,7 +52,6 @@ TestInterruptRacesParent::OnRaceTime()
     mHasReply = true;
 
     MessageLoop::current()->PostTask(
-        FROM_HERE,
         NewRunnableMethod(this, &TestInterruptRacesParent::Test2));
 }
 
@@ -81,7 +79,6 @@ TestInterruptRacesParent::Test2()
     puts("  passed");
 
     MessageLoop::current()->PostTask(
-        FROM_HERE,
         NewRunnableMethod(this, &TestInterruptRacesParent::Test3));
 }
 

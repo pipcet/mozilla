@@ -2473,7 +2473,6 @@ function UpdatePageProxyState()
 
 function SetPageProxyState(aState)
 {
-  BookmarkingUI.onPageProxyStateChanged(aState);
   if (!gURLBar)
     return;
 
@@ -5440,7 +5439,7 @@ function handleLinkClick(event, href, linkNode) {
       linkNode) {
     let referrerAttrValue = Services.netUtils.parseAttributePolicyString(linkNode.
                             getAttribute("referrerpolicy"));
-    if (referrerAttrValue != Ci.nsIHttpChannel.REFERRER_POLICY_DEFAULT) {
+    if (referrerAttrValue != Ci.nsIHttpChannel.REFERRER_POLICY_UNSET) {
       referrerPolicy = referrerAttrValue;
     }
   }

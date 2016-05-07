@@ -37,9 +37,12 @@ var AboutReader = function(mm, win, articlePromise) {
   this._mm.addMessageListener("Reader:CloseDropdown", this);
   this._mm.addMessageListener("Reader:AddButton", this);
   this._mm.addMessageListener("Reader:RemoveButton", this);
+  this._mm.addMessageListener("Reader:GetStoredArticleData", this);
 
   this._docRef = Cu.getWeakReference(doc);
   this._winRef = Cu.getWeakReference(win);
+  this._innerWindowId = win.QueryInterface(Ci.nsIInterfaceRequestor)
+    .getInterface(Ci.nsIDOMWindowUtils).currentInnerWindowID;
 
   this._article = null;
 
@@ -59,9 +62,11 @@ var AboutReader = function(mm, win, articlePromise) {
 
   doc.addEventListener("click", this, false);
 
-  win.addEventListener("unload", this, false);
+  win.addEventListener("pagehide", this, false);
   win.addEventListener("scroll", this, false);
   win.addEventListener("resize", this, false);
+
+  Services.obs.addObserver(this, "inner-window-destroyed", false);
 
   doc.addEventListener("visibilitychange", this, false);
 
@@ -205,6 +210,9 @@ AboutReader.prototype = {
         }
         break;
       }
+      case "Reader:GetStoredArticleData": {
+        this._mm.sendAsyncMessage("Reader:StoredArticleData", { article: this._article });
+      }
     }
   },
 
@@ -222,7 +230,7 @@ AboutReader.prototype = {
         }
         break;
       case "scroll":
-        this._closeDropdowns();
+        this._closeDropdowns(true);
         let isScrollingUp = this._scrollOffset > aEvent.pageY;
         this._setSystemUIVisibility(isScrollingUp);
         this._scrollOffset = aEvent.pageY;
@@ -246,20 +254,34 @@ AboutReader.prototype = {
         this._handleVisibilityChange();
         break;
 
-      case "unload":
+      case "pagehide":
         // Close the Banners Font-dropdown, cleanup Android BackPressListener.
         this._closeDropdowns();
 
         this._mm.removeMessageListener("Reader:CloseDropdown", this);
         this._mm.removeMessageListener("Reader:AddButton", this);
         this._mm.removeMessageListener("Reader:RemoveButton", this);
+        this._mm.removeMessageListener("Reader:GetStoredArticleData", this);
         this._windowUnloaded = true;
         break;
     }
   },
 
+  observe: function(subject, topic, data) {
+    if (subject.QueryInterface(Ci.nsISupportsPRUint64).data != this._innerWindowId) {
+      return;
+    }
+
+    Services.obs.removeObserver(this, "inner-window-destroyed", false);
+
+    this._mm.removeMessageListener("Reader:CloseDropdown", this);
+    this._mm.removeMessageListener("Reader:AddButton", this);
+    this._mm.removeMessageListener("Reader:RemoveButton", this);
+    this._windowUnloaded = true;
+  },
+
   _onReaderClose: function() {
-    this._win.location.href = this._getOriginalUrl();
+    ReaderMode.leaveReaderMode(this._mm.docShell, this._win);
   },
 
   _setFontSize: function(newFontSize) {
@@ -771,10 +793,17 @@ AboutReader.prototype = {
   },
 
   /*
-   * If the ReaderView has open dropdowns, close them.
+   * If the ReaderView has open dropdowns, close them. If we are closing the
+   * dropdowns because the page is scrolling, allow popups to stay open with
+   * the keep-open class.
    */
-  _closeDropdowns: function() {
-    let openDropdowns = this._doc.querySelectorAll(".dropdown.open:not(.keep-open)");
+  _closeDropdowns: function(scrolling) {
+    let selector = ".dropdown.open";
+    if (scrolling) {
+      selector += ":not(.keep-open)";
+    }
+
+    let openDropdowns = this._doc.querySelectorAll(selector);
     for (let dropdown of openDropdowns) {
       dropdown.classList.remove("open");
     }

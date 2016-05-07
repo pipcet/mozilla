@@ -2508,12 +2508,16 @@ GeckoDriver.prototype.clearImportedScripts = function*(cmd, resp) {
  *     Reference to a web element.
  * @param {string} highlights
  *     List of web elements to highlight.
+ * @param {boolean} hash
+ *     True if the user requests a hash of the image data.
  *
  * @return {string}
- *     PNG image encoded as base64 encoded string.
+ *     If {@code hash} is false, PNG image encoded as base64 encoded string. If
+ *     'hash' is True, hex digest of the SHA-256 hash of the base64 encoded
+ *     string.
  */
 GeckoDriver.prototype.takeScreenshot = function(cmd, resp) {
-  let {id, highlights, full} = cmd.parameters;
+  let {id, highlights, full, hash} = cmd.parameters;
   highlights = highlights || [];
 
   switch (this.context) {
@@ -2558,7 +2562,11 @@ GeckoDriver.prototype.takeScreenshot = function(cmd, resp) {
       break;
 
     case Context.CONTENT:
-      return this.listener.takeScreenshot(id, full, highlights);
+      if (hash) {
+        return this.listener.getScreenshotHash(id, full, highlights);
+      } else {
+        return this.listener.takeScreenshot(id, full, highlights);
+      }
   }
 };
 
@@ -2661,8 +2669,7 @@ GeckoDriver.prototype.maximizeWindow = function(cmd, resp) {
   }
 
   let win = this.getCurrentWindow();
-  win.moveTo(0,0);
-  win.resizeTo(win.screen.availWidth, win.screen.availHeight);
+  win.maximize()
 };
 
 /**
@@ -3075,13 +3082,6 @@ BrowserObj.prototype.setBrowser = function(win) {
 
     case "Fennec":
       this.browser = win.BrowserApp;
-      break;
-
-    case "B2G":
-      // eideticker (bug 965297) and mochitest (bug 965304)
-      // compatibility.  They only check for the presence of this
-      // property and should not be in caps if not on a B2G device.
-      this.driver.sessionCapabilities.b2g = true;
       break;
   }
 };

@@ -43,6 +43,7 @@
 #include "vm/GlobalObject.h"
 #include "vm/Interpreter.h"
 #include "vm/Shape.h"
+#include "vm/SharedImmutableStringsCache.h"
 #include "vm/StringBuffer.h"
 #include "vm/WrapperObject.h"
 #include "vm/Xdr.h"
@@ -504,15 +505,15 @@ fun_resolve(JSContext* cx, HandleObject obj, HandleId id, bool* resolvedp)
                 // It's impossible to have an empty named class expression. We
                 // use empty as a sentinel when creating default class
                 // constructors.
-                MOZ_ASSERT(fun->atom() != cx->names().empty);
+                MOZ_ASSERT(fun->name() != cx->names().empty);
 
                 // Unnamed class expressions should not get a .name property
                 // at all.
-                if (fun->atom() == nullptr)
+                if (fun->name() == nullptr)
                     return true;
             }
 
-            v.setString(fun->atom() == nullptr ? cx->runtime()->emptyString : fun->atom());
+            v.setString(fun->name() == nullptr ? cx->runtime()->emptyString : fun->name());
         }
 
         if (!NativeDefineProperty(cx, fun, id, v, nullptr, nullptr,
@@ -566,7 +567,7 @@ js::XDRInterpretedFunction(XDRState<mode>* xdr, HandleObject enclosingScope, Han
             return false;
         }
 
-        if (fun->atom() || fun->hasGuessedAtom())
+        if (fun->name() || fun->hasGuessedAtom())
             firstword |= HasAtom;
 
         if (fun->isStarGenerator())
@@ -767,18 +768,17 @@ CreateFunctionPrototype(JSContext* cx, JSProtoKey key)
 
     const char* rawSource = "() {\n}";
     size_t sourceLen = strlen(rawSource);
-    char16_t* source = InflateString(cx, rawSource, &sourceLen);
+    mozilla::UniquePtr<char16_t[], JS::FreePolicy> source(InflateString(cx, rawSource, &sourceLen));
     if (!source)
         return nullptr;
 
-    ScriptSource* ss =
-        cx->new_<ScriptSource>();
-    if (!ss) {
-        js_free(source);
+    ScriptSource* ss = cx->new_<ScriptSource>();
+    if (!ss)
         return nullptr;
-    }
     ScriptSourceHolder ssHolder(ss);
-    ss->setSource(source, sourceLen);
+    if (!ss->setSource(cx, mozilla::Move(source), sourceLen))
+        return nullptr;
+
     CompileOptions options(cx);
     options.setNoScriptRval(true)
            .setVersion(JSVERSION_DEFAULT);
@@ -976,8 +976,8 @@ js::FunctionToString(JSContext* cx, HandleFunction fun, bool lambdaParen)
         if (!(fun->isStarGenerator() ? out.append("function* ") : out.append("function ")))
             return nullptr;
     }
-    if (fun->atom()) {
-        if (!out.append(fun->atom()))
+    if (fun->name()) {
+        if (!out.append(fun->name()))
             return nullptr;
     }
 
@@ -2007,7 +2007,7 @@ js::CloneFunctionReuseScript(JSContext* cx, HandleFunction fun, HandleObject par
      * Clone the function, reusing its script. We can use the same group as
      * the original function provided that its prototype is correct.
      */
-    if (fun->getProto() == clone->getProto())
+    if (fun->staticPrototype() == clone->staticPrototype())
         clone->setGroup(fun->group());
     return clone;
 }
@@ -2160,8 +2160,8 @@ js::ReportIncompatibleMethod(JSContext* cx, CallReceiver call, const Class* clas
     if (thisv.isObject()) {
         MOZ_ASSERT(thisv.toObject().getClass() != clasp ||
                    !thisv.toObject().isNative() ||
-                   !thisv.toObject().getProto() ||
-                   thisv.toObject().getProto()->getClass() != clasp);
+                   !thisv.toObject().staticPrototype() ||
+                   thisv.toObject().staticPrototype()->getClass() != clasp);
     } else if (thisv.isString()) {
         MOZ_ASSERT(clasp != &StringObject::class_);
     } else if (thisv.isNumber()) {

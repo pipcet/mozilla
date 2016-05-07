@@ -2505,7 +2505,7 @@ nsHTMLDocument::MaybeEditingStateChanged()
       EditingStateChanged();
     } else if (!mInDestructor) {
       nsContentUtils::AddScriptRunner(
-        NS_NewRunnableMethod(this, &nsHTMLDocument::MaybeEditingStateChanged));
+        NewRunnableMethod(this, &nsHTMLDocument::MaybeEditingStateChanged));
     }
   }
 }
@@ -2524,7 +2524,7 @@ nsHTMLDocument::EndUpdate(nsUpdateType aUpdateType)
 
 
 // Helper class, used below in ChangeContentEditableCount().
-class DeferredContentEditableCountChangeEvent : public nsRunnable
+class DeferredContentEditableCountChangeEvent : public Runnable
 {
 public:
   DeferredContentEditableCountChangeEvent(nsHTMLDocument *aDoc,
