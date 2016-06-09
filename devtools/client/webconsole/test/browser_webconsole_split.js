@@ -11,8 +11,7 @@ function test() {
   // Test is slow on Linux EC2 instances - Bug 962931
   requestLongerTimeout(2);
 
-  let {Task} = Cu.import("resource://gre/modules/Task.jsm", {});
-  let {Toolbox} = require("devtools/client/framework/toolbox")
+  let {Toolbox} = require("devtools/client/framework/toolbox");
   let toolbox;
 
   loadTab(TEST_URI).then(testConsoleLoadOnDifferentPanel);
@@ -47,7 +46,7 @@ function test() {
   function checkAllTools() {
     info("About to check split console with each panel individually.");
 
-    Task.spawn(function*() {
+    Task.spawn(function* () {
       yield openAndCheckPanel("jsdebugger");
       yield openAndCheckPanel("inspector");
       yield openAndCheckPanel("styleeditor");
@@ -159,7 +158,7 @@ function test() {
   function openPanel(toolId) {
     let deferred = promise.defer();
     let target = TargetFactory.forTab(gBrowser.selectedTab);
-    gDevTools.showToolbox(target, toolId).then(function(box) {
+    gDevTools.showToolbox(target, toolId).then(function (box) {
       toolbox = box;
       deferred.resolve();
     }).then(null, console.error);
@@ -251,7 +250,7 @@ function test() {
   }
 
   function testDestroy() {
-    toolbox.destroy().then(function() {
+    toolbox.destroy().then(function () {
       let target = TargetFactory.forTab(gBrowser.selectedTab);
       gDevTools.showToolbox(target).then(finish);
     });

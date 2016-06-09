@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const protocol = require("devtools/server/protocol");
+const protocol = require("devtools/shared/protocol");
 const { Arg, RetVal, types } = protocol;
 
 let childSpecs = {};
@@ -171,6 +171,12 @@ types.addDictType("idbstoreobject", {
   data: "array:nullable:idbobject"
 });
 
+// Result of Indexed DB delete operation: can block or throw error
+types.addDictType("idbdeleteresult", {
+  blocked: "nullable:boolean",
+  error: "nullable:string"
+});
+
 createStorageSpec({
   typeName: "indexedDB",
   storeObjectType: "idbstoreobject",
@@ -180,7 +186,7 @@ createStorageSpec({
         host: Arg(0, "string"),
         name: Arg(1, "string"),
       },
-      response: {}
+      response: RetVal("idbdeleteresult")
     }
   }
 });

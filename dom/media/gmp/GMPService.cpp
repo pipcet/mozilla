@@ -13,7 +13,6 @@
 #include "GMPVideoDecoderParent.h"
 #include "nsIObserverService.h"
 #include "GeckoChildProcessHost.h"
-#include "mozilla/Preferences.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/SyncRunnable.h"
 #include "nsXPCOMPrivate.h"
@@ -24,7 +23,6 @@
 #include "GMPDecryptorParent.h"
 #include "GMPAudioDecoderParent.h"
 #include "nsComponentManagerUtils.h"
-#include "mozilla/Preferences.h"
 #include "runnable_utils.h"
 #include "VideoUtils.h"
 #if defined(XP_LINUX) && defined(MOZ_GMP_SANDBOX)
@@ -320,6 +318,7 @@ GeckoMediaPluginService::ShutdownGMPThread()
     MutexAutoLock lock(mMutex);
     mGMPThreadShutdown = true;
     mGMPThread.swap(gmpThread);
+    mAbstractGMPThread = nullptr;
   }
 
   if (gmpThread) {
@@ -371,7 +370,7 @@ GeckoMediaPluginService::GetThread(nsIThread** aThread)
     mAbstractGMPThread = AbstractThread::CreateXPCOMThreadWrapper(mGMPThread, false);
 
     // Tell the thread to initialize plugins
-    InitializePlugins();
+    InitializePlugins(mAbstractGMPThread.get());
   }
 
   nsCOMPtr<nsIThread> copy = mGMPThread;
@@ -383,6 +382,7 @@ GeckoMediaPluginService::GetThread(nsIThread** aThread)
 RefPtr<AbstractThread>
 GeckoMediaPluginService::GetAbstractGMPThread()
 {
+  MutexAutoLock lock(mMutex);
   return mAbstractGMPThread;
 }
 

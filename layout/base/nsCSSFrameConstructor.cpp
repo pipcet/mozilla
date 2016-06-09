@@ -4241,6 +4241,13 @@ nsCSSFrameConstructor::GetAnonymousContent(nsIContent* aParent,
     }
   }
 
+  if (ServoStyleSet* styleSet = mPresShell->StyleSet()->GetAsServo()) {
+    // Eagerly compute styles for the anonymous content tree.
+    for (auto& info : aContent) {
+      styleSet->RestyleSubtree(info.mContent);
+    }
+  }
+
   return NS_OK;
 }
 
@@ -5373,7 +5380,6 @@ nsCSSFrameConstructor::FindSVGData(Element* aElement,
         return &sTSpanData;
       }
     } else if (aTag == nsGkAtoms::tspan ||
-               aTag == nsGkAtoms::altGlyph ||
                aTag == nsGkAtoms::a) {
       return &sTSpanData;
     }
@@ -5386,7 +5392,6 @@ nsCSSFrameConstructor::FindSVGData(Element* aElement,
                                  nsCSSAnonBoxes::mozSVGText);
     return &sTextData;
   } else if (aTag == nsGkAtoms::tspan ||
-             aTag == nsGkAtoms::altGlyph ||
              aTag == nsGkAtoms::textPath) {
     return &sSuppressData;
   }

@@ -32,7 +32,6 @@ const {
   DEFAULT_PRESET_CATEGORY
 } = require("devtools/client/shared/widgets/CubicBezierPresets");
 const {getCSSLexer} = require("devtools/shared/css-lexer");
-const {Cc, Ci} = require('chrome');
 
 /**
  * CubicBezier data structure helper
@@ -53,7 +52,7 @@ function CubicBezier(coordinates) {
     }
   }
 
-  this.coordinates.toString = function() {
+  this.coordinates.toString = function () {
     return this.map(n => {
       return (Math.round(n * 100) / 100 + "").replace(/^0\./, ".");
     }) + "";
@@ -71,7 +70,7 @@ CubicBezier.prototype = {
     return this.coordinates.slice(2);
   },
 
-  toString: function() {
+  toString: function () {
     // Check first if current coords are one of css predefined functions
     let predefName = Object.keys(PREDEFINED)
                            .find(key => coordsAreEqual(PREDEFINED[key],
@@ -114,17 +113,19 @@ BezierCanvas.prototype = {
 
     return [{
       left: w * (this.bezier.coordinates[0] * (1 - p[3] - p[1]) - p[3]) + "px",
-      top: h * (1 - this.bezier.coordinates[1] * (1 - p[0] - p[2]) - p[0]) + "px"
+      top: h * (1 - this.bezier.coordinates[1] * (1 - p[0] - p[2]) - p[0])
+           + "px"
     }, {
       left: w * (this.bezier.coordinates[2] * (1 - p[3] - p[1]) - p[3]) + "px",
-      top: h * (1 - this.bezier.coordinates[3] * (1 - p[0] - p[2]) - p[0]) + "px"
+      top: h * (1 - this.bezier.coordinates[3] * (1 - p[0] - p[2]) - p[0])
+           + "px"
     }];
   },
 
   /**
    * Convert an element's left/top offsets into coordinates
    */
-  offsetsToCoordinates: function(element) {
+  offsetsToCoordinates: function (element) {
     let p = this.padding, w = this.canvas.width, h = this.canvas.height;
 
     // Convert padding percentage to actual padding
@@ -139,7 +140,7 @@ BezierCanvas.prototype = {
   /**
    * Draw the cubic bezier curve for the current coordinates
    */
-  plot: function(settings = {}) {
+  plot: function (settings = {}) {
     let xy = this.bezier.coordinates;
 
     let defaultSettings = {
@@ -249,7 +250,7 @@ function CubicBezierWidget(parent,
 exports.CubicBezierWidget = CubicBezierWidget;
 
 CubicBezierWidget.prototype = {
-  _initMarkup: function() {
+  _initMarkup: function () {
     let doc = this.parent.ownerDocument;
 
     let wrap = doc.createElement("div");
@@ -285,11 +286,11 @@ CubicBezierWidget.prototype = {
     };
   },
 
-  _removeMarkup: function() {
+  _removeMarkup: function () {
     this.parent.ownerDocument.querySelector(".display-wrap").remove();
   },
 
-  _initEvents: function() {
+  _initEvents: function () {
     this.p1.addEventListener("mousedown", this._onPointMouseDown);
     this.p2.addEventListener("mousedown", this._onPointMouseDown);
 
@@ -301,7 +302,7 @@ CubicBezierWidget.prototype = {
     this.presets.on("new-coordinates", this._onNewCoordinates);
   },
 
-  _removeEvents: function() {
+  _removeEvents: function () {
     this.p1.removeEventListener("mousedown", this._onPointMouseDown);
     this.p2.removeEventListener("mousedown", this._onPointMouseDown);
 
@@ -313,7 +314,7 @@ CubicBezierWidget.prototype = {
     this.presets.off("new-coordinates", this._onNewCoordinates);
   },
 
-  _onPointMouseDown: function(event) {
+  _onPointMouseDown: function (event) {
     // Updating the boundingbox in case it has changed
     this.curveBoundingBox = this.curve.getBoundingClientRect();
 
@@ -340,13 +341,13 @@ CubicBezierWidget.prototype = {
       self._updateFromPoints();
     };
 
-    doc.onmouseup = function() {
+    doc.onmouseup = function () {
       point.focus();
       doc.onmousemove = doc.onmouseup = null;
     };
   },
 
-  _onPointKeyDown: function(event) {
+  _onPointKeyDown: function (event) {
     let point = event.target;
     let code = event.keyCode;
 
@@ -369,7 +370,7 @@ CubicBezierWidget.prototype = {
     }
   },
 
-  _onCurveClick: function(event) {
+  _onCurveClick: function (event) {
     this.curveBoundingBox = this.curve.getBoundingClientRect();
 
     let left = this.curveBoundingBox.left;
@@ -390,17 +391,19 @@ CubicBezierWidget.prototype = {
     this._updateFromPoints();
   },
 
-  _onNewCoordinates: function(event, coordinates) {
+  _onNewCoordinates: function (event, coordinates) {
     this.coordinates = coordinates;
   },
 
   /**
    * Get the current point coordinates and redraw the curve to match
    */
-  _updateFromPoints: function() {
+  _updateFromPoints: function () {
     // Get the new coordinates from the point's offsets
     let coordinates = this.bezierCanvas.offsetsToCoordinates(this.p1);
-    coordinates = coordinates.concat(this.bezierCanvas.offsetsToCoordinates(this.p2));
+    coordinates = coordinates.concat(
+      this.bezierCanvas.offsetsToCoordinates(this.p2)
+    );
 
     this.presets.refreshMenu(coordinates);
     this._redraw(coordinates);
@@ -410,7 +413,7 @@ CubicBezierWidget.prototype = {
    * Redraw the curve
    * @param {Array} coordinates The array of control point coordinates
    */
-  _redraw: function(coordinates) {
+  _redraw: function (coordinates) {
     // Provide a new CubicBezier to the canvas and plot the curve
     this.bezierCanvas.bezier = new CubicBezier(coordinates);
     this.bezierCanvas.plot();
@@ -453,7 +456,7 @@ CubicBezierWidget.prototype = {
     this.coordinates = coordinates;
   },
 
-  destroy: function() {
+  destroy: function () {
     this._removeEvents();
     this._removeMarkup();
 
@@ -513,7 +516,7 @@ CubicBezierPresetWidget.prototype = {
    *        div .preset
    *        ...
    */
-  _initMarkup: function() {
+  _initMarkup: function () {
     let doc = this.parent.ownerDocument;
 
     let presetPane = doc.createElement("div");
@@ -548,7 +551,7 @@ CubicBezierPresetWidget.prototype = {
     };
   },
 
-  _createCategory: function(categoryLabel) {
+  _createCategory: function (categoryLabel) {
     let doc = this.parent.ownerDocument;
 
     let category = doc.createElement("div");
@@ -562,11 +565,11 @@ CubicBezierPresetWidget.prototype = {
     return category;
   },
 
-  _normalizeCategoryLabel: function(categoryLabel) {
+  _normalizeCategoryLabel: function (categoryLabel) {
     return categoryLabel.replace("/-/g", " ");
   },
 
-  _createPresetList: function(categoryLabel) {
+  _createPresetList: function (categoryLabel) {
     let doc = this.parent.ownerDocument;
 
     let presetList = doc.createElement("div");
@@ -581,7 +584,7 @@ CubicBezierPresetWidget.prototype = {
     return presetList;
   },
 
-  _createPreset: function(categoryLabel, presetLabel) {
+  _createPreset: function (categoryLabel, presetLabel) {
     let doc = this.parent.ownerDocument;
 
     let preset = doc.createElement("div");
@@ -602,7 +605,8 @@ CubicBezierPresetWidget.prototype = {
 
     // Create preset label
     let presetLabelElem = doc.createElement("p");
-    let presetDisplayLabel = this._normalizePresetLabel(categoryLabel, presetLabel);
+    let presetDisplayLabel = this._normalizePresetLabel(categoryLabel,
+                                                        presetLabel);
     presetLabelElem.textContent = presetDisplayLabel;
     preset.appendChild(presetLabelElem);
     preset.setAttribute("title", presetDisplayLabel);
@@ -610,11 +614,11 @@ CubicBezierPresetWidget.prototype = {
     return preset;
   },
 
-  _normalizePresetLabel: function(categoryLabel, presetLabel) {
+  _normalizePresetLabel: function (categoryLabel, presetLabel) {
     return presetLabel.replace(categoryLabel + "-", "").replace("/-/g", " ");
   },
 
-  _initEvents: function() {
+  _initEvents: function () {
     for (let category of this.categories) {
       category.addEventListener("click", this._onCategoryClick);
     }
@@ -624,7 +628,7 @@ CubicBezierPresetWidget.prototype = {
     }
   },
 
-  _removeEvents: function() {
+  _removeEvents: function () {
     for (let category of this.categories) {
       category.removeEventListener("click", this._onCategoryClick);
     }
@@ -634,16 +638,16 @@ CubicBezierPresetWidget.prototype = {
     }
   },
 
-  _onPresetClick: function(event) {
+  _onPresetClick: function (event) {
     this.emit("new-coordinates", event.currentTarget.coordinates);
     this.activePreset = event.currentTarget;
   },
 
-  _onCategoryClick: function(event) {
+  _onCategoryClick: function (event) {
     this.activeCategory = event.target;
   },
 
-  _setActivePresetList: function(presetListId) {
+  _setActivePresetList: function (presetListId) {
     let presetList = this.presetPane.querySelector("#" + presetListId);
     swapClassName("active-preset-list", this._activePresetList, presetList);
     this._activePresetList = presetList;
@@ -675,7 +679,7 @@ CubicBezierPresetWidget.prototype = {
    * existing preset.
    * @param {Array} coordinates new coords [i, j, k, l]
    */
-  refreshMenu: function(coordinates) {
+  refreshMenu: function (coordinates) {
     // If we cannot find a matching preset, keep
     // menu on last known preset category.
     let category = this._activeCategory;
@@ -705,7 +709,7 @@ CubicBezierPresetWidget.prototype = {
     this.activePreset = preset;
   },
 
-  destroy: function() {
+  destroy: function () {
     this._removeEvents();
     this.parent.querySelector(".preset-pane").remove();
   }
@@ -727,7 +731,7 @@ function TimingFunctionPreviewWidget(parent) {
 TimingFunctionPreviewWidget.prototype = {
   PREVIEW_DURATION: 1000,
 
-  _initMarkup: function() {
+  _initMarkup: function () {
     let doc = this.parent.ownerDocument;
 
     let container = doc.createElement("div");
@@ -744,7 +748,7 @@ TimingFunctionPreviewWidget.prototype = {
     this.parent.appendChild(container);
   },
 
-  destroy: function() {
+  destroy: function () {
     clearTimeout(this.autoRestartAnimation);
     this.parent.querySelector(".timing-function-preview").remove();
     this.parent = this.dot = null;
@@ -756,10 +760,10 @@ TimingFunctionPreviewWidget.prototype = {
    * supplied function is invalid, the preview will stop.
    * @param {String} value
    */
-  preview: function(value) {
+  preview: function (value) {
     // Don't restart the preview animation if the value is the same
     if (value === this.previousValue) {
-      return false;
+      return;
     }
 
     clearTimeout(this.autoRestartAnimation);
@@ -775,13 +779,12 @@ TimingFunctionPreviewWidget.prototype = {
   /**
    * Re-start the preview animation from the beginning
    */
-  restartAnimation: function() {
+  restartAnimation: function () {
     // Reset the animation duration in case it was changed
     this.dot.style.animationDuration = (this.PREVIEW_DURATION * 2) + "ms";
 
     // Just toggling the class won't do it unless there's a sync reflow
     this.dot.classList.remove("animate");
-    let w = this.dot.offsetWidth;
     this.dot.classList.add("animate");
 
     // Restart it again after a while

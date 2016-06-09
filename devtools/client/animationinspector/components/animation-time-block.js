@@ -6,8 +6,7 @@
 
 "use strict";
 
-const {Cu} = require("chrome");
-Cu.import("resource://devtools/client/shared/widgets/ViewHelpers.jsm");
+const EventEmitter = require("devtools/shared/event-emitter");
 const {createNode, TimeScale} = require("devtools/client/animationinspector/utils");
 
 const { LocalizationHelper } = require("devtools/client/shared/l10n");

@@ -83,11 +83,13 @@ here = os.path.abspath(os.path.dirname(__file__))
 # Option for MOZ (former NSPR) logging #
 ########################################
 
-# Set the desired log modules you want a log be produced by a try run for, or leave blank to disable the feature.
-# This will be passed to MOZ_LOG_MODULES environment variable. Try run will then put a download link for all log files
+# Set the desired log modules you want a log be produced
+# by a try run for, or leave blank to disable the feature.
+# This will be passed to MOZ_LOG environment variable.
+# Try run will then put a download link for all log files
 # on tbpl.mozilla.org.
 
-MOZ_LOG_MODULES = ""
+MOZ_LOG = ""
 
 #####################
 # Test log handling #
@@ -1234,11 +1236,11 @@ toolbar#nav-bar {
         if options.fatalAssertions:
             browserEnv["XPCOM_DEBUG_BREAK"] = "stack-and-abort"
 
-        # Produce a mozlog, if setup (see MOZ_LOG_MODULES global at the top of
+        # Produce a mozlog, if setup (see MOZ_LOG global at the top of
         # this script).
-        self.mozLogs = MOZ_LOG_MODULES and "MOZ_UPLOAD_DIR" in os.environ
+        self.mozLogs = MOZ_LOG and "MOZ_UPLOAD_DIR" in os.environ
         if self.mozLogs:
-            browserEnv["MOZ_LOG_MODULES"] = MOZ_LOG_MODULES
+            browserEnv["MOZ_LOG"] = MOZ_LOG
 
         if debugger and not options.slowscript:
             browserEnv["JS_DISABLE_SLOW_SCRIPT_SIGNALS"] = "1"
@@ -1329,6 +1331,7 @@ class SSLTunnel:
                              (loc.host, loc.port, self.sslPort, redirhost))
 
             if self.useSSLTunnelExts and option in (
+                    'tls1',
                     'ssl3',
                     'rc4',
                     'failHandshake'):
@@ -2189,6 +2192,12 @@ class MochitestDesktop(MochitestBase):
     def runTests(self, options):
         """ Prepare, configure, run tests and cleanup """
 
+        # a11y and chrome tests don't run with e10s enabled in CI. Need to set
+        # this here since |mach mochitest| sets the flavor after argument parsing.
+        if options.a11y or options.chrome:
+            options.e10s = False
+        mozinfo.update({"e10s": options.e10s})  # for test manifest parsing.
+
         self.setTestRoot(options)
 
         # Despite our efforts to clean up servers started by this script, in practice
@@ -2198,6 +2207,9 @@ class MochitestDesktop(MochitestBase):
         # trying to start new ones.
         self.killNamedOrphans('ssltunnel')
         self.killNamedOrphans('xpcshell')
+
+        if options.cleanupCrashes:
+            mozcrash.cleanup_pending_crash_reports()
 
         # Until we have all green, this only runs on bc*/dt*/mochitest-chrome
         # jobs, not jetpack*, a11yr (for perf reasons), or plain
@@ -2446,6 +2458,7 @@ class MochitestDesktop(MochitestBase):
         self.message_logger.dump_buffered()
         self.message_logger.buffering = False
         self.log.info(error_message)
+        self.log.error("Force-terminating active process(es).");
 
         browser_pid = browser_pid or proc.pid
         child_pids = self.extract_child_pids(processLog, browser_pid)

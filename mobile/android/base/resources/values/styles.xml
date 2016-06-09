@@ -82,11 +82,12 @@
 
     <style name="Widget.GeckoMenuListView" parent="Widget.ListView">
         <item name="android:listSelector">@drawable/menu_item_action_bar_bg</item>
-        <item name="android:divider">@color/toolbar_divider_grey</item>
+        <item name="android:divider">@null</item>
+        <item name="android:dividerHeight">0dp</item>
     </style>
 
     <style name="Widget.MenuItemActionBar">
-        <item name="android:padding">8dip</item>
+        <item name="android:padding">10dip</item>
         <item name="android:background">@drawable/menu_item_action_bar_bg</item>
         <item name="android:scaleType">fitCenter</item>
         <item name="drawableTintList">@color/action_bar_menu_item_colors</item>"
@@ -661,8 +662,20 @@
         <item name="android:textStyle">bold</item>
     </style>
 
-    <style name="GeckoActionBar">
-        <item name="android:background">@drawable/ab_background</item>
+    <!-- Ideally, we use the same style for the action bar & action mode, but unfortunately
+         some attrs that share a purpose have different names so instead we inherit. -->
+    <style name="GeckoActionBar" parent="ThemeOverlay.AppCompat.ActionBar">
+        <item name="android:colorBackground">@color/action_bar_bg_color</item>
+        <item name="colorAccent">@color/fennec_ui_orange</item>
+        <item name="colorControlNormal">@color/toolbar_icon_grey</item>
+    </style>
+    <style name="GeckoActionBar.ActionMode">
+        <item name="android:background">@color/action_bar_bg_color</item>
+        <!-- Note: the bottom divider is drawn in code. -->
+    </style>
+
+    <style name="PreferencesActionBar" parent="Widget.AppCompat.ActionBar.Solid">
+        <item name="displayOptions">showHome|homeAsUp|showTitle</item>
     </style>
 
     <style name="GeckoActionBar.Title">

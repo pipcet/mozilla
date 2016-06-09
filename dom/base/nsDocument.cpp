@@ -138,6 +138,7 @@
 
 #include "jsapi.h"
 #include "nsIXPConnect.h"
+#include "xpcpublic.h"
 #include "nsCCUncollectableMarker.h"
 #include "nsIContentPolicy.h"
 #include "nsContentPolicyUtils.h"
@@ -163,6 +164,7 @@
 #include "mozilla/dom/HTMLIFrameElement.h"
 #include "mozilla/dom/HTMLImageElement.h"
 #include "mozilla/dom/MediaSource.h"
+#include "mozilla/dom/FlyWebService.h"
 
 #include "mozAutoDocUpdate.h"
 #include "nsGlobalWindow.h"
@@ -1452,6 +1454,7 @@ nsIDocument::nsIDocument()
     mFontFaceSetDirty(true),
     mGetUserFontSetCalled(false),
     mPostedFlushUserFontSet(false),
+    mFullscreenEnabled(false),
     mPartID(0),
     mDidFireDOMContentLoaded(true),
     mHasScrollLinkedEffect(false),
@@ -1807,6 +1810,13 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsDocument)
     return NS_SUCCESS_INTERRUPTED_TRAVERSE;
   }
 
+  if (tmp->mMaybeEndOutermostXBLUpdateRunner) {
+    // The cached runnable keeps a reference to the document object..
+    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb,
+                                       "mMaybeEndOutermostXBLUpdateRunner.mObj");
+    cb.NoteXPCOMChild(ToSupports(tmp));
+  }
+
   for (auto iter = tmp->mIdentifierMap.ConstIter(); !iter.Done();
        iter.Next()) {
     iter.Get()->Traverse(&cb);
@@ -1957,6 +1967,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsDocument)
   tmp->mCachedRootElement = nullptr; // Avoid a dangling pointer
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDisplayDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mFirstBaseNodeWithHref)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mMaybeEndOutermostXBLUpdateRunner)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDOMImplementation)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mImageMaps)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mCachedEncoder)
@@ -2495,7 +2506,7 @@ WarnIfSandboxIneffective(nsIDocShell* aDocShell,
       return;
     }
 
-    nsCOMPtr<nsIDocument> parentDocument = do_GetInterface(parentDocShell);
+    nsCOMPtr<nsIDocument> parentDocument = parentDocShell->GetDocument();
     nsCOMPtr<nsIURI> iframeUri;
     parentChannel->GetURI(getter_AddRefs(iframeUri));
     nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
@@ -2579,13 +2590,15 @@ nsDocument::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
   }
 
   // If this document is being loaded by a docshell, copy its sandbox flags
-  // to the document. These are immutable after being set here.
+  // to the document, and store the fullscreen enabled flag. These are
+  // immutable after being set here.
   nsCOMPtr<nsIDocShell> docShell = do_QueryInterface(aContainer);
 
   if (docShell) {
     nsresult rv = docShell->GetSandboxFlags(&mSandboxFlags);
     NS_ENSURE_SUCCESS(rv, rv);
     WarnIfSandboxIneffective(docShell, mSandboxFlags, GetChannel());
+    mFullscreenEnabled = docShell->GetFullscreenAllowed();
   }
 
   // The CSP directive upgrade-insecure-requests not only applies to the
@@ -2749,7 +2762,6 @@ nsDocument::ApplySettingsFromCSP(bool aSpeculative)
 nsresult
 nsDocument::InitCSP(nsIChannel* aChannel)
 {
-  nsCOMPtr<nsIContentSecurityPolicy> csp;
   if (!CSPService::sCSPEnabled) {
     MOZ_LOG(gCspPRLog, LogLevel::Debug,
            ("CSP is disabled, skipping CSP init for document %p", this));
@@ -2869,6 +2881,7 @@ nsDocument::InitCSP(nsIChannel* aChannel)
     }
   }
 
+  nsCOMPtr<nsIContentSecurityPolicy> csp;
   rv = principal->EnsureCSP(this, getter_AddRefs(csp));
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -4977,8 +4990,11 @@ nsDocument::MaybeEndOutermostXBLUpdate()
       mInXBLUpdate = false;
       BindingManager()->EndOutermostUpdate();
     } else if (!mInDestructor) {
-      nsContentUtils::AddScriptRunner(
-        NewRunnableMethod(this, &nsDocument::MaybeEndOutermostXBLUpdate));
+      if (!mMaybeEndOutermostXBLUpdateRunner) {
+        mMaybeEndOutermostXBLUpdateRunner =
+          NewRunnableMethod(this, &nsDocument::MaybeEndOutermostXBLUpdate);
+      }
+      nsContentUtils::AddScriptRunner(mMaybeEndOutermostXBLUpdateRunner);
     }
   }
 }
@@ -5448,6 +5464,40 @@ nsIDocument::RemoveAnonymousContent(AnonymousContent& aContent,
   if (mAnonymousContents.IsEmpty()) {
     shell->GetCanvasFrame()->HideCustomContentContainer();
   }
+}
+
+Element*
+nsIDocument::GetAnonRootIfInAnonymousContentContainer(nsINode* aNode) const
+{
+  if (!aNode->IsInNativeAnonymousSubtree()) {
+    return nullptr;
+  }
+
+  nsIPresShell* shell = GetShell();
+  if (!shell || !shell->GetCanvasFrame()) {
+    return nullptr;
+  }
+
+  nsAutoScriptBlocker scriptBlocker;
+  nsCOMPtr<Element> customContainer = shell->GetCanvasFrame()
+                                           ->GetCustomContentContainer();
+  if (!customContainer) {
+    return nullptr;
+  }
+
+  // An arbitrary number of elements can be inserted as children of the custom
+  // container frame.  We want the one that was added that contains aNode, so
+  // we need to keep track of the last child separately using |child| here.
+  nsINode* child = aNode;
+  nsINode* parent = aNode->GetParentNode();
+  while (parent && parent->IsInNativeAnonymousSubtree()) {
+    if (parent == customContainer) {
+      return child->IsElement() ? child->AsElement() : nullptr;
+    }
+    child = parent;
+    parent = child->GetParentNode();
+  }
+  return nullptr;
 }
 
 //
@@ -8435,9 +8485,6 @@ nsDocument::IsScriptEnabled()
     return false;
   }
 
-  nsCOMPtr<nsIScriptSecurityManager> sm(do_GetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID));
-  NS_ENSURE_TRUE(sm, false);
-
   nsCOMPtr<nsIScriptGlobalObject> globalObject = do_QueryInterface(GetInnerWindow());
   if (!globalObject && mMasterDocument) {
     globalObject = do_QueryInterface(mMasterDocument->GetInnerWindow());
@@ -8446,7 +8493,7 @@ nsDocument::IsScriptEnabled()
     return false;
   }
 
-  return sm->ScriptAllowed(globalObject->GetGlobalJSObject());
+  return xpc::Scriptability::Get(globalObject->GetGlobalJSObject()).Allowed();
 }
 
 nsRadioGroupStruct*
@@ -8942,6 +8989,13 @@ nsDocument::CanSavePresentation(nsIRequest *aNewRequest)
     return false;
   }
 
+  // Don't save presentation if there are active FlyWeb connections or FlyWeb
+  // servers.
+  FlyWebService* flyWebService = FlyWebService::GetExisting();
+  if (flyWebService && flyWebService->HasConnectionOrServer(win->WindowID())) {
+    return false;
+  }
+
   if (mSubDocuments) {
     for (auto iter = mSubDocuments->Iter(); !iter.Done(); iter.Next()) {
       auto entry = static_cast<SubDocMapEntry*>(iter.Get());
@@ -9082,16 +9136,8 @@ nsDocument::BlockOnload()
       // block onload only when there are no script blockers.
       ++mAsyncOnloadBlockCount;
       if (mAsyncOnloadBlockCount == 1) {
-        bool success = nsContentUtils::AddScriptRunner(
+        nsContentUtils::AddScriptRunner(
           NewRunnableMethod(this, &nsDocument::AsyncBlockOnload));
-
-        // The script runner shouldn't fail to add. But if somebody broke
-        // something and it does, we'll thrash at 100% cpu forever. The best
-        // response is just to ignore the onload blocking request. See bug 579535.
-        if (!success) {
-          NS_WARNING("Disaster! Onload blocking script runner failed to add - expect bad things!");
-          mAsyncOnloadBlockCount = 0;
-        }
       }
       return;
     }
@@ -9736,6 +9782,9 @@ nsDocument::SuppressEventHandling(nsIDocument::SuppressionType aWhat,
     mAnimationsPaused += aIncrease;
   } else {
     mEventsSuppressed += aIncrease;
+    for (uint32_t i = 0; i < aIncrease; ++i) {
+      ScriptLoader()->AddExecuteBlocker();
+    }
   }
 
   SuppressArgs args = { aWhat, aIncrease };
@@ -10064,6 +10113,7 @@ GetAndUnsuppressSubDocuments(nsIDocument* aDocument,
   if (args->mWhat != nsIDocument::eAnimationsOnly &&
       aDocument->EventHandlingSuppressed() > 0) {
     static_cast<nsDocument*>(aDocument)->DecreaseEventSuppression();
+    aDocument->ScriptLoader()->RemoveExecuteBlocker();
   } else if (args->mWhat == nsIDocument::eAnimationsOnly &&
              aDocument->AnimationsPaused()) {
     static_cast<nsDocument*>(aDocument)->ResumeAnimations();
@@ -11742,20 +11792,9 @@ GetFullscreenError(nsIDocument* aDoc, bool aCallerIsChrome)
   if (!nsContentUtils::IsFullScreenApiEnabled()) {
     return "FullscreenDeniedDisabled";
   }
-  if (!aDoc->IsVisible()) {
-    return "FullscreenDeniedHidden";
-  }
-  if (HasFullScreenSubDocument(aDoc)) {
-    return "FullscreenDeniedSubDocFullScreen";
-  }
-
-  // Ensure that all containing elements are <iframe> and have
-  // allowfullscreen attribute set.
-  nsCOMPtr<nsIDocShell> docShell(aDoc->GetDocShell());
-  if (!docShell || !docShell->GetFullscreenAllowed()) {
+  if (!aDoc->FullscreenEnabledInternal()) {
     return "FullscreenDeniedContainerNotAllowed";
   }
-
   return nullptr;
 }
 
@@ -11782,6 +11821,14 @@ nsDocument::FullscreenElementReadyCheck(Element* aElement,
   }
   if (const char* msg = GetFullscreenError(this, aWasCallerChrome)) {
     DispatchFullscreenError(msg);
+    return false;
+  }
+  if (!IsVisible()) {
+    DispatchFullscreenError("FullscreenDeniedHidden");
+    return false;
+  }
+  if (HasFullScreenSubDocument(this)) {
+    DispatchFullscreenError("FullscreenDeniedSubDocFullScreen");
     return false;
   }
   if (GetFullscreenElement() &&
@@ -12175,7 +12222,7 @@ nsDocument::GetFullscreenElement()
 NS_IMETHODIMP
 nsDocument::GetMozFullScreen(bool *aFullScreen)
 {
-  *aFullScreen = MozFullScreen();
+  *aFullScreen = Fullscreen();
   return NS_OK;
 }
 
@@ -12791,6 +12838,13 @@ nsDocument::GetVisibilityState() const
   // Otherwise, we're visible.
   if (!IsVisible() || !mWindow || !mWindow->GetOuterWindow() ||
       mWindow->GetOuterWindow()->IsBackground()) {
+
+    // Check if the document is in prerender state.
+    nsCOMPtr<nsIDocShell> docshell = GetDocShell();
+    if (docshell && docshell->GetIsPrerendered()) {
+      return dom::VisibilityState::Prerender;
+    }
+
     return dom::VisibilityState::Hidden;
   }
 

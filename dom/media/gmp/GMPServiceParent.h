@@ -23,8 +23,6 @@ namespace gmp {
 
 class GMPParent;
 
-#define GMP_DEFAULT_ASYNC_SHUTDONW_TIMEOUT 3000
-
 class GeckoMediaPluginServiceParent final : public GeckoMediaPluginService
                                           , public mozIGeckoMediaPluginChromeService
 {
@@ -112,7 +110,7 @@ protected:
   friend class GMPParent;
   void ReAddOnGMPThread(const RefPtr<GMPParent>& aOld);
   void PluginTerminated(const RefPtr<GMPParent>& aOld);
-  void InitializePlugins() override;
+  void InitializePlugins(AbstractThread* aAbstractGMPThread) override;
   RefPtr<GenericPromise::AllPromiseType> LoadFromEnvironment();
   RefPtr<GenericPromise> AddOnGMPThread(nsString aDirectory);
   bool GetContentParentFrom(const nsACString& aNodeId,

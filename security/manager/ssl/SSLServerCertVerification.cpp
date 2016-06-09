@@ -107,6 +107,7 @@
 #include "SharedSSLState.h"
 #include "cert.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/Casting.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/UniquePtr.h"
@@ -761,7 +762,7 @@ private:
   const Time mTime;
   const PRTime mPRTime;
   const TimeStamp mJobStartTime;
-  const ScopedSECItem mStapledOCSPResponse;
+  const UniqueSECItem mStapledOCSPResponse;
 };
 
 SSLServerCertVerificationJob::SSLServerCertVerificationJob(
@@ -924,7 +925,7 @@ GatherBaselineRequirementsTelemetry(const UniqueCERTCertList& certList)
             "(or IsCertBuiltInRoot failed)\n", commonName.get()));
     return;
   }
-  SECItem altNameExtension;
+  ScopedAutoSECItem altNameExtension;
   SECStatus rv = CERT_FindCertExtension(cert, SEC_OID_X509_SUBJECT_ALT_NAME,
                                         &altNameExtension);
   if (rv != SECSuccess) {
@@ -940,11 +941,6 @@ GatherBaselineRequirementsTelemetry(const UniqueCERTCertList& certList)
   UniquePLArenaPool arena(PORT_NewArena(DER_DEFAULT_CHUNKSIZE));
   CERTGeneralName* subjectAltNames =
     CERT_DecodeAltNameExtension(arena.get(), &altNameExtension);
-  // CERT_FindCertExtension takes a pointer to a SECItem and allocates memory
-  // in its data field. This is a bad way to do this because we can't use a
-  // ScopedSECItem and neither is that memory tracked by an arena. We have to
-  // manually reach in and free the memory.
-  PORT_Free(altNameExtension.data);
   if (!subjectAltNames) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
            ("BR telemetry: could not decode subject alt names for '%s'\n",
@@ -963,7 +959,8 @@ GatherBaselineRequirementsTelemetry(const UniqueCERTCertList& certList)
   do {
     nsAutoCString altName;
     if (currentName->type == certDNSName) {
-      altName.Assign(reinterpret_cast<char*>(currentName->name.other.data),
+      altName.Assign(BitwiseCast<char*, unsigned char*>(
+                       currentName->name.other.data),
                      currentName->name.other.len);
       nsDependentCString altNameWithoutWildcard(altName, 0);
       if (StringBeginsWith(altNameWithoutWildcard, NS_LITERAL_CSTRING("*."))) {
@@ -1435,7 +1432,7 @@ SSLServerCertVerificationJob::Run()
     // set the error code if/when it fails.
     PR_SetError(0, 0);
     SECStatus rv = AuthCertificate(*mCertVerifier, mInfoObject, mCert,
-                                   mPeerCertChain, mStapledOCSPResponse,
+                                   mPeerCertChain, mStapledOCSPResponse.get(),
                                    mProviderFlags, mTime);
     MOZ_ASSERT(mPeerCertChain || rv != SECSuccess,
                "AuthCertificate() should take ownership of chain on failure");

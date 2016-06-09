@@ -601,12 +601,9 @@ function RegExpSplit(string, limit) {
     // Steps 6-7.
     var unicodeMatching = callFunction(std_String_includes, flags, "u");
 
-    // Step 14 (reordered).
-    var size = S.length;
-
     var optimizable = IsRegExpSplitOptimizable(rx, C);
     var splitter;
-    if (optimizable && size !== 0) {
+    if (optimizable) {
         // Steps 8-9 (skipped).
 
         // Step 10.
@@ -637,17 +634,24 @@ function RegExpSplit(string, limit) {
     else
         lim = limit >>> 0;
 
-    // Step 16;
+    // Step 15.
     var p = 0;
 
-    // Step 16;
+    // Step 16.
     if (lim === 0)
         return A;
+
+    // Step 14 (reordered).
+    var size = S.length;
 
     // Step 17.
     if (size === 0) {
         // Step 17.a.
-        var z = RegExpExec(splitter, S, false);
+        var z;
+        if (optimizable)
+            z = RegExpMatcher(splitter, S, 0);
+        else
+            z = RegExpExec(splitter, S, false);
 
         // Step 17.b.
         if (z !== null)
@@ -805,7 +809,7 @@ function RegExpBuiltinExec(R, S, forTest) {
     // This check is here for RegExpTest.  RegExp_prototype_Exec does same
     // thing already.
     if (!IsRegExpObject(R))
-        return callFunction(CallRegExpMethodIfWrapped, R, R, S, forTest, "RegExpBuiltinExec");
+        return UnwrapAndCallRegExpBuiltinExec(R, S, forTest);
 
     // Steps 1-2 (skipped).
 
@@ -857,6 +861,14 @@ function RegExpBuiltinExec(R, S, forTest) {
     }
 
     return result;
+}
+
+function UnwrapAndCallRegExpBuiltinExec(R, S, forTest) {
+    return callFunction(CallRegExpMethodIfWrapped, R, S, forTest, "CallRegExpBuiltinExec");
+}
+
+function CallRegExpBuiltinExec(S, forTest) {
+    return RegExpBuiltinExec(this, S, forTest);
 }
 
 // ES6 21.2.5.13.

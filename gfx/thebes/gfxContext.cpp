@@ -85,11 +85,11 @@ gfxContext::gfxContext(DrawTarget *aTarget, const Point& aDeviceOffset)
 }
 
 /* static */ already_AddRefed<gfxContext>
-gfxContext::ForDrawTarget(DrawTarget* aTarget,
-                          const mozilla::gfx::Point& aDeviceOffset)
+gfxContext::CreateOrNull(DrawTarget* aTarget,
+                         const mozilla::gfx::Point& aDeviceOffset)
 {
   if (!aTarget || !aTarget->IsValid()) {
-    gfxCriticalNote << "Invalid target in gfxContext::ForDrawTarget " << hexa(aTarget);
+    gfxCriticalNote << "Invalid target in gfxContext::CreateOrNull " << hexa(aTarget);
     return nullptr;
   }
 
@@ -98,10 +98,10 @@ gfxContext::ForDrawTarget(DrawTarget* aTarget,
 }
 
 /* static */ already_AddRefed<gfxContext>
-gfxContext::ForDrawTargetWithTransform(DrawTarget* aTarget)
+gfxContext::CreatePreservingTransformOrNull(DrawTarget* aTarget)
 {
   if (!aTarget || !aTarget->IsValid()) {
-    gfxCriticalNote << "Invalid target in gfxContext::ForDrawTargetWithTransform " << hexa(aTarget);
+    gfxCriticalNote << "Invalid target in gfxContext::CreatePreservingTransformOrNull " << hexa(aTarget);
     return nullptr;
   }
 
@@ -730,25 +730,6 @@ gfxContext::Mask(SourceSurface* aSurface, Float aAlpha, const Matrix& aTransform
   mDT->MaskSurface(PatternFromState(this), aSurface, Point(),
                    DrawOptions(aAlpha, CurrentState().op, CurrentState().aaMode));
   ChangeTransform(old);
-}
-
-void
-gfxContext::Mask(gfxASurface *surface, const gfxPoint& offset)
-{
-  PROFILER_LABEL("gfxContext", "Mask",
-    js::ProfileEntry::Category::GRAPHICS);
-
-  // Lifetime needs to be limited here as we may simply wrap surface's data.
-  RefPtr<SourceSurface> sourceSurf =
-  gfxPlatform::GetPlatform()->GetSourceSurfaceForSurface(mDT, surface);
-
-  if (!sourceSurf) {
-    return;
-  }
-
-  gfxPoint pt = surface->GetDeviceOffset();
-
-  Mask(sourceSurf, 1.0f, Point(offset.x - pt.x, offset.y - pt.y));
 }
 
 void

@@ -2914,12 +2914,12 @@ CodeGenerator::visitMoveGroup(LMoveGroup* group)
 #else
           case LDefinition::BOX:
 #endif
-          case LDefinition::GENERAL:    moveType = MoveOp::GENERAL;   break;
-          case LDefinition::INT32:      moveType = MoveOp::INT32;     break;
-          case LDefinition::FLOAT32:    moveType = MoveOp::FLOAT32;   break;
-          case LDefinition::DOUBLE:     moveType = MoveOp::DOUBLE;    break;
-          case LDefinition::INT32X4:    moveType = MoveOp::INT32X4;   break;
-          case LDefinition::FLOAT32X4:  moveType = MoveOp::FLOAT32X4; break;
+          case LDefinition::GENERAL:      moveType = MoveOp::GENERAL;      break;
+          case LDefinition::INT32:        moveType = MoveOp::INT32;        break;
+          case LDefinition::FLOAT32:      moveType = MoveOp::FLOAT32;      break;
+          case LDefinition::DOUBLE:       moveType = MoveOp::DOUBLE;       break;
+          case LDefinition::SIMD128INT:   moveType = MoveOp::SIMD128INT;   break;
+          case LDefinition::SIMD128FLOAT: moveType = MoveOp::SIMD128FLOAT; break;
           default: MOZ_CRASH("Unexpected move type");
         }
 
@@ -3478,6 +3478,24 @@ CodeGenerator::visitOutOfLineCallPostWriteBarrier(OutOfLineCallPostWriteBarrier*
     masm.jump(ool->rejoin());
 }
 
+void
+CodeGenerator::maybeEmitGlobalBarrierCheck(const LAllocation* maybeGlobal, OutOfLineCode* ool)
+{
+    // Check whether an object is a global that we have already barriered before
+    // calling into the VM.
+
+    if (!maybeGlobal->isConstant())
+        return;
+
+    JSObject* obj = &maybeGlobal->toConstant()->toObject();
+    if (!obj->is<GlobalObject>())
+        return;
+
+    JSCompartment* comp = obj->compartment();
+    auto addr = AbsoluteAddress(&comp->globalWriteBarriered);
+    masm.branch32(Assembler::NotEqual, addr, Imm32(0), ool->rejoin());
+}
+
 template <class LPostBarrierType>
 void
 CodeGenerator::visitPostWriteBarrierCommonO(LPostBarrierType* lir, OutOfLineCode* ool)
@@ -3493,6 +3511,8 @@ CodeGenerator::visitPostWriteBarrierCommonO(LPostBarrierType* lir, OutOfLineCode
         masm.branchPtrInNurseryRange(Assembler::Equal, ToRegister(lir->object()), temp,
                                      ool->rejoin());
     }
+
+    maybeEmitGlobalBarrierCheck(lir->object(), ool);
 
     masm.branchPtrInNurseryRange(Assembler::Equal, ToRegister(lir->value()), temp, ool->entry());
 
@@ -3514,6 +3534,8 @@ CodeGenerator::visitPostWriteBarrierCommonV(LPostBarrierType* lir, OutOfLineCode
         masm.branchPtrInNurseryRange(Assembler::Equal, ToRegister(lir->object()), temp,
                                      ool->rejoin());
     }
+
+    maybeEmitGlobalBarrierCheck(lir->object(), ool);
 
     ValueOperand value = ToValue(lir, LPostBarrierType::Input);
     masm.branchValueIsNurseryObject(Assembler::Equal, value, temp, ool->entry());
@@ -4939,6 +4961,42 @@ CodeGenerator::emitDebugResultChecks(LInstruction* ins)
         break;
     }
 }
+
+void
+CodeGenerator::emitDebugForceBailing(LInstruction* lir)
+{
+    if (!lir->snapshot())
+        return;
+    if (lir->isStart())
+        return;
+    if (lir->isOsiPoint())
+        return;
+
+    const void* bailAfterAddr = GetJitContext()->runtime->addressOfIonBailAfter();
+
+    AllocatableGeneralRegisterSet regs(GeneralRegisterSet::All());
+
+    Label done, notBail, bail;
+    masm.branch32(Assembler::Equal, AbsoluteAddress(bailAfterAddr), Imm32(0), &done);
+    {
+        Register temp = regs.takeAny();
+
+        masm.push(temp);
+        masm.load32(AbsoluteAddress(bailAfterAddr), temp);
+        masm.sub32(Imm32(1), temp);
+        masm.store32(temp, AbsoluteAddress(bailAfterAddr));
+
+        masm.branch32(Assembler::NotEqual, temp, Imm32(0), &notBail);
+        {
+            masm.pop(temp);
+            masm.jump(&bail);
+            bailoutFrom(&bail, lir->snapshot());
+        }
+        masm.bind(&notBail);
+        masm.pop(temp);
+    }
+    masm.bind(&done);
+}
 #endif
 
 bool
@@ -5026,6 +5084,10 @@ CodeGenerator::generateBody()
                         return false;
                 }
             }
+
+#ifdef DEBUG
+            emitDebugForceBailing(*iter);
+#endif
 
             iter->accept(this);
 
@@ -5186,7 +5248,7 @@ CodeGenerator::visitNewArray(LNewArray* lir)
 
     MOZ_ASSERT(length <= NativeObject::MAX_DENSE_ELEMENTS_COUNT);
 
-    if (!templateObject) {
+    if (lir->mir()->isVMCall()) {
         visitNewArrayCallVM(lir);
         return;
     }
@@ -5443,7 +5505,7 @@ CodeGenerator::visitNewObject(LNewObject* lir)
     Register tempReg = ToRegister(lir->temp());
     JSObject* templateObject = lir->mir()->templateObject();
 
-    if (!templateObject) {
+    if (lir->mir()->isVMCall()) {
         visitNewObjectVMCall(lir);
         return;
     }
@@ -5508,12 +5570,16 @@ CodeGenerator::visitSimdBox(LSimdBox* lir)
 
     Address objectData(object, InlineTypedObject::offsetOfDataStart());
     switch (type) {
-      case MIRType::Bool32x4:
+      case MIRType::Int8x16:
+      case MIRType::Int16x8:
       case MIRType::Int32x4:
-        masm.storeUnalignedInt32x4(in, objectData);
+      case MIRType::Bool8x16:
+      case MIRType::Bool16x8:
+      case MIRType::Bool32x4:
+        masm.storeUnalignedSimd128Int(in, objectData);
         break;
       case MIRType::Float32x4:
-        masm.storeUnalignedFloat32x4(in, objectData);
+        masm.storeUnalignedSimd128Float(in, objectData);
         break;
       default:
         MOZ_CRASH("Unknown SIMD kind when generating code for SimdBox.");
@@ -5586,12 +5652,16 @@ CodeGenerator::visitSimdUnbox(LSimdUnbox* lir)
     // Load the value from the data of the InlineTypedObject.
     Address objectData(object, InlineTypedObject::offsetOfDataStart());
     switch (lir->mir()->type()) {
-      case MIRType::Bool32x4:
+      case MIRType::Int8x16:
+      case MIRType::Int16x8:
       case MIRType::Int32x4:
-        masm.loadUnalignedInt32x4(objectData, simd);
+      case MIRType::Bool8x16:
+      case MIRType::Bool16x8:
+      case MIRType::Bool32x4:
+        masm.loadUnalignedSimd128Int(objectData, simd);
         break;
       case MIRType::Float32x4:
-        masm.loadUnalignedFloat32x4(objectData, simd);
+        masm.loadUnalignedSimd128Float(objectData, simd);
         break;
       default:
         MOZ_CRASH("The impossible happened!");
@@ -8740,11 +8810,11 @@ CodeGenerator::visitRest(LRest* lir)
 }
 
 bool
-CodeGenerator::generateAsmJS(wasm::FuncOffsets* offsets)
+CodeGenerator::generateWasm(uint32_t sigIndex, wasm::FuncOffsets* offsets)
 {
     JitSpew(JitSpew_Codegen, "# Emitting asm.js code");
 
-    wasm::GenerateFunctionPrologue(masm, frameSize(), offsets);
+    wasm::GenerateFunctionPrologue(masm, frameSize(), sigIndex, offsets);
 
     // Overflow checks are omitted by CodeGenerator in some cases (leaf
     // functions with small framePushed). Perform overflow-checking after
@@ -11203,7 +11273,7 @@ void
 CodeGenerator::visitAsmThrowUnreachable(LAsmThrowUnreachable* lir)
 {
     MOZ_ASSERT(gen->compilingAsmJS());
-    masm.jump(wasm::JumpTarget::UnreachableTrap);
+    masm.jump(wasm::JumpTarget::Unreachable);
 }
 
 typedef bool (*RecompileFn)(JSContext*);

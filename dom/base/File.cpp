@@ -343,35 +343,24 @@ Blob::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 }
 
 /* static */ already_AddRefed<Blob>
-Blob::Constructor(const GlobalObject& aGlobal, ErrorResult& aRv)
+Blob::Constructor(const GlobalObject& aGlobal,
+                  const Optional<Sequence<BlobPart>>& aData,
+                  const BlobPropertyBag& aBag,
+                  ErrorResult& aRv)
 {
   RefPtr<MultipartBlobImpl> impl = new MultipartBlobImpl();
 
-  impl->InitializeBlob(aRv);
+  if (aData.WasPassed()) {
+    impl->InitializeBlob(aGlobal.Context(), aData.Value(), aBag.mType,
+                         aBag.mEndings == EndingTypes::Native, aRv);
+  } else {
+    impl->InitializeBlob(aRv);
+  }
+
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
   }
 
-  MOZ_ASSERT(!impl->IsFile());
-
-  RefPtr<Blob> blob = Blob::Create(aGlobal.GetAsSupports(), impl);
-  return blob.forget();
-}
-
-/* static */ already_AddRefed<Blob>
-Blob::Constructor(
-        const GlobalObject& aGlobal,
-        const Sequence<OwningArrayBufferOrArrayBufferViewOrBlobOrString>& aData,
-        const BlobPropertyBag& aBag,
-        ErrorResult& aRv)
-{
-  RefPtr<MultipartBlobImpl> impl = new MultipartBlobImpl();
-
-  impl->InitializeBlob(aGlobal.Context(), aData, aBag.mType,
-                       aBag.mEndings == EndingTypes::Native, aRv);
-  if (aRv.Failed()) {
-    return nullptr;
-  }
   MOZ_ASSERT(!impl->IsFile());
 
   RefPtr<Blob> blob = Blob::Create(aGlobal.GetAsSupports(), impl);
@@ -465,9 +454,15 @@ File::GetName(nsAString& aFileName) const
 }
 
 void
-File::GetPath(nsAString& aPath, ErrorResult& aRv)
+File::GetPath(nsAString& aPath) const
 {
-  mImpl->GetPath(aPath, aRv);
+  mImpl->GetPath(aPath);
+}
+
+void
+File::SetPath(const nsAString& aPath)
+{
+  mImpl->SetPath(aPath);
 }
 
 Date
@@ -537,12 +532,11 @@ ParseSize(int64_t aSize, int64_t& aStart, int64_t& aEnd)
 }
 
 /* static */ already_AddRefed<File>
-File::Constructor(
-        const GlobalObject& aGlobal,
-        const Sequence<OwningArrayBufferOrArrayBufferViewOrBlobOrString>& aData,
-        const nsAString& aName,
-        const FilePropertyBag& aBag,
-        ErrorResult& aRv)
+File::Constructor(const GlobalObject& aGlobal,
+                  const Sequence<BlobPart>& aData,
+                  const nsAString& aName,
+                  const FilePropertyBag& aBag,
+                  ErrorResult& aRv)
 {
   RefPtr<MultipartBlobImpl> impl = new MultipartBlobImpl(aName);
 
@@ -685,10 +679,17 @@ BlobImplBase::GetName(nsAString& aName) const
 }
 
 void
-BlobImplBase::GetPath(nsAString& aPath, ErrorResult& aRv)
+BlobImplBase::GetPath(nsAString& aPath) const
 {
   NS_ASSERTION(mIsFile, "Should only be called on files");
   aPath = mPath;
+}
+
+void
+BlobImplBase::SetPath(const nsAString& aPath)
+{
+  NS_ASSERTION(mIsFile, "Should only be called on files");
+  mPath = aPath;
 }
 
 void
@@ -983,15 +984,6 @@ BlobImplFile::GetInternalStream(nsIInputStream** aStream, ErrorResult& aRv)
 
   aRv = NS_NewPartialLocalFileInputStream(aStream, mFile, mStart, mLength,
                                           -1, -1, sFileStreamFlags);
-}
-
-void
-BlobImplFile::SetPath(const nsAString& aPath)
-{
-  MOZ_ASSERT(aPath.IsEmpty() ||
-             aPath[aPath.Length() - 1] == char16_t('/'),
-             "Path must end with a path separator");
-  mPath = aPath;
 }
 
 ////////////////////////////////////////////////////////////////////////////

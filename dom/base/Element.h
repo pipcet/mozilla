@@ -112,8 +112,11 @@ enum {
                               ELEMENT_POTENTIAL_RESTYLE_ROOT_FLAGS |
                               ELEMENT_IS_CONDITIONAL_RESTYLE_ANCESTOR,
 
+  // Set if this element is marked as 'scrollgrab' (see bug 912666)
+  ELEMENT_HAS_SCROLLGRAB = ELEMENT_FLAG_BIT(5),
+
   // Remaining bits are for subclasses
-  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 5
+  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 6
 };
 
 #undef ELEMENT_FLAG_BIT
@@ -660,7 +663,7 @@ public:
                          ErrorResult& aError);
   bool HasAttribute(const nsAString& aName) const
   {
-    return InternalGetExistingAttrNameFromQName(aName) != nullptr;
+    return InternalGetAttrNameFromQName(aName) != nullptr;
   }
   bool HasAttributeNS(const nsAString& aNamespaceURI,
                       const nsAString& aLocalName) const;
@@ -852,7 +855,7 @@ public:
 
   already_AddRefed<Animation>
   Animate(JSContext* aContext,
-          JS::Handle<JSObject*> aFrames,
+          JS::Handle<JSObject*> aKeyframes,
           const UnrestrictedDoubleOrKeyframeAnimationOptions& aOptions,
           ErrorResult& aError);
 
@@ -861,7 +864,7 @@ public:
   static already_AddRefed<Animation>
   Animate(const Nullable<ElementOrCSSPseudoElement>& aTarget,
           JSContext* aContext,
-          JS::Handle<JSObject*> aFrames,
+          JS::Handle<JSObject*> aKeyframes,
           const UnrestrictedDoubleOrKeyframeAnimationOptions& aOptions,
           ErrorResult& aError);
 
@@ -1273,9 +1276,13 @@ protected:
     GetEventListenerManagerForAttr(nsIAtom* aAttrName, bool* aDefer);
 
   /**
-   * Internal hook for converting an attribute name-string to an atomized name
+   * Internal hook for converting an attribute name-string to nsAttrName in
+   * case there is such existing attribute. aNameToUse can be passed to get
+   * name which was used for looking for the attribute (lowercase in HTML).
    */
-  virtual const nsAttrName* InternalGetExistingAttrNameFromQName(const nsAString& aStr) const;
+  const nsAttrName*
+  InternalGetAttrNameFromQName(const nsAString& aStr,
+                               nsAutoString* aNameToUse = nullptr) const;
 
   nsIFrame* GetStyledFrame();
 
@@ -1336,8 +1343,6 @@ protected:
 
   nsDOMTokenList* GetTokenList(nsIAtom* aAtom,
                                const DOMTokenListSupportedTokenArray aSupportedTokens = nullptr);
-  void GetTokenList(nsIAtom* aAtom, nsIVariant** aResult);
-  nsresult SetTokenList(nsIAtom* aAtom, nsIVariant* aValue);
 
 private:
   /**

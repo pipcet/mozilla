@@ -5,6 +5,7 @@
 "use strict";
 
 Cu.import("resource://gre/modules/Promise.jsm");
+Cu.import("resource://gre/modules/AppConstants.jsm");
 var {AddonTestUtils} = Cu.import("resource://testing-common/AddonManagerTesting.jsm", {});
 var GMPScope = Cu.import("resource://gre/modules/addons/GMPProvider.jsm");
 
@@ -70,7 +71,7 @@ function getInstallItem() {
 }
 
 function openDetailsView(aId) {
-  let view = gManagerWindow.document.getElementById("view-port").selectedPanel
+  let view = get_current_view(gManagerWindow);
   Assert.equal(view.id, "list-view", "Should be in the list view to use this function");
 
   let item = get_addon_element(gManagerWindow, aId);
@@ -386,9 +387,8 @@ add_task(function* testEmeSupport() {
                   "Adobe EME not supported, couldn't find add-on element.");
       }
     } else if (addon.id == GMPScope.WIDEVINE_ID) {
-      if ((Services.appinfo.OS == "WINNT" &&
-          Services.sysinfo.getPropertyAsInt32("version") >= 6) ||
-          Services.appinfo.OS == "Darwin") {
+      if (AppConstants.isPlatformAndVersionAtLeast("win", "6") ||
+          AppConstants.isPlatformAndVersionAtLeast("macosx", "10.7")) {
         Assert.ok(item, "Widevine supported, found add-on element.");
       } else {
         Assert.ok(!item,

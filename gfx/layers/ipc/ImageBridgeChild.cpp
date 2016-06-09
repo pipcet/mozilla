@@ -24,7 +24,7 @@
 #include "mozilla/media/MediaSystemResourceManager.h" // for MediaSystemResourceManager
 #include "mozilla/media/MediaSystemResourceManagerChild.h" // for MediaSystemResourceManagerChild
 #include "mozilla/layers/CompositableClient.h"  // for CompositableChild, etc
-#include "mozilla/layers/CompositorBridgeParent.h" // for CompositorBridgeParent
+#include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/ISurfaceAllocator.h"  // for ISurfaceAllocator
 #include "mozilla/layers/ImageClient.h"  // for ImageClient
 #include "mozilla/layers/LayersMessages.h"  // for CompositableOperation
@@ -149,7 +149,6 @@ struct CompositableTransaction
       }
       default:
         MOZ_CRASH("GFX: IBC Fallback destroy actors");
-        break;
       }
     }
     mDestroyedActors.Clear();
@@ -188,8 +187,12 @@ ImageBridgeChild::UseTextures(CompositableClient* aCompositable,
       return;
     }
 
+    ReadLockDescriptor readLock;
+    t.mTextureClient->SerializeReadLock(readLock);
+
     FenceHandle fence = t.mTextureClient->GetAcquireFenceHandle();
     textures.AppendElement(TimedTexture(nullptr, t.mTextureClient->GetIPDLActor(),
+                                        readLock,
                                         fence.IsValid() ? MaybeFence(fence) : MaybeFence(null_t()),
                                         t.mTimeStamp, t.mPictureRect,
                                         t.mFrameID, t.mProducerID, t.mInputFrameID));
@@ -210,13 +213,23 @@ ImageBridgeChild::UseComponentAlphaTextures(CompositableClient* aCompositable,
   MOZ_ASSERT(aTextureOnWhite->GetIPDLActor());
   MOZ_ASSERT(aTextureOnBlack->GetIPDLActor());
   MOZ_ASSERT(aTextureOnBlack->GetSize() == aTextureOnWhite->GetSize());
+
+  ReadLockDescriptor readLockW;
+  ReadLockDescriptor readLockB;
+  aTextureOnBlack->SerializeReadLock(readLockB);
+  aTextureOnWhite->SerializeReadLock(readLockW);
+
   mTxn->AddNoSwapEdit(
     CompositableOperation(
       nullptr,
       aCompositable->GetIPDLActor(),
       OpUseComponentAlphaTextures(
-        nullptr ,aTextureOnBlack->GetIPDLActor(),
-        nullptr, aTextureOnWhite->GetIPDLActor())));
+        nullptr, aTextureOnBlack->GetIPDLActor(),
+        nullptr, aTextureOnWhite->GetIPDLActor(),
+        readLockB, readLockW
+      )
+    )
+  );
 }
 
 #ifdef MOZ_WIDGET_GONK
@@ -844,7 +857,7 @@ bool ImageBridgeChild::StartUpOnThread(Thread* aThread)
     }
     sImageBridgeChildSingleton = new ImageBridgeChild();
     sImageBridgeParentSingleton = new ImageBridgeParent(
-      CompositorBridgeParent::CompositorLoop(), nullptr, base::GetCurrentProcId());
+      CompositorThreadHolder::Loop(), nullptr, base::GetCurrentProcId());
     sImageBridgeChildSingleton->ConnectAsync(sImageBridgeParentSingleton);
     sImageBridgeChildSingleton->GetMessageLoop()->PostTask(
       NewRunnableFunction(CallSendImageBridgeThreadId,

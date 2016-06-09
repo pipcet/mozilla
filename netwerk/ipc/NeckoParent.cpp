@@ -22,6 +22,7 @@
 #include "mozilla/net/DNSRequestParent.h"
 #include "mozilla/net/RemoteOpenFileParent.h"
 #include "mozilla/net/ChannelDiverterParent.h"
+#include "mozilla/net/IPCTransportProvider.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/TabContext.h"
 #include "mozilla/dom/TabParent.h"
@@ -152,6 +153,7 @@ NeckoParent::GetValidatedAppInfo(const SerializedLoadContext& aSerialized,
     aAttrs.mInIsolatedMozBrowser = inBrowserElement;
     aAttrs.mSignedPkg = aSerialized.mOriginAttributes.mSignedPkg;
     aAttrs.mUserContextId = aSerialized.mOriginAttributes.mUserContextId;
+    aAttrs.mPrivateBrowsingId = aSerialized.mOriginAttributes.mPrivateBrowsingId;
 
     return nullptr;
   }
@@ -188,6 +190,7 @@ NeckoParent::CreateChannelLoadContext(const PBrowserOrId& aBrowser,
   // if !UsingNeckoIPCSecurity(), we may not have a LoadContext to set. This is
   // the common case for most xpcshell tests.
   if (aSerialized.IsNotNull()) {
+    attrs.SyncAttributesWithPrivateBrowsing(aSerialized.mUsePrivateBrowsing);
     switch (aBrowser.type()) {
       case PBrowserOrId::TPBrowserParent:
       {
@@ -784,6 +787,21 @@ NeckoParent::DeallocPChannelDiverterParent(PChannelDiverterParent* parent)
   return true;
 }
 
+PTransportProviderParent*
+NeckoParent::AllocPTransportProviderParent()
+{
+  RefPtr<TransportProviderParent> res = new TransportProviderParent();
+  return res.forget().take();
+}
+
+bool
+NeckoParent::DeallocPTransportProviderParent(PTransportProviderParent* aActor)
+{
+  RefPtr<TransportProviderParent> provider =
+    dont_AddRef(static_cast<TransportProviderParent*>(aActor));
+  return true;
+}
+
 void
 NeckoParent::CloneManagees(ProtocolBase* aSource,
                          mozilla::ipc::ProtocolCloneContext* aCtx)
@@ -904,6 +922,7 @@ NeckoParent::RecvPredPredict(const ipc::OptionalURIParams& aTargetURI,
   DocShellOriginAttributes attrs(NECKO_UNKNOWN_APP_ID, false);
   nsCOMPtr<nsILoadContext> loadContext;
   if (aLoadContext.IsNotNull()) {
+    attrs.SyncAttributesWithPrivateBrowsing(aLoadContext.mUsePrivateBrowsing);
     loadContext = new LoadContext(aLoadContext, nestedFrameId, attrs);
   }
 
@@ -936,6 +955,7 @@ NeckoParent::RecvPredLearn(const ipc::URIParams& aTargetURI,
   DocShellOriginAttributes attrs(NECKO_UNKNOWN_APP_ID, false);
   nsCOMPtr<nsILoadContext> loadContext;
   if (aLoadContext.IsNotNull()) {
+    attrs.SyncAttributesWithPrivateBrowsing(aLoadContext.mUsePrivateBrowsing);
     loadContext = new LoadContext(aLoadContext, nestedFrameId, attrs);
   }
 

@@ -9,6 +9,7 @@
 
 const {PREF_ORIG_SOURCES} = require("devtools/client/styleeditor/utils");
 const Services = require("Services");
+const {Task} = require("devtools/shared/task");
 
 loader.lazyRequireGetter(this, "overlays",
   "devtools/client/inspector/shared/style-inspector-overlays");

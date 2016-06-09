@@ -13,12 +13,14 @@
 #include "GMPVideoEncoderProxy.h"
 #include "GMPDecryptorProxy.h"
 #include "GMPServiceParent.h"
+#include "MediaPrefs.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsIFile.h"
 #include "nsISimpleEnumerator.h"
 #include "mozilla/Atomics.h"
 #include "nsNSSComponent.h"
 #include "mozilla/DebugOnly.h"
+#include "GMPDeviceBinding.h"
 
 #if defined(XP_WIN)
 #include "mozilla/WindowsVersion.h"
@@ -33,6 +35,7 @@ struct GMPTestRunner
 {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(GMPTestRunner)
 
+  GMPTestRunner() { MediaPrefs::GetSingleton(); }
   void DoTest(void (GMPTestRunner::*aTestMethod)(GMPTestMonitor&));
   void RunTestGMPTestCodec1(GMPTestMonitor& aMonitor);
   void RunTestGMPTestCodec2(GMPTestMonitor& aMonitor);
@@ -612,6 +615,15 @@ class GMPStorageTest : public GMPDecryptorProxyCallback
     nsCOMPtr<nsIRunnable> mContinuation;
   };
 
+  void CreateDecryptor(const nsCString& aNodeId,
+                       const nsCString& aUpdate)
+  {
+    nsTArray<nsCString> updates;
+    updates.AppendElement(aUpdate);
+    nsCOMPtr<nsIRunnable> continuation(new Updates(this, Move(updates)));
+    CreateDecryptor(aNodeId, continuation);
+  }
+
   void CreateDecryptor(const nsAString& aOrigin,
                        const nsAString& aTopLevelOrigin,
                        bool aInPBMode,
@@ -626,7 +638,7 @@ class GMPStorageTest : public GMPDecryptorProxyCallback
   public:
     Updates(GMPStorageTest* aRunner, nsTArray<nsCString>&& aUpdates)
       : mRunner(aRunner),
-        mUpdates(aUpdates)
+        mUpdates(Move(aUpdates))
     {
     }
 
@@ -647,17 +659,16 @@ class GMPStorageTest : public GMPDecryptorProxyCallback
                        bool aInPBMode,
                        nsTArray<nsCString>&& aUpdates) {
     nsCOMPtr<nsIRunnable> updates(new Updates(this, Move(aUpdates)));
-    CreateDecryptor(aOrigin, aTopLevelOrigin, aInPBMode, updates);
+    CreateDecryptor(GetNodeId(aOrigin, aTopLevelOrigin, aInPBMode), updates);
   }
-  void CreateDecryptor(const nsAString& aOrigin,
-                       const nsAString& aTopLevelOrigin,
-                       bool aInPBMode,
+
+  void CreateDecryptor(const nsCString& aNodeId,
                        nsIRunnable* aContinuation) {
     RefPtr<GeckoMediaPluginService> service =
       GeckoMediaPluginService::GetGeckoMediaPluginService();
     EXPECT_TRUE(service);
 
-    mNodeId = GetNodeId(aOrigin, aTopLevelOrigin, aInPBMode);
+    mNodeId = aNodeId;
     EXPECT_TRUE(!mNodeId.IsEmpty());
 
     nsTArray<nsCString> tags;
@@ -1078,7 +1089,7 @@ class GMPStorageTest : public GMPDecryptorProxyCallback
         &GMPStorageTest::NextAsyncShutdownTimeoutTest,
         NewRunnableMethod(this, aCallback)));
 
-    CreateDecryptor(aOrigin1, aOrigin2, false, continuation);
+    CreateDecryptor(GetNodeId(aOrigin1, aOrigin2, false), continuation);
   }
 
   void TestAsyncShutdownTimeout() {
@@ -1272,6 +1283,24 @@ class GMPStorageTest : public GMPDecryptorProxyCallback
                     update);
   }
 
+  void TestNodeId() {
+    // Calculate the nodeId, and the device bound nodeId. Start a GMP, and
+    // have it return the device bound nodeId that it's been passed. Assert
+    // they have the same value.
+    const nsString origin = NS_LITERAL_STRING("http://example-fuz-baz.com");
+    nsCString originSalt1 = GetNodeId(origin, origin, false);
+
+    nsCString salt = originSalt1;
+    std::string nodeId;
+    EXPECT_TRUE(CalculateGMPDeviceId(salt.BeginWriting(), salt.Length(), nodeId));
+
+    std::string expected = "node-id " + nodeId;
+    Expect(nsDependentCString(expected.c_str()), NewRunnableMethod(this, &GMPStorageTest::SetFinished));
+
+    CreateDecryptor(originSalt1,
+                    NS_LITERAL_CSTRING("retrieve-node-id"));
+  }
+
   void Expect(const nsCString& aMessage, already_AddRefed<nsIRunnable> aContinuation) {
     mExpected.AppendElement(ExpectedMessage(aMessage, Move(aContinuation)));
   }
@@ -1349,7 +1378,6 @@ class GMPStorageTest : public GMPDecryptorProxyCallback
   void KeyStatusChanged(const nsCString& aSessionId,
                         const nsTArray<uint8_t>& aKeyId,
                         GMPMediaKeyStatus aStatus) override { }
-  void SetCaps(uint64_t aCaps) override {}
   void Decrypted(uint32_t aId,
                  GMPErr aResult,
                  const nsTArray<uint8_t>& aDecryptedData) override { }
@@ -1488,4 +1516,9 @@ TEST(GeckoMediaPlugins, GMPStorageGetRecordNamesPersistentStorage) {
 TEST(GeckoMediaPlugins, GMPStorageLongRecordNames) {
   RefPtr<GMPStorageTest> runner = new GMPStorageTest();
   runner->DoTest(&GMPStorageTest::TestLongRecordNames);
+}
+
+TEST(GeckoMediaPlugins, GMPNodeId) {
+  RefPtr<GMPStorageTest> runner = new GMPStorageTest();
+  runner->DoTest(&GMPStorageTest::TestNodeId);
 }

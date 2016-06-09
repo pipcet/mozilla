@@ -22,6 +22,7 @@ import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.animation.PropertyAnimator;
 import org.mozilla.gecko.animation.ViewHelper;
 import org.mozilla.gecko.toolbar.BrowserToolbarTabletBase.ForwardButtonAnimation;
+import org.mozilla.gecko.util.Experiments;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.widget.themed.ThemedLinearLayout;
@@ -41,6 +42,8 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
 import android.widget.ImageButton;
+
+import com.keepsafe.switchboard.SwitchBoard;
 
 /**
 * {@code ToolbarDisplayLayout} is the UI for when the toolbar is in
@@ -269,6 +272,8 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
 
         String strippedURL = stripAboutReaderURL(url);
 
+        final boolean isHttpOrHttps = StringUtils.isHttpOrHttps(strippedURL);
+
         if (mPrefs.shouldTrimUrls()) {
             strippedURL = StringUtils.stripCommonSubdomains(StringUtils.stripScheme(strippedURL));
         }
@@ -279,14 +284,15 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
         setContentDescription(strippedURL);
 
         final SiteIdentity siteIdentity = tab.getSiteIdentity();
-        if (siteIdentity.hasOwner()) {
+        if (siteIdentity.hasOwner() && SwitchBoard.isInExperiment(mActivity, Experiments.URLBAR_SHOW_EV_CERT_OWNER)) {
             // Show Owner of EV certificate as title
             updateTitleFromSiteIdentity(siteIdentity);
-        } else if (!HardwareUtils.isTablet() && !TextUtils.isEmpty(baseDomain)) {
+        } else if (isHttpOrHttps && !HardwareUtils.isTablet() && !TextUtils.isEmpty(baseDomain)
+                && SwitchBoard.isInExperiment(mActivity, Experiments.URLBAR_SHOW_ORIGIN_ONLY)) {
             // Show just the base domain as title
             setTitle(baseDomain);
         } else {
-            // Display full URL as title
+            // Display full URL with base domain highlighted as title
             updateAndColorTitleFromFullURL(strippedURL, baseDomain, tab.isPrivate());
         }
     }

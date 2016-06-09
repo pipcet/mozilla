@@ -157,7 +157,7 @@ function test_dom_onpaste() {
   content.onpaste = function() { onpaste_fired = true; };
   try {
     synthesizeKey("v", {accelKey: 1});
-    ok(!onpaste_fired, "paste event firing on DOM element");
+    ok(onpaste_fired, "paste event firing on DOM element");
   } finally {
     content.onpaste = null;
   }
@@ -664,7 +664,7 @@ function checkCachedDataTransfer(cd, eventtype)
 
   var newtext = (eventtype == "paste") ? cd.getData("text/plain") :
                                          cd.mozGetDataAt("text/plain", 0);
-  is(newtext, (eventtype == "paste") ? "" : "Test Cache Data",
+  is(newtext, (eventtype == "paste") ? oldtext : "Test Cache Data",
      " clipboardData not changed using " + testprefix);
 
   is(getClipboardText(), "Some Clipboard Text", "clipboard not changed using " + testprefix);

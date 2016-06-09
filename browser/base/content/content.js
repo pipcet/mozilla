@@ -231,7 +231,14 @@ const SEC_ERROR_OCSP_FUTURE_RESPONSE               = SEC_ERROR_BASE + 131;
 const SEC_ERROR_OCSP_OLD_RESPONSE                  = SEC_ERROR_BASE + 132;
 const MOZILLA_PKIX_ERROR_NOT_YET_VALID_CERTIFICATE = MOZILLA_PKIX_ERROR_BASE + 5;
 
-const PREF_KINTO_CLOCK_SKEW_SECONDS = "services.kinto.clock_skew_seconds";
+const PREF_BLOCKLIST_CLOCK_SKEW_SECONDS = "services.blocklist.clock_skew_seconds";
+
+const PREF_SSL_IMPACT_ROOTS = ["security.tls.version.", "security.ssl3."];
+
+const PREF_SSL_IMPACT = PREF_SSL_IMPACT_ROOTS.reduce((prefs, root) => {
+  return prefs.concat(Services.prefs.getChildList(root));
+}, []);
+
 
 var AboutNetAndCertErrorListener = {
   init: function(chromeGlobal) {
@@ -239,6 +246,7 @@ var AboutNetAndCertErrorListener = {
     chromeGlobal.addEventListener('AboutNetErrorLoad', this, false, true);
     chromeGlobal.addEventListener('AboutNetErrorSetAutomatic', this, false, true);
     chromeGlobal.addEventListener('AboutNetErrorOverride', this, false, true);
+    chromeGlobal.addEventListener('AboutNetErrorResetPreferences', this, false, true);
   },
 
   get isAboutNetError() {
@@ -272,16 +280,16 @@ var AboutNetAndCertErrorListener = {
         break;
 
       // in case the certificate expired we make sure the system clock
-      // matches kinto server time
+      // matches settings server (kinto) time
       case SEC_ERROR_EXPIRED_CERTIFICATE:
       case SEC_ERROR_EXPIRED_ISSUER_CERTIFICATE:
       case SEC_ERROR_OCSP_FUTURE_RESPONSE:
       case SEC_ERROR_OCSP_OLD_RESPONSE:
       case MOZILLA_PKIX_ERROR_NOT_YET_VALID_CERTIFICATE:
 
-        // use Kinto stats if available
-        if (Services.prefs.getPrefType(PREF_KINTO_CLOCK_SKEW_SECONDS)) {
-          let difference = Services.prefs.getIntPref(PREF_KINTO_CLOCK_SKEW_SECONDS);
+        // use blocklist stats if available
+        if (Services.prefs.getPrefType(PREF_BLOCKLIST_CLOCK_SKEW_SECONDS)) {
+          let difference = Services.prefs.getIntPref(PREF_BLOCKLIST_CLOCK_SKEW_SECONDS);
 
           // if the difference is more than a day
           if (Math.abs(difference) > 60 * 60 * 24) {
@@ -323,7 +331,20 @@ var AboutNetAndCertErrorListener = {
     case "AboutNetErrorOverride":
       this.onOverride(aEvent);
       break;
+    case "AboutNetErrorResetPreferences":
+      this.onResetPreferences(aEvent);
+      break;
     }
+  },
+
+  changedCertPrefs: function () {
+    for (let prefName of PREF_SSL_IMPACT) {
+      if (Services.prefs.prefHasUserValue(prefName)) {
+        return true;
+      }
+    }
+
+    return false;
   },
 
   onPageLoad: function(evt) {
@@ -337,12 +358,18 @@ var AboutNetAndCertErrorListener = {
     content.dispatchEvent(new content.CustomEvent("AboutNetErrorOptions", {
       detail: JSON.stringify({
         enabled: Services.prefs.getBoolPref("security.ssl.errorReporting.enabled"),
+        changedCertPrefs: this.changedCertPrefs(),
         automatic: automatic
       })
     }));
 
     sendAsyncMessage("Browser:SSLErrorReportTelemetry",
                      {reportStatus: TLS_ERROR_REPORT_TELEMETRY_UI_SHOWN});
+  },
+
+
+  onResetPreferences: function(evt) {
+    sendAsyncMessage("Browser:ResetSSLPreferences");
   },
 
   onSetAutomatic: function(evt) {
@@ -620,6 +647,13 @@ addEventListener("pageshow", function(event) {
     });
   }
 });
+addEventListener("pagehide", function(event) {
+  if (event.target == content.document) {
+    sendAsyncMessage("PageVisibility:Hide", {
+      persisted: event.persisted,
+    });
+  }
+});
 
 var PageMetadataMessenger = {
   init() {
@@ -703,6 +737,9 @@ addMessageListener("ContextMenu:MediaCommand", (message) => {
     case "pause":
       media.pause();
       break;
+    case "loop":
+      media.loop = !media.loop;
+      break;
     case "mute":
       media.muted = true;
       break;
@@ -717,13 +754,6 @@ addMessageListener("ContextMenu:MediaCommand", (message) => {
       break;
     case "showcontrols":
       media.setAttribute("controls", "true");
-      break;
-    case "hidestats":
-    case "showstats":
-      let event = media.ownerDocument.createEvent("CustomEvent");
-      event.initCustomEvent("media-showStatistics", false, true,
-                            message.data.command == "showstats");
-      media.dispatchEvent(event);
       break;
     case "fullscreen":
       if (content.document.fullscreenEnabled)

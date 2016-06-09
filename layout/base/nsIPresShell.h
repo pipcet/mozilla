@@ -47,6 +47,7 @@
 #include "nsPresArena.h"
 #include "nsMargin.h"
 #include "nsFrameState.h"
+#include "Visibility.h"
 
 #ifdef MOZ_B2G
 #include "nsIHardwareKeyHandler.h"
@@ -185,6 +186,7 @@ public:
 protected:
   typedef mozilla::layers::LayerManager LayerManager;
   typedef mozilla::gfx::SourceSurface SourceSurface;
+  using VisibilityCounter = mozilla::VisibilityCounter;
 
   enum eRenderFlag {
     STATE_IGNORING_VIEWPORT_SCROLLING = 0x1,
@@ -225,19 +227,15 @@ public:
    */
   void* AllocateFrame(nsQueryFrame::FrameIID aID, size_t aSize)
   {
-#ifdef DEBUG
-    mPresArenaAllocCount++;
-#endif
     void* result = mFrameArena.AllocateByFrameID(aID, aSize);
+    RecordAlloc(result);
     memset(result, 0, aSize);
     return result;
   }
 
   void FreeFrame(nsQueryFrame::FrameIID aID, void* aPtr)
   {
-#ifdef DEBUG
-    mPresArenaAllocCount--;
-#endif
+    RecordFree(aPtr);
     if (!mIsDestroying)
       mFrameArena.FreeByFrameID(aID, aPtr);
   }
@@ -250,19 +248,15 @@ public:
    */
   void* AllocateByObjectID(mozilla::ArenaObjectID aID, size_t aSize)
   {
-#ifdef DEBUG
-    mPresArenaAllocCount++;
-#endif
     void* result = mFrameArena.AllocateByObjectID(aID, aSize);
+    RecordAlloc(result);
     memset(result, 0, aSize);
     return result;
   }
 
   void FreeByObjectID(mozilla::ArenaObjectID aID, void* aPtr)
   {
-#ifdef DEBUG
-    mPresArenaAllocCount--;
-#endif
+    RecordFree(aPtr);
     if (!mIsDestroying)
       mFrameArena.FreeByObjectID(aID, aPtr);
   }
@@ -278,17 +272,14 @@ public:
    */
   void* AllocateMisc(size_t aSize)
   {
-#ifdef DEBUG
-    mPresArenaAllocCount++;
-#endif
-    return mFrameArena.AllocateBySize(aSize);
+    void* result = mFrameArena.AllocateBySize(aSize);
+    RecordAlloc(result);
+    return result;
   }
 
   void FreeMisc(size_t aSize, void* aPtr)
   {
-#ifdef DEBUG
-    mPresArenaAllocCount--;
-#endif
+    RecordFree(aPtr);
     if (!mIsDestroying)
       mFrameArena.FreeBySize(aSize, aPtr);
   }
@@ -427,12 +418,12 @@ public:
    * Reflow the frame model into a new width and height.  The
    * coordinates for aWidth and aHeight must be in standard nscoord's.
    */
-  virtual nsresult ResizeReflow(nscoord aWidth, nscoord aHeight) = 0;
+  virtual nsresult ResizeReflow(nscoord aWidth, nscoord aHeight, nscoord aOldWidth = 0, nscoord aOldHeight = 0) = 0;
   /**
    * Do the same thing as ResizeReflow but even if ResizeReflowOverride was
    * called previously.
    */
-  virtual nsresult ResizeReflowIgnoreOverride(nscoord aWidth, nscoord aHeight) = 0;
+  virtual nsresult ResizeReflowIgnoreOverride(nscoord aWidth, nscoord aHeight, nscoord aOldWidth, nscoord aOldHeight) = 0;
 
   /**
    * Returns true if ResizeReflowOverride has been called.
@@ -1106,6 +1097,7 @@ public:
                                   gfxContext* aRenderedContext) = 0;
 
   enum {
+    RENDER_IS_IMAGE = 0x100,
     RENDER_AUTO_SCALE = 0x80
   };
 
@@ -1241,7 +1233,7 @@ public:
     return mObservesMutationsForPrint;
   }
 
-  virtual nsresult SetIsActive(bool aIsActive, bool aIsHidden = true) = 0;
+  virtual void SetIsActive(bool aIsActive, bool aIsHidden = true) = 0;
 
   bool IsActive()
   {
@@ -1434,6 +1426,12 @@ public:
   virtual bool ScaleToResolution() const = 0;
 
   /**
+   * Used by session restore code to restore a resolution before the first
+   * paint.
+   */
+  virtual void SetRestoreResolution(float aResolution) = 0;
+
+  /**
    * Returns whether we are in a DrawWindow() call that used the
    * DRAWWINDOW_DO_NOT_FLUSH flag.
    */
@@ -1592,11 +1590,11 @@ public:
   virtual void RebuildApproximateFrameVisibility(nsRect* aRect = nullptr,
                                                  bool aRemoveOnly = false) = 0;
 
-  /// Adds @aFrame to the list of frames which were visible within the
-  /// displayport during the last paint.
-  virtual void MarkFrameVisibleInDisplayPort(nsIFrame* aFrame) = 0;
+  /// Adds @aFrame to the visible frames set specified by @aCounter.
+  /// VisibilityCounter::MAY_BECOME_VISIBLE is not a valid argument.
+  virtual void MarkFrameVisible(nsIFrame* aFrame, VisibilityCounter aCounter) = 0;
 
-  /// Marks @aFrame nonvisible and removes it from all lists of visible frames.
+  /// Marks @aFrame nonvisible and removes it from all sets of visible frames.
   virtual void MarkFrameNonvisible(nsIFrame* aFrame) = 0;
 
   /// Whether we should assume all frames are visible.
@@ -1631,6 +1629,20 @@ protected:
    * expensive.
    */
   void RecomputeFontSizeInflationEnabled();
+
+  void RecordAlloc(void* aPtr) {
+#ifdef DEBUG
+    MOZ_ASSERT(!mAllocatedPointers.Contains(aPtr));
+    mAllocatedPointers.PutEntry(aPtr);
+#endif
+  }
+
+  void RecordFree(void* aPtr) {
+#ifdef DEBUG
+    MOZ_ASSERT(mAllocatedPointers.Contains(aPtr));
+    mAllocatedPointers.RemoveEntry(aPtr);
+#endif
+  }
 
 public:
   bool AddRefreshObserver(nsARefreshObserver* aObserver,
@@ -1739,9 +1751,12 @@ protected:
 
 #ifdef DEBUG
   nsIFrame*                 mDrawEventTargetFrame;
-  // Ensure that every allocation from the PresArena is eventually freed.
-  uint32_t                  mPresArenaAllocCount;
+
+  // We track allocated pointers in a debug-only hashtable to assert against
+  // missing/double frees.
+  nsTHashtable<nsPtrHashKey<void>> mAllocatedPointers;
 #endif
+
 
   // Count of the number of times this presshell has been painted to a window.
   uint64_t                  mPaintCount;

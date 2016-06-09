@@ -269,7 +269,7 @@ AndroidDecoderModule::SupportsMimeType(const nsACString& aMimeType,
       aMimeType.EqualsLiteral("audio/wave; codecs=7") ||
       aMimeType.EqualsLiteral("audio/wave; codecs=65534")) {
     return false;
-  }  
+  }
 
   if ((VPXDecoder::IsVPX(aMimeType, VPXDecoder::VP8) &&
        !GetFeatureStatus(nsIGfxInfo::FEATURE_VP8_HW_DECODE)) ||
@@ -285,7 +285,7 @@ AndroidDecoderModule::SupportsMimeType(const nsACString& aMimeType,
 already_AddRefed<MediaDataDecoder>
 AndroidDecoderModule::CreateVideoDecoder(
     const VideoInfo& aConfig, layers::LayersBackend aLayersBackend,
-    layers::ImageContainer* aImageContainer, FlushableTaskQueue* aVideoTaskQueue,
+    layers::ImageContainer* aImageContainer, TaskQueue* aTaskQueue,
     MediaDataDecoderCallback* aCallback,
     DecoderDoctorDiagnostics* aDiagnostics)
 {
@@ -305,7 +305,7 @@ AndroidDecoderModule::CreateVideoDecoder(
 
 already_AddRefed<MediaDataDecoder>
 AndroidDecoderModule::CreateAudioDecoder(
-    const AudioInfo& aConfig, FlushableTaskQueue* aAudioTaskQueue,
+    const AudioInfo& aConfig, TaskQueue* aTaskQueue,
     MediaDataDecoderCallback* aCallback,
     DecoderDoctorDiagnostics* aDiagnostics)
 {
@@ -378,7 +378,7 @@ MediaCodecDataDecoder::InitDecoder(Surface::Param aSurface)
 {
   mDecoder = CreateDecoder(mMimeType);
   if (!mDecoder) {
-    INVOKE_CALLBACK(Error);
+    INVOKE_CALLBACK(Error, MediaDataDecoderError::FATAL_ERROR);
     return NS_ERROR_FAILURE;
   }
 
@@ -405,7 +405,7 @@ static const int64_t kDecoderTimeout = 10000;
       INVOKE_CALLBACK(DrainComplete); \
       State(kDecoding); \
     } \
-    INVOKE_CALLBACK(Error); \
+    INVOKE_CALLBACK(Error, MediaDataDecoderError::FATAL_ERROR); \
     break; \
   }
 
@@ -549,11 +549,13 @@ MediaCodecDataDecoder::HandleEOS(int32_t aOutputStatus)
   mDecoder->ReleaseOutputBuffer(aOutputStatus, false);
 }
 
-TimeUnit
+Maybe<TimeUnit>
 MediaCodecDataDecoder::GetOutputDuration()
 {
-  MOZ_ASSERT(!mDurations.empty(), "Should have had a duration queued");
-  const TimeUnit duration = mDurations.front();
+  if (mDurations.empty()) {
+    return Nothing();
+  }
+  const Maybe<TimeUnit> duration = Some(mDurations.front());
   mDurations.pop_front();
   return duration;
 }
@@ -564,19 +566,26 @@ MediaCodecDataDecoder::ProcessOutput(
 {
   AutoLocalJNIFrame frame(jni::GetEnvForThread(), 1);
 
-  const TimeUnit duration = GetOutputDuration();
+  const Maybe<TimeUnit> duration = GetOutputDuration();
+  if (!duration) {
+    // Some devices report failure in QueueSample while actually succeeding at
+    // it, in which case we get an output buffer without having a cached duration
+    // (bug 1273523).
+    return NS_OK;
+  }
+
   const auto buffer = jni::Object::LocalRef::Adopt(
       frame.GetEnv()->GetObjectArrayElement(mOutputBuffers.Get(), aStatus));
 
   if (buffer) {
     // The buffer will be null on Android L if we are decoding to a Surface.
     void* directBuffer = frame.GetEnv()->GetDirectBufferAddress(buffer.Get());
-    Output(aInfo, directBuffer, aFormat, duration);
+    Output(aInfo, directBuffer, aFormat, duration.value());
   }
 
   // The Surface will be updated at this point (for video).
   mDecoder->ReleaseOutputBuffer(aStatus, true);
-  PostOutput(aInfo, aFormat, duration);
+  PostOutput(aInfo, aFormat, duration.value());
 
   return NS_OK;
 }
@@ -636,7 +645,7 @@ MediaCodecDataDecoder::DecoderLoop()
       BREAK_ON_DECODER_ERROR();
     } else if (outputStatus < 0) {
       NS_WARNING("Unknown error from decoder!");
-      INVOKE_CALLBACK(Error);
+      INVOKE_CALLBACK(Error, MediaDataDecoderError::DECODE_ERROR);
       // Don't break here just in case it's recoverable. If it's not, other
       // stuff will fail later and we'll bail out.
     } else {

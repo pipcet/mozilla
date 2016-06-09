@@ -537,12 +537,12 @@ DocAccessible::RelativeBounds(nsIFrame** aRelativeFrame) const
 nsresult
 DocAccessible::AddEventListeners()
 {
-  nsCOMPtr<nsIDocShellTreeItem> docShellTreeItem(mDocumentNode->GetDocShell());
+  nsCOMPtr<nsIDocShell> docShell(mDocumentNode->GetDocShell());
 
   // We want to add a command observer only if the document is content and has
   // an editor.
-  if (docShellTreeItem->ItemType() == nsIDocShellTreeItem::typeContent) {
-    nsCOMPtr<nsICommandManager> commandManager = do_GetInterface(docShellTreeItem);
+  if (docShell->ItemType() == nsIDocShellTreeItem::typeContent) {
+    nsCOMPtr<nsICommandManager> commandManager = docShell->GetCommandManager();
     if (commandManager)
       commandManager->AddCommandObserver(this, "obs_documentCreated");
   }
@@ -567,12 +567,12 @@ DocAccessible::RemoveEventListeners()
   if (mDocumentNode) {
     mDocumentNode->RemoveObserver(this);
 
-    nsCOMPtr<nsIDocShellTreeItem> docShellTreeItem(mDocumentNode->GetDocShell());
-    NS_ASSERTION(docShellTreeItem, "doc should support nsIDocShellTreeItem.");
+    nsCOMPtr<nsIDocShell> docShell(mDocumentNode->GetDocShell());
+    NS_ASSERTION(docShell, "doc should support nsIDocShellTreeItem.");
 
-    if (docShellTreeItem) {
-      if (docShellTreeItem->ItemType() == nsIDocShellTreeItem::typeContent) {
-        nsCOMPtr<nsICommandManager> commandManager = do_GetInterface(docShellTreeItem);
+    if (docShell) {
+      if (docShell->ItemType() == nsIDocShellTreeItem::typeContent) {
+        nsCOMPtr<nsICommandManager> commandManager = docShell->GetCommandManager();
         if (commandManager) {
           commandManager->RemoveCommandObserver(this, "obs_documentCreated");
         }
@@ -1814,6 +1814,15 @@ DocAccessible::ProcessContentInserted(Accessible* aContainer, nsIContent* aNode)
     return;
   }
 
+#ifdef A11Y_LOG
+  logging::TreeInfo("children before insertion", logging::eVerbose, aContainer);
+#endif
+
+#ifdef A11Y_LOG
+  logging::TreeInfo("traversing an inserted node", logging::eVerbose,
+                    "container", aContainer, "node", aNode);
+#endif
+
   TreeWalker walker(aContainer);
   if (aContainer->IsAcceptableChild(aNode) && walker.Seek(aNode)) {
     Accessible* child = GetAccessible(aNode);
@@ -1831,6 +1840,10 @@ DocAccessible::ProcessContentInserted(Accessible* aContainer, nsIContent* aNode)
       FireEventsOnInsertion(aContainer);
     }
   }
+
+#ifdef A11Y_LOG
+  logging::TreeInfo("children after insertion", logging::eVerbose, aContainer);
+#endif
 }
 
 void
@@ -1856,17 +1869,8 @@ DocAccessible::UpdateTreeOnRemoval(Accessible* aContainer, nsIContent* aChildNod
   // If child node is not accessible then look for its accessible children.
   Accessible* child = GetAccessible(aChildNode);
 #ifdef A11Y_LOG
-  if (logging::IsEnabled(logging::eTree)) {
-    logging::MsgBegin("TREE", "process content removal");
-    logging::Node("container", aContainer->GetNode());
-    logging::Node("child", aChildNode);
-    if (child)
-      logging::Address("child", child);
-    else
-      logging::MsgEntry("child accessible: null");
-
-    logging::MsgEnd();
-  }
+  logging::TreeInfo("process content removal", 0,
+                    "container", aContainer, "child", aChildNode);
 #endif
 
   TreeMutation mt(aContainer);
@@ -2181,19 +2185,9 @@ DocAccessible::CacheChildrenInSubtree(Accessible* aRoot,
     return;
   }
 
-  roles::Role role = aRoot->ARIARole();
-  if (role == roles::MENUPOPUP) {
-    FireDelayedEvent(nsIAccessibleEvent::EVENT_MENUPOPUP_START, aRoot);
-    return;
-  }
-
-  if (role == roles::ALERT) {
-    FireDelayedEvent(nsIAccessibleEvent::EVENT_ALERT, aRoot);
-    return;
-  }
-
   // XXX: we should delay document load complete event if the ARIA document
   // has aria-busy.
+  roles::Role role = aRoot->ARIARole();
   if (!aRoot->IsDoc() && (role == roles::DIALOG || role == roles::DOCUMENT)) {
     FireDelayedEvent(nsIAccessibleEvent::EVENT_DOCUMENT_LOAD_COMPLETE, aRoot);
   }

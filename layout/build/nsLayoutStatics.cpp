@@ -109,7 +109,6 @@ using namespace mozilla::system;
 #include "nsJSEnvironment.h"
 #include "nsContentSink.h"
 #include "nsFrameMessageManager.h"
-#include "nsRefreshDriver.h"
 #include "nsDOMMutationObserver.h"
 #include "nsHyphenationManager.h"
 #include "nsEditorSpellCheck.h"
@@ -127,10 +126,12 @@ using namespace mozilla::system;
 #include "CameraPreferences.h"
 #include "TouchManager.h"
 #include "MediaDecoder.h"
+#include "MediaPrefs.h"
 #include "mozilla/layers/CompositorLRU.h"
 #include "mozilla/dom/devicestorage/DeviceStorageStatics.h"
 #include "mozilla/ServoBindings.h"
 #include "mozilla/StaticPresData.h"
+#include "mozilla/dom/WebIDLGlobalNameHash.h"
 
 #ifdef MOZ_B2G_BT
 #include "mozilla/dom/BluetoothUUID.h"
@@ -269,7 +270,6 @@ nsLayoutStatics::Initialize()
   nsLayoutUtils::Initialize();
   nsIPresShell::InitializeStatics();
   TouchManager::InitializeStatics();
-  nsRefreshDriver::InitializeStatics();
   nsPrincipal::InitializeStatics();
 
   nsCORSListenerProxy::Startup();
@@ -309,6 +309,7 @@ nsLayoutStatics::Initialize()
 #endif
 
   MediaDecoder::InitStatics();
+  MediaPrefs::GetSingleton();
 
   PromiseDebugging::Init();
 
@@ -384,6 +385,7 @@ nsLayoutStatics::Shutdown()
   ShutdownJSEnvironment();
   nsGlobalWindow::ShutDown();
   nsDOMClassInfo::ShutDown();
+  WebIDLGlobalNameHash::Shutdown();
   nsListControlFrame::Shutdown();
   nsXBLService::Shutdown();
   nsAutoCopyListener::Shutdown();
@@ -429,8 +431,6 @@ nsLayoutStatics::Shutdown()
   nsDOMMutationObserver::Shutdown();
 
   ContentParent::ShutDown();
-
-  nsRefreshDriver::Shutdown();
 
   DisplayItemClip::Shutdown();
 

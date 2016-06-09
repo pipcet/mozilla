@@ -213,143 +213,6 @@ class TestHg(unittest.TestCase):
         # Try and pull in changes from the new repo
         self.assertRaises(mercurial.VCSException, m.pull, repo2, self.wc, update_dest=False)
 
-    def test_no_share_base(self):
-        m = get_mercurial_vcs_obj()
-        m.vcs_config = {'repo': self.repodir, 'dest': self.wc}
-        with self.assertRaisesRegexp(mercurial.VCSException, 'vcs share base'):
-            m.ensure_repo_and_revision()
-
-    def test_dest_is_not_hg_repo(self):
-        m = get_mercurial_vcs_obj()
-        dest = os.path.join(self.tmpdir, 'destnohg')
-        m.vcs_config = {
-            'repo': self.repodir,
-            'dest': dest,
-            'vcs_share_base': os.path.join(self.tmpdir, 'share'),
-        }
-
-        os.makedirs(dest)
-        m.ensure_repo_and_revision()
-        self.assertTrue(os.path.exists(os.path.join(dest, '.hg')))
-
-    def test_dest_is_not_shared(self):
-        dest = os.path.join(self.tmpdir, 'destnotshared')
-        m = get_mercurial_vcs_obj()
-        self._init_hg_repo(m, dest)
-        self.assertTrue(os.path.exists(os.path.join(dest, '.hg')))
-
-        m.vcs_config = {
-            'repo': self.repodir,
-            'dest': dest,
-            'vcs_share_base': os.path.join(self.tmpdir, 'share'),
-        }
-
-        m.ensure_repo_and_revision()
-        shared_path = os.path.join(dest, '.hg', 'sharedpath')
-        self.assertTrue(os.path.exists(shared_path))
-
-    def test_dest_share_path_missing(self):
-        dest = os.path.join(self.tmpdir, 'destmissingsharepath')
-        m = get_mercurial_vcs_obj()
-
-        m.vcs_config = {
-            'repo': self.repodir,
-            'dest': dest,
-            'vcs_share_base': os.path.join(self.tmpdir, 'share'),
-        }
-        m.ensure_repo_and_revision()
-
-        # Point the shared path at somewhere that doesn't exist.
-        with open(os.path.join(dest, '.hg', 'sharedpath'), 'wb') as fh:
-            fh.write('/does/not/exist')
-
-        m.ensure_repo_and_revision()
-        with open(os.path.join(dest, '.hg', 'sharedpath'), 'rb') as fh:
-            p = fh.read()
-            self.assertNotIn('/does/not/exist', p)
-
-    def test_dest_share_no_pooled_storage(self):
-        m = get_mercurial_vcs_obj()
-        m.vcs_config = {
-            'repo': self.repodir,
-            'dest': self.wc,
-            'vcs_share_base': os.path.join(self.tmpdir, 'share'),
-        }
-        m.ensure_repo_and_revision()
-
-        self._init_hg_repo(m, os.path.join(self.tmpdir, 'notpooled'))
-
-        with open(os.path.join(self.wc, '.hg', 'sharedpath'), 'wb') as fh:
-            fh.write(os.path.join(self.tmpdir, 'notpooled'))
-
-        m.ensure_repo_and_revision()
-        with open(os.path.join(self.wc, '.hg', 'sharedpath'), 'rb') as fh:
-            p = fh.read()
-            self.assertNotIn('notpooled', p)
-
-    def test_share_unrelated(self):
-        m = get_mercurial_vcs_obj()
-        # Create a new repo
-        repo2 = os.path.join(self.tmpdir, 'repo2')
-        self._init_hg_repo(m, repo2)
-
-        self.assertNotEqual(self.revisions, get_revisions(repo2))
-
-        share_base = os.path.join(self.tmpdir, 'share')
-
-        # Clone the original repo
-        m.vcs_config = {'repo': self.repodir, 'dest': self.wc, 'vcs_share_base': share_base}
-        m.ensure_repo_and_revision()
-
-        # Clone the new repo
-        m = get_mercurial_vcs_obj()
-        m.vcs_config = {'repo': repo2, 'dest': self.wc, 'vcs_share_base': share_base}
-        m.ensure_repo_and_revision()
-
-        self.assertEquals(get_revisions(self.wc), get_revisions(repo2))
-
-    def test_share_reset(self):
-        m = get_mercurial_vcs_obj()
-        share_base = os.path.join(self.tmpdir, 'share')
-        m.vcs_config = {'repo': self.repodir, 'dest': self.wc, 'vcs_share_base': share_base}
-
-        # Clone the original repo
-        m.ensure_repo_and_revision()
-
-        old_revs = self.revisions[:]
-
-        # Reset the repo
-        self._init_hg_repo(m, self.repodir)
-
-        self.assertNotEqual(old_revs, get_revisions(self.repodir))
-
-        # Try and update our working copy
-        m = get_mercurial_vcs_obj()
-        m.vcs_config = {'repo': self.repodir, 'dest': self.wc, 'vcs_share_base': share_base}
-        m.config = {'log_to_console': False}
-        m.ensure_repo_and_revision()
-
-        self.assertEquals(get_revisions(self.repodir), get_revisions(self.wc))
-        self.assertNotEqual(old_revs, get_revisions(self.wc))
-
-    def test_purge_performed(self):
-        m = get_mercurial_vcs_obj()
-        m.vcs_config = {
-            'repo': self.repodir,
-            'dest': self.wc,
-            'vcs_share_base': os.path.join(self.tmpdir, 'share'),
-        }
-
-        m.ensure_repo_and_revision()
-
-        with open(os.path.join(self.wc, 'untracked'), 'a'):
-            pass
-
-        m.vcs_config['clone_with_purge'] = True
-        m.ensure_repo_and_revision()
-
-        self.assertFalse(os.path.exists(os.path.join(self.wc, 'untracked')))
-
     def test_push(self):
         m = get_mercurial_vcs_obj()
         m.clone(self.repodir, self.wc, revision=self.revisions[-2])
@@ -387,17 +250,6 @@ class TestHg(unittest.TestCase):
         # Hide the wanted error
         m.config = {'log_to_console': False}
         self.assertRaises(Exception, m.push, self.repodir, self.wc, push_new_branches=False)
-
-    def test_mercurial_with_share_base_in_env(self):
-        share_base = os.path.join(self.tmpdir, 'share')
-        try:
-            os.environ['HG_SHARE_BASE_DIR'] = share_base
-            m = get_mercurial_vcs_obj()
-            m.vcs_config = {'repo': self.repodir, 'dest': self.wc}
-            m.ensure_repo_and_revision()
-            self.assertEquals(get_revisions(self.repodir), get_revisions(self.wc))
-        finally:
-            del os.environ['HG_SHARE_BASE_DIR']
 
     def test_mercurial_relative_dir(self):
         m = get_mercurial_vcs_obj()
@@ -476,36 +328,6 @@ class TestHg(unittest.TestCase):
         self.assertEquals(rev, self.revisions[0])
         # Make sure our local file didn't go away
         self.failUnless(os.path.exists(os.path.join(self.wc, 'test.txt')))
-
-    def test_mercurial_change_repo(self):
-        # Create a new repo
-        m = get_mercurial_vcs_obj()
-        repo2 = os.path.join(self.tmpdir, 'repo2')
-        self._init_hg_repo(m, repo2)
-
-        self.assertNotEqual(self.revisions, get_revisions(repo2))
-
-        # Clone the original repo
-        m.vcs_config = {
-            'repo': self.repodir,
-            'dest': self.wc,
-            'vcs_share_base': os.path.join(self.tmpdir, 'share'),
-        }
-        m.ensure_repo_and_revision()
-        self.assertEquals(get_revisions(self.wc), self.revisions)
-        open(os.path.join(self.wc, 'test.txt'), 'w').write("hello!")
-
-        # Clone the new one
-        m.vcs_config = {
-            'repo': repo2,
-            'dest': self.wc,
-            'vcs_share_base': os.path.join(self.tmpdir, 'share'),
-        }
-        m.config = {'log_to_console': False}
-        m.ensure_repo_and_revision()
-        self.assertEquals(get_revisions(self.wc), get_revisions(repo2))
-        # Make sure our local file went away
-        self.failUnless(not os.path.exists(os.path.join(self.wc, 'test.txt')))
 
     def test_make_hg_url(self):
         #construct an hg url specific to revision, branch and filename and try to pull it down

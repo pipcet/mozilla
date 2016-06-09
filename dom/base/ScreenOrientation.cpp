@@ -478,7 +478,7 @@ ScreenOrientation::GetLockOrientationPermission(bool aCheckSandbox) const
   }
 
   // Other content must be full-screen in order to lock orientation.
-  return doc->MozFullScreen() ? FULLSCREEN_LOCK_ALLOWED : LOCK_DENIED;
+  return doc->Fullscreen() ? FULLSCREEN_LOCK_ALLOWED : LOCK_DENIED;
 }
 
 nsIDocument*
@@ -553,7 +553,8 @@ ScreenOrientation::UpdateActiveOrientationLock(ScreenOrientationInternal aOrient
   if (aOrientation == eScreenOrientation_None) {
     hal::UnlockScreenOrientation();
   } else {
-    hal::LockScreenOrientation(aOrientation);
+    bool rv = hal::LockScreenOrientation(aOrientation);
+    NS_WARN_IF(!rv);
   }
 }
 
@@ -647,7 +648,7 @@ ScreenOrientation::FullScreenEventListener::HandleEvent(nsIDOMEvent* aEvent)
   // We have to make sure that the event we got is the event sent when
   // fullscreen is disabled because we could get one when fullscreen
   // got enabled if the lock call is done at the same moment.
-  if (doc->MozFullScreen()) {
+  if (doc->Fullscreen()) {
     return NS_OK;
   }
 

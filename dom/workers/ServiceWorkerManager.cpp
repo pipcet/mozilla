@@ -126,7 +126,9 @@ static_assert(nsIHttpChannelInternal::FETCH_CACHE_MODE_NO_CACHE == static_cast<u
              "RequestCache enumeration value should match Necko Cache mode value.");
 static_assert(nsIHttpChannelInternal::FETCH_CACHE_MODE_FORCE_CACHE == static_cast<uint32_t>(RequestCache::Force_cache),
              "RequestCache enumeration value should match Necko Cache mode value.");
-static_assert(5 == static_cast<uint32_t>(RequestCache::EndGuard_),
+static_assert(nsIHttpChannelInternal::FETCH_CACHE_MODE_ONLY_IF_CACHED == static_cast<uint32_t>(RequestCache::Only_if_cached),
+             "RequestCache enumeration value should match Necko Cache mode value.");
+static_assert(6 == static_cast<uint32_t>(RequestCache::EndGuard_),
              "RequestCache enumeration value should match Necko Cache mode value.");
 
 static StaticRefPtr<ServiceWorkerManager> gInstance;
@@ -959,6 +961,37 @@ ServiceWorkerManager::SendPushSubscriptionChangeEvent(const nsACString& aOriginA
 #endif
 }
 
+nsresult
+ServiceWorkerManager::SendNotificationEvent(const nsAString& aEventName,
+                                            const nsACString& aOriginSuffix,
+                                            const nsACString& aScope,
+                                            const nsAString& aID,
+                                            const nsAString& aTitle,
+                                            const nsAString& aDir,
+                                            const nsAString& aLang,
+                                            const nsAString& aBody,
+                                            const nsAString& aTag,
+                                            const nsAString& aIcon,
+                                            const nsAString& aData,
+                                            const nsAString& aBehavior)
+{
+  PrincipalOriginAttributes attrs;
+  if (!attrs.PopulateFromSuffix(aOriginSuffix)) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  ServiceWorkerInfo* info = GetActiveWorkerInfoForScope(attrs, aScope);
+  if (!info) {
+    return NS_ERROR_FAILURE;
+  }
+
+  ServiceWorkerPrivate* workerPrivate = info->WorkerPrivate();
+  return workerPrivate->SendNotificationEvent(aEventName, aID, aTitle, aDir,
+                                              aLang, aBody, aTag,
+                                              aIcon, aData, aBehavior,
+                                              NS_ConvertUTF8toUTF16(aScope));
+}
+
 NS_IMETHODIMP
 ServiceWorkerManager::SendNotificationClickEvent(const nsACString& aOriginSuffix,
                                                  const nsACString& aScope,
@@ -972,21 +1005,27 @@ ServiceWorkerManager::SendNotificationClickEvent(const nsACString& aOriginSuffix
                                                  const nsAString& aData,
                                                  const nsAString& aBehavior)
 {
-  PrincipalOriginAttributes attrs;
-  if (!attrs.PopulateFromSuffix(aOriginSuffix)) {
-    return NS_ERROR_INVALID_ARG;
-  }
+  return SendNotificationEvent(NS_LITERAL_STRING(NOTIFICATION_CLICK_EVENT_NAME),
+                               aOriginSuffix, aScope, aID, aTitle, aDir, aLang,
+                               aBody, aTag, aIcon, aData, aBehavior);
+}
 
-  ServiceWorkerInfo* info = GetActiveWorkerInfoForScope(attrs, aScope);
-  if (!info) {
-    return NS_ERROR_FAILURE;
-  }
-
-  ServiceWorkerPrivate* workerPrivate = info->WorkerPrivate();
-  return workerPrivate->SendNotificationClickEvent(aID, aTitle, aDir,
-                                                   aLang, aBody, aTag,
-                                                   aIcon, aData, aBehavior,
-                                                   NS_ConvertUTF8toUTF16(aScope));
+NS_IMETHODIMP
+ServiceWorkerManager::SendNotificationCloseEvent(const nsACString& aOriginSuffix,
+                                                 const nsACString& aScope,
+                                                 const nsAString& aID,
+                                                 const nsAString& aTitle,
+                                                 const nsAString& aDir,
+                                                 const nsAString& aLang,
+                                                 const nsAString& aBody,
+                                                 const nsAString& aTag,
+                                                 const nsAString& aIcon,
+                                                 const nsAString& aData,
+                                                 const nsAString& aBehavior)
+{
+  return SendNotificationEvent(NS_LITERAL_STRING(NOTIFICATION_CLOSE_EVENT_NAME),
+                               aOriginSuffix, aScope, aID, aTitle, aDir, aLang,
+                               aBody, aTag, aIcon, aData, aBehavior);
 }
 
 NS_IMETHODIMP
@@ -1918,13 +1957,10 @@ ServiceWorkerManager::StopControllingADocument(ServiceWorkerRegistrationInfo* aR
     if (aRegistration->mPendingUninstall) {
       RemoveRegistration(aRegistration);
     } else {
-      // If the registration has an active worker that is running
-      // this might be a good time to stop it.
-      if (aRegistration->GetActive()) {
-        ServiceWorkerPrivate* serviceWorkerPrivate =
-          aRegistration->GetActive()->WorkerPrivate();
-        serviceWorkerPrivate->NoteStoppedControllingDocuments();
-      }
+      // We use to aggressively terminate the worker at this point, but it
+      // caused problems.  There are more uses for a service worker than actively
+      // controlled documents.  We need to let the worker naturally terminate
+      // in case its handling push events, message events, etc.
       aRegistration->TryToActivateAsync();
     }
   }

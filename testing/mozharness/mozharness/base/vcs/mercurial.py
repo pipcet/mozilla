@@ -4,13 +4,15 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 # ***** END LICENSE BLOCK *****
-"""Mercurial VCS support."""
+"""Mercurial VCS support.
+"""
 
 import os
 import re
 import subprocess
 from collections import namedtuple
 from urlparse import urlsplit
+import hashlib
 
 import sys
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.dirname(sys.path[0]))))
@@ -26,6 +28,7 @@ external_tools_path = os.path.join(
     'external_tools',
 )
 
+
 HG_OPTIONS = ['--config', 'ui.merge=internal:merge']
 
 # MercurialVCS {{{1
@@ -35,15 +38,17 @@ HG_OPTIONS = ['--config', 'ui.merge=internal:merge']
 REVISION, BRANCH = 0, 1
 
 
-class RepositoryUnrelatedParser(OutputParser):
+class RepositoryUpdateRevisionParser(OutputParser):
     """Parse `hg pull` output for "repository unrelated" errors."""
-    unrelated = False
+    revision = None
+    RE_UPDATED = re.compile('^updated to ([a-f0-9]{40})$')
 
     def parse_single_line(self, line):
-        if 'abort: repository is unrelated' in line:
-            self.unrelated = True
+        m = self.RE_UPDATED.match(line)
+        if m:
+            self.revision = m.group(1)
 
-        return super(RepositoryUnrelatedParser, self).parse_single_line(line)
+        return super(RepositoryUpdateRevisionParser, self).parse_single_line(line)
 
 
 def make_hg_url(hg_host, repo_path, protocol='http', revision=None,
@@ -319,13 +324,11 @@ class MercurialVCS(ScriptMixin, LogMixin, TransferMixin):
         return status
 
     @property
-    def purgelong_path(self):
-        """Path to the purgelong extension."""
-        ext = os.path.join(external_tools_path, 'purgelong.py')
+    def robustcheckout_path(self):
+        """Path to the robustcheckout extension."""
+        ext = os.path.join(external_tools_path, 'robustcheckout.py')
         if os.path.exists(ext):
             return ext
-
-        return None
 
     def ensure_repo_and_revision(self):
         """Makes sure that `dest` is has `revision` or `branch` checked out
@@ -335,7 +338,6 @@ class MercurialVCS(ScriptMixin, LogMixin, TransferMixin):
         dest.
         """
         c = self.vcs_config
-
         dest = c['dest']
         repo_url = c['repo']
         rev = c.get('revision')
@@ -347,19 +349,16 @@ class MercurialVCS(ScriptMixin, LogMixin, TransferMixin):
         # self.vcs_config instead of passing arguments. This confuses
         # scripts that have multiple repos. This includes the clone_tools()
         # step :(
+
         if not rev and not branch:
             self.warning('did not specify revision or branch; assuming "default"')
             branch = 'default'
 
-        wanted_rev = rev or branch
-
-        self.info('ensuring %s@%s is available at %s' % (repo_url, wanted_rev, dest))
-
-        # Log HG version and install info to aid debugging.
-        self.run_command(self.hg + ['--version'])
-        self.run_command(self.hg + ['debuginstall'])
-
         share_base = c.get('vcs_share_base', os.environ.get('HG_SHARE_BASE_DIR', None))
+        if share_base and c.get('use_vcs_unique_share'):
+            # Bug 1277041 - update migration scripts to support robustcheckout
+            # fake a share but don't really share
+            share_base = os.path.join(share_base, hashlib.md5(dest).hexdigest())
 
         # We require shared storage is configured because it guarantees we
         # only have 1 local copy of logical repo stores.
@@ -367,122 +366,36 @@ class MercurialVCS(ScriptMixin, LogMixin, TransferMixin):
             raise VCSException('vcs share base not defined; '
                                'refusing to operate sub-optimally')
 
-        dest_hg_path = os.path.join(dest, '.hg')
-        dest_hg_sharedpath = os.path.join(dest_hg_path, 'sharedpath')
-        if os.path.exists(dest) and not os.path.exists(dest_hg_path):
-            self.warning('destination exists but has no Mercurial state; deleting')
-            self.rmtree(dest)
+        if not self.robustcheckout_path:
+            raise VCSException('could not find the robustcheckout Mercurial extension')
 
-        # We require checkouts are tied to shared storage because efficiency.
-        if os.path.exists(dest_hg_path) and not os.path.exists(dest_hg_sharedpath):
-            self.warning('destination is not shared; deleting')
-            self.rmtree(dest)
+        # Log HG version and install info to aid debugging.
+        self.run_command(self.hg + ['--version'])
+        self.run_command(self.hg + ['debuginstall'])
 
-        # Verify the shared path exists and is using modern pooled storage.
-        if os.path.exists(dest_hg_sharedpath):
-            with open(dest_hg_sharedpath, 'rb') as fh:
-                store_path = fh.read().strip()
+        args = self.hg + [
+            '--config', 'extensions.robustcheckout=%s' % self.robustcheckout_path,
+            'robustcheckout', repo_url, dest, '--sharebase', share_base,
+        ]
+        if purge:
+            args.append('--purge')
+        if upstream:
+            args.extend(['--upstream', upstream])
 
-            self.info('existing repository shared store: %s' % store_path)
+        if rev:
+            args.extend(['--revision', rev])
+        if branch:
+            args.extend(['--branch', branch])
 
-            if not os.path.exists(store_path):
-                self.warning('shared store does not exist; deleting')
-                self.rmtree(dest)
-            elif not re.search('[a-f0-9]{40}/\.hg$', store_path.replace('\\', '/')):
-                self.warning('shared store does not belong to pooled storage; '
-                             'deleting to improve efficiency')
-                self.rmtree(dest)
+        parser = RepositoryUpdateRevisionParser(config=self.config,
+                                                log_obj=self.log_obj)
+        if self.run_command(args, output_parser=parser):
+            raise VCSException('repo checkout failed!')
 
-            # FUTURE when we require generaldelta, this is where we can check
-            # for that.
+        if not parser.revision:
+            raise VCSException('could not identify revision updated to')
 
-        # At this point we either have an existing working directory using
-        # well-formed shared storage or we have nothing.
-        created = False
-
-        # Create the destination if necessary.
-        if not os.path.exists(dest):
-            # We do a full `hg clone` (no `hg clone -r`) because it will use
-            # clone bundles, which are the most efficient way to transfer data.
-            # `hg clone` with pooled storage automatically performs a
-            # share under the hood. So no additional share magic is necessary.
-            clone_url = upstream or repo_url
-            args = self.hg + [
-                '--config', 'extensions.share=',
-                '--config', 'share.pool=%s' % share_base,
-                'clone', '-U', clone_url, dest,
-            ]
-            if self.run_command(args):
-                raise VCSException('clone+share failed')
-
-            # Verify it is using shared pool storage. This can
-            # fail if we're not running a modern Mercurial.
-            if not os.path.exists(dest_hg_sharedpath):
-                raise VCSException('`hg clone` did not use share; '
-                                   'old Mercurial version?')
-
-            created = True
-
-        # The destination .hg directory should exist. Now make sure we have the
-        # wanted revision.
-
-        # If possible, we avoid going to the remote to check for the
-        # revision. But this only works for revisions because branch names
-        # resolve to different revisions over time.
-        have_wanted_rev = False
-        if wanted_rev == rev and rev:
-            args = self.hg + ['log', '-r', wanted_rev, '-T', '{node}']
-            output = self.get_output_from_command(args, cwd=dest, ignore_errors=True)
-            if output:
-                have_wanted_rev = wanted_rev in output
-
-        if not have_wanted_rev:
-            self.info('pulling to obtain %s' % wanted_rev)
-            args = self.hg + ['pull', '-r', wanted_rev, repo_url]
-
-            parser = RepositoryUnrelatedParser(config=self.config,
-                                               log_obj=self.log_obj)
-
-            if self.run_command(args, cwd=dest, output_parser=parser):
-                # If we fail to pull because the repository is unrelated,
-                # nuke the destination repo and start from scratch.
-                if parser.unrelated:
-                    self.warning('destination repository has changed; nuking and '
-                                 'trying again')
-                    self.rmtree(dest)
-                    return self.ensure_repo_and_revision()
-
-                raise VCSException('error pulling wanted revision')
-
-        # Now we should have the wanted revision in the store. Perform
-        # working directory manipulation.
-
-        # Do a purge first, if requested. We purge first because this way we're
-        # guaranteed to not have conflicts on `hg update`.
-        if purge and not created:
-            args = self.hg + ['--config', 'extensions.purge=', 'purge', '--all', '-a']
-
-            # The Windows APIs Mercurial uses to unlink files have path length
-            # limitations. This could cause a failure when running vanilla
-            # `hg purge`. We have an extension that falls back to more robust
-            # APIs.
-            purgelong = self.purgelong_path
-            if purgelong:
-                args.extend(['--config', 'extensions.purgelong=%s' % purgelong])
-            else:
-                self.warning('purgelong extension not found; '
-                             'purge may fail on Windows')
-
-            if self.run_command(args, cwd=dest):
-                raise VCSException('error purging')
-
-        # Update the working directory.
-        args = self.hg + ['update', '-C', '-r', wanted_rev]
-        if self.run_command(args, cwd=dest):
-            raise VCSException('error updating')
-
-        return self.get_output_from_command(self.hg + ['log', '-r', '.', '-T', '{node}'],
-                                            cwd=dest)
+        return parser.revision
 
     def apply_and_push(self, localrepo, remote, changer, max_attempts=10,
                        ssh_username=None, ssh_key=None):

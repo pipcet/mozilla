@@ -8,7 +8,6 @@ package org.mozilla.gecko;
 import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.GeckoProfileDirectories.NoMozillaDirectoryException;
 import org.mozilla.gecko.db.BrowserDB;
-import org.mozilla.gecko.db.URLMetadataTable;
 import org.mozilla.gecko.db.UrlAnnotations;
 import org.mozilla.gecko.favicons.Favicons;
 import org.mozilla.gecko.favicons.OnFaviconLoadedListener;
@@ -24,8 +23,8 @@ import org.mozilla.gecko.home.HomeConfig.PanelType;
 import org.mozilla.gecko.menu.GeckoMenu;
 import org.mozilla.gecko.menu.GeckoMenuInflater;
 import org.mozilla.gecko.menu.MenuPanel;
-import org.mozilla.gecko.mozglue.ContextUtils;
-import org.mozilla.gecko.mozglue.ContextUtils.SafeIntent;
+import org.mozilla.gecko.util.IntentUtils;
+import org.mozilla.gecko.mozglue.SafeIntent;
 import org.mozilla.gecko.mozglue.GeckoLoader;
 import org.mozilla.gecko.permissions.Permissions;
 import org.mozilla.gecko.preferences.ClearOnShutdownPref;
@@ -49,9 +48,9 @@ import org.mozilla.gecko.util.PrefUtils;
 import org.mozilla.gecko.util.ThreadUtils;
 
 import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.ContentResolver;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -76,6 +75,7 @@ import android.os.Process;
 import android.os.StrictMode;
 import android.provider.ContactsContract;
 import android.provider.MediaStore.Images.Media;
+import android.support.annotation.WorkerThread;
 import android.support.design.widget.Snackbar;
 import android.text.TextUtils;
 import android.util.AttributeSet;
@@ -89,7 +89,6 @@ import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.OrientationEventListener;
-import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
@@ -115,7 +114,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -124,6 +122,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 public abstract class GeckoApp
     extends GeckoActivity
@@ -140,7 +139,7 @@ public abstract class GeckoApp
     ViewTreeObserver.OnGlobalLayoutListener {
 
     private static final String LOGTAG = "GeckoApp";
-    private static final int ONE_DAY_MS = 1000 * 60 * 60 * 24;
+    private static final long ONE_DAY_MS = TimeUnit.MILLISECONDS.convert(1, TimeUnit.DAYS);
 
     public static final String ACTION_ALERT_CALLBACK       = "org.mozilla.gecko.ACTION_ALERT_CALLBACK";
     public static final String ACTION_HOMESCREEN_SHORTCUT  = "org.mozilla.gecko.BOOKMARK";
@@ -178,6 +177,9 @@ public abstract class GeckoApp
     protected Menu mMenu;
     protected boolean mIsRestoringActivity;
 
+    /** Tells if we're aborting app launch, e.g. if this is an unsupported device configuration. */
+    protected boolean mIsAbortingAppLaunch;
+
     private ContactService mContactService;
     private PromptService mPromptService;
     protected TextSelection mTextSelection;
@@ -196,6 +198,8 @@ public abstract class GeckoApp
 
     protected boolean mLastSessionCrashed;
     protected boolean mShouldRestore;
+    private boolean mSessionRestoreParsingFinished = false;
+
     protected boolean mInitialized;
     protected boolean mWindowFocusInitialized;
     private Telemetry.Timer mJavaUiStartupTimer;
@@ -693,6 +697,8 @@ public abstract class GeckoApp
                   rec.recordGeckoStartupTime(mGeckoReadyStartupTimer.getElapsed());
                 }
 
+                GeckoApplication.get().onDelayedStartup();
+
             } else if (event.equals("Gecko:Exited")) {
                 // Gecko thread exited first; let GeckoApp die too.
                 doShutdown();
@@ -1094,6 +1100,7 @@ public abstract class GeckoApp
 
         if (!HardwareUtils.isSupportedSystem()) {
             // This build does not support the Android version of the device: Show an error and finish the app.
+            mIsAbortingAppLaunch = true;
             super.onCreate(savedInstanceState);
             showSDKVersionError();
             finish();
@@ -1161,16 +1168,9 @@ public abstract class GeckoApp
             final String action = intent.getAction();
             final String args = intent.getStringExtra("args");
 
-            // If we don't already have a profile, but we do have arguments,
-            // let's see if they're enough to find one.
-            // Note that subclasses must ensure that if they try to access
-            // the profile prior to this code being run, then they do something
-            // similar.
-            final GeckoProfile profile = (args != null) ?
-                GeckoProfile.getFromArgs(getApplicationContext(), args) : null;
-
             sAlreadyLoaded = true;
-            GeckoThread.init(profile, args, action, /* debugging */ ACTION_DEBUG.equals(action));
+            GeckoThread.init(/* profile */ null, args, action,
+                             /* debugging */ ACTION_DEBUG.equals(action));
 
             // Speculatively pre-fetch the profile in the background.
             ThreadUtils.postToBackgroundThread(new Runnable() {
@@ -1220,7 +1220,7 @@ public abstract class GeckoApp
 
         GeckoThread.launch();
 
-        Bundle stateBundle = ContextUtils.getBundleExtra(getIntent(), EXTRA_STATE_BUNDLE);
+        Bundle stateBundle = IntentUtils.getBundleExtraSafe(getIntent(), EXTRA_STATE_BUNDLE);
         if (stateBundle != null) {
             // Use the state bundle if it was given as an intent extra. This is
             // only intended to be used internally via Robocop, so a boolean
@@ -1276,6 +1276,43 @@ public abstract class GeckoApp
 
             mPrivateBrowsingSession = savedInstanceState.getString(SAVED_STATE_PRIVATE_SESSION);
         }
+
+        ThreadUtils.postToBackgroundThread(new Runnable() {
+            @Override
+            public void run() {
+                // If we are doing a restore, read the session data so we can send it to Gecko later.
+                String restoreMessage = null;
+                if (!mIsRestoringActivity && mShouldRestore) {
+                    try {
+                        // restoreSessionTabs() will create simple tab stubs with the
+                        // URL and title for each page, but we also need to restore
+                        // session history. restoreSessionTabs() will inject the IDs
+                        // of the tab stubs into the JSON data (which holds the session
+                        // history). This JSON data is then sent to Gecko so session
+                        // history can be restored for each tab.
+                        final SafeIntent intent = new SafeIntent(getIntent());
+                        restoreMessage = restoreSessionTabs(invokedWithExternalURL(getIntentURI(intent)));
+                    } catch (SessionRestoreException e) {
+                        // If restore failed, do a normal startup
+                        Log.e(LOGTAG, "An error occurred during restore", e);
+                        mShouldRestore = false;
+                    }
+                }
+
+                synchronized (this) {
+                    mSessionRestoreParsingFinished = true;
+                    notifyAll();
+                }
+
+                // If we are doing a restore, send the parsed session data to Gecko.
+                if (!mIsRestoringActivity) {
+                    GeckoAppShell.notifyObservers("Session:Restore", restoreMessage);
+                }
+
+                // Make sure sessionstore.bak is either updated or deleted as necessary.
+                getProfile().updateSessionFile(mShouldRestore);
+            }
+        });
 
         // Perform background initialization.
         ThreadUtils.postToBackgroundThread(new Runnable() {
@@ -1348,7 +1385,21 @@ public abstract class GeckoApp
     @Override
     public void onStart() {
         super.onStart();
+        if (mIsAbortingAppLaunch) {
+            return;
+        }
+
         mWasFirstTabShownAfterActivityUnhidden = false; // onStart indicates we were hidden.
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        // Overriding here is not necessary, but we do this so we don't
+        // forget to add the abort if we override this method later.
+        if (mIsAbortingAppLaunch) {
+            return;
+        }
     }
 
     /**
@@ -1402,14 +1453,17 @@ public abstract class GeckoApp
     /**
      * Loads the initial tab at Fennec startup. If we don't restore tabs, this
      * tab will be about:home, or the homepage if the user has set one.
-     * If we've temporarily disabled restoring to break out of a crash loop, we'll
-     * show the recent tabs panel so the user can manually restore tabs as needed.
+     * If we've temporarily disabled restoring to break out of a crash loop, we'll show
+     * the Recent Tabs folder of the Combined History panel, so the user can manually
+     * restore tabs as needed.
      * If we restore tabs, we don't need to create a new tab.
      */
     protected void loadStartupTab(final int flags) {
         if (!mShouldRestore) {
             if (mLastSessionCrashed) {
-                Tabs.getInstance().loadUrl(AboutPages.getURLForBuiltinPanelType(PanelType.RECENT_TABS), flags);
+                // The Recent Tabs panel no longer exists, but BrowserApp will redirect us
+                // to the Recent Tabs folder of the Combined History panel.
+                Tabs.getInstance().loadUrl(AboutPages.getURLForBuiltinPanelType(PanelType.DEPRECATED_RECENT_TABS), flags);
             } else {
                 final String homepage = getHomepage();
                 Tabs.getInstance().loadUrl(!TextUtils.isEmpty(homepage) ? homepage : AboutPages.HOME, flags);
@@ -1439,6 +1493,22 @@ public abstract class GeckoApp
         return null;
     }
 
+    private String getIntentURI(SafeIntent intent) {
+        final String passedUri;
+        final String uri = getURIFromIntent(intent);
+
+        if (!TextUtils.isEmpty(uri)) {
+            passedUri = uri;
+        } else {
+            passedUri = null;
+        }
+        return passedUri;
+    }
+
+    private boolean invokedWithExternalURL(String uri) {
+        return uri != null && !AboutPages.isAboutHome(uri);
+    }
+
     private void initialize() {
         mInitialized = true;
 
@@ -1448,16 +1518,9 @@ public abstract class GeckoApp
         final SafeIntent intent = new SafeIntent(getIntent());
         final String action = intent.getAction();
 
-        final String uri = getURIFromIntent(intent);
+        final String passedUri = getIntentURI(intent);
 
-        final String passedUri;
-        if (!TextUtils.isEmpty(uri)) {
-            passedUri = uri;
-        } else {
-            passedUri = null;
-        }
-
-        final boolean isExternalURL = passedUri != null && !AboutPages.isAboutHome(passedUri);
+        final boolean isExternalURL = invokedWithExternalURL(passedUri);
 
         // Start migrating as early as possible, can do this in
         // parallel with Gecko load.
@@ -1467,26 +1530,17 @@ public abstract class GeckoApp
 
         initializeChrome();
 
-        // If we are doing a restore, read the session data and send it to Gecko
-        if (!mIsRestoringActivity) {
-            String restoreMessage = null;
-            if (mShouldRestore) {
+        // We need to wait here because mShouldRestore can revert back to
+        // false if a parsing error occurs and the startup tab we load
+        // depends on whether we restore tabs or not.
+        synchronized (this) {
+            while (!mSessionRestoreParsingFinished) {
                 try {
-                    // restoreSessionTabs() will create simple tab stubs with the
-                    // URL and title for each page, but we also need to restore
-                    // session history. restoreSessionTabs() will inject the IDs
-                    // of the tab stubs into the JSON data (which holds the session
-                    // history). This JSON data is then sent to Gecko so session
-                    // history can be restored for each tab.
-                    restoreMessage = restoreSessionTabs(isExternalURL);
-                } catch (SessionRestoreException e) {
-                    // If restore failed, do a normal startup
-                    Log.e(LOGTAG, "An error occurred during restore", e);
-                    mShouldRestore = false;
+                    wait();
+                } catch (final InterruptedException e) {
+                    // Ignore and wait again.
                 }
             }
-
-            GeckoAppShell.notifyObservers("Session:Restore", restoreMessage);
         }
 
         // External URLs should always be loaded regardless of whether Gecko is
@@ -1516,12 +1570,6 @@ public abstract class GeckoApp
             Tabs.getInstance().notifyListeners(null, Tabs.TabEvents.RESTORED);
 
             processTabQueue();
-        }
-
-        // If we're not restoring, move the session file so it can be read for
-        // the last tabs section.
-        if (!mShouldRestore) {
-            getProfile().moveSessionFile();
         }
 
         recordStartupActionTelemetry(passedUri, action);
@@ -1592,6 +1640,7 @@ public abstract class GeckoApp
         }
     }
 
+    @TargetApi(Build.VERSION_CODES.JELLY_BEAN)
     @Override
     public void onGlobalLayout() {
         if (Versions.preJB) {
@@ -1631,6 +1680,7 @@ public abstract class GeckoApp
         });
     }
 
+    @WorkerThread
     private String restoreSessionTabs(final boolean isExternalURL) throws SessionRestoreException {
         try {
             String sessionString = getProfile().readSessionFile(false);
@@ -1646,7 +1696,7 @@ public abstract class GeckoApp
                 final JSONObject windowObject = new JSONObject();
                 SessionParser parser = new SessionParser() {
                     @Override
-                    public void onTabRead(SessionTab sessionTab) {
+                    public void onTabRead(final SessionTab sessionTab) {
                         JSONObject tabObject = sessionTab.getTabObject();
 
                         int flags = Tabs.LOADURL_NEW_TAB;
@@ -1654,8 +1704,13 @@ public abstract class GeckoApp
                         flags |= (tabObject.optBoolean("desktopMode") ? Tabs.LOADURL_DESKTOP : 0);
                         flags |= (tabObject.optBoolean("isPrivate") ? Tabs.LOADURL_PRIVATE : 0);
 
-                        Tab tab = Tabs.getInstance().loadUrl(sessionTab.getUrl(), flags);
-                        tab.updateTitle(sessionTab.getTitle());
+                        final Tab tab = Tabs.getInstance().loadUrl(sessionTab.getUrl(), flags);
+                        ThreadUtils.postToUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                tab.updateTitle(sessionTab.getTitle());
+                            }
+                        });
 
                         try {
                             tabObject.put("tabId", tab.getId());
@@ -1776,7 +1831,7 @@ public abstract class GeckoApp
     }
 
     private boolean getRestartFromIntent() {
-        return ContextUtils.getBooleanExtra(getIntent(), "didRestart", false);
+        return IntentUtils.getBooleanExtraSafe(getIntent(), "didRestart", false);
     }
 
     /**
@@ -1976,6 +2031,9 @@ public abstract class GeckoApp
         // After an onPause, the activity is back in the foreground.
         // Undo whatever we did in onPause.
         super.onResume();
+        if (mIsAbortingAppLaunch) {
+            return;
+        }
 
         int newOrientation = getResources().getConfiguration().orientation;
         if (GeckoScreenOrientation.getInstance().update(newOrientation)) {
@@ -2053,6 +2111,11 @@ public abstract class GeckoApp
     @Override
     public void onPause()
     {
+        if (mIsAbortingAppLaunch) {
+            super.onPause();
+            return;
+        }
+
         final HealthRecorder rec = mHealthRecorder;
         final Context context = this;
 
@@ -2101,6 +2164,11 @@ public abstract class GeckoApp
 
     @Override
     public void onRestart() {
+        if (mIsAbortingAppLaunch) {
+            super.onRestart();
+            return;
+        }
+
         // Faster on main thread with an async apply().
         final StrictMode.ThreadPolicy savedPolicy = StrictMode.allowThreadDiskReads();
         try {
@@ -2116,7 +2184,7 @@ public abstract class GeckoApp
 
     @Override
     public void onDestroy() {
-        if (!HardwareUtils.isSupportedSystem()) {
+        if (mIsAbortingAppLaunch) {
             // This build does not support the Android version of the device:
             // We did not initialize anything, so skip cleaning up.
             super.onDestroy();
@@ -2307,6 +2375,7 @@ public abstract class GeckoApp
     private void doShutdown() {
         // Shut down GeckoApp activity.
         runOnUiThread(new Runnable() {
+            @TargetApi(Build.VERSION_CODES.JELLY_BEAN_MR1)
             @Override public void run() {
                 if (!isFinishing() && (Versions.preJBMR1 || !isDestroyed())) {
                     finish();

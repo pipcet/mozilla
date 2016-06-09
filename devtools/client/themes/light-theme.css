@@ -6,6 +6,7 @@
 @import url(variables.css);
 @import url(common.css);
 @import url(toolbars.css);
+@import url(tooltips.css);
 
 body {
   margin: 0;
@@ -234,8 +235,8 @@ div.CodeMirror div.error-line {
 div.CodeMirror span.marked-text {
   background: rgba(255,255,0,0.2);
   border: 1px dashed rgba(192,192,0,0.6);
-  -moz-margin-start: -1px;
-  -moz-margin-end: -1px;
+  margin-inline-start: -1px;
+  margin-inline-end: -1px;
 }
 
 /* Highlight for evaluating current statement. */

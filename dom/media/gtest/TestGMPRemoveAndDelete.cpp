@@ -16,6 +16,7 @@
 #include "GMPService.h"
 #include "GMPUtils.h"
 #include "mozilla/StaticPtr.h"
+#include "MediaPrefs.h"
 
 #define GMP_DIR_NAME NS_LITERAL_STRING("gmp-fakeopenh264")
 #define GMP_OLD_VERSION NS_LITERAL_STRING("1.0")
@@ -227,6 +228,8 @@ GMPRemoveTest::~GMPRemoveTest()
 void
 GMPRemoveTest::Setup()
 {
+  // Initialize media preferences.
+  MediaPrefs::GetSingleton();
   GeneratePlugin();
   GetService()->GetThread(getter_AddRefs(mGMPThread));
 
@@ -235,6 +238,7 @@ GMPRemoveTest::Setup()
   // below may complete before we're finished adding GMPs from MOZ_GMP_PATH,
   // and we'll end up not removing the GMP, and the test will fail.
   RefPtr<AbstractThread> thread(GetServiceParent()->GetAbstractGMPThread());
+  EXPECT_TRUE(thread);
   GMPTestMonitor* mon = &mTestMonitor;
   GetServiceParent()->EnsureInitialized()->Then(thread, __func__,
     [mon]() { mon->SetFinished(); },

@@ -144,7 +144,7 @@ class JSFunction : public js::NativeObject
         } i;
         void*           nativeOrScript;
     } u;
-    js::HeapPtrAtom  atom_;       /* name for diagnostics and decompiling */
+    js::GCPtrAtom atom_;      /* name for diagnostics and decompiling */
 
   public:
 
@@ -315,6 +315,13 @@ class JSFunction : public js::NativeObject
 
     JSAtom* name() const { return hasGuessedAtom() ? nullptr : atom_.get(); }
 
+    // Because display names (see Debugger.Object.displayName) are already stored
+    // on functions and will always contain a valid es6 function name, as described
+    // in "ECMA-262 (2016-02-27) 9.2.11 SetFunctionName," we have opted to save
+    // memory by parsing the existing display name when a function's name property
+    // is accessed.
+    JSAtom* functionName(JSContext* cx) const;
+
     void initAtom(JSAtom* atom) { atom_.init(atom); }
 
     void setAtom(JSAtom* atom) { atom_ = atom; }
@@ -345,12 +352,12 @@ class JSFunction : public js::NativeObject
 
     void setEnvironment(JSObject* obj) {
         MOZ_ASSERT(isInterpreted() && !isBeingParsed());
-        *reinterpret_cast<js::HeapPtrObject*>(&u.i.env_) = obj;
+        *reinterpret_cast<js::GCPtrObject*>(&u.i.env_) = obj;
     }
 
     void initEnvironment(JSObject* obj) {
         MOZ_ASSERT(isInterpreted() && !isBeingParsed());
-        reinterpret_cast<js::HeapPtrObject*>(&u.i.env_)->init(obj);
+        reinterpret_cast<js::GCPtrObject*>(&u.i.env_)->init(obj);
     }
 
     void unsetEnvironment() {
@@ -557,9 +564,9 @@ class JSFunction : public js::NativeObject
     size_t getBoundFunctionArgumentCount() const;
 
   private:
-    js::HeapPtrScript& mutableScript() {
+    js::GCPtrScript& mutableScript() {
         MOZ_ASSERT(hasScript());
-        return *(js::HeapPtrScript*)&u.i.s.script_;
+        return *(js::GCPtrScript*)&u.i.s.script_;
     }
 
     inline js::FunctionExtended* toExtended();
@@ -670,6 +677,17 @@ FunctionHasResolveHook(const JSAtomState& atomState, jsid id);
 extern bool
 fun_toString(JSContext* cx, unsigned argc, Value* vp);
 
+struct WellKnownSymbols;
+
+extern bool
+FunctionHasDefaultHasInstance(JSFunction* fun, const WellKnownSymbols& symbols);
+
+extern bool
+fun_symbolHasInstance(JSContext* cx, unsigned argc, Value* vp);
+
+extern bool
+OrdinaryHasInstance(JSContext* cx, HandleObject objArg, MutableHandleValue v, bool* bp);
+
 /*
  * Function extended with reserved slots for use by various kinds of functions.
  * Most functions do not have these extensions, but enough do that efficient
@@ -699,7 +717,7 @@ class FunctionExtended : public JSFunction
 
     static inline size_t offsetOfExtendedSlot(unsigned which) {
         MOZ_ASSERT(which < NUM_EXTENDED_SLOTS);
-        return offsetof(FunctionExtended, extendedSlots) + which * sizeof(HeapValue);
+        return offsetof(FunctionExtended, extendedSlots) + which * sizeof(GCPtrValue);
     }
     static inline size_t offsetOfArrowNewTargetSlot() {
         return offsetOfExtendedSlot(ARROW_NEWTARGET_SLOT);
@@ -709,7 +727,7 @@ class FunctionExtended : public JSFunction
     friend class JSFunction;
 
     /* Reserved slots available for storage by particular native functions. */
-    HeapValue extendedSlots[NUM_EXTENDED_SLOTS];
+    GCPtrValue extendedSlots[NUM_EXTENDED_SLOTS];
 };
 
 extern bool
@@ -794,14 +812,14 @@ XDRInterpretedFunction(XDRState<mode>* xdr, HandleObject enclosingScope,
  * is what was called.
  */
 extern void
-ReportIncompatibleMethod(JSContext* cx, CallReceiver call, const Class* clasp);
+ReportIncompatibleMethod(JSContext* cx, const CallArgs& args, const Class* clasp);
 
 /*
  * Report an error that call.thisv is not an acceptable this for the callee
  * function.
  */
 extern void
-ReportIncompatible(JSContext* cx, CallReceiver call);
+ReportIncompatible(JSContext* cx, const CallArgs& args);
 
 extern const JSFunctionSpec function_methods[];
 extern const JSFunctionSpec function_selfhosted_methods[];

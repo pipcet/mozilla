@@ -247,7 +247,8 @@ protected:
   static void MarkContextAsEmpty(ITfContext* aContext);
 
   bool     Init(nsWindowBase* aWidget);
-  bool     Destroy();
+  void     Destroy();
+  void     ReleaseTSFObjects();
 
   bool     IsReadLock(DWORD aLock) const
   {
@@ -348,6 +349,21 @@ protected:
   // 0 if no lock is queued, otherwise TS_LF_* indicating the queue lock
   DWORD                        mLockQueued;
 
+  uint32_t mHandlingKeyMessage;
+  void OnStartToHandleKeyMessage() { ++mHandlingKeyMessage; }
+  void OnEndHandlingKeyMessage()
+  {
+    MOZ_ASSERT(mHandlingKeyMessage);
+    if (--mHandlingKeyMessage) {
+      return;
+    }
+    // If TSFTextStore instance is destroyed during handling key message(s),
+    // release all TSF objects when all nested key messages have been handled.
+    if (mDestroyed) {
+      ReleaseTSFObjects();
+    }
+  }
+
   class Composition final
   {
   public:
@@ -418,17 +434,23 @@ protected:
       mACP.style.fInterimChar = FALSE;
     }
 
-    void SetSelection(uint32_t aStart,
+    bool SetSelection(uint32_t aStart,
                       uint32_t aLength,
                       bool aReversed,
                       WritingMode aWritingMode)
     {
+      bool changed = mDirty ||
+                     mACP.acpStart != static_cast<LONG>(aStart) ||
+                     mACP.acpEnd != static_cast<LONG>(aStart + aLength);
+
       mDirty = false;
       mACP.acpStart = static_cast<LONG>(aStart);
       mACP.acpEnd = static_cast<LONG>(aStart + aLength);
       mACP.style.ase = aReversed ? TS_AE_START : TS_AE_END;
       mACP.style.fInterimChar = FALSE;
       mWritingMode = aWritingMode;
+
+      return changed;
     }
 
     bool IsCollapsed() const
@@ -882,6 +904,9 @@ protected:
   // Immediately after a call of Destroy(), mDestroyed becomes true.  If this
   // is true, the instance shouldn't grant any requests from the TIP anymore.
   bool                         mDestroyed;
+  // While the instance is being destroyed, this is set to true for avoiding
+  // recursive Destroy() calls.
+  bool                         mBeingDestroyed;
 
 
   // TSF thread manager object for the current application

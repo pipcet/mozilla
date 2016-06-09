@@ -42,6 +42,8 @@
 #include "mozilla/dom/UnionTypes.h"
 #include "mozilla/ErrorResult.h"
 #include "nsFrameMessageManager.h"
+#include "mozilla/Attributes.h"
+#include "mozilla/GuardObjects.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/TimeStamp.h"
 #include "nsWrapperCacheInlines.h"
@@ -101,11 +103,13 @@ namespace mozilla {
 class DOMEventTargetHelper;
 namespace dom {
 class BarProp;
+struct ChannelPixelLayout;
 class Console;
 class Crypto;
 class External;
 class Function;
 class Gamepad;
+enum class ImageBitmapFormat : uint32_t;
 class MediaQueryList;
 class MozSelfSupport;
 class Navigator;
@@ -565,11 +569,36 @@ public:
   bool DialogsAreBeingAbused();
 
   // These functions are used for controlling and determining whether dialogs
-  // (alert, prompt, confirm) are currently allowed in this window.
+  // (alert, prompt, confirm) are currently allowed in this window.  If you want
+  // to temporarily disable dialogs, please use TemporarilyDisableDialogs, not
+  // EnableDialogs/DisableDialogs, because correctly determining whether to
+  // re-enable dialogs is actually quite difficult.
   void EnableDialogs();
   void DisableDialogs();
   // Outer windows only.
   bool AreDialogsEnabled();
+
+  class MOZ_RAII TemporarilyDisableDialogs
+  {
+  public:
+    // Takes an inner _or_ outer window.
+    explicit TemporarilyDisableDialogs(nsGlobalWindow* aWindow
+                                       MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
+    ~TemporarilyDisableDialogs();
+
+  private:
+    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
+
+    // Always an inner window; this is the window whose dialog state we messed
+    // with.  We just want to keep it alive, because we plan to poke at its
+    // members in our destructor.
+    RefPtr<nsGlobalWindow> mTopWindow;
+    // This is not a AutoRestore<bool> because that would require careful
+    // member destructor ordering, which is a bit fragile.  This way we can
+    // explicitly restore things before we drop our ref to mTopWindow.
+    bool mSavedDialogsEnabled;
+  };
+  friend class TemporarilyDisableDialogs;
 
   nsIScriptContext *GetContextInternal()
   {
@@ -1176,6 +1205,14 @@ public:
                     int32_t aSx, int32_t aSy, int32_t aSw, int32_t aSh,
                     mozilla::ErrorResult& aRv);
 
+  already_AddRefed<mozilla::dom::Promise>
+  CreateImageBitmap(const mozilla::dom::ImageBitmapSource& aImage,
+                    int32_t aOffset, int32_t aLength,
+                    mozilla::dom::ImageBitmapFormat aFormat,
+                    const mozilla::dom::Sequence<mozilla::dom::ChannelPixelLayout>& aLayout,
+                    mozilla::ErrorResult& aRv);
+
+
   // ChromeWindow bits.  Do NOT call these unless your window is in
   // fact an nsGlobalChromeWindow.
   uint16_t WindowState();
@@ -1404,9 +1441,6 @@ private:
    * @param aExtraArgument Another way to pass arguments in.  This is mutually
    *        exclusive with the argv/argc approach.
    *
-   * @param aJSCallerContext The calling script's context. This must be null
-   *        when aCalledNoScript is true.
-   *
    * @param aReturn [out] The window that was opened, if any.
    *
    * Outer windows only.
@@ -1421,7 +1455,6 @@ private:
                         bool aNavigate,
                         nsIArray *argv,
                         nsISupports *aExtraArgument,
-                        JSContext *aJSCallerContext,
                         nsPIDOMWindowOuter **aReturn);
 
 public:

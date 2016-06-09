@@ -43,16 +43,18 @@ function PushRecord(props) {
   this.authenticationSecret = props.authenticationSecret;
   this.systemRecord = !!props.systemRecord;
   this.appServerKey = props.appServerKey;
+  this.recentMessageIDs = props.recentMessageIDs;
   this.setQuota(props.quota);
   this.ctime = (typeof props.ctime === "number") ? props.ctime : 0;
 }
 
 PushRecord.prototype = {
   setQuota(suggestedQuota) {
-    if (this.quotaApplies() && !isNaN(suggestedQuota) && suggestedQuota >= 0) {
-      this.quota = suggestedQuota;
+    if (this.quotaApplies()) {
+      let quota = +suggestedQuota;
+      this.quota = quota >= 0 ? quota : prefs.get("maxQuotaPerSubscription");
     } else {
-      this.resetQuota();
+      this.quota = Infinity;
     }
   },
 
@@ -75,8 +77,10 @@ PushRecord.prototype = {
     }
     if (lastVisit > this.lastPush) {
       // If the user visited the site since the last time we received a
-      // notification, reset the quota.
-      let daysElapsed = (Date.now() - lastVisit) / 24 / 60 / 60 / 1000;
+      // notification, reset the quota. `Math.max(0, ...)` ensures the
+      // last visit date isn't in the future.
+      let daysElapsed =
+        Math.max(0, (Date.now() - lastVisit) / 24 / 60 / 60 / 1000);
       this.quota = Math.min(
         Math.round(8 * Math.pow(daysElapsed, -0.8)),
         prefs.get("maxQuotaPerSubscription")
@@ -89,6 +93,29 @@ PushRecord.prototype = {
     this.updateQuota(lastVisit);
     this.pushCount++;
     this.lastPush = Date.now();
+  },
+
+  /**
+   * Records a message ID sent to this push registration. We track the last few
+   * messages sent to each registration to avoid firing duplicate events for
+   * unacknowledged messages.
+   */
+  noteRecentMessageID(id) {
+    if (this.recentMessageIDs) {
+      this.recentMessageIDs.unshift(id);
+    } else {
+      this.recentMessageIDs = [id];
+    }
+    // Drop older message IDs from the end of the list.
+    let maxRecentMessageIDs = Math.min(
+      this.recentMessageIDs.length,
+      Math.max(prefs.get("maxRecentMessageIDsPerSubscription"), 0)
+    );
+    this.recentMessageIDs.length = maxRecentMessageIDs || 0;
+  },
+
+  hasRecentMessageID(id) {
+    return this.recentMessageIDs && this.recentMessageIDs.includes(id);
   },
 
   reduceQuota() {

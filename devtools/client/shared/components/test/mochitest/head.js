@@ -5,7 +5,6 @@
 var { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 
 Cu.import("resource://testing-common/Assert.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 
 var { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
 var { gDevTools } = require("devtools/client/framework/devtools");
@@ -15,6 +14,7 @@ var Services = require("Services");
 var { DebuggerServer } = require("devtools/server/main");
 var { DebuggerClient } = require("devtools/shared/client/main");
 var DevToolsUtils = require("devtools/shared/DevToolsUtils");
+var { Task } = require("devtools/shared/task");
 var { TargetFactory } = require("devtools/client/framework/target");
 var { Toolbox } = require("devtools/client/framework/toolbox");
 
@@ -141,7 +141,7 @@ var TEST_TREE = {
 /**
  * Frame
  */
-function checkFrameString({ frame, file, line, column, shouldLink, tooltip }) {
+function checkFrameString({ frame, file, line, column, source, shouldLink, tooltip }) {
   let el = frame.getDOMNode();
   let $ = selector => el.querySelector(selector);
 
@@ -155,6 +155,9 @@ function checkFrameString({ frame, file, line, column, shouldLink, tooltip }) {
   is(el.getAttribute("data-column"), column ? `${column}` : null, "Expected `data-column` found");
   is($source.getAttribute("title"), tooltip, "Correct tooltip");
   is($source.tagName, shouldLink ? "A" : "SPAN", "Correct linkable status");
+  if (shouldLink) {
+    is($source.getAttribute("href"), source, "Correct source");
+  }
 
   if (line != null) {
     is(+$line.textContent, +line);

@@ -11,11 +11,13 @@
 #include "mozilla/gfx/2D.h"             // for DataSourceSurface, Factory
 #include "mozilla/ipc/Shmem.h"          // for Shmem
 #include "mozilla/layers/CompositableTransactionParent.h" // for CompositableParentManager
+#include "mozilla/layers/CompositorBridgeParent.h"
 #include "mozilla/layers/Compositor.h"  // for Compositor
 #include "mozilla/layers/ISurfaceAllocator.h"  // for ISurfaceAllocator
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor, etc
 #include "mozilla/layers/TextureHostOGL.h"  // for TextureHostOGL
 #include "mozilla/layers/ImageDataSerializer.h"
+#include "mozilla/layers/TextureClient.h"
 #include "nsAString.h"
 #include "mozilla/RefPtr.h"                   // for nsRefPtr
 #include "nsPrintfCString.h"            // for nsPrintfCString
@@ -64,7 +66,7 @@ namespace layers {
 class TextureParent : public ParentActor<PTextureParent>
 {
 public:
-  explicit TextureParent(CompositableParentManager* aManager);
+  explicit TextureParent(HostIPCAllocator* aAllocator);
 
   ~TextureParent();
 
@@ -82,26 +84,26 @@ public:
 
   virtual void Destroy() override;
 
-  CompositableParentManager* mCompositableManager;
+  HostIPCAllocator* mSurfaceAllocator;
   RefPtr<TextureHost> mWaitForClientRecycle;
   RefPtr<TextureHost> mTextureHost;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
 PTextureParent*
-TextureHost::CreateIPDLActor(CompositableParentManager* aManager,
+TextureHost::CreateIPDLActor(HostIPCAllocator* aAllocator,
                              const SurfaceDescriptor& aSharedData,
                              LayersBackend aLayersBackend,
                              TextureFlags aFlags)
 {
   if (aSharedData.type() == SurfaceDescriptor::TSurfaceDescriptorBuffer &&
       aSharedData.get_SurfaceDescriptorBuffer().data().type() == MemoryOrShmem::Tuintptr_t &&
-      !aManager->IsSameProcess())
+      !aAllocator->IsSameProcess())
   {
     NS_ERROR("A client process is trying to peek at our address space using a MemoryTexture!");
     return nullptr;
   }
-  TextureParent* actor = new TextureParent(aManager);
+  TextureParent* actor = new TextureParent(aAllocator);
   if (!actor->Init(aSharedData, aLayersBackend, aFlags)) {
     delete actor;
     return nullptr;
@@ -310,6 +312,11 @@ TextureHost::TextureHost(TextureFlags aFlags)
 
 TextureHost::~TextureHost()
 {
+  // If we still have a ReadLock, unlock it. At this point we don't care about
+  // the texture client being written into on the other side since it should be
+  // destroyed by now. But we will hit assertions if we don't ReadUnlock before
+  // destroying the lock itself.
+  ReadUnlock();
   MOZ_COUNT_DTOR(TextureHost);
 }
 
@@ -318,6 +325,26 @@ void TextureHost::Finalize()
   if (!(GetFlags() & TextureFlags::DEALLOCATE_CLIENT)) {
     DeallocateSharedData();
     DeallocateDeviceData();
+  }
+}
+
+void
+TextureHost::UnbindTextureSource()
+{
+  if (mReadLock) {
+    auto compositor = GetCompositor();
+    // This TextureHost is not used anymore. Since most compositor backends are
+    // working asynchronously under the hood a compositor could still be using
+    // this texture, so it is generally best to wait until the end of the next
+    // composition before calling ReadUnlock. We ask the compositor to take care
+    // of that for us.
+    if (compositor) {
+      compositor->UnlockAfterComposition(mReadLock.forget());
+    } else {
+      // GetCompositor returned null which means no compositor can be using this
+      // texture. We can ReadUnlock right away.
+      ReadUnlock();
+    }
   }
 }
 
@@ -499,6 +526,30 @@ BufferTextureHost::Unlock()
   mLocked = false;
 }
 
+void
+TextureHost::DeserializeReadLock(const ReadLockDescriptor& aDesc,
+                                 ISurfaceAllocator* aAllocator)
+{
+  RefPtr<TextureReadLock> lock = TextureReadLock::Deserialize(aDesc, aAllocator);
+  if (!lock) {
+    return;
+  }
+
+  // If mReadLock is not null it means we haven't unlocked it yet and the content
+  // side should not have been able to write into this texture and send a new lock!
+  MOZ_ASSERT(!mReadLock);
+  mReadLock = lock.forget();
+}
+
+void
+TextureHost::ReadUnlock()
+{
+  if (mReadLock) {
+    mReadLock->ReadUnlock();
+    mReadLock = nullptr;
+  }
+}
+
 bool
 BufferTextureHost::EnsureWrappingTextureSource()
 {
@@ -598,6 +649,19 @@ BufferTextureHost::BindTextureSource(CompositableTextureSourceRef& aTexture)
   return !!aTexture;
 }
 
+void
+BufferTextureHost::UnbindTextureSource()
+{
+  // This texture is not used by any layer anymore.
+  // If the texture doesn't have an intermediate buffer, it means we are
+  // compositing synchronously on the CPU, so we don't need to wait until
+  // the end of the next composition to ReadUnlock (which other textures do
+  // by default).
+  // If the texture has an intermediate buffer we don't care either because
+  // texture uploads are also performed synchronously for BufferTextureHost.
+  ReadUnlock();
+}
+
 gfx::SurfaceFormat
 BufferTextureHost::GetFormat() const
 {
@@ -630,6 +694,12 @@ BufferTextureHost::MaybeUpload(nsIntRegion *aRegion)
 
   if (!Upload(aRegion)) {
     return false;
+  }
+
+  if (mHasIntermediateBuffer) {
+    // We just did the texture upload, the content side can now freely write
+    // into the shared buffer.
+    ReadUnlock();
   }
 
   // We no longer have an invalid region.
@@ -675,7 +745,7 @@ BufferTextureHost::Upload(nsIntRegion *aRegion)
         return false;
       }
       if (!mFirstSource) {
-        mFirstSource = mCompositor->CreateDataTextureSource(mFlags);
+        mFirstSource = mCompositor->CreateDataTextureSource(mFlags|TextureFlags::RGB_FROM_YCBCR);
         mFirstSource->SetOwner(this);
       }
       mFirstSource->Update(surf, aRegion);
@@ -894,8 +964,8 @@ size_t MemoryTextureHost::GetBufferSize()
   return std::numeric_limits<size_t>::max();
 }
 
-TextureParent::TextureParent(CompositableParentManager* aCompositableManager)
-: mCompositableManager(aCompositableManager)
+TextureParent::TextureParent(HostIPCAllocator* aSurfaceAllocator)
+: mSurfaceAllocator(aSurfaceAllocator)
 {
   MOZ_COUNT_CTOR(TextureParent);
 }
@@ -945,7 +1015,7 @@ TextureParent::Init(const SurfaceDescriptor& aSharedData,
                     const TextureFlags& aFlags)
 {
   mTextureHost = TextureHost::Create(aSharedData,
-                                     mCompositableManager,
+                                     mSurfaceAllocator,
                                      aBackend,
                                      aFlags);
   if (mTextureHost) {

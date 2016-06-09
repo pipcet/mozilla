@@ -69,8 +69,9 @@ static MOZ_CONSTEXPR nsAttrValue::EnumTable kKindTable[] = {
   { 0 }
 };
 
-// The default value for kKindTable is "subtitles"
-static MOZ_CONSTEXPR const char* kKindTableDefaultString = kKindTable[0].tag;
+// Invalid values are treated as "metadata" in ParseAttribute, but if no value
+// at all is specified, it's treated as "subtitles" in GetKind
+static MOZ_CONSTEXPR const nsAttrValue::EnumTable* kKindTableInvalidValueDefault = &kKindTable[4];
 
 /** HTMLTrackElement */
 HTMLTrackElement::HTMLTrackElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
@@ -96,7 +97,7 @@ NS_INTERFACE_MAP_END_INHERITING(nsGenericHTMLElement)
 void
 HTMLTrackElement::GetKind(DOMString& aKind) const
 {
-  GetEnumAttr(nsGkAtoms::kind, kKindTableDefaultString, aKind);
+  GetEnumAttr(nsGkAtoms::kind, kKindTable[0].tag, aKind);
 }
 
 void
@@ -170,7 +171,8 @@ HTMLTrackElement::ParseAttribute(int32_t aNamespaceID,
 {
   if (aNamespaceID == kNameSpaceID_None && aAttribute == nsGkAtoms::kind) {
     // Case-insensitive lookup, with the first element as the default.
-    return aResult.ParseEnumValue(aValue, kKindTable, false, kKindTable);
+    return aResult.ParseEnumValue(aValue, kKindTable, false,
+                                  kKindTableInvalidValueDefault);
   }
 
   // Otherwise call the generic implementation.
@@ -200,13 +202,6 @@ HTMLTrackElement::LoadResource()
     mChannel = nullptr;
   }
 
-  // We may already have a TextTrack at this point if GetTrack() has already
-  // been called. This happens, for instance, if script tries to get the
-  // TextTrack before its mTrackElement has been bound to the DOM tree.
-  if (!mTrack) {
-    CreateTextTrack();
-  }
-
   nsCOMPtr<nsIChannel> channel;
   nsCOMPtr<nsILoadGroup> loadGroup = OwnerDoc()->GetDocumentLoadGroup();
   rv = NS_NewChannel(getter_AddRefs(channel),
@@ -214,7 +209,9 @@ HTMLTrackElement::LoadResource()
                      static_cast<Element*>(this),
                      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS,
                      nsIContentPolicy::TYPE_INTERNAL_TRACK,
-                     loadGroup);
+                     loadGroup,
+                     nullptr,   // aCallbacks
+                     nsIRequest::LOAD_NORMAL | nsIChannel::LOAD_CLASSIFY_URI);
 
   NS_ENSURE_TRUE_VOID(NS_SUCCEEDED(rv));
 
@@ -255,11 +252,16 @@ HTMLTrackElement::BindToTree(nsIDocument* aDocument,
   if (!mMediaParent) {
     mMediaParent = static_cast<HTMLMediaElement*>(aParent);
 
-    HTMLMediaElement* media = static_cast<HTMLMediaElement*>(aParent);
     // TODO: separate notification for 'alternate' tracks?
-    media->NotifyAddedSource();
+    mMediaParent->NotifyAddedSource();
     LOG(LogLevel::Debug, ("Track element sent notification to parent."));
 
+    // We may already have a TextTrack at this point if GetTrack() has already
+    // been called. This happens, for instance, if script tries to get the
+    // TextTrack before its mTrackElement has been bound to the DOM tree.
+    if (!mTrack) {
+      CreateTextTrack();
+    }
     RefPtr<Runnable> r = NewRunnableMethod(this, &HTMLTrackElement::LoadResource);
     mMediaParent->RunInStableState(r);
   }
@@ -270,15 +272,13 @@ HTMLTrackElement::BindToTree(nsIDocument* aDocument,
 void
 HTMLTrackElement::UnbindFromTree(bool aDeep, bool aNullParent)
 {
-  if (mMediaParent) {
+  if (mMediaParent && aNullParent) {
     // mTrack can be null if HTMLTrackElement::LoadResource has never been
     // called.
     if (mTrack) {
       mMediaParent->RemoveTextTrack(mTrack);
     }
-    if (aNullParent) {
-      mMediaParent = nullptr;
-    }
+    mMediaParent = nullptr;
   }
 
   nsGenericHTMLElement::UnbindFromTree(aDeep, aNullParent);

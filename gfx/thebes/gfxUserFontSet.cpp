@@ -1305,15 +1305,14 @@ gfxUserFontSet::UserFontCache::Entry::ReportMemory(nsIMemoryReporterCallback* aC
                                                    nsISupports* aClosure,
                                                    bool aAnonymize)
 {
+    MOZ_ASSERT(mFontEntry);
     nsAutoCString path("explicit/gfx/user-fonts/font(");
 
     if (aAnonymize) {
         path.AppendPrintf("<anonymized-%p>", this);
     } else {
-        if (mFontEntry) { // this should always be present
-            NS_ConvertUTF16toUTF8 familyName(mFontEntry->mFamilyName);
-            path.AppendPrintf("family=%s", familyName.get());
-        }
+        NS_ConvertUTF16toUTF8 familyName(mFontEntry->mFamilyName);
+        path.AppendPrintf("family=%s", familyName.get());
         if (mURI) {
             nsCString spec;
             mURI->GetSpec(spec);
@@ -1331,15 +1330,17 @@ gfxUserFontSet::UserFontCache::Entry::ReportMemory(nsIMemoryReporterCallback* aC
         if (mPrincipal) {
             nsCOMPtr<nsIURI> uri;
             mPrincipal->GetURI(getter_AddRefs(uri));
-            nsCString spec;
-            uri->GetSpec(spec);
-            if (!spec.IsEmpty()) {
-                // Include a clue as to who loaded this resource. (Note that
-                // because of font entry sharing, other pages may now be using
-                // this resource, and the original page may not even be loaded
-                // any longer.)
-                spec.ReplaceChar('/', '\\');
-                path.AppendPrintf(", principal=%s", spec.get());
+            if (uri) {
+                nsCString spec;
+                uri->GetSpec(spec);
+                if (!spec.IsEmpty()) {
+                    // Include a clue as to who loaded this resource. (Note
+                    // that because of font entry sharing, other pages may now
+                    // be using this resource, and the original page may not
+                    // even be loaded any longer.)
+                    spec.ReplaceChar('/', '\\');
+                    path.AppendPrintf(", principal=%s", spec.get());
+                }
             }
         }
     }

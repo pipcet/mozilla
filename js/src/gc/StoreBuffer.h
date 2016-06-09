@@ -64,7 +64,7 @@ class StoreBuffer
 
         /*
          * A one element cache in front of the canonical set to speed up
-         * temporary instances of RelocatablePtr.
+         * temporary instances of HeapPtr.
          */
         T last_;
 
@@ -74,7 +74,7 @@ class StoreBuffer
         explicit MonoTypeBuffer() : last_(T()) {}
         ~MonoTypeBuffer() { stores_.finish(); }
 
-        bool init() {
+        MOZ_MUST_USE bool init() {
             if (!stores_.initialized() && !stores_.init())
                 return false;
             clear();
@@ -141,7 +141,7 @@ class StoreBuffer
         explicit GenericBuffer() : storage_(nullptr) {}
         ~GenericBuffer() { js_delete(storage_); }
 
-        bool init() {
+        MOZ_MUST_USE bool init() {
             if (!storage_)
                 storage_ = js_new<LifoAlloc>(LifoAllocBlockSize);
             clear();
@@ -348,9 +348,6 @@ class StoreBuffer
 
         bool maybeInRememberedSet(const Nursery&) const { return true; }
 
-        static bool supportsDeduplication() { return true; }
-        void* deduplicationKey() const { return (void*)edge; }
-
         void trace(TenuringTracer& mover) const;
 
         explicit operator bool() const { return edge != nullptr; }
@@ -410,7 +407,7 @@ class StoreBuffer
     void disable();
     bool isEnabled() const { return enabled_; }
 
-    bool clear();
+    void clear();
 
     /* Get the overflowed status. */
     bool isAboutToOverflow() const { return aboutToOverflow_; }

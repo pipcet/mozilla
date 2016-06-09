@@ -186,11 +186,11 @@ public:
 
   static nscoord ToLength(nsStyleUnit aUnit, nsStyleUnion aValue) {
     MOZ_ASSERT(ConvertsToLength(aUnit, aValue));
-    if (aUnit == eStyleUnit_Coord) {
-      return aValue.mInt;
+    if (IsCalcUnit(aUnit)) {
+      return AsCalcValue(aValue)->ToLength(); // Note: This asserts !mHasPercent
     }
-    MOZ_ASSERT(IsCalcUnit(aUnit) && !AsCalcValue(aValue)->mHasPercent);
-    return AsCalcValue(aValue)->ToLength();
+    MOZ_ASSERT(aUnit == eStyleUnit_Coord);
+    return aValue.mInt;
   }
 
   nscoord ToLength() const {
@@ -294,6 +294,10 @@ public:
   inline nsStyleUnit GetBStartUnit(mozilla::WritingMode aWritingMode) const;
   inline nsStyleUnit GetIEndUnit(mozilla::WritingMode aWritingMode) const;
   inline nsStyleUnit GetBEndUnit(mozilla::WritingMode aWritingMode) const;
+
+  // Return true if either the start or end side in the axis is 'auto'.
+  inline bool HasBlockAxisAuto(mozilla::WritingMode aWritingMode) const;
+  inline bool HasInlineAxisAuto(mozilla::WritingMode aWritingMode) const;
 
   inline nsStyleCoord Get(mozilla::WritingMode aWritingMode,
                           mozilla::LogicalSide aSide) const;

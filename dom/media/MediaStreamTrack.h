@@ -30,6 +30,7 @@ class PeerConnectionMedia;
 class PeerIdentity;
 class ProcessedMediaStream;
 class RemoteSourceStreamInfo;
+class SourceStreamInfo;
 
 namespace dom {
 
@@ -65,6 +66,13 @@ public:
   {
     MOZ_COUNT_CTOR(MediaStreamTrackSource);
   }
+
+  /**
+   * Use to clean up any resources that have to be cleaned before the
+   * destructor is called. It is often too late in the destructor because
+   * of garbage collection having removed the members already.
+   */
+  virtual void Destroy() {}
 
   /**
    * Gets the source's MediaSourceEnum for usage by PeerConnections.
@@ -221,6 +229,7 @@ class MediaStreamTrack : public DOMEventTargetHelper,
   // PeerConnection and friends need to know our owning DOMStream and track id.
   friend class mozilla::PeerConnectionImpl;
   friend class mozilla::PeerConnectionMedia;
+  friend class mozilla::SourceStreamInfo;
   friend class mozilla::RemoteSourceStreamInfo;
 
   class PrincipalHandleListener;

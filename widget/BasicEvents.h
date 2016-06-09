@@ -87,9 +87,9 @@ public:
   // If mIsSynthesizedForTests is true, the event has been synthesized for
   // automated tests or something hacky approach of an add-on.
   bool    mIsSynthesizedForTests : 1;
-  // If mExceptionHasBeenRisen is true, one of the event handlers has risen an
+  // If mExceptionWasRaised is true, one of the event handlers has raised an
   // exception.
-  bool    mExceptionHasBeenRisen : 1;
+  bool    mExceptionWasRaised : 1;
   // If mRetargetToNonNativeAnonymous is true and the target is in a non-native
   // native anonymous subtree, the event target is set to mOriginalTarget.
   bool    mRetargetToNonNativeAnonymous : 1;
@@ -123,6 +123,9 @@ public:
   // perform its associated action. This is currently only relevant for
   // wheel and touch events.
   bool mHandledByAPZ : 1;
+  // True if the event is currently being handled by an event listener that
+  // was registered as a passive listener.
+  bool mInPassiveListener: 1;
 
   // If the event is being handled in target phase, returns true.
   inline bool InTargetPhase() const
@@ -311,7 +314,11 @@ private:
         mFlags.mBubbles = true;
         break;
       default:
-        mFlags.mCancelable = true;
+        if (mMessage == eResize) {
+          mFlags.mCancelable = false;
+        } else {
+          mFlags.mCancelable = true;
+        }
         mFlags.mBubbles = true;
         break;
     }

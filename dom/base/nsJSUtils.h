@@ -65,18 +65,11 @@ public:
                                   JSObject** aFunctionObject);
 
   struct MOZ_STACK_CLASS EvaluateOptions {
-    bool coerceToString;
     JS::AutoObjectVector scopeChain;
 
     explicit EvaluateOptions(JSContext* cx)
-      : coerceToString(false)
-      , scopeChain(cx)
+      : scopeChain(cx)
     {}
-
-    EvaluateOptions& setCoerceToString(bool aCoerce) {
-      coerceToString = aCoerce;
-      return *this;
-    }
   };
 
   // aEvaluationGlobal is the global to evaluate in.  The return value
@@ -139,25 +132,6 @@ private:
                                  const EvaluateOptions& aEvaluateOptions,
                                  JS::MutableHandle<JS::Value> aRetValue,
                                  void **aOffThreadToken);
-};
-
-class MOZ_STACK_CLASS AutoDontReportUncaught {
-  JSContext* mContext;
-  bool mWasSet;
-
-public:
-  explicit AutoDontReportUncaught(JSContext* aContext) : mContext(aContext) {
-    MOZ_ASSERT(aContext);
-    mWasSet = JS::ContextOptionsRef(mContext).dontReportUncaught();
-    if (!mWasSet) {
-      JS::ContextOptionsRef(mContext).setDontReportUncaught(true);
-    }
-  }
-  ~AutoDontReportUncaught() {
-    if (!mWasSet) {
-      JS::ContextOptionsRef(mContext).setDontReportUncaught(false);
-    }
-  }
 };
 
 template<typename T>

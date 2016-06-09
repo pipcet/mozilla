@@ -353,6 +353,29 @@ bool PluginModuleMapping::sIsLoadModuleOnStack = false;
 
 } // namespace
 
+base::ProcessId
+mozilla::plugins::PluginProcessId(uint32_t aPluginId)
+{
+  RefPtr<nsPluginHost> host = nsPluginHost::GetInst();
+  if (!host) {
+    return mozilla::ipc::kInvalidProcessId;
+  }
+
+  nsPluginTag* pluginTag = host->PluginWithId(aPluginId);
+  if (!pluginTag || !pluginTag->mPlugin) {
+      return mozilla::ipc::kInvalidProcessId;
+  }
+
+  RefPtr<nsNPAPIPlugin> plugin = pluginTag->mPlugin;
+  PluginModuleChromeParent* chromeParent =
+      static_cast<PluginModuleChromeParent*>(plugin->GetLibrary());
+  if (!chromeParent) {
+    return mozilla::ipc::kInvalidProcessId;
+  }
+
+  return chromeParent->OtherPid();
+}
+
 void
 mozilla::plugins::TerminatePlugin(uint32_t aPluginId,
                                   base::ProcessId aContentProcessId,
@@ -1235,8 +1258,7 @@ PluginModuleChromeParent::TerminateChildProcess(MessageLoop* aMsgLoop,
 
     // Check to see if we already have a browser dump id - with e10s plugin
     // hangs we take this earlier (see ProcessHangMonitor) from a background
-    // thread. We do this before we message the main thread about the hang
-    // since the posted message will trash our browser stack state.
+    // thread. It includes a content and plugin dump too.
     bool exists;
     nsCOMPtr<nsIFile> browserDumpFile;
     if (!aBrowserDumpId.IsEmpty() &&
@@ -1244,14 +1266,8 @@ PluginModuleChromeParent::TerminateChildProcess(MessageLoop* aMsgLoop,
         browserDumpFile &&
         NS_SUCCEEDED(browserDumpFile->Exists(&exists)) && exists)
     {
-        // We have a single browser report, generate a new plugin process parent
-        // report and pair it up with the browser report handed in.
-        reportsReady = crashReporter->GenerateMinidumpAndPair(this, browserDumpFile,
-                                                              NS_LITERAL_CSTRING("browser"));
-        if (!reportsReady) {
-          browserDumpFile = nullptr;
-          CrashReporter::DeleteMinidumpFilesForID(aBrowserDumpId);
-        }
+        crashReporter->UseMinidump(browserDumpFile);
+        reportsReady = true;
     }
 
     // Generate crash report including plugin and browser process minidumps.
@@ -1286,8 +1302,10 @@ PluginModuleChromeParent::TerminateChildProcess(MessageLoop* aMsgLoop,
             }
 #endif
             if (aContentPid != mozilla::ipc::kInvalidProcessId) {
-                // Include the content process minidump
-                if (CreatePluginMinidump(aContentPid, 0,
+                // Include the content process minidump only if we don't have
+                // it already.
+                if (exists ||
+                    CreatePluginMinidump(aContentPid, 0,
                                          pluginDumpFile,
                                          NS_LITERAL_CSTRING("content"))) {
                     additionalDumps.AppendLiteral(",content");
@@ -2032,27 +2050,27 @@ PluginModuleParent::OnInitFailure()
     }
 }
 
-class OfflineObserver final : public nsIObserver
+class PluginOfflineObserver final : public nsIObserver
 {
 public:
     NS_DECL_ISUPPORTS
     NS_DECL_NSIOBSERVER
 
-    explicit OfflineObserver(PluginModuleChromeParent* pmp)
+    explicit PluginOfflineObserver(PluginModuleChromeParent* pmp)
       : mPmp(pmp)
     {}
 
 private:
-    ~OfflineObserver() {}
+    ~PluginOfflineObserver() {}
     PluginModuleChromeParent* mPmp;
 };
 
-NS_IMPL_ISUPPORTS(OfflineObserver, nsIObserver)
+NS_IMPL_ISUPPORTS(PluginOfflineObserver, nsIObserver)
 
 NS_IMETHODIMP
-OfflineObserver::Observe(nsISupports *aSubject,
-                         const char *aTopic,
-                         const char16_t *aData)
+PluginOfflineObserver::Observe(nsISupports *aSubject,
+                               const char *aTopic,
+                               const char16_t *aData)
 {
     MOZ_ASSERT(!strcmp(aTopic, "ipc:network:set-offline"));
     mPmp->CachedSettingChanged();
@@ -2072,8 +2090,8 @@ PluginModuleChromeParent::RegisterSettingsCallbacks()
 
     nsCOMPtr<nsIObserverService> observerService = mozilla::services::GetObserverService();
     if (observerService) {
-        mOfflineObserver = new OfflineObserver(this);
-        observerService->AddObserver(mOfflineObserver, "ipc:network:set-offline", false);
+        mPluginOfflineObserver = new PluginOfflineObserver(this);
+        observerService->AddObserver(mPluginOfflineObserver, "ipc:network:set-offline", false);
     }
 }
 
@@ -2086,8 +2104,8 @@ PluginModuleChromeParent::UnregisterSettingsCallbacks()
 
     nsCOMPtr<nsIObserverService> observerService = mozilla::services::GetObserverService();
     if (observerService) {
-        observerService->RemoveObserver(mOfflineObserver, "ipc:network:set-offline");
-        mOfflineObserver = nullptr;
+        observerService->RemoveObserver(mPluginOfflineObserver, "ipc:network:set-offline");
+        mPluginOfflineObserver = nullptr;
     }
 }
 

@@ -88,8 +88,7 @@ private:
   BroadcastChannel(nsPIDOMWindowInner* aWindow,
                    const PrincipalInfo& aPrincipalInfo,
                    const nsACString& aOrigin,
-                   const nsAString& aChannel,
-                   bool aPrivateBrowsing);
+                   const nsAString& aChannel);
 
   ~BroadcastChannel();
 
@@ -105,11 +104,6 @@ private:
     return mIsKeptAlive;
   }
 
-  bool IsClosed() const
-  {
-    return mState != StateActive;
-  }
-
   void RemoveDocFromBFCache();
 
   RefPtr<BroadcastChannelChild> mActor;
@@ -121,7 +115,6 @@ private:
 
   nsCString mOrigin;
   nsString mChannel;
-  bool mPrivateBrowsing;
 
   bool mIsKeptAlive;
 

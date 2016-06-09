@@ -38,13 +38,13 @@ add_task(function* () {
   hud.jsterm.clearOutput();
 
   let loaded = loadBrowser(browser);
-  content.location = TEST_VIOLATION;
+  BrowserTestUtils.loadURI(browser, TEST_VIOLATION);
   yield loaded;
 
   yield waitForSuccess({
     name: "Confirmed that CSP and CSP-Report-Only log different messages to " +
           "the console.",
-    validator: function() {
+    validator: function () {
       console.log(hud.outputNode.textContent);
       let success = false;
       success = hud.outputNode.textContent.indexOf(CSP_VIOLATION_MSG) > -1 &&

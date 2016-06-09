@@ -20,19 +20,17 @@ pref("security.ssl3.ecdhe_rsa_aes_128_gcm_sha256", true);
 pref("security.ssl3.ecdhe_ecdsa_aes_128_gcm_sha256", true);
 pref("security.ssl3.ecdhe_ecdsa_chacha20_poly1305_sha256", true);
 pref("security.ssl3.ecdhe_rsa_chacha20_poly1305_sha256", true);
+pref("security.ssl3.ecdhe_ecdsa_aes_256_gcm_sha384", true);
+pref("security.ssl3.ecdhe_rsa_aes_256_gcm_sha384", true);
 pref("security.ssl3.ecdhe_rsa_aes_128_sha", true);
 pref("security.ssl3.ecdhe_ecdsa_aes_128_sha", true);
 pref("security.ssl3.ecdhe_rsa_aes_256_sha", true);
 pref("security.ssl3.ecdhe_ecdsa_aes_256_sha", true);
 pref("security.ssl3.dhe_rsa_aes_128_sha", true);
 pref("security.ssl3.dhe_rsa_aes_256_sha", true);
-pref("security.ssl3.ecdhe_rsa_rc4_128_sha", true);
-pref("security.ssl3.ecdhe_ecdsa_rc4_128_sha", true);
 pref("security.ssl3.rsa_aes_128_sha", true);
 pref("security.ssl3.rsa_aes_256_sha", true);
 pref("security.ssl3.rsa_des_ede3_sha", true);
-pref("security.ssl3.rsa_rc4_128_sha", true);
-pref("security.ssl3.rsa_rc4_128_md5", true);
 
 pref("security.content.signature.root_hash",
      "97:E8:BA:9C:F1:2F:B3:DE:53:CC:42:A4:E6:57:7E:D6:4D:F4:93:C2:47:B4:14:FE:A0:36:81:8D:38:23:56:0E");
@@ -66,6 +64,18 @@ pref("security.pki.sha1_enforcement_level", 3);
 pref("security.pki.name_matching_mode", 1);
 #else
 pref("security.pki.name_matching_mode", 2);
+#endif
+
+// security.pki.netscape_step_up_policy controls how the platform handles the
+// id-Netscape-stepUp OID in extended key usage extensions of CA certificates.
+// 0: id-Netscape-stepUp is always considered equivalent to id-kp-serverAuth
+// 1: it is considered equivalent when the notBefore is before 23 August 2016
+// 2: similarly, but for 23 August 2015
+// 3: it is never considered equivalent
+#ifdef RELEASE_BUILD
+pref("security.pki.netscape_step_up_policy", 1);
+#else
+pref("security.pki.netscape_step_up_policy", 2);
 #endif
 
 pref("security.webauth.u2f", false);

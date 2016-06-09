@@ -430,6 +430,7 @@ private:
                                    GdkWindow** aWindow, gint* aButton,
                                    gint* aRootX, gint* aRootY);
     void               ClearCachedResources();
+    nsIWidgetListener* GetListener();
 
     GtkWidget          *mShell;
     MozContainer       *mContainer;
@@ -466,6 +467,9 @@ private:
     RefPtr<nsShmImage>  mFrontShmImage;
     RefPtr<nsShmImage>  mBackShmImage;
 #endif
+
+    // A fallback image surface when a SHM surface is unavailable.
+    cairo_surface_t* mFallbackSurface;
 
 #ifdef ACCESSIBILITY
     RefPtr<mozilla::a11y::Accessible> mRootAccessible;

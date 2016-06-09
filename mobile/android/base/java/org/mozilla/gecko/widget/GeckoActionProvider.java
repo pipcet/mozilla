@@ -16,10 +16,10 @@ import org.mozilla.gecko.R;
 import org.mozilla.gecko.SnackbarHelper;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
-import org.mozilla.gecko.mozglue.ContextUtils;
 import org.mozilla.gecko.overlays.ui.ShareDialog;
 import org.mozilla.gecko.menu.MenuItemSwitcherLayout;
 import org.mozilla.gecko.util.IOUtils;
+import org.mozilla.gecko.util.IntentUtils;
 import org.mozilla.gecko.util.ThreadUtils;
 
 import android.content.Context;
@@ -195,6 +195,12 @@ public class GeckoActionProvider {
         return dataModel.getIntent();
     }
 
+    /**
+     * Must be run on a background thread due to DB access.
+     *
+     * DB access happens in ActivityChosseModel when it retrieves the list of sync clients
+     * if sync is enabled.
+     */
     public void setIntent(Intent intent) {
         ActivityChooserModel dataModel = ActivityChooserModel.get(mContext, mHistoryFileName);
         dataModel.setIntent(intent);
@@ -289,7 +295,7 @@ public class GeckoActionProvider {
      * @param intent share intent to alter in place.
      */
     public void downloadImageForIntent(final Intent intent) {
-        final String src = ContextUtils.getStringExtra(intent, Intent.EXTRA_TEXT);
+        final String src = IntentUtils.getStringExtraSafe(intent, Intent.EXTRA_TEXT);
         final File dir = GeckoApp.getTempDirectory();
 
         if (src == null || dir == null) {

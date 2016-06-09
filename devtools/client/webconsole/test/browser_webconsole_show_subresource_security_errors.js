@@ -21,12 +21,12 @@ add_task(function* () {
   hud.jsterm.clearOutput();
 
   let loaded = loadBrowser(browser);
-  content.location = TEST_DOC;
+  BrowserTestUtils.loadURI(browser, TEST_DOC);
   yield loaded;
 
   yield waitForSuccess({
     name: "Subresource STS warning displayed successfully",
-    validator: function() {
+    validator: function () {
       return hud.outputNode.textContent.indexOf(SAMPLE_MSG) > -1;
     }
   });

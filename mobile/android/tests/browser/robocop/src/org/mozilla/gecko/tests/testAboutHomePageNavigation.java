@@ -4,15 +4,12 @@
 
 package org.mozilla.gecko.tests;
 
-import org.mozilla.gecko.home.HomeConfig;
 import org.mozilla.gecko.home.HomeConfig.PanelType;
 import org.mozilla.gecko.tests.helpers.DeviceHelper;
 import org.mozilla.gecko.tests.helpers.GeckoHelper;
 
 /**
  * Tests functionality related to navigating between the various about:home panels.
- *
- * TODO: Update this test to account for recent tabs panel (bug 1028727).
  */
 public class testAboutHomePageNavigation extends UITest {
     // TODO: Define this test dynamically by creating dynamic representations of the Page
@@ -26,9 +23,6 @@ public class testAboutHomePageNavigation extends UITest {
 
         mAboutHome.swipeToPanelOnRight();
         mAboutHome.assertCurrentPanel(PanelType.BOOKMARKS);
-
-        mAboutHome.swipeToPanelOnRight();
-        mAboutHome.assertCurrentPanel(PanelType.READING_LIST);
 
         // Ideally these helpers would just be their own tests. However, by keeping this within
         // one method, we're saving test setUp and tearDown resources.
@@ -48,9 +42,6 @@ public class testAboutHomePageNavigation extends UITest {
         mAboutHome.assertCurrentPanel(PanelType.COMBINED_HISTORY);
 
         mAboutHome.swipeToPanelOnLeft();
-        mAboutHome.assertCurrentPanel(PanelType.READING_LIST);
-
-        mAboutHome.swipeToPanelOnLeft();
         mAboutHome.assertCurrentPanel(PanelType.BOOKMARKS);
 
         mAboutHome.swipeToPanelOnLeft();
@@ -63,9 +54,6 @@ public class testAboutHomePageNavigation extends UITest {
 
     private void helperTestPhone() {
         // Edge case.
-        mAboutHome.swipeToPanelOnRight();
-        mAboutHome.assertCurrentPanel(PanelType.READING_LIST);
-
         mAboutHome.swipeToPanelOnLeft();
         mAboutHome.assertCurrentPanel(PanelType.BOOKMARKS);
 

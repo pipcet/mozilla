@@ -7,12 +7,7 @@
 
 const TEST_URL = "data:text/html;charset=utf-8,";
 
-const { getActiveTab } = require("sdk/tabs/utils");
 const { getMostRecentBrowserWindow } = require("sdk/window/utils");
-const { open, close, startup } = require("sdk/window/helpers");
-const { partial } = require("sdk/lang/functional");
-
-const openBrowserWindow = partial(open, null, { features: { toolbar: true } });
 
 const isMenuCheckedFor = ({document}) => {
   let menu = document.getElementById("menu_responsiveUI");
@@ -20,24 +15,31 @@ const isMenuCheckedFor = ({document}) => {
 };
 
 add_task(function* () {
-  const window1 = yield openBrowserWindow(TEST_URL);
+  const window1 = yield BrowserTestUtils.openNewBrowserWindow();
+  let { gBrowser } = window1;
 
-  yield startup(window1);
+  yield BrowserTestUtils.withNewTab({ gBrowser, url: TEST_URL },
+    function* (browser) {
+      let tab = gBrowser.getTabForBrowser(browser);
 
-  const tab1 = getActiveTab(window1);
+      is(window1, getMostRecentBrowserWindow(),
+        "The new window is the active one");
 
-  is(window1, getMostRecentBrowserWindow(),
-    "The new window is the active one");
+      ok(!isMenuCheckedFor(window1),
+        "RDM menu item is unchecked by default");
 
-  ok(!isMenuCheckedFor(window1),
-    "RDM menu item is unchecked by default");
+      yield openRDM(tab);
 
-  yield openRDM(tab1);
+      ok(isMenuCheckedFor(window1),
+        "RDM menu item is checked with RDM open");
 
-  ok(isMenuCheckedFor(window1),
-    "RDM menu item is checked with RDM open");
+      yield closeRDM(tab);
 
-  yield close(window1);
+      ok(!isMenuCheckedFor(window1),
+        "RDM menu item is unchecked with RDM closed");
+    });
+
+  yield BrowserTestUtils.closeWindow(window1);
 
   is(window, getMostRecentBrowserWindow(),
     "The original window is the active one");

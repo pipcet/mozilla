@@ -28,23 +28,42 @@
 #include "MacIOSurfaceImage.h"
 #endif
 
-extern mozilla::LogModule* GetPDMLog();
-#define LOG(...) MOZ_LOG(GetPDMLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
+#define LOG(...) MOZ_LOG(sPDMLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
 //#define LOG_MEDIA_SHA1
 
 namespace mozilla {
 
+static uint32_t ComputeMaxRefFrames(const MediaByteBuffer* aExtraData)
+{
+  uint32_t maxRefFrames = 4;
+  // Retrieve video dimensions from H264 SPS NAL.
+  mp4_demuxer::SPSData spsdata;
+  if (mp4_demuxer::H264::DecodeSPSFromExtraData(aExtraData, spsdata)) {
+    // max_num_ref_frames determines the size of the sliding window
+    // we need to queue that many frames in order to guarantee proper
+    // pts frames ordering. Use a minimum of 4 to ensure proper playback of
+    // non compliant videos.
+    maxRefFrames =
+      std::min(std::max(maxRefFrames, spsdata.max_num_ref_frames + 1), 16u);
+  }
+  return maxRefFrames;
+}
+
 AppleVDADecoder::AppleVDADecoder(const VideoInfo& aConfig,
-                               FlushableTaskQueue* aVideoTaskQueue,
-                               MediaDataDecoderCallback* aCallback,
-                               layers::ImageContainer* aImageContainer)
-  : mTaskQueue(aVideoTaskQueue)
+                                 TaskQueue* aTaskQueue,
+                                 MediaDataDecoderCallback* aCallback,
+                                 layers::ImageContainer* aImageContainer)
+  : mExtraData(aConfig.mExtraData)
   , mCallback(aCallback)
-  , mImageContainer(aImageContainer)
   , mPictureWidth(aConfig.mImage.width)
   , mPictureHeight(aConfig.mImage.height)
   , mDisplayWidth(aConfig.mDisplay.width)
   , mDisplayHeight(aConfig.mDisplay.height)
+  , mQueuedSamples(0)
+  , mTaskQueue(aTaskQueue)
+  , mDecoder(nullptr)
+  , mMaxRefFrames(ComputeMaxRefFrames(aConfig.mExtraData))
+  , mImageContainer(aImageContainer)
   , mInputIncoming(0)
   , mIsShutDown(false)
 #ifdef MOZ_WIDGET_UIKIT
@@ -53,27 +72,12 @@ AppleVDADecoder::AppleVDADecoder(const VideoInfo& aConfig,
 #else
   , mUseSoftwareImages(false)
   , mIs106(!nsCocoaFeatures::OnLionOrLater())
-  #endif
-  , mQueuedSamples(0)
+#endif
   , mMonitor("AppleVideoDecoder")
   , mIsFlushing(false)
-  , mDecoder(nullptr)
 {
   MOZ_COUNT_CTOR(AppleVDADecoder);
   // TODO: Verify aConfig.mime_type.
-
-  mExtraData = aConfig.mExtraData;
-  mMaxRefFrames = 4;
-  // Retrieve video dimensions from H264 SPS NAL.
-  mp4_demuxer::SPSData spsdata;
-  if (mp4_demuxer::H264::DecodeSPSFromExtraData(mExtraData, spsdata)) {
-    // max_num_ref_frames determines the size of the sliding window
-    // we need to queue that many frames in order to guarantee proper
-    // pts frames ordering. Use a minimum of 4 to ensure proper playback of
-    // non compliant videos.
-    mMaxRefFrames =
-      std::min(std::max(mMaxRefFrames, spsdata.max_num_ref_frames + 1), 16u);
-  }
 
   LOG("Creating AppleVDADecoder for %dx%d (%dx%d) h.264 video",
       mPictureWidth,
@@ -133,12 +137,8 @@ AppleVDADecoder::Input(MediaRawData* aSample)
 
   mInputIncoming++;
 
-  nsCOMPtr<nsIRunnable> runnable =
-      NewRunnableMethod<RefPtr<MediaRawData>>(
-          this,
-          &AppleVDADecoder::SubmitFrame,
-          RefPtr<MediaRawData>(aSample));
-  mTaskQueue->Dispatch(runnable.forget());
+  mTaskQueue->Dispatch(NewRunnableMethod<RefPtr<MediaRawData>>(
+    this, &AppleVDADecoder::ProcessDecode, aSample));
   return NS_OK;
 }
 
@@ -147,12 +147,15 @@ AppleVDADecoder::Flush()
 {
   MOZ_ASSERT(mCallback->OnReaderTaskQueue());
   mIsFlushing = true;
-  mTaskQueue->Flush();
   nsCOMPtr<nsIRunnable> runnable =
     NewRunnableMethod(this, &AppleVDADecoder::ProcessFlush);
   SyncRunnable::DispatchToThread(mTaskQueue, runnable);
   mIsFlushing = false;
-  mInputIncoming = 0;
+  // All ProcessDecode() tasks should be done.
+  MOZ_ASSERT(mInputIncoming == 0);
+
+  mSeekTargetThreshold.reset();
+
   return NS_OK;
 }
 
@@ -169,7 +172,7 @@ AppleVDADecoder::Drain()
 void
 AppleVDADecoder::ProcessFlush()
 {
-  MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
+  AssertOnTaskQueueThread();
 
   OSStatus rv = VDADecoderFlush(mDecoder, 0 /*dont emit*/);
   if (rv != noErr) {
@@ -182,7 +185,7 @@ AppleVDADecoder::ProcessFlush()
 void
 AppleVDADecoder::ProcessDrain()
 {
-  MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
+  AssertOnTaskQueueThread();
 
   OSStatus rv = VDADecoderFlush(mDecoder, kVDADecoderFlush_EmitFrames);
   if (rv != noErr) {
@@ -290,6 +293,13 @@ AppleVDADecoder::ClearReorderedFrames()
   mQueuedSamples = 0;
 }
 
+void
+AppleVDADecoder::SetSeekThreshold(const media::TimeUnit& aTime)
+{
+  LOG("SetSeekThreshold %lld", aTime.ToMicroseconds());
+  mSeekTargetThreshold = Some(aTime);
+}
+
 // Copy and return a decoded frame.
 nsresult
 AppleVDADecoder::OutputFrame(CVPixelBufferRef aImage,
@@ -321,8 +331,17 @@ AppleVDADecoder::OutputFrame(CVPixelBufferRef aImage,
     return NS_OK;
   }
 
+  bool useNullSample = false;
+  if (mSeekTargetThreshold.isSome()) {
+    if ((aFrameRef.composition_timestamp + aFrameRef.duration) < mSeekTargetThreshold.ref()) {
+      useNullSample = true;
+    } else {
+      mSeekTargetThreshold.reset();
+    }
+  }
+
   // Where our resulting image will end up.
-  RefPtr<VideoData> data;
+  RefPtr<MediaData> data;
   // Bounds.
   VideoInfo info;
   info.mDisplay = nsIntSize(mDisplayWidth, mDisplayHeight);
@@ -331,7 +350,11 @@ AppleVDADecoder::OutputFrame(CVPixelBufferRef aImage,
                                       mPictureWidth,
                                       mPictureHeight);
 
-  if (mUseSoftwareImages) {
+  if (useNullSample) {
+    data = new NullData(aFrameRef.byte_offset,
+                        aFrameRef.composition_timestamp.ToMicroseconds(),
+                        aFrameRef.duration.ToMicroseconds());
+  } else if (mUseSoftwareImages) {
     size_t width = CVPixelBufferGetWidth(aImage);
     size_t height = CVPixelBufferGetHeight(aImage);
     DebugOnly<size_t> planes = CVPixelBufferGetPlaneCount(aImage);
@@ -343,7 +366,7 @@ AppleVDADecoder::OutputFrame(CVPixelBufferRef aImage,
     CVReturn rv = CVPixelBufferLockBaseAddress(aImage, kCVPixelBufferLock_ReadOnly);
     if (rv != kCVReturnSuccess) {
       NS_ERROR("error locking pixel data");
-      mCallback->Error();
+      mCallback->Error(MediaDataDecoderError::DECODE_ERROR);
       return NS_ERROR_FAILURE;
     }
     // Y plane.
@@ -411,7 +434,7 @@ AppleVDADecoder::OutputFrame(CVPixelBufferRef aImage,
 
   if (!data) {
     NS_ERROR("Couldn't create VideoData for frame");
-    mCallback->Error();
+    mCallback->Error(MediaDataDecoderError::FATAL_ERROR);
     return NS_ERROR_FAILURE;
   }
 
@@ -429,11 +452,30 @@ AppleVDADecoder::OutputFrame(CVPixelBufferRef aImage,
 }
 
 nsresult
-AppleVDADecoder::SubmitFrame(MediaRawData* aSample)
+AppleVDADecoder::ProcessDecode(MediaRawData* aSample)
 {
-  MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
+  AssertOnTaskQueueThread();
 
   mInputIncoming--;
+
+  if (mIsFlushing) {
+    return NS_OK;
+  }
+
+  auto rv = DoDecode(aSample);
+  // Ask for more data.
+  if (NS_SUCCEEDED(rv) && !mInputIncoming && mQueuedSamples <= mMaxRefFrames) {
+    LOG("%s task queue empty; requesting more data", GetDescriptionName());
+    mCallback->InputExhausted();
+  }
+
+  return rv;
+}
+
+nsresult
+AppleVDADecoder::DoDecode(MediaRawData* aSample)
+{
+  AssertOnTaskQueueThread();
 
   AutoCFRelease<CFDataRef> block =
     CFDataCreate(kCFAllocatorDefault, aSample->Data(), aSample->Size());
@@ -494,7 +536,7 @@ AppleVDADecoder::SubmitFrame(MediaRawData* aSample)
 
   if (rv != noErr) {
     NS_WARNING("AppleVDADecoder: Couldn't pass frame to decoder");
-    mCallback->Error();
+    mCallback->Error(MediaDataDecoderError::FATAL_ERROR);
     return NS_ERROR_FAILURE;
   }
 
@@ -507,12 +549,6 @@ AppleVDADecoder::SubmitFrame(MediaRawData* aSample)
     // The CFDictionaryRef will be retained by the framework.
     // In 10.6, it is released one too many. So retain it.
     CFRetain(frameInfo);
-  }
-
-  // Ask for more data.
-  if (!mInputIncoming && mQueuedSamples <= mMaxRefFrames) {
-    LOG("AppleVDADecoder task queue empty; requesting more data");
-    mCallback->InputExhausted();
   }
 
   return NS_OK;
@@ -657,7 +693,7 @@ AppleVDADecoder::CreateOutputConfiguration()
 already_AddRefed<AppleVDADecoder>
 AppleVDADecoder::CreateVDADecoder(
   const VideoInfo& aConfig,
-  FlushableTaskQueue* aVideoTaskQueue,
+  TaskQueue* aTaskQueue,
   MediaDataDecoderCallback* aCallback,
   layers::ImageContainer* aImageContainer)
 {
@@ -667,7 +703,7 @@ AppleVDADecoder::CreateVDADecoder(
   }
 
   RefPtr<AppleVDADecoder> decoder =
-    new AppleVDADecoder(aConfig, aVideoTaskQueue, aCallback, aImageContainer);
+    new AppleVDADecoder(aConfig, aTaskQueue, aCallback, aImageContainer);
 
   if (NS_FAILED(decoder->InitializeSession())) {
     return nullptr;

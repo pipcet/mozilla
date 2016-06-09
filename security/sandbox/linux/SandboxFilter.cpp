@@ -437,6 +437,9 @@ public:
     case SYS_SEND:
     case SYS_SOCKET: // DANGEROUS
     case SYS_CONNECT: // DANGEROUS
+    case SYS_ACCEPT:
+    case SYS_BIND:
+    case SYS_LISTEN:
     case SYS_SETSOCKOPT:
     case SYS_GETSOCKNAME:
     case SYS_GETPEERNAME:
@@ -532,6 +535,7 @@ public:
     case __NR_writev:
     case __NR_pread64:
 #ifdef DESKTOP
+    case __NR_pwrite64:
     case __NR_readahead:
 #endif
       return Allow();

@@ -36,6 +36,7 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.BitmapDrawable;
 import android.os.Build;
+import android.os.Bundle;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.View;
@@ -87,6 +88,13 @@ public class Tab {
     private volatile boolean mIsAudioPlaying;
     private String mMostRecentHomePanel;
     private boolean mShouldShowToolbarWithoutAnimationOnFirstSelection;
+
+    /*
+     * Bundle containing restore data for the panel referenced in mMostRecentHomePanel. This can be
+     * e.g. the most recent folder for the bookmarks panel, or any other state that should be
+     * persisted. This is then used e.g. when returning to homepanels via history.
+     */
+    private Bundle mMostRecentHomePanelData;
 
     private int mHistoryIndex;
     private int mHistorySize;
@@ -219,8 +227,17 @@ public class Tab {
         return mMostRecentHomePanel;
     }
 
+    public Bundle getMostRecentHomePanelData() {
+        return mMostRecentHomePanelData;
+    }
+
     public void setMostRecentHomePanel(String panelId) {
         mMostRecentHomePanel = panelId;
+        mMostRecentHomePanelData = null;
+    }
+
+    public void setMostRecentHomePanelData(Bundle data) {
+        mMostRecentHomePanelData = data;
     }
 
     public Bitmap getThumbnailBitmap(int width, int height) {
@@ -337,7 +354,7 @@ public class Tab {
         ThreadUtils.postToBackgroundThread(new Runnable() {
             @Override
             public void run() {
-                urlMetadata.save(cr, mUrl, data);
+                urlMetadata.save(cr, data);
             }
         });
     }
@@ -444,8 +461,16 @@ public class Tab {
             mFaviconUrl = null;
         }
 
+        final Favicons.LoadType loadType;
+        if (mSiteIdentity.getSecurityMode() == SiteIdentity.SecurityMode.CHROMEUI) {
+            loadType = Favicons.LoadType.PRIVILEGED;
+        } else {
+            loadType = Favicons.LoadType.UNPRIVILEGED;
+        }
+
         int flags = (isPrivate() || mErrorType != ErrorType.NONE) ? 0 : LoadFaviconTask.FLAG_PERSIST;
-        mFaviconLoadId = Favicons.getSizedFavicon(mAppContext, mUrl, mFaviconUrl, Favicons.browserToolbarFaviconSize, flags,
+        mFaviconLoadId = Favicons.getSizedFavicon(mAppContext, mUrl, mFaviconUrl,
+                loadType, Favicons.browserToolbarFaviconSize, flags,
                 new OnFaviconLoadedListener() {
                     @Override
                     public void onFaviconLoaded(String pageUrl, String faviconURL, Bitmap favicon) {

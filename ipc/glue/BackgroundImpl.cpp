@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,6 +10,7 @@
 #include "BackgroundChildImpl.h"
 #include "BackgroundParentImpl.h"
 #include "base/process_util.h"
+#include "base/task.h"
 #include "FileDescriptor.h"
 #include "GeckoProfiler.h"
 #include "InputStreamUtils.h"
@@ -434,7 +437,7 @@ private:
           threadLocalInfo->mActor.forget(&actor);
 
           MOZ_ALWAYS_SUCCEEDS(
-	    NS_DispatchToMainThread(NewNonOwningRunnableMethod(actor, &ChildImpl::Release)));
+            NS_DispatchToMainThread(NewNonOwningRunnableMethod(actor, &ChildImpl::Release)));
         }
       }
       delete threadLocalInfo;
@@ -1257,7 +1260,7 @@ ParentImpl::ShutdownTimerCallback(nsITimer* aTimer, void* aClosure)
   nsCOMPtr<nsIRunnable> forceCloseRunnable =
     new ForceCloseBackgroundActorsRunnable(closure->mLiveActors);
   MOZ_ALWAYS_SUCCEEDS(closure->mThread->Dispatch(forceCloseRunnable,
-						 NS_DISPATCH_NORMAL));
+                                                 NS_DISPATCH_NORMAL));
 }
 
 void

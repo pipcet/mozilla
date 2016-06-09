@@ -465,7 +465,7 @@ nsNSSSocketInfo::SetNPNList(nsTArray<nsCString>& protocolArray)
 
   if (SSL_SetNextProtoNego(
         mFd,
-        reinterpret_cast<const unsigned char*>(npnList.get()),
+        BitwiseCast<const unsigned char*, const char*>(npnList.get()),
         npnList.Length()) != SECSuccess)
     return NS_ERROR_FAILURE;
 
@@ -747,6 +747,8 @@ nsSSLIOLayerHelpers::rememberIntolerantAtVersion(const nsACString& hostName,
       return false;
     }
 
+    // This telemetry doesn't support TLS 1.3
+    // See bug 1250582
     uint32_t fallbackLimitBucket = 0;
     // added if the version has reached the min version.
     if (intolerant <= minVersion) {
@@ -1050,6 +1052,7 @@ uint32_t tlsIntoleranceTelemetryBucket(PRErrorCode err)
     case SSL_ERROR_DECODE_ERROR_ALERT: return 14;
     case PR_CONNECT_RESET_ERROR: return 16;
     case PR_END_OF_FILE_ERROR: return 17;
+    case SSL_ERROR_INTERNAL_ERROR_ALERT: return 18;
     default: return 0;
   }
 }
@@ -1133,6 +1136,10 @@ retryDueToTLSIntolerance(PRErrorCode err, nsNSSSocketInfo* socketInfo)
   Telemetry::ID pre;
   Telemetry::ID post;
   switch (range.max) {
+    case SSL_LIBRARY_VERSION_TLS_1_3:
+      pre = Telemetry::SSL_TLS13_INTOLERANCE_REASON_PRE;
+      post = Telemetry::SSL_TLS13_INTOLERANCE_REASON_POST;
+      break;
     case SSL_LIBRARY_VERSION_TLS_1_2:
       pre = Telemetry::SSL_TLS12_INTOLERANCE_REASON_PRE;
       post = Telemetry::SSL_TLS12_INTOLERANCE_REASON_POST;
@@ -1323,33 +1330,33 @@ nsSSLIOLayerHelpers::nsSSLIOLayerHelpers()
 static int
 _PSM_InvalidInt(void)
 {
-    PR_ASSERT(!"I/O method is invalid");
-    PR_SetError(PR_INVALID_METHOD_ERROR, 0);
-    return -1;
+  MOZ_ASSERT_UNREACHABLE("I/O method is invalid");
+  PR_SetError(PR_INVALID_METHOD_ERROR, 0);
+  return -1;
 }
 
 static int64_t
 _PSM_InvalidInt64(void)
 {
-    PR_ASSERT(!"I/O method is invalid");
-    PR_SetError(PR_INVALID_METHOD_ERROR, 0);
-    return -1;
+  MOZ_ASSERT_UNREACHABLE("I/O method is invalid");
+  PR_SetError(PR_INVALID_METHOD_ERROR, 0);
+  return -1;
 }
 
 static PRStatus
 _PSM_InvalidStatus(void)
 {
-    PR_ASSERT(!"I/O method is invalid");
-    PR_SetError(PR_INVALID_METHOD_ERROR, 0);
-    return PR_FAILURE;
+  MOZ_ASSERT_UNREACHABLE("I/O method is invalid");
+  PR_SetError(PR_INVALID_METHOD_ERROR, 0);
+  return PR_FAILURE;
 }
 
 static PRFileDesc*
 _PSM_InvalidDesc(void)
 {
-    PR_ASSERT(!"I/O method is invalid");
-    PR_SetError(PR_INVALID_METHOD_ERROR, 0);
-    return nullptr;
+  MOZ_ASSERT_UNREACHABLE("I/O method is invalid");
+  PR_SetError(PR_INVALID_METHOD_ERROR, 0);
+  return nullptr;
 }
 
 static PRStatus
@@ -1661,6 +1668,9 @@ nsSSLIOLayerHelpers::loadVersionFallbackLimit()
                                SSL_LIBRARY_VERSION_TLS_1_2 };
   SSLVersionRange filledInRange;
   nsNSSComponent::FillTLSVersionRange(filledInRange, limit, limit, defaults);
+  if (filledInRange.max < SSL_LIBRARY_VERSION_TLS_1_2) {
+    filledInRange.max = SSL_LIBRARY_VERSION_TLS_1_2;
+  }
 
   mVersionFallbackLimit = filledInRange.max;
 }
@@ -2037,7 +2047,7 @@ nsNSS_SSLGetClientAuthData(void* arg, PRFileDesc* socket,
   }
 
   RefPtr<nsNSSSocketInfo> info(
-    reinterpret_cast<nsNSSSocketInfo*>(socket->higher->secret));
+    BitwiseCast<nsNSSSocketInfo*, PRFilePrivate*>(socket->higher->secret));
 
   UniqueCERTCertificate serverCert(SSL_PeerCertificate(socket));
   if (!serverCert) {
@@ -2234,7 +2244,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
             getter_AddRefs(found_cert));
           if (NS_SUCCEEDED(find_rv) && found_cert) {
             nsNSSCertificate* obj_cert =
-              reinterpret_cast<nsNSSCertificate*>(found_cert.get());
+              BitwiseCast<nsNSSCertificate*, nsIX509Cert*>(found_cert.get());
             if (obj_cert) {
               cert.reset(obj_cert->GetCert());
             }
@@ -2537,8 +2547,11 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
   if (range.max < maxEnabledVersion) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
            ("[%p] nsSSLIOLayerSetOptions: enabling TLS_FALLBACK_SCSV\n", fd));
-    if (SECSuccess != SSL_OptionSet(fd, SSL_ENABLE_FALLBACK_SCSV, true)) {
-      return NS_ERROR_FAILURE;
+    // Some servers will choke if we send the fallback SCSV with TLS 1.2.
+    if (range.max < SSL_LIBRARY_VERSION_TLS_1_2) {
+      if (SECSuccess != SSL_OptionSet(fd, SSL_ENABLE_FALLBACK_SCSV, true)) {
+        return NS_ERROR_FAILURE;
+      }
     }
     // tell NSS the max enabled version to make anti-downgrade effective
     if (SECSuccess != SSL_SetDowngradeCheckVersion(fd, maxEnabledVersion)) {

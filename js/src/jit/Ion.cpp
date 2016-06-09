@@ -11,6 +11,7 @@
 #include "mozilla/ThreadLocal.h"
 
 #include "jscompartment.h"
+#include "jsgc.h"
 #include "jsprf.h"
 
 #include "gc/Marking.h"
@@ -198,11 +199,9 @@ JitRuntime::~JitRuntime()
 }
 
 bool
-JitRuntime::initialize(JSContext* cx)
+JitRuntime::initialize(JSContext* cx, AutoLockForExclusiveAccess& lock)
 {
-    MOZ_ASSERT(cx->runtime()->currentThreadHasExclusiveAccess());
-
-    AutoCompartment ac(cx, cx->atomsCompartment());
+    AutoCompartment ac(cx, cx->atomsCompartment(lock));
 
     JitContext jctx(cx, nullptr);
 
@@ -336,7 +335,7 @@ JitRuntime::debugTrapHandler(JSContext* cx)
         // JitRuntime code stubs are shared across compartments and have to
         // be allocated in the atoms compartment.
         AutoLockForExclusiveAccess lock(cx);
-        AutoCompartment ac(cx, cx->runtime()->atomsCompartment());
+        AutoCompartment ac(cx, cx->runtime()->atomsCompartment(lock));
         debugTrapHandler_ = generateDebugTrapHandler(cx);
     }
     return debugTrapHandler_;
@@ -465,7 +464,7 @@ jit::FinishOffThreadBuilder(JSContext* cx, IonBuilder* builder)
 
     // If the builder is still in one of the helper thread list, then remove it.
     if (builder->isInList())
-        builder->removeFrom(HelperThreadState().ionLazyLinkList());
+        HelperThreadState().ionLazyLinkListRemove(builder);
 
     // Clear the recompiling flag of the old ionScript, since we continue to
     // use the old ionScript if recompiling fails.
@@ -548,7 +547,7 @@ jit::LazyLink(JSContext* cx, HandleScript calleeScript)
         calleeScript->baselineScript()->removePendingIonBuilder(calleeScript);
 
         // Remove from pending.
-        builder->removeFrom(HelperThreadState().ionLazyLinkList());
+        HelperThreadState().ionLazyLinkListRemove(builder);
     }
 
     {
@@ -587,12 +586,12 @@ jit::LazyLinkTopActivation(JSContext* cx)
 }
 
 /* static */ void
-JitRuntime::Mark(JSTracer* trc)
+JitRuntime::Mark(JSTracer* trc, AutoLockForExclusiveAccess& lock)
 {
     MOZ_ASSERT(!trc->runtime()->isHeapMinorCollecting());
-    Zone* zone = trc->runtime()->atomsCompartment()->zone();
-    for (gc::ZoneCellIterUnderGC i(zone, gc::AllocKind::JITCODE); !i.done(); i.next()) {
-        JitCode* code = i.get<JitCode>();
+    Zone* zone = trc->runtime()->atomsCompartment(lock)->zone();
+    for (auto i = zone->cellIter<JitCode>(); !i.done(); i.next()) {
+        JitCode* code = i;
         TraceRoot(trc, &code, "wrapper");
     }
 }
@@ -1222,7 +1221,24 @@ void
 IonScript::Destroy(FreeOp* fop, IonScript* script)
 {
     script->unlinkFromRuntime(fop);
+
+    /*
+     * When the script contains pointers to nursery things, the store buffer can
+     * contain entries that point into the fallback stub space. Since we can
+     * destroy scripts outside the context of a GC, this situation could result
+     * in us trying to mark invalid store buffer entries.
+     *
+     * Defer freeing any allocated blocks until after the next minor GC.
+     */
+    script->fallbackStubSpace_.freeAllAfterMinorGC(fop->runtime());
+
     fop->delete_(script);
+}
+
+void
+JS::DeletePolicy<js::jit::IonScript>::operator()(const js::jit::IonScript* script)
+{
+    IonScript::Destroy(rt_->defaultFreeOp(), const_cast<IonScript*>(script));
 }
 
 void
@@ -1336,8 +1352,7 @@ jit::ToggleBarriers(JS::Zone* zone, bool needs)
     if (!rt->hasJitRuntime())
         return;
 
-    for (gc::ZoneCellIterUnderGC i(zone, gc::AllocKind::SCRIPT); !i.done(); i.next()) {
-        JSScript* script = i.get<JSScript>();
+    for (auto script = zone->cellIter<JSScript>(); !script.done(); script.next()) {
         if (script->hasIonScript())
             script->ionScript()->toggleBarriers(needs);
         if (script->hasBaselineScript())
@@ -2019,7 +2034,15 @@ AttachFinishedCompilations(JSContext* cx)
             JSScript* script = builder->script();
             MOZ_ASSERT(script->hasBaselineScript());
             script->baselineScript()->setPendingIonBuilder(cx, script, builder);
-            HelperThreadState().ionLazyLinkList().insertFront(builder);
+            HelperThreadState().ionLazyLinkListAdd(builder);
+
+            // Don't keep more than 100 lazy link builders.
+            // Throw away the oldest items.
+            while (HelperThreadState().ionLazyLinkListSize() > 100) {
+                jit::IonBuilder* builder = HelperThreadState().ionLazyLinkList().getLast();
+                jit::FinishOffThreadBuilder(nullptr, builder);
+            }
+
             continue;
         }
     }
@@ -2834,13 +2857,14 @@ jit::SetEnterJitData(JSContext* cx, EnterJitData& data, RunState& state,
             if (!vals.reserve(1))
                 return false;
 
-            ScriptFrameIter iter(cx);
             data.maxArgc = 1;
             data.maxArgv = vals.begin();
-            if (state.asExecute()->newTarget().isNull())
+            if (state.asExecute()->newTarget().isNull()) {
+                ScriptFrameIter iter(cx);
                 vals.infallibleAppend(iter.newTarget());
-            else
+            } else {
                 vals.infallibleAppend(state.asExecute()->newTarget());
+            }
         }
     }
 

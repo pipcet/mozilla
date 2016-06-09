@@ -32,10 +32,8 @@ interfaces = [
     'smil',
     'apps',
     'gamepad',
+    'push',
 ]
-
-if not CONFIG['MOZ_SIMPLEPUSH']:
-    interfaces += ['push']
 
 DIRS += ['interfaces/' + i for i in interfaces]
 
@@ -62,6 +60,7 @@ DIRS += [
     'fetch',
     'filehandle',
     'filesystem',
+    'flyweb',
     'fmradio',
     'geolocation',
     'html',
@@ -113,6 +112,7 @@ DIRS += [
     'vr',
     'newapps',
     'u2f',
+    'console',
 ]
 
 if CONFIG['OS_ARCH'] == 'WINNT':

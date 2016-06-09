@@ -46,7 +46,7 @@ add_task(function* test_expiration_origin_threshold() {
   yield PlacesTestUtils.addVisits({
     uri: 'https://example.com/login',
     title: 'Sign in to see your auctions',
-    visitDate: (Date.now() - 1 * 24 * 60 * 60 * 1000) * 1000,
+    visitDate: (Date.now() - MS_IN_ONE_DAY) * 1000,
     transition: Ci.nsINavHistoryService.TRANSITION_LINK
   });
 
@@ -58,11 +58,19 @@ add_task(function* test_expiration_origin_threshold() {
     return updates == numMessages;
   });
 
+  let modifications = 0;
+  let modifiedPromise = promiseObserverNotification(PushServiceComponent.subscriptionModifiedTopic, (subject, data) => {
+    // Each subscription should be modified twice: once to update the message
+    // count and last push time, and the second time to update the quota.
+    modifications++;
+    return modifications == numMessages * 2;
+  });
+
   let updateQuotaPromise = new Promise((resolve, reject) => {
     let quotaUpdateCount = 0;
     PushService._updateQuotaTestCallback = function() {
       quotaUpdateCount++;
-      if (quotaUpdateCount == 10) {
+      if (quotaUpdateCount == numMessages) {
         resolve();
       }
     };
@@ -105,6 +113,7 @@ add_task(function* test_expiration_origin_threshold() {
   yield notifyPromise;
 
   yield updateQuotaPromise;
+  yield modifiedPromise;
 
   let expiredRecord = yield db.getByKeyID('f56645a9-1f32-4655-92ad-ddc37f6d54fb');
   notStrictEqual(expiredRecord.quota, 0, 'Expired record not updated');

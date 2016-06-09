@@ -13,6 +13,10 @@ final class UnusedResourcesUtil {
             R.dimen.wrap_content,
     };
 
+    public static final int[] USED_IN_BRANDING = {
+            R.drawable.large_icon
+    };
+
     public static final int[] USED_IN_COLOR_PALETTE = {
             R.color.private_browsing_purple, // This will be used eventually, then this item removed.
     };
@@ -98,7 +102,6 @@ final class UnusedResourcesUtil {
 
             R.drawable.remote_tabs_setup_button_background,
 
-            R.style.ActionBarThemeGeckoPreferences,
             R.style.TabsPanelSectionBase,
             R.style.TabsPanelSection,
             R.style.TabsPanelItemBase,

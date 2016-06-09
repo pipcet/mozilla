@@ -116,7 +116,6 @@
 #include "nsIWebBrowserFind.h"  // For window.find()
 #include "nsIWindowMediator.h"  // For window.find()
 #include "nsComputedDOMStyle.h"
-#include "nsIEntropyCollector.h"
 #include "nsDOMCID.h"
 #include "nsDOMWindowUtils.h"
 #include "nsIWindowWatcher.h"
@@ -227,8 +226,10 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/NavigatorBinding.h"
 #include "mozilla/dom/ImageBitmap.h"
+#include "mozilla/dom/ImageBitmapBinding.h"
 #include "mozilla/dom/ServiceWorkerRegistration.h"
 #include "mozilla/dom/U2F.h"
+#include "mozilla/dom/WebIDLGlobalNameHash.h"
 #ifdef HAVE_SIDEBAR
 #include "mozilla/dom/ExternalBinding.h"
 #endif
@@ -276,7 +277,6 @@ nsGlobalWindow::WindowByIdTable *nsGlobalWindow::sWindowsById = nullptr;
 bool nsGlobalWindow::sWarnedAboutWindowInternal = false;
 bool nsGlobalWindow::sIdleObserversAPIFuzzTimeDisabled = false;
 
-static nsIEntropyCollector *gEntropyCollector          = nullptr;
 static int32_t              gRefCnt                    = 0;
 static int32_t              gOpenPopupSpamCount        = 0;
 static PopupControlState    gPopupControlState         = openAbused;
@@ -307,6 +307,16 @@ static int32_t gMinBackgroundTimeoutValue;
 inline int32_t
 nsGlobalWindow::DOMMinTimeoutValue() const {
   bool isBackground = !mOuterWindow || mOuterWindow->IsBackground();
+  if (isBackground) {
+    // Don't use the background timeout value when there are audio contexts with
+    // active nodes, so that background audio can keep running smoothly.
+    for (const AudioContext* ctx : mAudioContexts) {
+      if (ctx->ActiveNodeCount() > 0) {
+        isBackground = false;
+        break;
+      }
+    }
+  }
   return
     std::max(isBackground ? gMinBackgroundTimeoutValue : gMinTimeoutValue, 0);
 }
@@ -1094,7 +1104,9 @@ nsOuterWindowProxy::AppendIndexedPropertyNames(JSContext *cx, JSObject *proxy,
     return false;
   }
   for (int32_t i = 0; i < int32_t(length); ++i) {
-    props.append(INT_TO_JSID(i));
+    if (!props.append(INT_TO_JSID(i))) {
+      return false;
+    }
   }
 
   return true;
@@ -1337,10 +1349,6 @@ nsGlobalWindow::Init()
 {
   AssertIsOnMainThread();
 
-  CallGetService(NS_ENTROPYCOLLECTOR_CONTRACTID, &gEntropyCollector);
-  NS_ASSERTION(gEntropyCollector,
-               "gEntropyCollector should have been initialized!");
-
   NS_ASSERTION(gDOMLeakPRLog, "gDOMLeakPRLog should have been initialized!");
 
   sWindowsById = new WindowByIdTable();
@@ -1482,8 +1490,6 @@ nsGlobalWindow::ShutDown()
     fclose(gDumpFile);
   }
   gDumpFile = nullptr;
-
-  NS_IF_RELEASE(gEntropyCollector);
 
   delete sWindowsById;
   sWindowsById = nullptr;
@@ -2247,7 +2253,7 @@ public:
   NS_DECLARE_STATIC_IID_ACCESSOR(WINDOWSTATEHOLDER_IID)
   NS_DECL_ISUPPORTS
 
-  WindowStateHolder(nsIScriptContext* aContext, nsGlobalWindow *aWindow);
+  explicit WindowStateHolder(nsGlobalWindow *aWindow);
 
   nsGlobalWindow* GetInnerWindow() { return mInnerWindow; }
 
@@ -2268,10 +2274,9 @@ protected:
 
 NS_DEFINE_STATIC_IID_ACCESSOR(WindowStateHolder, WINDOWSTATEHOLDER_IID)
 
-WindowStateHolder::WindowStateHolder(nsIScriptContext* aContext,
-                                     nsGlobalWindow* aWindow)
+WindowStateHolder::WindowStateHolder(nsGlobalWindow* aWindow)
   : mInnerWindow(aWindow),
-    mInnerWindowReflector(aContext->GetNativeContext(), aWindow->GetWrapper())
+    mInnerWindowReflector(nsContentUtils::RootingCx(), aWindow->GetWrapper())
 {
   NS_PRECONDITION(aWindow, "null window");
   NS_PRECONDITION(aWindow->IsInnerWindow(), "Saving an outer window");
@@ -2338,7 +2343,7 @@ InitializeLegacyNetscapeObject(JSContext* aCx, JS::Handle<JSObject*> aGlobal)
   // uses enablePrivilege. If you're not doing test automation, you _must_ not
   // flip this pref, or you will be exposing all your users to security
   // vulnerabilities.
-  if (!Preferences::GetBool("security.turn_off_all_security_so_that_viruses_can_take_over_this_computer")) {
+  if (!xpc::IsInAutomation()) {
     return true;
   }
 
@@ -3316,27 +3321,11 @@ nsresult
 nsGlobalWindow::PreHandleEvent(EventChainPreVisitor& aVisitor)
 {
   NS_PRECONDITION(IsInnerWindow(), "PreHandleEvent is used on outer window!?");
-  static uint32_t count = 0;
   EventMessage msg = aVisitor.mEvent->mMessage;
 
   aVisitor.mCanHandle = true;
   aVisitor.mForceContentDispatch = true; //FIXME! Bug 329119
-  if (msg == eMouseMove && gEntropyCollector) {
-    //Chances are this counter will overflow during the life of the
-    //process, but that's OK for our case. Means we get a little
-    //more entropy.
-    if (count++ % 100 == 0) {
-      //Since the high bits seem to be zero's most of the time,
-      //let's only take the lowest half of the point structure.
-      int16_t myCoord[2];
-
-      myCoord[0] = aVisitor.mEvent->mRefPoint.x;
-      myCoord[1] = aVisitor.mEvent->mRefPoint.y;
-      gEntropyCollector->RandomUpdate((void*)myCoord, sizeof(myCoord));
-      gEntropyCollector->RandomUpdate((void*)&(aVisitor.mEvent->mTime),
-                                      sizeof(uint32_t));
-    }
-  } else if (msg == eResize && aVisitor.mEvent->IsTrusted()) {
+  if (msg == eResize && aVisitor.mEvent->IsTrusted()) {
     // QIing to window so that we can keep the old behavior also in case
     // a child window is handling resize.
     nsCOMPtr<nsPIDOMWindowInner> window =
@@ -3418,6 +3407,16 @@ nsGlobalWindow::AreDialogsEnabled()
     if (isHidden) {
       return false;
     }
+  }
+
+  // Dialogs are also blocked if the document is sandboxed with SANDBOXED_MODALS
+  // (or if we have no document, of course).  Which document?  Who knows; the
+  // spec is daft.  See <https://github.com/whatwg/html/issues/1206>.  For now
+  // just go ahead and check mDoc, since in everything except edge cases in
+  // which a frame is allow-same-origin but not allow-scripts and is being poked
+  // at by some other window this should be the right thing anyway.
+  if (!mDoc || (mDoc->GetSandboxFlags() & SANDBOXED_MODALS)) {
+    return false;
   }
 
   return topWindow->mAreDialogsEnabled;
@@ -4499,6 +4498,15 @@ nsGlobalWindow::DoResolve(JSContext* aCx, JS::Handle<JSObject*> aObj,
     return true;
   }
 
+  bool found;
+  if (!WebIDLGlobalNameHash::DefineIfEnabled(aCx, aObj, aId, aDesc, &found)) {
+    return false;
+  }
+
+  if (found) {
+    return true;
+  }
+
   nsresult rv = nsWindowSH::GlobalResolve(this, aCx, aObj, aId, aDesc);
   if (NS_FAILED(rv)) {
     return Throw(aCx, rv);
@@ -4527,6 +4535,10 @@ nsGlobalWindow::MayResolve(jsid aId)
     return true;
   }
 
+  if (WebIDLGlobalNameHash::MayResolve(aId)) {
+    return true;
+  }
+
   nsScriptNameSpaceManager *nameSpaceManager = PeekNameSpaceManager();
   if (!nameSpaceManager) {
     // Really shouldn't happen.  Fail safe.
@@ -4550,12 +4562,13 @@ nsGlobalWindow::GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& aNames,
   nsScriptNameSpaceManager* nameSpaceManager = GetNameSpaceManager();
   if (nameSpaceManager) {
     JS::Rooted<JSObject*> wrapper(aCx, GetWrapper());
+
+    WebIDLGlobalNameHash::GetNames(aCx, wrapper, aNames);
+
     for (auto i = nameSpaceManager->GlobalNameIter(); !i.Done(); i.Next()) {
       const GlobalNameMapEntry* entry = i.Get();
       if (nsWindowSH::NameStructEnabled(aCx, this, entry->mKey,
-                                        entry->mGlobalName) &&
-          (!entry->mGlobalName.mConstructorEnabled ||
-           entry->mGlobalName.mConstructorEnabled(aCx, wrapper))) {
+                                        entry->mGlobalName)) {
         aNames.AppendElement(entry->mKey);
       }
     }
@@ -6247,6 +6260,7 @@ private:
   nsCOMPtr<nsITimer> mTimer;
   nsCOMPtr<nsISupports> mTransitionData;
 
+  TimeStamp mFullscreenChangeStartTime;
   FullscreenTransitionDuration mDuration;
   Stage mStage;
   bool mFullscreen;
@@ -6273,6 +6287,7 @@ FullscreenTransitionTask::Run()
                                          this);
   } else if (stage == eToggleFullscreen) {
     PROFILER_MARKER("Fullscreen toggle start");
+    mFullscreenChangeStartTime = TimeStamp::Now();
     if (MOZ_UNLIKELY(mWindow->mFullScreen != mFullscreen)) {
       // This could happen in theory if several fullscreen requests in
       // different direction happen continuously in a short time. We
@@ -6306,9 +6321,11 @@ FullscreenTransitionTask::Run()
     // more than exposing an intermediate state.
     mTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
     uint32_t timeout =
-      Preferences::GetUint("full-screen-api.transition.timeout", 500);
+      Preferences::GetUint("full-screen-api.transition.timeout", 1000);
     mTimer->Init(observer, timeout, nsITimer::TYPE_ONE_SHOT);
   } else if (stage == eAfterToggle) {
+    Telemetry::AccumulateTimeDelta(Telemetry::FULLSCREEN_TRANSITION_BLACK_MS,
+                                   mFullscreenChangeStartTime);
     mWidget->PerformFullscreenTransition(nsIWidget::eAfterFullscreenToggle,
                                          mDuration.mFadeOut, mTransitionData,
                                          this);
@@ -8106,7 +8123,6 @@ nsGlobalWindow::Open(const nsAString& aUrl, const nsAString& aName,
                       false,          // aDoJSFixups
                       true,           // aNavigate
                       nullptr, nullptr,  // No args
-                      nullptr,           // aJSCallerContext
                       _retval);
 }
 
@@ -8122,7 +8138,6 @@ nsGlobalWindow::OpenJS(const nsAString& aUrl, const nsAString& aName,
                       true,           // aDoJSFixups
                       true,           // aNavigate
                       nullptr, nullptr,  // No args
-                      nsContentUtils::GetCurrentJSContext(), // aJSCallerContext
                       _retval);
 }
 
@@ -8142,7 +8157,6 @@ nsGlobalWindow::OpenDialog(const nsAString& aUrl, const nsAString& aName,
                       false,                   // aDoJSFixups
                       true,                    // aNavigate
                       nullptr, aExtraArgument,    // Arguments
-                      nullptr,                    // aJSCallerContext
                       _retval);
 }
 
@@ -8161,7 +8175,6 @@ nsGlobalWindow::OpenNoNavigate(const nsAString& aUrl,
                       false,          // aDoJSFixups
                       false,          // aNavigate
                       nullptr, nullptr,  // No args
-                      nullptr,           // aJSCallerContext
                       _retval);
 
 }
@@ -8190,7 +8203,6 @@ nsGlobalWindow::OpenDialogOuter(JSContext* aCx, const nsAString& aUrl,
                         false,            // aDoJSFixups
                         true,                // aNavigate
                         argvArray, nullptr,  // Arguments
-                        aCx,                 // aJSCallerContext
                         getter_AddRefs(dialog));
   return dialog.forget();
 }
@@ -8628,13 +8640,14 @@ nsGlobalWindow::FinalClose()
   // broken addons. The chrome tests in toolkit/mozapps/downloads are a good
   // testing ground.
   //
-  // In particular, if |win|'s JSContext is at the top of the stack, we must
+  // In particular, if some inner of |win| is the entry global, we must
   // complete _two_ round-trips to the event loop before the call to
   // ReallyCloseWindow. This allows setTimeout handlers that are set after
   // FinalClose() is called to run before the window is torn down.
-  bool indirect = GetContextInternal() && // Occasionally null. See bug 877390.
-                  (nsContentUtils::GetCurrentJSContext() ==
-                   GetContextInternal()->GetNativeContext());
+  nsCOMPtr<nsPIDOMWindowInner> entryWindow =
+    do_QueryInterface(GetEntryGlobal());
+  bool indirect =
+    entryWindow && entryWindow->GetOuterWindow() == this->AsOuter();
   if (NS_FAILED(nsCloseEvent::PostCloseEvent(this, indirect))) {
     ReallyCloseWindow();
   } else {
@@ -9270,7 +9283,6 @@ nsGlobalWindow::ShowModalDialogOuter(const nsAString& aUrl, nsIVariant* aArgumen
                         true,           // aDoJSFixups
                         true,           // aNavigate
                         nullptr, argHolder, // args
-                        nullptr,            // aJSCallerContext
                         getter_AddRefs(dlgWin));
   nsContentUtils::SetMicroTaskLevel(oldMicroTaskLevel);
   LeaveModalState();
@@ -11739,7 +11751,6 @@ nsGlobalWindow::OpenInternal(const nsAString& aUrl, const nsAString& aName,
                              bool aDoJSFixups, bool aNavigate,
                              nsIArray *argv,
                              nsISupports *aExtraArgument,
-                             JSContext *aJSCallerContext,
                              nsPIDOMWindowOuter **aReturn)
 {
   MOZ_ASSERT(IsOuterWindow());
@@ -11753,8 +11764,6 @@ nsGlobalWindow::OpenInternal(const nsAString& aUrl, const nsAString& aName,
                   "Can't pass in arguments both ways");
   NS_PRECONDITION(!aCalledNoScript || (!argv && argc == 0),
                   "Can't pass JS args when called via the noscript methods");
-  NS_PRECONDITION(!aJSCallerContext || !aCalledNoScript,
-                  "Shouldn't have caller context when called noscript");
 
   mozilla::Maybe<AutoUnblockScriptClosing> closeUnblocker;
 
@@ -11815,13 +11824,18 @@ nsGlobalWindow::OpenInternal(const nsAString& aUrl, const nsAString& aName,
   if (checkForPopup) {
     abuseLevel = RevisePopupAbuseLevel(abuseLevel);
     if (abuseLevel >= openAbused) {
-      if (aJSCallerContext) {
+      if (!aCalledNoScript) {
         // If script in some other window is doing a window.open on us and
         // it's being blocked, then it's OK to close us afterwards, probably.
         // But if we're doing a window.open on ourselves and block the popup,
         // prevent this window from closing until after this script terminates
         // so that whatever popup blocker UI the app has will be visible.
-        if (mContext == GetScriptContextFromJSContext(aJSCallerContext)) {
+        nsCOMPtr<nsPIDOMWindowInner> entryWindow =
+          do_QueryInterface(GetEntryGlobal());
+        // Note that entryWindow can be null here if some JS component was the
+        // place where script was entered for this JS execution.
+        if (entryWindow &&
+            entryWindow->GetOuterWindow() == this->AsOuter()) {
           mBlockScriptedClosingFlag = true;
           closeUnblocker.emplace(this);
         }
@@ -12267,7 +12281,7 @@ nsGlobalWindow::RunTimeoutHandler(nsTimeout* aTimeout,
     // New script entry point required, due to the "Create a script" sub-step of
     // http://www.whatwg.org/specs/web-apps/current-work/#timer-initialisation-steps
     nsAutoMicroTask mt;
-    AutoEntryScript aes(this, reason, true, aScx->GetNativeContext());
+    AutoEntryScript aes(this, reason, true);
     JS::CompileOptions options(aes.cx());
     options.setFileAndLine(filename, lineNo)
            .setVersion(JSVERSION_DEFAULT);
@@ -12944,7 +12958,7 @@ nsGlobalWindow::SaveWindowState()
   // to the page.
   inner->Freeze();
 
-  nsCOMPtr<nsISupports> state = new WindowStateHolder(mContext, inner);
+  nsCOMPtr<nsISupports> state = new WindowStateHolder(inner);
 
 #ifdef DEBUG_PAGE_CACHE
   printf("saving window state, state = %p\n", (void*)state);
@@ -14358,6 +14372,11 @@ already_AddRefed<Promise>
 nsGlobalWindow::CreateImageBitmap(const ImageBitmapSource& aImage,
                                   ErrorResult& aRv)
 {
+  if (aImage.IsArrayBuffer() || aImage.IsArrayBufferView()) {
+    aRv.Throw(NS_ERROR_NOT_IMPLEMENTED);
+    return nullptr;
+  }
+
   return ImageBitmap::Create(this, aImage, Nothing(), aRv);
 }
 
@@ -14366,7 +14385,28 @@ nsGlobalWindow::CreateImageBitmap(const ImageBitmapSource& aImage,
                                   int32_t aSx, int32_t aSy, int32_t aSw, int32_t aSh,
                                   ErrorResult& aRv)
 {
+  if (aImage.IsArrayBuffer() || aImage.IsArrayBufferView()) {
+    aRv.Throw(NS_ERROR_NOT_IMPLEMENTED);
+    return nullptr;
+  }
+
   return ImageBitmap::Create(this, aImage, Some(gfx::IntRect(aSx, aSy, aSw, aSh)), aRv);
+}
+
+already_AddRefed<mozilla::dom::Promise>
+nsGlobalWindow::CreateImageBitmap(const ImageBitmapSource& aImage,
+                                  int32_t aOffset, int32_t aLength,
+                                  ImageBitmapFormat aFormat,
+                                  const Sequence<ChannelPixelLayout>& aLayout,
+                                  ErrorResult& aRv)
+{
+  if (aImage.IsArrayBuffer() || aImage.IsArrayBufferView()) {
+    return ImageBitmap::Create(this, aImage, aOffset, aLength, aFormat, aLayout,
+                               aRv);
+  } else {
+    aRv.Throw(NS_ERROR_TYPE_ERR);
+    return nullptr;
+  }
 }
 
 // Helper called by methods that move/resize the window,
@@ -14383,6 +14423,35 @@ nsGlobalWindow::CheckForDPIChange()
         presContext->UIResolutionChanged();
       }
     }
+  }
+}
+
+nsGlobalWindow::TemporarilyDisableDialogs::TemporarilyDisableDialogs(
+  nsGlobalWindow* aWindow MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
+{
+  MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+
+  MOZ_ASSERT(aWindow);
+  nsGlobalWindow* topWindow = aWindow->GetScriptableTopInternal();
+  if (!topWindow) {
+    NS_ERROR("nsGlobalWindow::TemporarilyDisableDialogs used without a top "
+             "window?");
+    return;
+  }
+
+  // TODO: Warn if no top window?
+  topWindow = topWindow->GetCurrentInnerWindowInternal();
+  if (topWindow) {
+    mTopWindow = topWindow;
+    mSavedDialogsEnabled = mTopWindow->mAreDialogsEnabled;
+    mTopWindow->mAreDialogsEnabled = false;
+  }
+}
+
+nsGlobalWindow::TemporarilyDisableDialogs::~TemporarilyDisableDialogs()
+{
+  if (mTopWindow) {
+    mTopWindow->mAreDialogsEnabled = mSavedDialogsEnabled;
   }
 }
 

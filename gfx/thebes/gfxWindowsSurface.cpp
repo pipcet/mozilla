@@ -14,13 +14,6 @@
 
 #include "nsString.h"
 
-gfxWindowsSurface::gfxWindowsSurface(HWND wnd, uint32_t flags) :
-    mOwnsDC(true), mForPrinting(false), mWnd(wnd)
-{
-    mDC = ::GetDC(mWnd);
-    InitWithDC(flags);
-}
-
 gfxWindowsSurface::gfxWindowsSurface(HDC dc, uint32_t flags) :
     mOwnsDC(false), mForPrinting(false), mDC(dc), mWnd(nullptr)
 {
@@ -72,33 +65,6 @@ gfxWindowsSurface::gfxWindowsSurface(const mozilla::gfx::IntSize& realSize, gfxI
     } else {
         mDC = nullptr;
     }
-}
-
-gfxWindowsSurface::gfxWindowsSurface(HDC dc, const mozilla::gfx::IntSize& realSize, gfxImageFormat imageFormat) :
-    mOwnsDC(false), mForPrinting(false), mWnd(nullptr)
-{
-    mozilla::gfx::IntSize size(realSize);
-    if (!CheckSurfaceSize(size))
-        MakeInvalid(size);
-
-    cairo_format_t cformat = GfxFormatToCairoFormat(imageFormat);
-    cairo_surface_t *surf =
-        cairo_win32_surface_create_with_ddb(dc, cformat,
-                                            size.width, size.height);
-
-    Init(surf);
-
-    if (mSurfaceValid) {
-        // DDBs will generally only use 3 bytes per pixel when RGB24
-        int bytesPerPixel =
-            ((imageFormat == mozilla::gfx::SurfaceFormat::X8R8G8B8_UINT32) ? 3 : 4);
-        RecordMemoryUsed(size.width * size.height * bytesPerPixel + sizeof(gfxWindowsSurface));
-    }
-
-    if (CairoStatus() == 0)
-        mDC = cairo_win32_surface_get_dc(CairoSurface());
-    else
-        mDC = nullptr;
 }
 
 gfxWindowsSurface::gfxWindowsSurface(cairo_surface_t *csurf) :
@@ -312,10 +278,13 @@ gfxWindowsSurface::GetSize() const
 {
     if (mForPrinting) {
         // On Windows we need to use the printable area of the page.
+        // Note: we only scale the printing using the LOGPIXELSY, so we use that
+        // when calculating the surface width as well as the height.
+        int32_t heightDPI = ::GetDeviceCaps(mDC, LOGPIXELSY);
         float width = (::GetDeviceCaps(mDC, HORZRES) * POINTS_PER_INCH_FLOAT)
-                      / ::GetDeviceCaps(mDC, LOGPIXELSX);
+                      / heightDPI;
         float height = (::GetDeviceCaps(mDC, VERTRES) * POINTS_PER_INCH_FLOAT)
-                       / ::GetDeviceCaps(mDC, LOGPIXELSY);
+                       / heightDPI;
         return mozilla::gfx::IntSize(width, height);
     }
 

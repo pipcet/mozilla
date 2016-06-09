@@ -6,6 +6,7 @@
 #include "GMPServiceParent.h"
 #include "GMPService.h"
 #include "prio.h"
+#include "base/task.h"
 #include "mozilla/Logging.h"
 #include "GMPParent.h"
 #include "GMPVideoDecoderParent.h"
@@ -22,7 +23,6 @@
 #include "GMPDecryptorParent.h"
 #include "GMPAudioDecoderParent.h"
 #include "nsComponentManagerUtils.h"
-#include "mozilla/Preferences.h"
 #include "runnable_utils.h"
 #include "VideoUtils.h"
 #if defined(XP_LINUX) && defined(MOZ_GMP_SANDBOX)
@@ -41,6 +41,7 @@
 #include "nsIXULRuntime.h"
 #include "GMPDecoderModule.h"
 #include <limits>
+#include "MediaPrefs.h"
 
 namespace mozilla {
 
@@ -80,10 +81,6 @@ NS_IMPL_ISUPPORTS_INHERITED(GeckoMediaPluginServiceParent,
                             GeckoMediaPluginService,
                             mozIGeckoMediaPluginChromeService)
 
-static int32_t sMaxAsyncShutdownWaitMs = 0;
-static bool sAllowInsecureGMP = false;
-static bool sHaveSetGMPServiceParentPrefCaches = false;
-
 GeckoMediaPluginServiceParent::GeckoMediaPluginServiceParent()
   : mShuttingDown(false)
 #ifdef MOZ_CRASHREPORTER
@@ -95,14 +92,6 @@ GeckoMediaPluginServiceParent::GeckoMediaPluginServiceParent()
   , mLoadPluginsFromDiskComplete(false)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  if (!sHaveSetGMPServiceParentPrefCaches) {
-    sHaveSetGMPServiceParentPrefCaches = true;
-    Preferences::AddIntVarCache(&sMaxAsyncShutdownWaitMs,
-                                "media.gmp.async-shutdown-timeout",
-                                GMP_DEFAULT_ASYNC_SHUTDONW_TIMEOUT);
-    Preferences::AddBoolVarCache(&sAllowInsecureGMP,
-                                 "media.gmp.insecure.allow", false);
-  }
   mInitPromise.SetMonitor(&mInitPromiseMonitor);
 }
 
@@ -115,8 +104,7 @@ GeckoMediaPluginServiceParent::~GeckoMediaPluginServiceParent()
 int32_t
 GeckoMediaPluginServiceParent::AsyncShutdownTimeoutMs()
 {
-  MOZ_ASSERT(sHaveSetGMPServiceParentPrefCaches);
-  return sMaxAsyncShutdownWaitMs;
+  return MediaPrefs::GMPAsyncShutdownTimeout();
 }
 
 nsresult
@@ -541,8 +529,12 @@ GeckoMediaPluginServiceParent::GetContentParentFrom(const nsACString& aNodeId,
                                                     const nsTArray<nsCString>& aTags,
                                                     UniquePtr<GetGMPContentParentCallback>&& aCallback)
 {
-  RefPtr<GeckoMediaPluginServiceParent> self(this);
   RefPtr<AbstractThread> thread(GetAbstractGMPThread());
+  if (!thread) {
+    return false;
+  }
+
+  RefPtr<GeckoMediaPluginServiceParent> self(this);
   nsCString nodeId(aNodeId);
   nsTArray<nsCString> tags(aTags);
   nsCString api(aAPI);
@@ -568,8 +560,10 @@ GeckoMediaPluginServiceParent::GetContentParentFrom(const nsACString& aNodeId,
 }
 
 void
-GeckoMediaPluginServiceParent::InitializePlugins()
+GeckoMediaPluginServiceParent::InitializePlugins(
+  AbstractThread* aAbstractGMPThread)
 {
+  MOZ_ASSERT(aAbstractGMPThread);
   MonitorAutoLock lock(mInitPromiseMonitor);
   if (mLoadPluginsFromDiskComplete) {
     return;
@@ -577,9 +571,9 @@ GeckoMediaPluginServiceParent::InitializePlugins()
 
   RefPtr<GeckoMediaPluginServiceParent> self(this);
   RefPtr<GenericPromise> p = mInitPromise.Ensure(__func__);
-  RefPtr<AbstractThread> thread(GetAbstractGMPThread());
-  InvokeAsync(thread, this, __func__, &GeckoMediaPluginServiceParent::LoadFromEnvironment)
-    ->Then(thread, __func__,
+  InvokeAsync(aAbstractGMPThread, this, __func__,
+              &GeckoMediaPluginServiceParent::LoadFromEnvironment)
+    ->Then(aAbstractGMPThread, __func__,
       [self]() -> void {
         MonitorAutoLock lock(self->mInitPromiseMonitor);
         self->mLoadPluginsFromDiskComplete = true;
@@ -771,6 +765,10 @@ RefPtr<GenericPromise::AllPromiseType>
 GeckoMediaPluginServiceParent::LoadFromEnvironment()
 {
   MOZ_ASSERT(NS_GetCurrentThread() == mGMPThread);
+  RefPtr<AbstractThread> thread(GetAbstractGMPThread());
+  if (!thread) {
+    return GenericPromise::AllPromiseType::CreateAndReject(NS_ERROR_FAILURE, __func__);
+  }
 
   const char* env = PR_GetEnv("MOZ_GMP_PATH");
   if (!env || !*env) {
@@ -798,7 +796,6 @@ GeckoMediaPluginServiceParent::LoadFromEnvironment()
   }
 
   mScannedPluginOnDisk = true;
-  RefPtr<AbstractThread> thread(GetAbstractGMPThread());
   return GenericPromise::All(thread, promises);
 }
 
@@ -846,6 +843,10 @@ RefPtr<GenericPromise>
 GeckoMediaPluginServiceParent::AsyncAddPluginDirectory(const nsAString& aDirectory)
 {
   RefPtr<AbstractThread> thread(GetAbstractGMPThread());
+  if (!thread) {
+    return GenericPromise::CreateAndReject(NS_ERROR_FAILURE, __func__);
+  }
+
   nsString dir(aDirectory);
   return InvokeAsync(thread, this, __func__, &GeckoMediaPluginServiceParent::AddOnGMPThread, dir)
     ->Then(AbstractThread::MainThread(), __func__,
@@ -1044,7 +1045,7 @@ CreateGMPParent()
 {
 #if defined(XP_LINUX) && defined(MOZ_GMP_SANDBOX)
   if (!SandboxInfo::Get().CanSandboxMedia()) {
-    if (!sAllowInsecureGMP) {
+    if (!MediaPrefs::GMPAllowInsecure()) {
       NS_WARNING("Denying media plugin load due to lack of sandboxing.");
       return nullptr;
     }
@@ -1074,7 +1075,13 @@ RefPtr<GenericPromise>
 GeckoMediaPluginServiceParent::AddOnGMPThread(nsString aDirectory)
 {
   MOZ_ASSERT(NS_GetCurrentThread() == mGMPThread);
-  LOGD(("%s::%s: %s", __CLASS__, __FUNCTION__, NS_LossyConvertUTF16toASCII(aDirectory).get()));
+  nsCString dir = NS_ConvertUTF16toUTF8(aDirectory);
+  RefPtr<AbstractThread> thread(GetAbstractGMPThread());
+  if (!thread) {
+    LOGD(("%s::%s: %s No GMP Thread", __CLASS__, __FUNCTION__, dir.get()));
+    return GenericPromise::CreateAndReject(NS_ERROR_FAILURE, __func__);
+  }
+  LOGD(("%s::%s: %s", __CLASS__, __FUNCTION__, dir.get()));
 
   nsCOMPtr<nsIFile> directory;
   nsresult rv = NS_NewLocalFile(aDirectory, false, getter_AddRefs(directory));
@@ -1089,8 +1096,6 @@ GeckoMediaPluginServiceParent::AddOnGMPThread(nsString aDirectory)
   }
 
   RefPtr<GeckoMediaPluginServiceParent> self(this);
-  RefPtr<AbstractThread> thread(GetAbstractGMPThread());
-  nsCString dir = NS_ConvertUTF16toUTF8(aDirectory);
   return gmp->Init(this, directory)->Then(thread, __func__,
     [gmp, self, dir]() -> void {
       LOGD(("%s::%s: %s Succeeded", __CLASS__, __FUNCTION__, dir.get()));

@@ -133,7 +133,7 @@ class nsLayoutUtils
   typedef mozilla::gfx::Color Color;
   typedef mozilla::gfx::DrawTarget DrawTarget;
   typedef mozilla::gfx::ExtendMode ExtendMode;
-  typedef mozilla::gfx::Filter Filter;
+  typedef mozilla::gfx::SamplingFilter SamplingFilter;
   typedef mozilla::gfx::Float Float;
   typedef mozilla::gfx::Point Point;
   typedef mozilla::gfx::Rect Rect;
@@ -563,16 +563,12 @@ public:
    * properties (top, left, right, bottom) are auto. aAnchorRect is in the
    * coordinate space of aLayer's container layer (i.e. relative to the reference
    * frame of the display item which is building aLayer's container layer).
-   * aIsClipFixed is true if the layer's clip rect should also remain fixed
-   * during async-scrolling (true for fixed position elements, false for
-   * fixed backgrounds).
    */
   static void SetFixedPositionLayerData(Layer* aLayer, const nsIFrame* aViewportFrame,
                                         const nsRect& aAnchorRect,
                                         const nsIFrame* aFixedPosFrame,
                                         nsPresContext* aPresContext,
-                                        const ContainerLayerParameters& aContainerParameters,
-                                        bool aIsClipFixed);
+                                        const ContainerLayerParameters& aContainerParameters);
 
   /**
    * Return true if aPresContext's viewport has a displayport.
@@ -837,11 +833,23 @@ public:
    * aAncestor. Computes the bounding-box of the true quadrilateral.
    * Pass non-null aPreservesAxisAlignedRectangles and it will be set to true if
    * we only need to use a 2d transform that PreservesAxisAlignedRectangles().
+   *
+   * |aMatrixCache| allows for optimizations in recomputing the same matrix over
+   * and over. The argument can be one of the following values:
+   * nullptr (the default) - No optimization; the transform matrix is computed on
+   *   every call to this function.
+   * non-null pointer to an empty Maybe<Matrix4x4> - Upon return, the Maybe is
+   *   filled with the transform matrix that was computed. This can then be passed
+   *   in to subsequent calls with the same source and destination frames to avoid
+   *   recomputing the matrix.
+   * non-null pointer to a non-empty Matrix4x4 - The provided matrix will be used
+   *   as the transform matrix and applied to the rect.
    */
   static nsRect TransformFrameRectToAncestor(nsIFrame* aFrame,
                                              const nsRect& aRect,
                                              const nsIFrame* aAncestor,
-                                             bool* aPreservesAxisAlignedRectangles = nullptr);
+                                             bool* aPreservesAxisAlignedRectangles = nullptr,
+                                             mozilla::Maybe<Matrix4x4>* aMatrixCache = nullptr);
 
 
   /**
@@ -903,6 +911,12 @@ public:
    */
   static TransformResult TransformRect(nsIFrame* aFromFrame, nsIFrame* aToFrame,
                                        nsRect& aRect);
+
+  /**
+   * Converts app units to pixels (with optional snapping) and appends as a
+   * translation to aTransform.
+   */
+  static void PostTranslate(Matrix4x4& aTransform, const nsPoint& aOrigin, float aAppUnitsPerPixel, bool aRounded);
 
   /**
    * Get the border-box of aElement's primary frame, transformed it to be
@@ -1705,9 +1719,9 @@ public:
   static nsIFrame* GetClosestLayer(nsIFrame* aFrame);
 
   /**
-   * Gets the graphics filter for the frame
+   * Gets the graphics sampling filter for the frame
    */
-  static Filter GetGraphicsFilterForFrame(nsIFrame* aFrame);
+  static SamplingFilter GetSamplingFilterForFrame(nsIFrame* aFrame);
 
   /* N.B. The only difference between variants of the Draw*Image
    * functions below is the type of the aImage argument.
@@ -1727,8 +1741,13 @@ public:
    *                            the image is a vector image being rendered at
    *                            that size.)
    *   @param aDest             The position and scaled area where one copy of
-   *                            the image should be drawn.
+   *                            the image should be drawn. This area represents
+   *                            the image itself in its correct position as defined
+   *                            with the background-position css property.
    *   @param aFill             The area to be filled with copies of the image.
+   *   @param aRepeatSize       The distance between the positions of two subsequent
+   *                            repeats of the image. Sizes larger than aDest.Size()
+   *                            create gaps between the images.
    *   @param aAnchor           A point in aFill which we will ensure is
    *                            pixel-aligned in the output.
    *   @param aDirty            Pixels outside this area may be skipped.
@@ -1739,9 +1758,10 @@ public:
                                         nsPresContext*      aPresContext,
                                         imgIContainer*      aImage,
                                         const CSSIntSize&   aImageSize,
-                                        Filter              aGraphicsFilter,
+                                        SamplingFilter      aSamplingFilter,
                                         const nsRect&       aDest,
                                         const nsRect&       aFill,
+                                        const nsSize&       aRepeatSize,
                                         const nsPoint&      aAnchor,
                                         const nsRect&       aDirty,
                                         uint32_t            aImageFlags,
@@ -1765,7 +1785,7 @@ public:
   static DrawResult DrawImage(gfxContext&         aContext,
                               nsPresContext*      aPresContext,
                               imgIContainer*      aImage,
-                              Filter              aGraphicsFilter,
+                              const SamplingFilter aSamplingFilter,
                               const nsRect&       aDest,
                               const nsRect&       aFill,
                               const nsPoint&      aAnchor,
@@ -1819,7 +1839,7 @@ public:
   static DrawResult DrawSingleUnscaledImage(gfxContext&          aContext,
                                             nsPresContext*       aPresContext,
                                             imgIContainer*       aImage,
-                                            Filter               aGraphicsFilter,
+                                            const SamplingFilter aSamplingFilter,
                                             const nsPoint&       aDest,
                                             const nsRect*        aDirty,
                                             uint32_t             aImageFlags,
@@ -1850,7 +1870,7 @@ public:
   static DrawResult DrawSingleImage(gfxContext&         aContext,
                                     nsPresContext*      aPresContext,
                                     imgIContainer*      aImage,
-                                    Filter              aGraphicsFilter,
+                                    const SamplingFilter aSamplingFilter,
                                     const nsRect&       aDest,
                                     const nsRect&       aDirty,
                                     const mozilla::SVGImageContext* aSVGContext,
@@ -2213,18 +2233,6 @@ public:
                                         bool clear);
 
   /**
-   * Given a frame with possibly animated content, finds the content node
-   * that contains its animations as well as the frame's pseudo-element type
-   * relative to the resulting content node. Returns true if animated content
-   * was found, otherwise it returns false and the output parameters are
-   * undefined.
-   */
-  static bool GetAnimationContent(const nsIFrame* aFrame,
-                                  nsIContent* &aContentResult,
-                                  mozilla::CSSPseudoElementType
-                                    &aPseudoTypeResult);
-
-  /**
    * Returns true if the frame has current (i.e. running or scheduled-to-run)
    * animations or transitions for the property.
    */
@@ -2310,7 +2318,7 @@ public:
   static bool IsGridTemplateSubgridValueEnabled();
 
   /**
-   * Checks whether support for the CSS text-align (and -moz-text-align-last)
+   * Checks whether support for the CSS text-align (and text-align-last)
    * 'true' value is enabled.
    */
   static bool IsTextAlignUnsafeValueEnabled();
@@ -2562,11 +2570,12 @@ public:
    */
   static void
   TransformToAncestorAndCombineRegions(
-    const nsRect& aBounds,
+    const nsRegion& aRegion,
     nsIFrame* aFrame,
     const nsIFrame* aAncestorFrame,
     nsRegion* aPreciseTargetDest,
-    nsRegion* aImpreciseTargetDest);
+    nsRegion* aImpreciseTargetDest,
+    mozilla::Maybe<Matrix4x4>* aMatrixCache);
 
   /**
    * Populate aOutSize with the size of the content viewer corresponding

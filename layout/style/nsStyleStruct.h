@@ -120,8 +120,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleFont
 
   nsChangeHint CalcDifference(const nsStyleFont& aOther) const;
   static nsChangeHint MaxDifference() {
-    return NS_CombineHint(NS_STYLE_HINT_REFLOW,
-                          nsChangeHint_NeutralChange);
+    return NS_STYLE_HINT_REFLOW |
+           nsChangeHint_NeutralChange;
   }
   static nsChangeHint DifferenceAlwaysHandledForDescendants() {
     // CalcDifference never returns the reflow hints that are sometimes
@@ -228,7 +228,7 @@ public:
   bool HasCalc();
   uint32_t Hash(PLDHashNumber aHash);
 
-  NS_INLINE_DECL_REFCOUNTING(nsStyleGradient)
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(nsStyleGradient)
 
 private:
   // Private destructor, to discourage deletion outside of Release():
@@ -472,12 +472,6 @@ private:
 };
 
 struct nsStyleImageLayers {
-  nsStyleImageLayers();
-  nsStyleImageLayers(const nsStyleImageLayers &aSource);
-  ~nsStyleImageLayers() {
-    MOZ_COUNT_DTOR(nsStyleImageLayers);
-  }
-
   // Indices into kBackgroundLayerTable and kMaskLayerTable
   enum {
     shorthand = 0,
@@ -493,6 +487,17 @@ struct nsStyleImageLayers {
     maskMode,
     composite
   };
+
+  enum class LayerType : uint8_t {
+    Background = 0,
+    Mask
+  };
+
+  explicit nsStyleImageLayers(LayerType aType);
+  nsStyleImageLayers(const nsStyleImageLayers &aSource);
+  ~nsStyleImageLayers() {
+    MOZ_COUNT_DTOR(nsStyleImageLayers);
+  }
 
   struct Position;
   friend struct Position;
@@ -598,13 +603,15 @@ struct nsStyleImageLayers {
     // Initialize nothing
     Repeat() {}
 
-    bool IsInitialValue() const {
-      return mXRepeat == NS_STYLE_IMAGELAYER_REPEAT_REPEAT &&
-             mYRepeat == NS_STYLE_IMAGELAYER_REPEAT_REPEAT;
+    bool IsInitialValue(LayerType aType) const;
+
+    bool DependsOnPositioningAreaSize() const {
+      return mXRepeat == NS_STYLE_IMAGELAYER_REPEAT_SPACE ||
+             mYRepeat == NS_STYLE_IMAGELAYER_REPEAT_SPACE;
     }
 
     // Initialize to initial values
-    void SetInitialValues();
+    void SetInitialValues(LayerType aType);
 
     bool operator==(const Repeat& aOther) const {
       return mXRepeat == aOther.mXRepeat &&
@@ -656,9 +663,13 @@ struct nsStyleImageLayers {
                                   // NS_STYLE_MASK_MODE_MATCH_SOURCE.
     Repeat        mRepeat;        // [reset] See nsStyleConsts.h
 
-    // Initializes only mImage
+    // This constructor does not initialize mRepeat or mOrigin and Initialize()
+    // must be called to do that.
     Layer();
     ~Layer();
+
+    // Initialize mRepeat and mOrigin by specified layer type
+    void Initialize(LayerType aType);
 
     // Register/unregister images with the document. We do this only
     // after the dust has settled in ComputeBackgroundData.
@@ -822,25 +833,24 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleMargin
     return nsChangeHint(0);
   }
 
-  nsStyleSides  mMargin;          // [reset] coord, percent, calc, auto
-
   bool GetMargin(nsMargin& aMargin) const
   {
-    if (mMargin.ConvertsToLength()) {
-      GetMarginNoPercentage(aMargin);
-      return true;
+    if (!mMargin.ConvertsToLength()) {
+      return false;
     }
 
-    return false;
-  }
-
-  void GetMarginNoPercentage(nsMargin& aMargin) const
-  {
-    MOZ_ASSERT(mMargin.ConvertsToLength());
     NS_FOR_CSS_SIDES(side) {
       aMargin.Side(side) = mMargin.ToLength(side);
     }
+    return true;
   }
+
+  // Return true if either the start or end side in the axis is 'auto'.
+  // (defined in WritingModes.h since we need the full WritingMode type)
+  inline bool HasBlockAxisAuto(mozilla::WritingMode aWM) const;
+  inline bool HasInlineAxisAuto(mozilla::WritingMode aWM) const;
+
+  nsStyleSides  mMargin; // [reset] coord, percent, calc, auto
 };
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePadding
@@ -860,8 +870,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePadding
 
   nsChangeHint CalcDifference(const nsStylePadding& aOther) const;
   static nsChangeHint MaxDifference() {
-    return NS_SubtractHint(NS_STYLE_HINT_REFLOW,
-                           nsChangeHint_ClearDescendantIntrinsics);
+    return NS_STYLE_HINT_REFLOW & ~nsChangeHint_ClearDescendantIntrinsics;
   }
   static nsChangeHint DifferenceAlwaysHandledForDescendants() {
     // CalcDifference can return nsChangeHint_ClearAncestorIntrinsics as
@@ -883,21 +892,15 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePadding
 
   bool GetPadding(nsMargin& aPadding) const
   {
-    if (mPadding.ConvertsToLength()) {
-      GetPaddingNoPercentage(aPadding);
-      return true;
+    if (!mPadding.ConvertsToLength()) {
+      return false;
     }
 
-    return false;
-  }
-
-  void GetPaddingNoPercentage(nsMargin& aPadding) const
-  {
-    MOZ_ASSERT(mPadding.ConvertsToLength());
     NS_FOR_CSS_SIDES(side) {
       // Clamp negative calc() to 0.
       aPadding.Side(side) = std::max(mPadding.ToLength(side), 0);
     }
+    return true;
   }
 };
 
@@ -1300,13 +1303,13 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleOutline
       FreeByObjectID(mozilla::eArenaObjectID_nsStyleOutline, this);
   }
 
-  void RecalcData(nsPresContext* aContext);
+  void RecalcData();
   nsChangeHint CalcDifference(const nsStyleOutline& aOther) const;
   static nsChangeHint MaxDifference() {
-    return NS_CombineHint(NS_CombineHint(nsChangeHint_UpdateOverflow,
-                                         nsChangeHint_SchedulePaint),
-                          NS_CombineHint(nsChangeHint_RepaintFrame,
-                                         nsChangeHint_NeutralChange));
+    return nsChangeHint_UpdateOverflow |
+           nsChangeHint_SchedulePaint |
+           nsChangeHint_RepaintFrame |
+           nsChangeHint_NeutralChange;
   }
   static nsChangeHint DifferenceAlwaysHandledForDescendants() {
     // CalcDifference never returns the reflow hints that are sometimes
@@ -1316,14 +1319,17 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleOutline
 
   nsStyleCorners  mOutlineRadius; // [reset] coord, percent, calc
 
-  // Note that this is a specified value.  You can get the actual values
-  // with GetOutlineWidth.  You cannot get the computed value directly.
+  // This is the specified value of outline-width, but with length values
+  // computed to absolute.  mActualOutlineWidth stores the outline-width
+  // value used by layout.  (We must store mOutlineWidth for the same
+  // style struct resolution reasons that we do nsStyleBorder::mBorder;
+  // see that field's comment.)
   nsStyleCoord  mOutlineWidth;    // [reset] coord, enum (see nsStyleConsts.h)
   nscoord       mOutlineOffset;   // [reset]
 
   nscoord GetOutlineWidth() const
   {
-    return mCachedOutlineWidth;
+    return mActualOutlineWidth;
   }
 
   uint8_t GetOutlineStyle() const
@@ -1364,9 +1370,10 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleOutline
   }
 
 protected:
-  // This value is the actual value, so it's rounded to the nearest device
-  // pixel.
-  nscoord       mCachedOutlineWidth;
+  // The actual value of outline-width is the computed value (an absolute
+  // length, forced to zero when outline-style is none) rounded to device
+  // pixels.  This is the value used by layout.
+  nscoord       mActualOutlineWidth;
 
   nscolor       mOutlineColor;    // [reset]
 
@@ -1385,7 +1392,7 @@ class nsStyleQuoteValues
 {
 public:
   typedef nsTArray<std::pair<nsString, nsString>> QuotePairArray;
-  NS_INLINE_DECL_REFCOUNTING(nsStyleQuoteValues);
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(nsStyleQuoteValues);
   QuotePairArray mQuotePairs;
 
 private:
@@ -1411,8 +1418,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleList
 
   nsChangeHint CalcDifference(const nsStyleList& aOther) const;
   static nsChangeHint MaxDifference() {
-    return NS_CombineHint(NS_STYLE_HINT_FRAMECHANGE,
-                          nsChangeHint_NeutralChange);
+    return NS_STYLE_HINT_FRAMECHANGE |
+           nsChangeHint_NeutralChange;
   }
   static nsChangeHint DifferenceAlwaysHandledForDescendants() {
     // CalcDifference never returns the reflow hints that are sometimes
@@ -1446,7 +1453,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleList
   {
     // NB: This function is called off-main-thread during parallel restyle, but
     // only with builtin styles that use dummy refcounting.
-    MOZ_ASSERT(NS_IsMainThread() || aStyle->IsDependentStyle());
+    MOZ_ASSERT(NS_IsMainThread() || !aStyle->IsDependentStyle());
     mCounterStyle = aStyle;
   }
   void SetListStyleType(const nsSubstring& aType,
@@ -1637,11 +1644,11 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePosition
   nsChangeHint CalcDifference(const nsStylePosition& aOther,
                               const nsStyleVisibility* aOldStyleVisibility) const;
   static nsChangeHint MaxDifference() {
-    return NS_CombineHint(NS_STYLE_HINT_REFLOW,
-                          nsChangeHint(nsChangeHint_NeutralChange |
-                                       nsChangeHint_RecomputePosition |
-                                       nsChangeHint_UpdateParentOverflow |
-                                       nsChangeHint_UpdateComputedBSize));
+    return NS_STYLE_HINT_REFLOW |
+           nsChangeHint_NeutralChange |
+           nsChangeHint_RecomputePosition |
+           nsChangeHint_UpdateParentOverflow |
+           nsChangeHint_UpdateComputedBSize;
   }
   static nsChangeHint DifferenceAlwaysHandledForDescendants() {
     // CalcDifference can return all of the reflow hints that are
@@ -1729,8 +1736,8 @@ public:
   nsStyleGridLine mGridColumnEnd;
   nsStyleGridLine mGridRowStart;
   nsStyleGridLine mGridRowEnd;
-  nscoord         mGridColumnGap;       // [reset] coord, calc
-  nscoord         mGridRowGap;          // [reset] coord, calc
+  nsStyleCoord    mGridColumnGap;       // [reset] coord, percent, calc
+  nsStyleCoord    mGridRowGap;          // [reset] coord, percent, calc
 
   // FIXME: Logical-coordinate equivalents to these WidthDepends... and
   // HeightDepends... methods have been introduced (see below); we probably
@@ -1994,7 +2001,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleText
   uint8_t mTextTransform;               // [inherited] see nsStyleConsts.h
   uint8_t mWhiteSpace;                  // [inherited] see nsStyleConsts.h
   uint8_t mWordBreak;                   // [inherited] see nsStyleConsts.h
-  uint8_t mWordWrap;                    // [inherited] see nsStyleConsts.h
+  uint8_t mOverflowWrap;                // [inherited] see nsStyleConsts.h
   uint8_t mHyphens;                     // [inherited] see nsStyleConsts.h
   uint8_t mRubyAlign;                   // [inherited] see nsStyleConsts.h
   uint8_t mRubyPosition;                // [inherited] see nsStyleConsts.h
@@ -2051,7 +2058,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleText
 
   bool WordCanWrapStyle() const {
     return WhiteSpaceCanWrapStyle() &&
-           mWordWrap == NS_STYLE_WORDWRAP_BREAK_WORD;
+           mOverflowWrap == NS_STYLE_OVERFLOWWRAP_BREAK_WORD;
   }
 
   bool HasTextEmphasis() const {
@@ -3054,9 +3061,9 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleUserInterface
 
   nsChangeHint CalcDifference(const nsStyleUserInterface& aOther) const;
   static nsChangeHint MaxDifference() {
-    return NS_CombineHint(NS_STYLE_HINT_FRAMECHANGE,
-                          NS_CombineHint(nsChangeHint_UpdateCursor,
-                                         nsChangeHint_NeutralChange));
+    return NS_STYLE_HINT_FRAMECHANGE |
+           nsChangeHint_UpdateCursor |
+           nsChangeHint_NeutralChange;
   }
   static nsChangeHint DifferenceAlwaysHandledForDescendants() {
     // CalcDifference never returns the reflow hints that are sometimes
@@ -3143,8 +3150,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleColumn
 
   nsChangeHint CalcDifference(const nsStyleColumn& aOther) const;
   static nsChangeHint MaxDifference() {
-    return NS_CombineHint(NS_STYLE_HINT_FRAMECHANGE,
-                          nsChangeHint_NeutralChange);
+    return NS_STYLE_HINT_FRAMECHANGE |
+           nsChangeHint_NeutralChange;
   }
   static nsChangeHint DifferenceAlwaysHandledForDescendants() {
     // CalcDifference never returns the reflow hints that are sometimes
@@ -3193,7 +3200,7 @@ enum nsStyleSVGPaintType {
   eStyleSVGPaintType_ContextStroke
 };
 
-enum nsStyleSVGOpacitySource {
+enum nsStyleSVGOpacitySource : uint8_t {
   eStyleSVGOpacitySource_Normal,
   eStyleSVGOpacitySource_ContextFillOpacity,
   eStyleSVGOpacitySource_ContextStrokeOpacity
@@ -3240,9 +3247,10 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVG
 
   nsChangeHint CalcDifference(const nsStyleSVG& aOther) const;
   static nsChangeHint MaxDifference() {
-    return NS_CombineHint(NS_CombineHint(nsChangeHint_UpdateEffects,
-             NS_CombineHint(nsChangeHint_NeedReflow, nsChangeHint_NeedDirtyReflow)), // XXX remove nsChangeHint_NeedDirtyReflow: bug 876085
-                                         nsChangeHint_RepaintFrame);
+    return nsChangeHint_UpdateEffects |
+           nsChangeHint_NeedReflow |
+           nsChangeHint_NeedDirtyReflow | // XXX remove me: bug 876085
+           nsChangeHint_RepaintFrame;
   }
   static nsChangeHint DifferenceAlwaysHandledForDescendants() {
     // CalcDifference never returns nsChangeHint_NeedReflow as a hint
@@ -3256,7 +3264,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVG
   nsCOMPtr<nsIURI> mMarkerEnd;        // [inherited]
   nsCOMPtr<nsIURI> mMarkerMid;        // [inherited]
   nsCOMPtr<nsIURI> mMarkerStart;      // [inherited]
-  nsStyleCoord    *mStrokeDasharray;  // [inherited] coord, percent, factor
+  nsTArray<nsStyleCoord> mStrokeDasharray;  // [inherited] coord, percent, factor
 
   nsStyleCoord     mStrokeDashoffset; // [inherited] coord, percent, factor
   nsStyleCoord     mStrokeWidth;      // [inherited] coord, percent, factor
@@ -3265,7 +3273,6 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVG
   float            mStrokeMiterlimit; // [inherited]
   float            mStrokeOpacity;    // [inherited]
 
-  uint32_t         mStrokeDasharrayLength;
   uint8_t          mClipRule;         // [inherited]
   uint8_t          mColorInterpolation; // [inherited] see nsStyleConsts.h
   uint8_t          mColorInterpolationFilters; // [inherited] see nsStyleConsts.h
@@ -3276,16 +3283,46 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVG
   uint8_t          mStrokeLinejoin;   // [inherited] see nsStyleConsts.h
   uint8_t          mTextAnchor;       // [inherited] see nsStyleConsts.h
 
-  // In SVG glyphs, whether we inherit fill or stroke opacity from the outer
-  // text object.
-  // Use 3 bits to avoid signedness problems in MSVC.
-  nsStyleSVGOpacitySource mFillOpacitySource    : 3;
-  nsStyleSVGOpacitySource mStrokeOpacitySource  : 3;
+  nsStyleSVGOpacitySource FillOpacitySource() const {
+    uint8_t value = (mContextFlags & FILL_OPACITY_SOURCE_MASK) >>
+                    FILL_OPACITY_SOURCE_SHIFT;
+    return nsStyleSVGOpacitySource(value);
+  }
+  nsStyleSVGOpacitySource StrokeOpacitySource() const {
+    uint8_t value = (mContextFlags & STROKE_OPACITY_SOURCE_MASK) >>
+                    STROKE_OPACITY_SOURCE_SHIFT;
+    return nsStyleSVGOpacitySource(value);
+  }
+  bool StrokeDasharrayFromObject() const {
+    return mContextFlags & STROKE_DASHARRAY_CONTEXT;
+  }
+  bool StrokeDashoffsetFromObject() const {
+    return mContextFlags & STROKE_DASHOFFSET_CONTEXT;
+  }
+  bool StrokeWidthFromObject() const {
+    return mContextFlags & STROKE_WIDTH_CONTEXT;
+  }
 
-  // SVG glyph outer object inheritance for other properties
-  bool mStrokeDasharrayFromObject   : 1;
-  bool mStrokeDashoffsetFromObject  : 1;
-  bool mStrokeWidthFromObject       : 1;
+  void SetFillOpacitySource(nsStyleSVGOpacitySource aValue) {
+    mContextFlags = (mContextFlags & ~FILL_OPACITY_SOURCE_MASK) |
+                    (aValue << FILL_OPACITY_SOURCE_SHIFT);
+  }
+  void SetStrokeOpacitySource(nsStyleSVGOpacitySource aValue) {
+    mContextFlags = (mContextFlags & ~STROKE_OPACITY_SOURCE_MASK) |
+                    (aValue << STROKE_OPACITY_SOURCE_SHIFT);
+  }
+  void SetStrokeDasharrayFromObject(bool aValue) {
+    mContextFlags = (mContextFlags & ~STROKE_DASHARRAY_CONTEXT) |
+                    (aValue ? STROKE_DASHARRAY_CONTEXT : 0);
+  }
+  void SetStrokeDashoffsetFromObject(bool aValue) {
+    mContextFlags = (mContextFlags & ~STROKE_DASHOFFSET_CONTEXT) |
+                    (aValue ? STROKE_DASHOFFSET_CONTEXT : 0);
+  }
+  void SetStrokeWidthFromObject(bool aValue) {
+    mContextFlags = (mContextFlags & ~STROKE_WIDTH_CONTEXT) |
+                    (aValue ? STROKE_WIDTH_CONTEXT : 0);
+  }
 
   bool HasMarker() const {
     return mMarkerStart || mMarkerMid || mMarkerEnd;
@@ -3306,6 +3343,22 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVG
   bool HasFill() const {
     return mFill.mType != eStyleSVGPaintType_None && mFillOpacity > 0;
   }
+
+private:
+  // Flags to represent the use of context-fill and context-stroke
+  // for fill-opacity or stroke-opacity, and context-value for stroke-dasharray,
+  // stroke-dashoffset and stroke-width.
+  enum {
+    FILL_OPACITY_SOURCE_MASK   = 0x03,  // fill-opacity: context-{fill,stroke}
+    STROKE_OPACITY_SOURCE_MASK = 0x0C,  // stroke-opacity: context-{fill,stroke}
+    STROKE_DASHARRAY_CONTEXT   = 0x10,  // stroke-dasharray: context-value
+    STROKE_DASHOFFSET_CONTEXT  = 0x20,  // stroke-dashoffset: context-value
+    STROKE_WIDTH_CONTEXT       = 0x40,  // stroke-width: context-value
+    FILL_OPACITY_SOURCE_SHIFT   = 0,
+    STROKE_OPACITY_SOURCE_SHIFT = 2,
+  };
+
+  uint8_t          mContextFlags;     // [inherited]
 };
 
 class nsStyleBasicShape final
@@ -3525,6 +3578,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVGReset
     return nsChangeHint_UpdateEffects |
            nsChangeHint_UpdateOverflow |
            nsChangeHint_NeutralChange |
+           nsChangeHint_UpdateBackgroundPosition |
            NS_STYLE_HINT_REFLOW;
   }
   static nsChangeHint DifferenceAlwaysHandledForDescendants() {
@@ -3544,7 +3598,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVGReset
   }
 
   nsStyleImageLayers    mMask;
-  nsStyleClipPath mClipPath;          // [reset]
+  nsStyleClipPath  mClipPath;         // [reset]
   nscolor          mStopColor;        // [reset]
   nscolor          mFloodColor;       // [reset]
   nscolor          mLightingColor;    // [reset]

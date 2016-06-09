@@ -2623,7 +2623,6 @@ Promise::ResolveInternal(JSContext* aCx,
   mResolvePending = true;
 
   if (aValue.isObject()) {
-    AutoDontReportUncaught silenceReporting(aCx);
     JS::Rooted<JSObject*> valueObj(aCx, &aValue.toObject());
 
     // Thenables.

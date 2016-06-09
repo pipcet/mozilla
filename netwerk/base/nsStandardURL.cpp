@@ -28,6 +28,9 @@
 using mozilla::dom::EncodingUtils;
 using namespace mozilla::ipc;
 
+namespace mozilla {
+namespace net {
+
 static NS_DEFINE_CID(kThisImplCID, NS_THIS_STANDARDURL_IMPL_CID);
 static NS_DEFINE_CID(kStandardURLCID, NS_STANDARDURL_CID);
 
@@ -40,13 +43,13 @@ char nsStandardURL::gHostLimitDigits[] = { '/', '\\', '?', '#', 0 };
 //
 // setenv NSPR_LOG_MODULES nsStandardURL:5
 //
-static mozilla::LazyLogModule gStandardURLLog("nsStandardURL");
+static LazyLogModule gStandardURLLog("nsStandardURL");
 
 // The Chromium code defines its own LOG macro which we don't want
 #undef LOG
-#define LOG(args)     MOZ_LOG(gStandardURLLog, mozilla::LogLevel::Debug, args)
+#define LOG(args)     MOZ_LOG(gStandardURLLog, LogLevel::Debug, args)
 #undef LOG_ENABLED
-#define LOG_ENABLED() MOZ_LOG_TEST(gStandardURLLog, mozilla::LogLevel::Debug)
+#define LOG_ENABLED() MOZ_LOG_TEST(gStandardURLLog, LogLevel::Debug)
 
 //----------------------------------------------------------------------------
 
@@ -263,6 +266,7 @@ nsStandardURL::nsStandardURL(bool aSupportsFileURL, bool aTrackURL)
     mParser = net_GetStdURLParser();
 
 #ifdef DEBUG_DUMP_URLS_AT_SHUTDOWN
+    memset(&mDebugCList, 0, sizeof(mDebugCList));
     if (NS_IsMainThread()) {
         if (aTrackURL) {
             PR_APPEND_LINK(&mDebugCList, &gAllURLs);
@@ -469,19 +473,28 @@ nsStandardURL::CoalescePath(netCoalesceFlags coalesceFlag, char *path)
 }
 
 uint32_t
-nsStandardURL::AppendSegmentToBuf(char *buf, uint32_t i, const char *str, URLSegment &seg, const nsCString *escapedStr, bool useEscaped)
+nsStandardURL::AppendSegmentToBuf(char *buf, uint32_t i, const char *str,
+                                  const URLSegment &segInput, URLSegment &segOutput,
+                                  const nsCString *escapedStr,
+                                  bool useEscaped, int32_t *diff)
 {
-    if (seg.mLen > 0) {
+    MOZ_ASSERT(segInput.mLen == segOutput.mLen);
+
+    if (diff) *diff = 0;
+
+    if (segInput.mLen > 0) {
         if (useEscaped) {
-            seg.mLen = escapedStr->Length();
-            memcpy(buf + i, escapedStr->get(), seg.mLen);
+            MOZ_ASSERT(diff);
+            segOutput.mLen = escapedStr->Length();
+            *diff = segOutput.mLen - segInput.mLen;
+            memcpy(buf + i, escapedStr->get(), segOutput.mLen);
+        } else {
+            memcpy(buf + i, str + segInput.mPos, segInput.mLen);
         }
-        else
-            memcpy(buf + i, str + seg.mPos, seg.mLen);
-        seg.mPos = i;
-        i += seg.mLen;
+        segOutput.mPos = i;
+        i += segOutput.mLen;
     } else {
-        seg.mPos = i;
+        segOutput.mPos = i;
     }
     return i;
 }
@@ -595,18 +608,33 @@ nsStandardURL::BuildNormalizedSpec(const char *spec)
         }
     }
 
+    // We must take a copy of every single segment because they are pointing to
+    // the |spec| while we are changing their value, in case we must use
+    // encoded strings.
+    URLSegment username(mUsername);
+    URLSegment password(mPassword);
+    URLSegment host(mHost);
+    URLSegment path(mPath);
+    URLSegment filepath(mFilepath);
+    URLSegment directory(mDirectory);
+    URLSegment basename(mBasename);
+    URLSegment extension(mExtension);
+    URLSegment query(mQuery);
+    URLSegment ref(mRef);
+
     //
     // generate the normalized URL string
     //
     // approxLen should be correct or 1 high
-    if (!mSpec.SetLength(approxLen+1, mozilla::fallible)) // buf needs a trailing '\0' below
+    if (!mSpec.SetLength(approxLen+1, fallible)) // buf needs a trailing '\0' below
         return NS_ERROR_OUT_OF_MEMORY;
     char *buf;
     mSpec.BeginWriting(buf);
     uint32_t i = 0;
+    int32_t diff = 0;
 
     if (mScheme.mLen > 0) {
-        i = AppendSegmentToBuf(buf, i, spec, mScheme);
+        i = AppendSegmentToBuf(buf, i, spec, mScheme, mScheme);
         net_ToLowerCase(buf + mScheme.mPos, mScheme.mLen);
         i = AppendToBuf(buf, i, "://", 3);
     }
@@ -616,15 +644,22 @@ nsStandardURL::BuildNormalizedSpec(const char *spec)
 
     // append authority
     if (mUsername.mLen > 0) {
-        i = AppendSegmentToBuf(buf, i, spec, mUsername, &encUsername, useEncUsername);
-        if (mPassword.mLen >= 0) {
+        i = AppendSegmentToBuf(buf, i, spec, username, mUsername,
+                               &encUsername, useEncUsername, &diff);
+        ShiftFromPassword(diff);
+        if (password.mLen >= 0) {
             buf[i++] = ':';
-            i = AppendSegmentToBuf(buf, i, spec, mPassword, &encPassword, useEncPassword);
+            i = AppendSegmentToBuf(buf, i, spec, password, mPassword,
+                                   &encPassword, useEncPassword, &diff);
+            ShiftFromHost(diff);
         }
         buf[i++] = '@';
     }
-    if (mHost.mLen > 0) {
-        i = AppendSegmentToBuf(buf, i, spec, mHost, &encHost, useEncHost);
+    if (host.mLen > 0) {
+        i = AppendSegmentToBuf(buf, i, spec, host, mHost, &encHost, useEncHost,
+                               &diff);
+        ShiftFromPath(diff);
+
         net_ToLowerCase(buf + mHost.mPos, mHost.mLen);
         MOZ_ASSERT(mPort >= -1, "Invalid negative mPort");
         if (mPort != -1 && mPort != mDefaultPort) {
@@ -649,21 +684,23 @@ nsStandardURL::BuildNormalizedSpec(const char *spec)
     }
     else {
         uint32_t leadingSlash = 0;
-        if (spec[mPath.mPos] != '/') {
+        if (spec[path.mPos] != '/') {
             LOG(("adding leading slash to path\n"));
             leadingSlash = 1;
             buf[i++] = '/';
             // basename must exist, even if empty (bugs 113508, 429347)
             if (mBasename.mLen == -1) {
-                mBasename.mPos = i;
-                mBasename.mLen = 0;
+                mBasename.mPos = basename.mPos = i;
+                mBasename.mLen = basename.mLen = 0;
             }
         }
 
         // record corrected (file)path starting position
         mPath.mPos = mFilepath.mPos = i - leadingSlash;
 
-        i = AppendSegmentToBuf(buf, i, spec, mDirectory, &encDirectory, useEncDirectory);
+        i = AppendSegmentToBuf(buf, i, spec, directory, mDirectory,
+                               &encDirectory, useEncDirectory, &diff);
+        ShiftFromBasename(diff);
 
         // the directory must end with a '/'
         if (buf[i-1] != '/') {
@@ -671,7 +708,9 @@ nsStandardURL::BuildNormalizedSpec(const char *spec)
             mDirectory.mLen++;
         }
 
-        i = AppendSegmentToBuf(buf, i, spec, mBasename, &encBasename, useEncBasename);
+        i = AppendSegmentToBuf(buf, i, spec, basename, mBasename,
+                               &encBasename, useEncBasename, &diff);
+        ShiftFromExtension(diff);
 
         // make corrections to directory segment if leadingSlash
         if (leadingSlash) {
@@ -684,18 +723,24 @@ nsStandardURL::BuildNormalizedSpec(const char *spec)
 
         if (mExtension.mLen >= 0) {
             buf[i++] = '.';
-            i = AppendSegmentToBuf(buf, i, spec, mExtension, &encExtension, useEncExtension);
+            i = AppendSegmentToBuf(buf, i, spec, extension, mExtension,
+                                   &encExtension, useEncExtension, &diff);
+            ShiftFromQuery(diff);
         }
         // calculate corrected filepath length
         mFilepath.mLen = i - mFilepath.mPos;
 
         if (mQuery.mLen >= 0) {
             buf[i++] = '?';
-            i = AppendSegmentToBuf(buf, i, spec, mQuery, &encQuery, useEncQuery);
+            i = AppendSegmentToBuf(buf, i, spec, query, mQuery,
+                                   &encQuery, useEncQuery,
+                                   &diff);
+            ShiftFromRef(diff);
         }
         if (mRef.mLen >= 0) {
             buf[i++] = '#';
-            i = AppendSegmentToBuf(buf, i, spec, mRef, &encRef, useEncRef);
+            i = AppendSegmentToBuf(buf, i, spec, ref, mRef, &encRef, useEncRef,
+                                   &diff);
         }
         // calculate corrected path length
         mPath.mLen = i - mPath.mPos;
@@ -958,6 +1003,39 @@ nsStandardURL::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
 #undef GOT_PREF
 }
 
+#define SHIFT_FROM(name, what)                    \
+void                                              \
+nsStandardURL::name(int32_t diff)                 \
+{                                                 \
+    if (!diff) return;                            \
+    if (what.mLen >= 0) {                         \
+        CheckedInt<int32_t> pos = what.mPos;      \
+        pos += diff;                              \
+        MOZ_ASSERT(pos.isValid());                \
+        what.mPos = pos.value();                  \
+    }
+
+#define SHIFT_FROM_NEXT(name, what, next)         \
+    SHIFT_FROM(name, what)                        \
+    next(diff);                                   \
+}
+
+#define SHIFT_FROM_LAST(name, what)               \
+    SHIFT_FROM(name, what)                        \
+}
+
+SHIFT_FROM_NEXT(ShiftFromAuthority, mAuthority, ShiftFromUsername)
+SHIFT_FROM_NEXT(ShiftFromUsername, mUsername, ShiftFromPassword)
+SHIFT_FROM_NEXT(ShiftFromPassword, mPassword, ShiftFromHost)
+SHIFT_FROM_NEXT(ShiftFromHost, mHost, ShiftFromPath)
+SHIFT_FROM_NEXT(ShiftFromPath, mPath, ShiftFromFilepath)
+SHIFT_FROM_NEXT(ShiftFromFilepath, mFilepath, ShiftFromDirectory)
+SHIFT_FROM_NEXT(ShiftFromDirectory, mDirectory, ShiftFromBasename)
+SHIFT_FROM_NEXT(ShiftFromBasename, mBasename, ShiftFromExtension)
+SHIFT_FROM_NEXT(ShiftFromExtension, mExtension, ShiftFromQuery)
+SHIFT_FROM_NEXT(ShiftFromQuery, mQuery, ShiftFromRef)
+SHIFT_FROM_LAST(ShiftFromRef, mRef)
+
 //----------------------------------------------------------------------------
 // nsStandardURL::nsISupports
 //----------------------------------------------------------------------------
@@ -1216,21 +1294,17 @@ nsStandardURL::SetSpec(const nsACString &input)
     ENSURE_MUTABLE();
 
     const nsPromiseFlatCString &flat = PromiseFlatCString(input);
-    const char *spec = flat.get();
-    int32_t specLength = flat.Length();
-
-    LOG(("nsStandardURL::SetSpec [spec=%s]\n", spec));
-
-    if (!spec || !*spec)
-        return NS_ERROR_MALFORMED_URI;
+    LOG(("nsStandardURL::SetSpec [spec=%s]\n", flat.get()));
 
     if (input.Length() > (uint32_t) net_GetURLMaxLength()) {
         return NS_ERROR_MALFORMED_URI;
     }
 
-    // NUL characters aren't allowed
-    // \r\n\t are stripped out instead of returning error(see below)
-    if (input.Contains('\0')) {
+    // filter out unexpected chars "\r\n\t" if necessary
+    nsAutoCString filteredURI;
+    net_FilterURIString(flat, filteredURI);
+
+    if (filteredURI.Length() == 0) {
         return NS_ERROR_MALFORMED_URI;
     }
 
@@ -1238,14 +1312,6 @@ nsStandardURL::SetSpec(const nsACString &input)
     nsStandardURL prevURL(false,false);
     prevURL.CopyMembers(this, eHonorRef);
     Clear();
-
-    // filter out unexpected chars "\r\n\t" if necessary
-    nsAutoCString filteredURI;
-    if (!net_FilterURIString(spec, filteredURI)) {
-        // Copy the content into filteredURI even if no whitespace was stripped.
-        // We need a non-const buffer to perform backslash replacement.
-        filteredURI = input;
-    }
 
     if (IsSpecialProtocol(filteredURI)) {
         // Bug 652186: Replace all backslashes with slashes when parsing paths
@@ -1265,9 +1331,8 @@ nsStandardURL::SetSpec(const nsACString &input)
         }
     }
 
-    spec = filteredURI.get();
-    specLength = filteredURI.Length();
-
+    const char *spec = filteredURI.get();
+    int32_t specLength = filteredURI.Length();
 
     // parse the given URL...
     nsresult rv = ParseURL(spec, specLength);
@@ -1783,7 +1848,7 @@ void
 nsStandardURL::ReplacePortInSpec(int32_t aNewPort)
 {
     MOZ_ASSERT(mMutable, "Caller should ensure we're mutable");
-    NS_ASSERTION(aNewPort != mDefaultPort,
+    NS_ASSERTION(aNewPort != mDefaultPort || mDefaultPort == -1,
                  "Caller should check its passed-in value and pass -1 instead of "
                  "mDefaultPort, to avoid encoding default port into mSpec");
 
@@ -2045,19 +2110,12 @@ NS_IMETHODIMP
 nsStandardURL::Resolve(const nsACString &in, nsACString &out)
 {
     const nsPromiseFlatCString &flat = PromiseFlatCString(in);
-    const char *relpath = flat.get();
-
     // filter out unexpected chars "\r\n\t" if necessary
     nsAutoCString buf;
-    int32_t relpathLen;
-    if (!net_FilterURIString(relpath, buf)) {
-        // Copy the content into filteredURI even if no whitespace was stripped.
-        // We need a non-const buffer to perform backslash replacement.
-        buf = in;
-    }
+    net_FilterURIString(flat, buf);
 
-    relpath = buf.get();
-    relpathLen = buf.Length();
+    const char *relpath = buf.get();
+    int32_t relpathLen = buf.Length();
 
     char *result = nullptr;
 
@@ -2463,7 +2521,7 @@ nsStandardURL::SetFilePath(const nsACString &input)
         int32_t dirLen, baseLen, extLen;
         nsresult rv;
 
-        rv = mParser->ParseFilePath(filepath, -1,
+        rv = mParser->ParseFilePath(filepath, flat.Length(),
                                     &dirPos, &dirLen,
                                     &basePos, &baseLen,
                                     &extPos, &extLen);
@@ -2552,7 +2610,7 @@ nsStandardURL::SetQuery(const nsACString &input)
         return NS_OK;
     }
 
-    int32_t queryLen = strlen(query);
+    int32_t queryLen = flat.Length();
     if (query[0] == '?') {
         query++;
         queryLen--;
@@ -2602,10 +2660,6 @@ nsStandardURL::SetRef(const nsACString &input)
 
     LOG(("nsStandardURL::SetRef [ref=%s]\n", ref));
 
-    if (input.Contains('\0')) {
-        return NS_ERROR_MALFORMED_URI;
-    }
-
     if (mPath.mLen < 0)
         return SetPath(flat);
 
@@ -2632,7 +2686,7 @@ nsStandardURL::SetRef(const nsACString &input)
         ref++;
         refLen--;
     }
-    
+
     if (mRef.mLen < 0) {
         mSpec.Append('#');
         ++mPath.mLen;  // Include the # in the path.
@@ -2703,7 +2757,7 @@ nsStandardURL::SetFileName(const nsACString &input)
         URLSegment basename, extension;
 
         // let the parser locate the basename and extension
-        rv = mParser->ParseFileName(filename, -1,
+        rv = mParser->ParseFileName(filename, flat.Length(),
                                     &basename.mPos, &basename.mLen,
                                     &extension.mPos, &extension.mLen);
         if (NS_FAILED(rv)) return rv;
@@ -3185,15 +3239,15 @@ nsStandardURL::Write(nsIObjectOutputStream *stream)
 //---------------------------------------------------------------------------
 
 inline
-mozilla::ipc::StandardURLSegment
+ipc::StandardURLSegment
 ToIPCSegment(const nsStandardURL::URLSegment& aSegment)
 {
-    return mozilla::ipc::StandardURLSegment(aSegment.mPos, aSegment.mLen);
+    return ipc::StandardURLSegment(aSegment.mPos, aSegment.mLen);
 }
 
 inline
 nsStandardURL::URLSegment
-FromIPCSegment(const mozilla::ipc::StandardURLSegment& aSegment)
+FromIPCSegment(const ipc::StandardURLSegment& aSegment)
 {
     return nsStandardURL::URLSegment(aSegment.position(), aSegment.length());
 }
@@ -3352,7 +3406,7 @@ nsStandardURL::GetClassIDNoAlloc(nsCID *aClassIDNoAlloc)
 //----------------------------------------------------------------------------
 
 size_t
-nsStandardURL::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
+nsStandardURL::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
 {
   return mSpec.SizeOfExcludingThisIfUnshared(aMallocSizeOf) +
          mOriginCharset.SizeOfExcludingThisIfUnshared(aMallocSizeOf) +
@@ -3365,6 +3419,9 @@ nsStandardURL::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
 }
 
 size_t
-nsStandardURL::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const {
+nsStandardURL::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const {
   return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
 }
+
+} // namespace net
+} // namespace mozilla

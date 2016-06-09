@@ -943,6 +943,11 @@ public:
 
   NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(RefusedAsyncAnimationProperty, bool)
 
+  NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(FragStretchBSizeProperty, nscoord)
+
+  NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(IBaselinePadProperty, nscoord)
+  NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(BBaselinePadProperty, nscoord)
+
   NS_DECLARE_FRAME_PROPERTY_WITH_DTOR(GenConProperty, ContentArray,
                                       DestroyContentArray)
 
@@ -1158,6 +1163,7 @@ protected:
    * Called when a frame transitions between visibility states (for example,
    * from nonvisible to visible, or from visible to nonvisible).
    *
+   * @param aOldVisibility    The previous visibility state.
    * @param aNewVisibility    The new visibility state.
    * @param aNonvisibleAction A requested action if the frame has become
    *                          nonvisible. If Nothing(), no action is
@@ -1169,7 +1175,8 @@ protected:
    * Subclasses which override this method should call their parent class's
    * implementation.
    */
-  virtual void OnVisibilityChange(Visibility aNewVisibility,
+  virtual void OnVisibilityChange(Visibility aOldVisibility,
+                                  Visibility aNewVisibility,
                                   Maybe<OnNonvisible> aNonvisibleAction = Nothing());
 
 public:
@@ -1355,7 +1362,7 @@ public:
   /**
    * Returns true if this frame is transformed (e.g. has CSS or SVG transforms)
    * or if its parent is an SVG frame that has children-only transforms (e.g.
-   * an SVG viewBox attribute).
+   * an SVG viewBox attribute) or if its transform-style is preserve-3d.
    */
   bool IsTransformed() const;
 
@@ -1424,10 +1431,13 @@ public:
 
   bool ChildrenHavePerspective() const;
 
-  // Calculate the overflow size of all child frames, taking preserve-3d into account
-  void ComputePreserve3DChildrenOverflow(nsOverflowAreas& aOverflowAreas, const nsRect& aBounds);
+  /**
+   * Includes the overflow area of all descendants that participate in the current
+   * 3d context into aOverflowAreas.
+   */
+  void ComputePreserve3DChildrenOverflow(nsOverflowAreas& aOverflowAreas);
 
-  void RecomputePerspectiveChildrenOverflow(const nsIFrame* aStartFrame, const nsRect* aBounds);
+  void RecomputePerspectiveChildrenOverflow(const nsIFrame* aStartFrame);
 
   /**
    * Returns the number of ancestors between this and the root of our frame tree
@@ -1892,10 +1902,10 @@ public:
      * shrink-wrap (e.g., it's floating, absolutely positioned, or
      * inline-block). */
     eShrinkWrap =        1 << 0,
-    /* Set if we'd like to compute our 'auto' height, regardless of our actual
-     * computed value of 'height'. (e.g. to get an intrinsic height for flex
+    /* Set if we'd like to compute our 'auto' bsize, regardless of our actual
+     * corresponding computed value. (e.g. to get an intrinsic height for flex
      * items with "min-height: auto" to use during flexbox layout.) */
-    eUseAutoHeight =     1 << 1
+    eUseAutoBSize =      1 << 1
   };
 
   /**
@@ -3247,6 +3257,11 @@ public:
     return StyleDisplay()->BackfaceIsHidden();
   }
 
+  /**
+   * Returns true if the frame is scrolled out of view.
+   */
+  bool IsScrolledOutOfView();
+
 protected:
   // Members
   nsRect           mRect;
@@ -3458,6 +3473,11 @@ public:
     nsAutoCString t;
     ListTag(t, aFrame);
     fputs(t.get(), out);
+  }
+  static void ListTag(FILE* out, const nsFrameList& aFrameList) {
+    for (nsIFrame* frame : aFrameList) {
+      ListTag(out, frame);
+    }
   }
   void ListTag(nsACString& aTo) const;
   nsAutoCString ListTag() const {

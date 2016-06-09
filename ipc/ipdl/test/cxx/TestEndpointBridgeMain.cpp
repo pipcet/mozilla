@@ -3,17 +3,11 @@
 
 #include "TestEndpointBridgeMain.h"
 
+#include "base/task.h"
 #include "IPDLUnitTests.h"      // fail etc.
 #include "IPDLUnitTestSubprocess.h"
 
 using namespace std;
-
-template<>
-struct RunnableMethodTraits<mozilla::_ipdltest::TestEndpointBridgeMainSubChild>
-{
-  static void RetainCallee(mozilla::_ipdltest::TestEndpointBridgeMainSubChild* obj) { }
-  static void ReleaseCallee(mozilla::_ipdltest::TestEndpointBridgeMainSubChild* obj) { }
-};
 
 namespace mozilla {
 namespace _ipdltest {
@@ -234,7 +228,7 @@ TestEndpointBridgeMainSubChild::RecvHi()
   // Need to close the channel without message-processing frames on
   // the C++ stack
   MessageLoop::current()->PostTask(
-    NewRunnableMethod(this, &TestEndpointBridgeMainSubChild::Close));
+    NewNonOwningRunnableMethod(this, &TestEndpointBridgeMainSubChild::Close));
   return true;
 }
 

@@ -13,7 +13,7 @@ const TEST_VIOLATION = "https://example.com/browser/devtools/client/" +
 const CSP_VIOLATION_MSG = "Content Security Policy: The page\u2019s settings " +
                           "blocked the loading of a resource at " +
                           "http://some.example.com/test.png (\u201cdefault-src " +
-                            "https://example.com\u201d).";
+                          "https://example.com\u201d).";
 
 add_task(function* () {
   let { browser } = yield loadTab(TEST_URI);
@@ -23,12 +23,12 @@ add_task(function* () {
   hud.jsterm.clearOutput();
 
   let loaded = loadBrowser(browser);
-  content.location = TEST_VIOLATION;
+  BrowserTestUtils.loadURI(gBrowser.selectedBrowser, TEST_VIOLATION);
   yield loaded;
 
   yield waitForSuccess({
     name: "CSP policy URI warning displayed successfully",
-    validator: function() {
+    validator: function () {
       return hud.outputNode.textContent.indexOf(CSP_VIOLATION_MSG) > -1;
     }
   });

@@ -549,7 +549,7 @@ BrowserTabList.prototype._listenForEventsIf =
  * @param aMessageNames array of strings
  *    An array of message names.
  */
-BrowserTabList.prototype._listenForMessagesIf = function(aShouldListen, aGuard, aMessageNames) {
+BrowserTabList.prototype._listenForMessagesIf = function (aShouldListen, aGuard, aMessageNames) {
   if (!aShouldListen !== !this[aGuard]) {
     let op = aShouldListen ? "addMessageListener" : "removeMessageListener";
     for (let win of allAppShellDOMWindows(DebuggerServer.chromeWindowType)) {
@@ -564,7 +564,7 @@ BrowserTabList.prototype._listenForMessagesIf = function(aShouldListen, aGuard, 
 /**
  * Implement nsIMessageListener.
  */
-BrowserTabList.prototype.receiveMessage = DevToolsUtils.makeInfallible(function(message) {
+BrowserTabList.prototype.receiveMessage = DevToolsUtils.makeInfallible(function (message) {
   let browser = message.target;
   switch (message.name) {
     case "DOMTitleChanged": {
@@ -2016,7 +2016,7 @@ TabActor.prototype = {
       // We are very explicitly examining the "console" property of
       // the non-Xrayed object here.
       let console = window.wrappedJSObject.console;
-      isNative = console instanceof window.Console;
+      isNative = new XPCNativeWrapper(console).IS_NATIVE_CONSOLE
     } catch (ex) {
       // ignore
     }
@@ -2316,21 +2316,44 @@ Object.defineProperty(BrowserAddonList.prototype, "onListChanged", {
         "onListChanged property may only be set to 'null' or a function");
     }
     this._onListChanged = v;
-    if (this._onListChanged) {
-      AddonManager.addAddonListener(this);
-    } else {
-      AddonManager.removeAddonListener(this);
-    }
+    this._adjustListener();
   }
 });
 
 BrowserAddonList.prototype.onInstalled = function (addon) {
-  this._onListChanged();
+  if (this._actorByAddonId.get(addon.id)) {
+    // When an add-on gets upgraded or reloaded, it will not be uninstalled
+    // so this step is necessary to clear the cache.
+    this._actorByAddonId.delete(addon.id);
+  }
+  this._notifyListChanged();
+  this._adjustListener();
 };
 
 BrowserAddonList.prototype.onUninstalled = function (addon) {
   this._actorByAddonId.delete(addon.id);
-  this._onListChanged();
+  this._notifyListChanged();
+  this._adjustListener();
+};
+
+BrowserAddonList.prototype._notifyListChanged = function () {
+  if (this._onListChanged) {
+    this._onListChanged();
+  }
+};
+
+BrowserAddonList.prototype._adjustListener = function () {
+  if (this._onListChanged) {
+    // As long as the callback exists, we need to listen for changes
+    // so we can notify about add-on changes.
+    AddonManager.addAddonListener(this);
+  } else {
+    // When the callback does not exist, we only need to keep listening
+    // if the actor cache will need adjusting when add-ons change.
+    if (this._actorByAddonId.size === 0) {
+      AddonManager.removeAddonListener(this);
+    }
+  }
 };
 
 exports.BrowserAddonList = BrowserAddonList;

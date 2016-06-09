@@ -12,6 +12,8 @@
 #include "nsTArray.h"
 #include "nsStringGlue.h"
 
+#include "mozilla/TelemetryHistogramEnums.h"
+
 /******************************************************************************
  * This implements the Telemetry system.
  * It allows recording into histograms as well some more specialized data
@@ -30,12 +32,17 @@ namespace HangMonitor {
 } // namespace HangMonitor
 namespace Telemetry {
 
-#include "mozilla/TelemetryHistogramEnums.h"
-
 enum TimerResolution {
   Millisecond,
   Microsecond
 };
+
+/**
+ * Create and destroy the underlying base::StatisticsRecorder singleton.
+ * Creation has to be done very early in the startup sequence.
+ */
+void CreateStatisticsRecorder();
+void DestroyStatisticsRecorder();
 
 /**
  * Initialize the Telemetry service on the main thread at startup.

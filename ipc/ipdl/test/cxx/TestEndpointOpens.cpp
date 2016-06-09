@@ -1,25 +1,12 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=8 sts=2 et sw=2 tw=80: */
 
+#include "base/task.h"
 #include "base/thread.h"
 
 #include "TestEndpointOpens.h"
 
 #include "IPDLUnitTests.h"      // fail etc.
-
-template<>
-struct RunnableMethodTraits<mozilla::_ipdltest::TestEndpointOpensChild>
-{
-  static void RetainCallee(mozilla::_ipdltest::TestEndpointOpensChild* obj) { }
-  static void ReleaseCallee(mozilla::_ipdltest::TestEndpointOpensChild* obj) { }
-};
-
-template<>
-struct RunnableMethodTraits<mozilla::_ipdltest2::TestEndpointOpensOpenedChild>
-{
-  static void RetainCallee(mozilla::_ipdltest2::TestEndpointOpensOpenedChild* obj) { }
-  static void ReleaseCallee(mozilla::_ipdltest2::TestEndpointOpensOpenedChild* obj) { }
-};
 
 using namespace mozilla::ipc;
 
@@ -244,7 +231,7 @@ TestEndpointOpensOpenedChild::RecvHi()
   // Need to close the channel without message-processing frames on
   // the C++ stack
   MessageLoop::current()->PostTask(
-    NewRunnableMethod(this, &TestEndpointOpensOpenedChild::Close));
+    NewNonOwningRunnableMethod(this, &TestEndpointOpensOpenedChild::Close));
   return true;
 }
 
@@ -270,7 +257,7 @@ ShutdownTestEndpointOpensOpenedChild(TestEndpointOpensOpenedChild* child,
 
   // Kick off main-thread shutdown.
   gMainThread->PostTask(
-    NewRunnableMethod(gOpensChild, &TestEndpointOpensChild::Close));
+    NewNonOwningRunnableMethod(gOpensChild, &TestEndpointOpensChild::Close));
 }
 
 void

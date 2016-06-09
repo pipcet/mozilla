@@ -94,6 +94,9 @@ XPCOMUtils.defineLazyServiceGetter(this, "Profiler",
 XPCOMUtils.defineLazyModuleGetter(this, "SimpleServiceDiscovery",
                                   "resource://gre/modules/SimpleServiceDiscovery.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "ExtensionManagement",
+                                  "resource://gre/modules/ExtensionManagement.jsm");
+
 XPCOMUtils.defineLazyModuleGetter(this, "CharsetMenu",
                                   "resource://gre/modules/CharsetMenu.jsm");
 
@@ -384,6 +387,13 @@ var BrowserApp = {
     Services.obs.addObserver(this, "keyword-search", false);
     Services.obs.addObserver(this, "sessionstore-state-purge-complete", false);
     Services.obs.addObserver(this, "Fonts:Reload", false);
+    Services.obs.addObserver(this, "Vibration:Request", false);
+
+    // Register extension source files.
+    ExtensionManagement.registerScript("chrome://browser/content/ext-pageAction.js");
+
+    // Register extension schemas.
+    ExtensionManagement.registerSchema("chrome://browser/content/schemas/page_action.json");
 
     Messaging.addListener(this.getHistory.bind(this), "Session:GetHistory");
 
@@ -787,7 +797,8 @@ var BrowserApp = {
     NativeWindow.contextmenus.add({
       label: stringGetter("contextmenu.shareMedia"),
       order: NativeWindow.contextmenus.DEFAULT_HTML5_ORDER - 1,
-      selector: NativeWindow.contextmenus._disableRestricted("SHARE", NativeWindow.contextmenus.SelectorContext("video")),
+      selector: NativeWindow.contextmenus._disableRestricted(
+        "SHARE", NativeWindow.contextmenus.videoContext()),
       showAsActions: function(aElement) {
         let url = (aElement.currentSrc || aElement.src);
         let title = aElement.textContent || aElement.title;
@@ -805,7 +816,7 @@ var BrowserApp = {
     });
 
     NativeWindow.contextmenus.add(stringGetter("contextmenu.fullScreen"),
-      NativeWindow.contextmenus.SelectorContext("video:not(:fullscreen)"),
+      NativeWindow.contextmenus.videoContext("not-fullscreen"),
       function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_fullscreen");
         aTarget.requestFullscreen();
@@ -848,7 +859,7 @@ var BrowserApp = {
 
     NativeWindow.contextmenus.add({
       label: stringGetter("contextmenu.shareImage"),
-      selector: NativeWindow.contextmenus._disableRestricted("SHARE", NativeWindow.contextmenus.imageSaveableContext),
+      selector: NativeWindow.contextmenus._disableRestricted("SHARE", NativeWindow.contextmenus.imageShareableContext),
       order: NativeWindow.contextmenus.DEFAULT_HTML5_ORDER - 1, // Show above HTML5 menu items
       showAsActions: function(aTarget) {
         let doc = aTarget.ownerDocument;
@@ -1950,6 +1961,31 @@ var BrowserApp = {
         FontEnumerator.updateFontList();
         break;
 
+      case "Vibration:Request":
+        if (aSubject instanceof Navigator) {
+          let navigator = aSubject;
+          let buttons = [
+            {
+              label: Strings.browser.GetStringFromName("vibrationRequest.denyButton"),
+              callback: function() {
+                navigator.setVibrationPermission(false);
+              }
+            },
+            {
+              label: Strings.browser.GetStringFromName("vibrationRequest.allowButton"),
+              callback: function() {
+                navigator.setVibrationPermission(true);
+              },
+              positive: true
+            }
+          ];
+          let message = Strings.browser.GetStringFromName("vibrationRequest.message");
+          let options = {};
+          NativeWindow.doorhanger.show(message, "vibration-request", buttons,
+              BrowserApp.selectedTab.id, options, "VIBRATION");
+        }
+        break;
+
       default:
         dump('BrowserApp.observe: unexpected topic "' + aTopic + '"\n');
         break;
@@ -2285,6 +2321,8 @@ var NativeWindow = {
       delete this.items[aId];
     },
 
+    // Although we do not use this ourselves anymore, add-ons may still
+    // need it as it has been documented, so we shouldn't remove it.
     SelectorContext: function(aSelector) {
       return {
         matches: function(aElt) {
@@ -2401,6 +2439,30 @@ var NativeWindow = {
       }
     },
 
+    imageShareableContext: {
+      matches: function imageShareableContextMatches(aElement) {
+        let imgSrc = '';
+        if (aElement instanceof Ci.nsIDOMHTMLImageElement) {
+          imgSrc = aElement.src;
+        } else if (aElement instanceof Ci.nsIImageLoadingContent &&
+            aElement.currentURI &&
+            aElement.currentURI.spec) {
+          imgSrc = aElement.currentURI.spec;
+        }
+
+        // In order to share an image, we need to pass the image src over IPC via an Intent (in
+        // `ApplicationPackageManager.queryIntentActivities`). However, the transaction has a 1MB limit
+        // (shared by all transactions in progress) - otherwise we crash! (bug 1243305)
+        //   https://developer.android.com/reference/android/os/TransactionTooLargeException.html
+        //
+        // The transaction limit is 1MB and we arbitrarily choose to cap this transaction at 1/4 of that = 250,000 bytes.
+        // In Java, a UTF-8 character is 1-4 bytes so, 250,000 bytes / 4 bytes/char = 62,500 char
+        let MAX_IMG_SRC_LEN = 62500;
+        let isTooLong = imgSrc.length >= MAX_IMG_SRC_LEN;
+        return !isTooLong && this.NativeWindow.contextmenus.imageSaveableContext.matches(aElement);
+      }.bind(this)
+    },
+
     mediaSaveableContext: {
       matches: function mediaSaveableContextMatches(aElement) {
         return (aElement instanceof HTMLVideoElement ||
@@ -2443,6 +2505,26 @@ var NativeWindow = {
               return true;
             else if (!muted && aMode == "media-unmuted")
               return true;
+          }
+          return false;
+        }
+      };
+    },
+
+    videoContext: function(aMode) {
+      return {
+        matches: function(aElt) {
+          if (aElt instanceof HTMLVideoElement) {
+            if (!aMode) {
+              return true;
+            }
+            var isFullscreen = aElt.ownerDocument.fullscreenElement == aElt;
+            if (aMode == "not-fullscreen") {
+              return !isFullscreen;
+            }
+            if (aMode == "fullscreen") {
+              return isFullscreen;
+            }
           }
           return false;
         }
@@ -2650,7 +2732,9 @@ var NativeWindow = {
         }
         return node.currentURI.spec;
       } else if (node instanceof Ci.nsIDOMHTMLMediaElement) {
-        return (node.currentSrc || node.src);
+        let srcUrl = node.currentSrc || node.src;
+        // If URL prepended with blob or mediasource, we'll remove it.
+        return srcUrl.replace(/^(?:blob|mediasource):/, '');
       }
 
       return "";
@@ -3355,13 +3439,14 @@ Tab.prototype = {
     BrowserApp.deck.insertBefore(this.browser, aParams.sibling || null);
     BrowserApp.deck.selectedPanel = selectedPanel;
 
+    let attrs = {};
     if (BrowserApp.manifestUrl) {
       let appsService = Cc["@mozilla.org/AppsService;1"].getService(Ci.nsIAppsService);
       let manifest = appsService.getAppByManifestURL(BrowserApp.manifestUrl);
       if (manifest) {
         let app = manifest.QueryInterface(Ci.mozIApplication);
         this.browser.docShell.frameType = Ci.nsIDocShell.FRAME_TYPE_APP;
-        this.browser.docShell.setOriginAttributes({appId: app.localId});
+        attrs['appId'] = app.localId;
       }
     }
 
@@ -3370,8 +3455,10 @@ Tab.prototype = {
 
     let isPrivate = ("isPrivate" in aParams) && aParams.isPrivate;
     if (isPrivate) {
-      this.browser.docShell.QueryInterface(Ci.nsILoadContext).usePrivateBrowsing = true;
+      attrs['privateBrowsingId'] = 1;
     }
+
+    this.browser.docShell.setOriginAttributes(attrs);
 
     // Set the new docShell load flags based on network state.
     if (Tabs.useCache) {
@@ -3472,7 +3559,9 @@ Tab.prototype = {
         url: aURL,
         title: truncate(title, MAX_TITLE_LENGTH)
       }],
-      index: 1
+      index: 1,
+      desktopMode: this.desktopMode,
+      isPrivate: isPrivate
     };
 
     if (aParams.delayLoad) {
@@ -3797,7 +3886,7 @@ Tab.prototype = {
   addMetadata: function(type, value, quality = 1) {
     if (!this.metatags) {
       this.metatags = {
-        url: this.browser.currentURI.spec
+        url: this.browser.currentURI.specIgnoringRef
       };
     }
 
@@ -4054,8 +4143,8 @@ Tab.prototype = {
           jsonMessage = this.makeFaviconMessage(target);
         } else if (list.indexOf("[apple-touch-icon]") != -1 ||
             list.indexOf("[apple-touch-icon-precomposed]") != -1) {
-          let message = this.makeFaviconMessage(target);
-          this.addMetadata("touchIconList", message.href, message.size);
+          jsonMessage = this.makeFaviconMessage(target);
+          this.addMetadata("touchIconList", jsonMessage.href, jsonMessage.size);
         } else if (list.indexOf("[alternate]") != -1 && aEvent.type == "DOMLinkAdded") {
           let type = target.type.toLowerCase().replace(/^\s+|\s*(?:;.*)?$/g, "");
           let isFeed = (type == "application/rss+xml" || type == "application/atom+xml");
@@ -4406,6 +4495,7 @@ Tab.prototype = {
       // browser.contentDocument is changed to the new document we're loading
       this.contentDocumentIsDisplayed = false;
       this.hasTouchListener = false;
+      Services.obs.notifyObservers(this.browser, "Session:NotifyLocationChange", null);
     } else {
       setTimeout(function() {
         this.sendViewportUpdate();
@@ -5095,13 +5185,13 @@ var ErrorPageEventHandler = {
           // can use the right strings/links
           let bucketName = "";
           let sendTelemetry = false;
-          if (errorDoc.documentURI.contains("e=malwareBlocked")) {
+          if (errorDoc.documentURI.includes("e=malwareBlocked")) {
             sendTelemetry = true;
             bucketName = "WARNING_MALWARE_PAGE_";
-          } else if (errorDoc.documentURI.contains("e=deceptiveBlocked")) {
+          } else if (errorDoc.documentURI.includes("e=deceptiveBlocked")) {
             sendTelemetry = true;
             bucketName = "WARNING_PHISHING_PAGE_";
-          } else if (errorDoc.documentURI.contains("e=unwantedBlocked")) {
+          } else if (errorDoc.documentURI.includes("e=unwantedBlocked")) {
             sendTelemetry = true;
             bucketName = "WARNING_UNWANTED_PAGE_";
           }
@@ -5264,15 +5354,15 @@ var FormAssistant = {
     if (!aInvalidElements.length)
       return;
 
-    // Ignore this notificaiton if the current tab doesn't contain the invalid form
+    // Ignore this notificaiton if the current tab doesn't contain the invalid element
+    let currentElement = aInvalidElements.queryElementAt(0, Ci.nsISupports);
     if (BrowserApp.selectedBrowser.contentDocument !=
-        aFormElement.ownerDocument.defaultView.top.document)
+        currentElement.ownerDocument.defaultView.top.document)
       return;
 
     this._invalidSubmit = true;
 
     // Our focus listener will show the element's validation message
-    let currentElement = aInvalidElements.queryElementAt(0, Ci.nsISupports);
     currentElement.focus();
   },
 
@@ -5972,7 +6062,7 @@ var PopupBlockerObserver = {
     let pageReport = BrowserApp.selectedBrowser.pageReport;
     if (pageReport) {
       for (let i = 0; i < pageReport.length; ++i) {
-        let popupURIspec = pageReport[i].popupWindowURI.spec;
+        let popupURIspec = pageReport[i].popupWindowURIspec;
 
         // Sometimes the popup URI that we get back from the pageReport
         // isn't useful (for instance, netscape.com's popup URI ends up
@@ -6238,7 +6328,7 @@ var IdentityHandler = {
     }
 
     // We also allow "about:" by allowing the selector to be empty (i.e. '(|.....|...|...)'
-    let whitelist = /^about:($|about|accounts|addons|buildconfig|cache|config|crashes|devices|downloads|fennec|firefox|feedback|healthreport|license|logins|logo|memory|mozilla|networking|plugins|privatebrowsing|rights|serviceworkers|support|telemetry|webrtc)($|\?)/i;
+    let whitelist = /^about:($|about|accounts|addons|buildconfig|cache|config|crashes|devices|downloads|fennec|firefox|feedback|healthreport|home|license|logins|logo|memory|mozilla|networking|plugins|privatebrowsing|rights|serviceworkers|support|telemetry|webrtc)($|\?)/i;
     if (uri.schemeIs("about") && whitelist.test(uri.spec)) {
         return this.IDENTITY_MODE_CHROMEUI;
     }
@@ -6638,54 +6728,112 @@ var SearchEngines = {
     });
   },
 
-  addEngine: function addEngine(aElement) {
+  /**
+   * Build and return an array of sorted form data / Query Parameters
+   * for an element in a submission form.
+   *
+   * @param element
+   *        A valid submission element of a form.
+   */
+  _getSortedFormData: function(element) {
+    let formData = [];
+
+    for (let formElement of element.form.elements) {
+      if (!formElement.type) {
+        continue;
+      }
+
+      // Make this text field a generic search parameter.
+      if (element == formElement) {
+        formData.push({ name: formElement.name, value: "{searchTerms}" });
+        continue;
+      }
+
+      // Add other form elements as parameters.
+      switch (formElement.type.toLowerCase()) {
+        case "checkbox":
+        case "radio":
+          if (!formElement.checked) {
+            break;
+          }
+        case "text":
+        case "hidden":
+        case "textarea":
+          formData.push({ name: escape(formElement.name), value: escape(formElement.value) });
+          break;
+
+        case "select-one": {
+          for (let option of formElement.options) {
+            if (option.selected) {
+              formData.push({ name: escape(formElement.name), value: escape(formElement.value) });
+              break;
+            }
+          }
+        }
+      }
+    };
+
+    // Return valid, pre-sorted queryParams. 
+    return formData.filter(a => a.name && a.value).sort((a, b) => {
+      // nsIBrowserSearchService.hasEngineWithURL() ensures sort, but this helps.
+      if (a.name > b.name) {
+        return 1;
+      }
+      if (b.name > a.name) {
+        return -1;
+      }
+
+      if (a.value > b.value) {
+        return 1;
+      }
+      if (b.value > a.value) {
+        return -1;
+      }
+
+      return 0;
+    });
+  },
+
+  /**
+   * Check if any search engines already handle an EngineURL of type
+   * URLTYPE_SEARCH_HTML, matching this request-method, formURL, and queryParams.
+   */
+  visibleEngineExists: function(element) {
+    let formData = this._getSortedFormData(element);
+
+    let form = element.form;
+    let method = form.method.toUpperCase();
+
+    let charset = element.ownerDocument.characterSet;
+    let docURI = Services.io.newURI(element.ownerDocument.URL, charset, null);
+    let formURL = Services.io.newURI(form.getAttribute("action"), charset, docURI).spec;
+
+    return Services.search.hasEngineWithURL(method, formURL, formData);
+  },
+
+  /**
+   * Adds a new search engine to the BrowserSearchService, based on its provided element. Prompts for an engine
+   * name, and appends a simple version-number in case of collision with an existing name.
+   *
+   * @return callback to handle success value. Currently used for ActionBarHandler.js and UI updates.
+   */
+  addEngine: function addEngine(aElement, resultCallback) {
     let form = aElement.form;
     let charset = aElement.ownerDocument.characterSet;
     let docURI = Services.io.newURI(aElement.ownerDocument.URL, charset, null);
     let formURL = Services.io.newURI(form.getAttribute("action"), charset, docURI).spec;
     let method = form.method.toUpperCase();
-    let formData = [];
-
-    for (let i = 0; i < form.elements.length; ++i) {
-      let el = form.elements[i];
-      if (!el.type)
-        continue;
-
-      // make this text field a generic search parameter
-      if (aElement == el) {
-        formData.push({ name: el.name, value: "{searchTerms}" });
-        continue;
-      }
-
-      let type = el.type.toLowerCase();
-      let escapedName = escape(el.name);
-      let escapedValue = escape(el.value);
-
-      // add other form elements as parameters
-      switch (el.type) {
-        case "checkbox":
-        case "radio":
-          if (!el.checked) break;
-        case "text":
-        case "hidden":
-        case "textarea":
-          formData.push({ name: escapedName, value: escapedValue });
-          break;
-        case "select-one":
-          for (let option of el.options) {
-            if (option.selected) {
-              formData.push({ name: escapedName, value: escapedValue });
-              break;
-            }
-          }
-      }
-    }
+    let formData = this._getSortedFormData(aElement);
 
     // prompt user for name of search engine
     let promptTitle = Strings.browser.GetStringFromName("contextmenu.addSearchEngine3");
     let title = { value: (aElement.ownerDocument.title || docURI.host) };
-    if (!Services.prompt.prompt(null, promptTitle, null, title, null, {}))
+    if (!Services.prompt.prompt(null, promptTitle, null, title, null, {})) {
+      if (resultCallback) {
+        resultCallback(false);
+      };
       return;
+    }
 
     // fetch the favicon for this page
     let dbFile = FileUtils.getFile("ProfD", ["browser.db"]);
@@ -6694,11 +6842,16 @@ var SearchEngines = {
     stmts[0] = mDBConn.createStatement("SELECT favicon FROM history_with_favicons WHERE url = ?");
     stmts[0].bindByIndex(0, docURI.spec);
     let favicon = null;
+
     Services.search.init(function addEngine_cb(rv) {
       if (!Components.isSuccessCode(rv)) {
         Cu.reportError("Could not initialize search service, bailing out.");
+        if (resultCallback) {
+          resultCallback(false);
+        };
         return;
       }
+
       mDBConn.executeAsync(stmts, stmts.length, {
         handleResult: function (results) {
           let bytes = results.getNextRow().getResultByName("favicon");
@@ -6715,13 +6868,14 @@ var SearchEngines = {
 
           Services.search.addEngineWithDetails(name, favicon, null, null, method, formURL);
           Snackbars.show(Strings.browser.formatStringFromName("alertSearchEngineAddedToast", [name], 1), Snackbars.LENGTH_LONG);
+
           let engine = Services.search.getEngineByName(name);
           engine.wrappedJSObject._queryCharset = charset;
-          for (let i = 0; i < formData.length; ++i) {
-            let param = formData[i];
-            if (param.name && param.value)
-              engine.addParam(param.name, param.value, null);
-          }
+          formData.forEach(param => { engine.addParam(param.name, param.value, null); });
+
+          if (resultCallback) {
+            return resultCallback(true);
+          };
         }
       });
     });
@@ -6797,6 +6951,21 @@ var Experiments = {
           }
         }
       }
+    });
+  },
+
+  setOverride(name, isEnabled) {
+    Messaging.sendRequest({
+      type: "Experiments:SetOverride",
+      name: name,
+      isEnabled: isEnabled
+    });
+  },
+
+  clearOverride(name) {
+    Messaging.sendRequest({
+      type: "Experiments:ClearOverride",
+      name: name
     });
   }
 };
@@ -7232,7 +7401,14 @@ var Tabs = {
           let targetURI = targetDoc.documentURI;
           if (isTopLevel && !targetURI.startsWith("about:")) {
             UITelemetry.addEvent("neterror.1", "toast", null, "usecache");
-            Snackbars.show(Strings.browser.GetStringFromName("networkOffline.message"), Snackbars.LENGTH_INDEFINITE);
+            Snackbars.show(
+              Strings.browser.GetStringFromName("networkOffline.message2"),
+              Snackbars.LENGTH_INDEFINITE,
+              {
+                // link_blue
+                backgroundColor: "#0096DD"
+              }
+            );
           }
         }
         break;
@@ -7300,9 +7476,9 @@ var Tabs = {
     BrowserApp.tabs.forEach(function(tab) {
       if (tab.browser && tab.browser.docShell) {
         if (aUseCache) {
-          tab.browser.docShell.defaultLoadFlags &= ~Ci.nsIRequest.LOAD_FROM_CACHE;
-        } else {
           tab.browser.docShell.defaultLoadFlags |= Ci.nsIRequest.LOAD_FROM_CACHE;
+        } else {
+          tab.browser.docShell.defaultLoadFlags &= ~Ci.nsIRequest.LOAD_FROM_CACHE;
         }
       }
     });

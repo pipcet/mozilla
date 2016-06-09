@@ -178,10 +178,12 @@ this.BootstrapMonitor = {
   },
 
   checkAddonInstalled(id, version = undefined) {
-    let installed = this.installed.get(id);
-    do_check_neq(installed, undefined);
-    if (version != undefined)
-      do_check_eq(installed.data.version, version);
+    const installed = this.installed.get(id);
+    notEqual(installed, undefined);
+    if (version !== undefined) {
+      equal(installed.data.version, version);
+    }
+    return installed;
   },
 
   checkAddonNotInstalled(id) {
@@ -1688,7 +1690,8 @@ function completeAllInstalls(aInstalls, aCallback) {
     onDownloadCancelled: installCompleted,
     onInstallFailed: installCompleted,
     onInstallCancelled: installCompleted,
-    onInstallEnded: installCompleted
+    onInstallEnded: installCompleted,
+    onInstallPostponed: installCompleted,
   };
 
   aInstalls.forEach(function(aInstall) {
@@ -1872,8 +1875,7 @@ Services.prefs.setBoolPref("extensions.showMismatchUI", false);
 Services.prefs.setCharPref("extensions.update.url", "http://127.0.0.1/updateURL");
 Services.prefs.setCharPref("extensions.update.background.url", "http://127.0.0.1/updateBackgroundURL");
 Services.prefs.setCharPref("extensions.blocklist.url", "http://127.0.0.1/blocklistURL");
-Services.prefs.setCharPref("services.kinto.base",
-                           "http://localhost/dummy-kinto/v1");
+Services.prefs.setCharPref("services.settings.server", "http://localhost/dummy-kinto/v1");
 
 // By default ignore bundled add-ons
 Services.prefs.setBoolPref("extensions.installDistroAddons", false);

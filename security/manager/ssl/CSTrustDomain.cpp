@@ -37,7 +37,7 @@ CSTrustDomain::GetCertTrust(EndEntityOrCA endEntityOrCA,
   }
 
   SECItem candidateCertDERSECItem = UnsafeMapInputToSECItem(candidateCertDER);
-  ScopedCERTCertificate candidateCert(
+  UniqueCERTCertificate candidateCert(
     CERT_NewTempCertificate(CERT_GetDefaultCertDB(), &candidateCertDERSECItem,
                             nullptr, false, true));
   if (!candidateCert) {
@@ -204,6 +204,14 @@ CSTrustDomain::CheckValidityIsAcceptable(Time notBefore, Time notAfter,
                                          EndEntityOrCA endEntityOrCA,
                                          KeyPurposeId keyPurpose)
 {
+  return Success;
+}
+
+Result
+CSTrustDomain::NetscapeStepUpMatchesServerAuth(Time notBefore,
+                                               /*out*/ bool& matches)
+{
+  matches = false;
   return Success;
 }
 

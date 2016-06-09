@@ -44,12 +44,12 @@ class StubURLMetadata implements URLMetadata {
     }
 
     public Map<String, Map<String, Object>> getForURLs(final ContentResolver cr,
-                                                       final List<String> urls,
+                                                       final Collection<String> urls,
                                                        final List<String> columns) {
         return new HashMap<String, Map<String, Object>>();
     }
 
-    public void save(final ContentResolver cr, final String url, final Map<String, Object> data) {
+    public void save(final ContentResolver cr, final Map<String, Object> data) {
     }
 }
 
@@ -141,6 +141,11 @@ class StubUrlAnnotations implements UrlAnnotations {
 
     @Override
     public void insertHomeScreenShortcut(ContentResolver cr, String url, boolean hasCreatedShortCut) {}
+
+    @Override
+    public int getAnnotationCount(ContentResolver cr, BrowserContract.UrlAnnotations.Key key) {
+        return 0;
+    }
 }
 
 /*
@@ -241,6 +246,8 @@ public class StubBrowserDB implements BrowserDB {
     public Cursor getBookmarksInFolder(ContentResolver cr, long folderId) {
         return null;
     }
+
+    public int getBookmarkCountForFolder(ContentResolver cr, long folderId) { return 0; }
 
     @RobocopTarget
     public boolean isBookmark(ContentResolver cr, String uri) {

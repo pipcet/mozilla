@@ -6,6 +6,7 @@
 @import url(variables.css);
 @import url(common.css);
 @import url(toolbars.css);
+@import url(tooltips.css);
 
 body {
   margin: 0;
@@ -172,7 +173,7 @@ body {
 .cm-s-mozilla .CodeMirror-dialog { /* General toolbar styling */
   color: var(--theme-body-color-alt);
   background-color: var(--theme-toolbar-background);
-  border-color: hsla(210,8%,5%,.6);
+  border-color: var(--theme-splitter-color);
 }
 
 .theme-fg-contrast { /* To be used for text on theme-bg-contrast */
@@ -232,8 +233,8 @@ div.CodeMirror div.error-line {
 div.CodeMirror span.marked-text {
   background: rgba(255,255,0,0.2);
   border: 1px dashed rgba(192,192,0,0.6);
-  -moz-margin-start: -1px;
-  -moz-margin-end: -1px;
+  margin-inline-start: -1px;
+  margin-inline-end: -1px;
 }
 
 /* Highlight for evaluating current statement. */

@@ -49,7 +49,7 @@ var snapshotFormatters = {
     if (data.updateChannel)
       $("updatechannel-box").textContent = data.updateChannel;
 
-    let statusStrName = ".unknown";
+    let statusText = stringBundle().GetStringFromName("multiProcessStatus.unknown");
 
     // Whitelist of known values with string descriptions:
     switch (data.autoStartStatus) {
@@ -57,15 +57,18 @@ var snapshotFormatters = {
       case 1:
       case 2:
       case 4:
-      case 5:
       case 6:
       case 7:
       case 8:
       case 9:
-        statusStrName = "." + data.autoStartStatus;
+        statusText = stringBundle().GetStringFromName("multiProcessStatus." + data.autoStartStatus);
+        break;
+
+      case 10:
+        statusText = (Services.appinfo.OS == "Darwin" ? "OS X 10.6 - 10.8" : "Windows XP");
+        break;
     }
 
-    let statusText = stringBundle().GetStringFromName("multiProcessStatus" + statusStrName);
     $("multiprocess-box").textContent = stringBundle().formatStringFromName("multiProcessWindows",
       [data.numRemoteWindows, data.numTotalWindows, statusText], 3);
 
@@ -356,6 +359,7 @@ var snapshotFormatters = {
     delete data.windowLayerManagerType;
     delete data.numTotalWindows;
     delete data.numAcceleratedWindows;
+    delete data.numAcceleratedWindowsMessage;
 
     addRow("features", "asyncPanZoom",
            apzInfo.length
@@ -479,10 +483,38 @@ var snapshotFormatters = {
       $("graphics-workarounds-tbody").style.display = "none";
     }
 
+    let crashGuards = data.crashGuards;
+    delete data.crashGuards;
+
+    if (crashGuards.length) {
+      for (let guard of crashGuards) {
+        let resetButton = $.new("button");
+        let onClickReset = (function (guard) {
+          // Note - need this wrapper until bug 449811 fixes |guard| scoping.
+          return function () {
+            Services.prefs.setIntPref(guard.prefName, 0);
+            resetButton.removeEventListener("click", onClickReset);
+            resetButton.disabled = true;
+          };
+        })(guard);
+
+        resetButton.textContent = strings.GetStringFromName("resetOnNextRestart");
+        resetButton.addEventListener("click", onClickReset);
+
+        addRow("crashguards", guard.type + "CrashGuard", [resetButton]);
+      }
+    } else {
+      $("graphics-crashguards-tbody").style.display = "none";
+    }
+
     // Now that we're done, grab any remaining keys in data and drop them into
     // the diagnostics section.
     for (let key in data) {
-      addRow("diagnostics", key, data[key]);
+      let value = data[key];
+      if (Array.isArray(value)) {
+        value = localizedMsg(value);
+      }
+      addRow("diagnostics", key, value);
     }
   },
 

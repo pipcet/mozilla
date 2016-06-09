@@ -31,7 +31,7 @@ function Notification(extension, id, options) {
     svc.showAlertNotification(imageURL,
                               options.title,
                               options.message,
-                              false, // textClickable
+                              true, // textClickable
                               this.id,
                               this,
                               this.id);
@@ -54,19 +54,22 @@ Notification.prototype = {
   observe(subject, topic, data) {
     let notifications = notificationsMap.get(this.extension);
 
+    let emitAndDelete = event => {
+      notifications.emit(event, data);
+      notifications.delete(this.id);
+    };
+
     // Don't try to emit events if the extension has been unloaded
     if (!notifications) {
       return;
     }
 
     if (topic === "alertclickcallback") {
-      notifications.emit("clicked", data);
+      emitAndDelete("clicked");
     }
     if (topic === "alertfinished") {
-      notifications.emit("closed", data);
+      emitAndDelete("closed");
     }
-
-    notifications.delete(this.id);
   },
 };
 

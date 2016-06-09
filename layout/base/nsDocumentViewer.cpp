@@ -86,6 +86,8 @@
 #include "nsIPrompt.h"
 #include "imgIContainer.h" // image animation mode constants
 
+#include "nsSandboxFlags.h"
+
 #include "mozilla/DocLoadingTimelineMarker.h"
 
 //--------------------------
@@ -99,14 +101,8 @@
 
 // Print Options
 #include "nsIPrintSettings.h"
-#include "nsIPrintOptions.h"
+#include "nsIPrintSettingsService.h"
 #include "nsISimpleEnumerator.h"
-
-#ifdef DEBUG
-// PrintOptions is now implemented by PrintSettingsService
-static const char sPrintOptionsContractID[] =
-  "@mozilla.org/gfx/printsettings-service;1";
-#endif // DEBUG
 
 #include "nsIPluginDocument.h"
 
@@ -579,7 +575,9 @@ nsDocumentViewer::SyncParentSubDocMap()
     return NS_OK;
   }
 
-  if (mDocument && parent_doc->GetSubDocumentFor(element) != mDocument) {
+  if (mDocument &&
+      parent_doc->GetSubDocumentFor(element) != mDocument &&
+      parent_doc->EventHandlingSuppressed()) {
     mDocument->SuppressEventHandling(nsIDocument::eEvents,
                                      parent_doc->EventHandlingSuppressed());
   }
@@ -1130,18 +1128,14 @@ nsDocumentViewer::PermitUnloadInternal(bool *aShouldPrompt,
     nsAutoPopupStatePusher popupStatePusher(openAbused, true);
 
     // Never permit dialogs from the beforeunload handler
-    nsGlobalWindow *globalWindow =
-      static_cast<nsGlobalWindow*>(reinterpret_cast<nsPIDOMWindow<nsISupports>*>(window));
+    nsGlobalWindow* globalWindow = nsGlobalWindow::Cast(window);
     dialogsAreEnabled = globalWindow->AreDialogsEnabled();
-    globalWindow->DisableDialogs();
+    nsGlobalWindow::TemporarilyDisableDialogs disableDialogs(globalWindow);
 
     mInPermitUnload = true;
     EventDispatcher::DispatchDOMEvent(window, nullptr, event, mPresContext,
                                       nullptr);
     mInPermitUnload = false;
-    if (dialogsAreEnabled) {
-      globalWindow->EnableDialogs();
-    }
   }
 
   nsCOMPtr<nsIDocShell> docShell(mContainer);
@@ -1150,7 +1144,8 @@ nsDocumentViewer::PermitUnloadInternal(bool *aShouldPrompt,
 
   // NB: we nullcheck mDocument because it might now be dead as a result of
   // the event being dispatched.
-  if (!sIsBeforeUnloadDisabled && *aShouldPrompt && dialogsAreEnabled && mDocument &&
+  if (!sIsBeforeUnloadDisabled && *aShouldPrompt && dialogsAreEnabled &&
+      mDocument && !(mDocument->GetSandboxFlags() & SANDBOXED_MODALS) &&
       (!sBeforeUnloadRequiresInteraction || mDocument->UserHasInteracted()) &&
       (event->WidgetEventPtr()->DefaultPrevented() || !text.IsEmpty())) {
     // Ask the user if it's ok to unload the current page
@@ -1910,7 +1905,7 @@ nsDocumentViewer::SetPreviousViewer(nsIContentViewer* aViewer)
 }
 
 NS_IMETHODIMP
-nsDocumentViewer::SetBounds(const nsIntRect& aBounds)
+nsDocumentViewer::SetBoundsWithFlags(const nsIntRect& aBounds, uint32_t aFlags)
 {
   NS_ENSURE_TRUE(mDocument, NS_ERROR_NOT_AVAILABLE);
 
@@ -1925,7 +1920,8 @@ nsDocumentViewer::SetBounds(const nsIntRect& aBounds)
   } else if (mPresContext && mViewManager) {
     int32_t p2a = mPresContext->AppUnitsPerDevPixel();
     mViewManager->SetWindowDimensions(NSIntPixelsToAppUnits(mBounds.width, p2a),
-                                      NSIntPixelsToAppUnits(mBounds.height, p2a));
+                                      NSIntPixelsToAppUnits(mBounds.height, p2a),
+                                      !!(aFlags & nsIContentViewer::eDelayResize));
   }
 
   // If there's a previous viewer, it's the one that's actually showing,
@@ -1941,6 +1937,12 @@ nsDocumentViewer::SetBounds(const nsIntRect& aBounds)
   }
 
   return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDocumentViewer::SetBounds(const nsIntRect& aBounds)
+{
+  return SetBoundsWithFlags(aBounds, 0);
 }
 
 NS_IMETHODIMP
@@ -2726,11 +2728,12 @@ nsDocumentViewer::Print(bool              aSilent,
   // if they don't pass in a PrintSettings, then make one
   // it will have all the default values
   printSettings = aPrintSettings;
-  nsCOMPtr<nsIPrintOptions> printOptions = do_GetService(sPrintOptionsContractID, &rv);
+  nsCOMPtr<nsIPrintSettingsService> printSettingsSvc
+    = do_GetService("@mozilla.org/gfx/printsettings-service;1", &rv);
   if (NS_SUCCEEDED(rv)) {
     // if they don't pass in a PrintSettings, then make one
     if (printSettings == nullptr) {
-      printOptions->CreatePrintSettings(getter_AddRefs(printSettings));
+      printSettingsSvc->GetNewPrintSettings(getter_AddRefs(printSettings));
     }
     NS_ASSERTION(printSettings, "You can't PrintPreview without a PrintSettings!");
   }

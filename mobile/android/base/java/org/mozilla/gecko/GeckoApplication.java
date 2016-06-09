@@ -133,7 +133,7 @@ public class GeckoApplication extends Application
 
         final Context applicationContext = getApplicationContext();
         GeckoBatteryManager.getInstance().start(applicationContext);
-        GeckoNetworkManager.getInstance().start(applicationContext);
+        GeckoNetworkManager.getInstance().start();
 
         mInBackground = false;
     }
@@ -177,7 +177,9 @@ public class GeckoApplication extends Application
         GeckoService.register();
 
         super.onCreate();
+    }
 
+    public void onDelayedStartup() {
         if (AppConstants.MOZ_ANDROID_GCM) {
             // TODO: only run in main process.
             ThreadUtils.postToBackgroundThread(new Runnable() {
