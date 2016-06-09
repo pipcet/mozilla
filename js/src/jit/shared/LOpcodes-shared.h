@@ -64,6 +64,7 @@
     _(TableSwitch)                  \
     _(TableSwitchV)                 \
     _(Goto)                         \
+    _(ThreadedGoto)                 \
     _(NewArray)                     \
     _(NewArrayCopyOnWrite)          \
     _(NewArrayDynamicLength)        \
@@ -390,6 +391,7 @@
     _(AsmJSStoreGlobalVar)          \
     _(AsmJSLoadFFIFunc)             \
     _(AsmJSParameter)               \
+    _(AsmJSEntry)                   \
     _(AsmJSReturn)                  \
     _(AsmJSVoidReturn)              \
     _(AsmJSPassStackArg)            \

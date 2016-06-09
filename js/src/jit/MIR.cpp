@@ -2106,6 +2106,14 @@ MGoto::New(TempAllocator& alloc, MBasicBlock* target)
     return new(alloc) MGoto(target);
 }
 
+MThreadedGoto*
+MThreadedGoto::New(TempAllocator& alloc, MBasicBlock* target,
+                   size_t len, int32_t val)
+{
+    MOZ_ASSERT(target);
+    return new(alloc) MThreadedGoto(alloc, target, len, val);
+}
+
 MGoto*
 MGoto::NewAsm(TempAllocator& alloc)
 {

@@ -120,6 +120,9 @@ MoveEmitterX86::emit(const MoveResolver& moves)
         const MoveOperand& from = move.from();
         const MoveOperand& to = move.to();
 
+        if (from.isClobber())
+            continue;
+
         if (move.isCycleEnd()) {
             MOZ_ASSERT(inCycle_);
             completeCycle(to, move.type());
@@ -380,11 +383,64 @@ MoveEmitterX86::completeCycle(const MoveOperand& to, MoveOp::Type type)
     }
 }
 
+bool
+MoveEmitterX86::firstInPair(const MoveResolver& moves, size_t i)
+{
+    if (i >= moves.numMoves()-1)
+        return false;
+
+    const MoveOp &move1 = moves.getMove(i);
+    if (!move1.from().isInt32() || move1.from().toInt32())
+        return false;
+    if (!move1.to().isMemory())
+        return false;
+    if (move1.to().disp() & 4)
+        return false;
+
+    const MoveOp &move2 = moves.getMove(i+1);
+    if (!move2.from().isInt32() || move2.from().toInt32())
+        return false;
+    if (!move2.to().isMemory())
+        return false;
+    if (!(move2.to().disp() & 4))
+        return false;
+
+    if (move1.to().base() != move2.to().base())
+        return false;
+    if (move2.to().disp() != move1.to().disp() + 4)
+        return false;
+
+    return true;
+}
+
 void
 MoveEmitterX86::emitInt32Move(const MoveOperand& from, const MoveOperand& to,
                               const MoveResolver& moves, size_t i)
 {
-    if (from.isGeneralReg()) {
+    if (from.isInt32()) {
+        if (from.toInt32() == 0) {
+            if (to.isGeneralReg()) {
+                masm.xorl(to.reg(), to.reg());
+                zeroRegister_ = mozilla::Some(to.reg());
+            } else {
+                if (!zeroRegister_.isSome()) {
+                    masm.xorl(r11, r11);
+                    zeroRegister_ = mozilla::Some(r11);
+                }
+                if (firstInPair(moves, i))
+                    masm.movq(zeroRegister_.value(), toOperand(to));
+                else if (firstInPair(moves, i-1))
+                    ;
+                else
+                    masm.move32(zeroRegister_.value(), toOperand(to));
+            }
+        } else {
+            if (to.isGeneralReg())
+                masm.mov(ImmWord(from.toInt32()), to.reg());
+            else
+                masm.move32(Imm32(from.toInt32()), toOperand(to));
+        }
+    } else if (from.isGeneralReg()) {
         masm.move32(from.reg(), toOperand(to));
     } else if (to.isGeneralReg()) {
         MOZ_ASSERT(from.isMemory());
@@ -408,12 +464,19 @@ void
 MoveEmitterX86::emitGeneralMove(const MoveOperand& from, const MoveOperand& to,
                                 const MoveResolver& moves, size_t i)
 {
-    if (from.isGeneralReg()) {
-        masm.mov(from.reg(), toOperand(to));
+    if (from.isInt32()) {
+        if (to.isGeneralReg())
+            masm.mov(ImmWord(from.toInt32()), to.reg());
+        else
+            masm.move32(Imm32(from.toInt32()), toOperand(to));
+    } else if (from.isGeneralReg()) {
+        masm.movq(from.reg(), toOperand(to));
     } else if (to.isGeneralReg()) {
         MOZ_ASSERT(from.isMemoryOrEffectiveAddress());
         if (from.isMemory())
             masm.loadPtr(toAddress(from), to.reg());
+        else if (from.isInt32())
+            masm.mov(ImmWord(from.toInt32()), to.reg());
         else
             masm.lea(toOperand(from), to.reg());
     } else if (from.isMemory()) {

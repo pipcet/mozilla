@@ -39,6 +39,7 @@ namespace jit {
     _(IsConstructing)                                                       \
     _(TableSwitch)                                                          \
     _(Goto)                                                                 \
+    _(ThreadedGoto)                                                         \
     _(Test)                                                                 \
     _(GotoWithFake)                                                         \
     _(ObjectGroupDispatch)                                                  \
@@ -278,6 +279,7 @@ namespace jit {
     _(AsmJSStoreGlobalVar)                                                  \
     _(AsmJSLoadFuncPtr)                                                     \
     _(AsmJSLoadFFIFunc)                                                     \
+    _(AsmJSEntry)                                                           \
     _(AsmJSReturn)                                                          \
     _(AsmJSParameter)                                                       \
     _(AsmJSVoidReturn)                                                      \

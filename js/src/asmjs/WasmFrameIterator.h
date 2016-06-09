@@ -26,7 +26,7 @@ class JSAtom;
 namespace js {
 
 class WasmActivation;
-namespace jit { class MacroAssembler; class Label; }
+namespace jit { class MacroAssembler; class Label; class RegisterSet; template <typename Set> class LiveSet; typedef LiveSet<RegisterSet> LiveRegisterSet; }
 
 namespace wasm {
 
@@ -106,15 +106,15 @@ class ProfilingFrameIterator
 
 void
 GenerateExitPrologue(jit::MacroAssembler& masm, unsigned framePushed, ExitReason reason,
-                     ProfilingOffsets* offsets);
+                     ProfilingOffsets* offsets, jit::LiveRegisterSet regsInUse);
 void
 GenerateExitEpilogue(jit::MacroAssembler& masm, unsigned framePushed, ExitReason reason,
-                     ProfilingOffsets* offsets);
+                     ProfilingOffsets* offsets, jit::LiveRegisterSet regsInUse);
 void
 GenerateFunctionPrologue(jit::MacroAssembler& masm, unsigned framePushed, uint32_t sigIndex,
-                         FuncOffsets* offsets);
+                         FuncOffsets* offsets, jit::LiveRegisterSet regsInUse);
 void
-GenerateFunctionEpilogue(jit::MacroAssembler& masm, unsigned framePushed, FuncOffsets* offsets);
+GenerateFunctionEpilogue(jit::MacroAssembler& masm, unsigned framePushed, FuncOffsets* offsets, jit::LiveRegisterSet regsInUse);
 
 // Runtime patching to enable/disable profiling
 

@@ -255,6 +255,51 @@ MoveResolver::reorderMove(size_t from, size_t to)
     orderedMoves_[to] = op;
 }
 
+int
+MoveResolver::clas(MoveOp &x)
+{
+    if (!x.from().isInt32() ||
+        x.from().toInt32())
+        return 1;
+    if (x.to().isMemory())
+        return 3;
+    return 2;
+}
+
+bool
+MoveResolver::before(MoveOp &a, MoveOp &b)
+{
+    int aclass = clas(a);
+    int bclass = clas(b);
+
+    if (aclass < bclass)
+        return true;
+
+    if (aclass > bclass)
+        return false;
+
+    switch (aclass) {
+    case 1: return false;
+    case 2: return false;
+    case 3: return (a.to().disp() < b.to().disp());
+    }
+
+    return false;
+}
+
+void
+MoveResolver::sortMoves()
+{
+    for (size_t i = numMoves() - 1; i > 0; i--) {
+        size_t maxIndex = i;
+        for (size_t j = 0; j < i; j++)
+            if (before(orderedMoves_[i], orderedMoves_[j]))
+                maxIndex = j;
+        if (maxIndex != i)
+            reorderMove(maxIndex, i);
+    }
+}
+
 void
 MoveResolver::sortMemoryToMemoryMoves()
 {

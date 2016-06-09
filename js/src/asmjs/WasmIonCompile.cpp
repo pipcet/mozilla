@@ -136,6 +136,9 @@ class FunctionCompiler
         if (!newBlock(/* prev */ nullptr, &curBlock_))
             return false;
 
+        MAsmJSEntry* ins = MAsmJSEntry::New(alloc());
+        curBlock_->add(ins);
+
         for (ABIArgValTypeIter i(args); !i.done(); i++) {
             MAsmJSParameter* ins = MAsmJSParameter::New(alloc(), *i, i.mirType());
             curBlock_->add(ins);
@@ -3452,14 +3455,15 @@ wasm::IonCompileFunction(IonCompileTask* task)
         if (!OptimizeMIR(&mir))
             return false;
 
-        LIRGraph* lir = GenerateLIR(&mir);
+        LiveRegisterSet regsInUse;
+        LIRGraph* lir = GenerateLIR(&mir, regsInUse);
         if (!lir)
             return false;
 
         uint32_t sigIndex = task->mg().funcSigIndex(func.index());
 
         CodeGenerator codegen(&mir, lir, &results.masm());
-        if (!codegen.generateWasm(sigIndex, &results.offsets()))
+        if (!codegen.generateWasm(sigIndex, &results.offsets(), regsInUse))
             return false;
     }
 

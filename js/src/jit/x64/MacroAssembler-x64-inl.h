@@ -569,6 +569,94 @@ MacroAssemblerX64::ensureDouble(const ValueOperand& source, FloatRegister dest, 
     bind(&done);
 }
 
+void
+MacroAssembler::prologue(uint32_t amount, LiveRegisterSet regsInUse)
+{
+    unsigned size = 0;
+    int count = 0;
+
+#if 1
+    for (size_t i = 0; i < AnyRegister::Total; i++) {
+        AnyRegister reg = AnyRegister::FromCode(i);
+        if (!reg.volatile_() && regsInUse.has(reg))
+            count++;
+    }
+    size += count*8;
+    if ((count&1) == 0)
+        amount += 8;
+    unsigned offset = amount;
+    subFromStackPtr(Imm32(amount + size)/* + AsmJSFrameBytesAfterReturnAddress */);
+    if (regsInUse.has(r12)) {
+        movq(r12, Operand(rsp, offset));
+        offset += 8;
+    }
+    if (regsInUse.has(r13)) {
+        movq(r13, Operand(rsp, offset));
+        offset += 8;
+    }
+    if (regsInUse.has(r14)) {
+        movq(r14, Operand(rsp, offset));
+        offset += 8;
+    }
+    if (regsInUse.has(r15)) {
+        movq(r15, Operand(rsp, offset));
+        offset += 8;
+    }
+    if (regsInUse.has(rbx)) {
+        movq(rbx, Operand(rsp, offset));
+        offset += 8;
+    }
+    if (regsInUse.has(rbp)) {
+        movq(rbp, Operand(rsp, offset));
+        offset += 8;
+    }
+#endif
+}
+
+void
+MacroAssembler::epilogue(uint32_t amount, LiveRegisterSet regsInUse)
+{
+    unsigned size = 0;
+    int count = 0;
+
+#if 1
+    for (size_t i = 0; i < AnyRegister::Total; i++) {
+        AnyRegister reg = AnyRegister::FromCode(i);
+        if (!reg.volatile_() && regsInUse.has(reg))
+            count++;
+    }
+    size += count*8;
+    if ((count&1) == 0)
+        amount += 8;
+    unsigned offset = amount;
+    if (regsInUse.has(r12)) {
+        movq(Operand(rsp, offset), r12);
+        offset += 8;
+    }
+    if (regsInUse.has(r13)) {
+        movq(Operand(rsp, offset), r13);
+        offset += 8;
+    }
+    if (regsInUse.has(r14)) {
+        movq(Operand(rsp, offset), r14);
+        offset += 8;
+    }
+    if (regsInUse.has(r15)) {
+        movq(Operand(rsp, offset), r15);
+        offset += 8;
+    }
+    if (regsInUse.has(rbx)) {
+        movq(Operand(rsp, offset), rbx);
+        offset += 8;
+    }
+    if (regsInUse.has(rbp)) {
+        movq(Operand(rsp, offset), rbp);
+        offset += 8;
+    }
+    addToStackPtr(Imm32(amount + size)/* + AsmJSFrameBytesAfterReturnAddress */);
+#endif
+}
+
 } // namespace jit
 } // namespace js
 

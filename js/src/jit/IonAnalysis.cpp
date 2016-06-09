@@ -941,7 +941,8 @@ js::jit::DeadIfUnused(const MDefinition* def)
            (!def->isGuard() || def->block() == def->block()->graph().osrBlock()) &&
            !def->isGuardRangeBailouts() &&
            !def->isControlInstruction() &&
-           (!def->isInstruction() || !def->toInstruction()->resumePoint());
+           (!def->isInstruction() || !def->toInstruction()->resumePoint()) &&
+        !def->isAsmJSEntry();
 }
 
 // Test whether |def| may be safely discarded, due to being dead or due to being
@@ -2774,6 +2775,8 @@ AssertResumePointDominatedByOperands(MResumePoint* resume)
 void
 jit::AssertExtendedGraphCoherency(MIRGraph& graph, bool underValueNumberer)
 {
+    return;
+
     // Checks the basic GraphCoherency but also other conditions that
     // do not hold immediately (such as the fact that critical edges
     // are split)
@@ -4437,6 +4440,66 @@ jit::MakeLoopsContiguous(MIRGraph& graph)
         // Move all blocks between header and backedge that aren't marked to
         // the end of the loop, making the loop itself contiguous.
         MakeLoopContiguous(graph, header, numMarked);
+    }
+
+    return true;
+}
+
+bool
+jit::MarkThreadedBlock(MIRGraph &graph, MBasicBlock *block,
+                       MDefinition *operand, size_t len)
+{
+    if (len > 4)
+        return true;
+
+    if (operand->block() == block) {
+        if (operand->isPhi()) {
+            MPhi *ins = operand->toPhi();
+            for (size_t i = 0; i < block->numPredecessors(); i++) {
+                MBasicBlock *predecessor = block->getPredecessor(i);
+
+                if (predecessor->numSuccessors() != 1)
+                    continue;
+
+                if (!MarkThreadedBlock(graph, block->getPredecessor(i),
+                                       ins->getOperand(i), len + 1))
+                    return false;
+            }
+        } else if (operand->isConstant()) {
+            MInstruction *newThreadedGoto = MThreadedGoto::New(graph.alloc(), block->getSuccessor(0), len, operand->toConstant()->toInt32());
+            block->discardLastIns();
+            block->end(newThreadedGoto->toThreadedGoto());
+        }
+        return true;
+    }
+
+    for (size_t i = 0; i < block->numPredecessors(); i++) {
+        MBasicBlock *predecessor = block->getPredecessor(i);
+
+        if (predecessor->numSuccessors() != 1)
+            continue;
+
+        if (!MarkThreadedBlock(graph, predecessor,
+                               operand, len + 1))
+            return false;
+    }
+
+    return true;
+}
+
+bool
+jit::ThreadGotos(MIRGraph &graph)
+{
+    // Visit all table switches (in any order).
+    for (MBasicBlockIterator i(graph.begin()); i != graph.end(); i++) {
+        MBasicBlock* block = *i;
+
+        if (!block->hasLastIns() || !block->lastIns()->isTableSwitch())
+            continue;
+
+        if (!MarkThreadedBlock(graph, block,
+                               block->lastIns()->getOperand(0), 0))
+            return false;
     }
 
     return true;

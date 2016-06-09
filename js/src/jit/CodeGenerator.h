@@ -66,12 +66,13 @@ class CodeGenerator : public CodeGeneratorSpecific
 
   public:
     MOZ_MUST_USE bool generate();
-    MOZ_MUST_USE bool generateWasm(uint32_t sigIndex, wasm::FuncOffsets *offsets);
+    MOZ_MUST_USE bool generateWasm(uint32_t sigIndex, wasm::FuncOffsets *offsets, LiveRegisterSet regsInUse);
     MOZ_MUST_USE bool link(JSContext* cx, CompilerConstraintList* constraints);
     MOZ_MUST_USE bool linkSharedStubs(JSContext* cx);
 
     void visitOsiPoint(LOsiPoint* lir);
     void visitGoto(LGoto* lir);
+    void visitThreadedGoto(LThreadedGoto* lir);
     void visitTableSwitch(LTableSwitch* ins);
     void visitTableSwitchV(LTableSwitchV* ins);
     void visitCloneLiteral(LCloneLiteral* lir);
@@ -79,6 +80,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitCallee(LCallee* lir);
     void visitIsConstructing(LIsConstructing* lir);
     void visitStart(LStart* lir);
+    void visitAsmJSEntry(LAsmJSEntry* ret);
     void visitReturn(LReturn* ret);
     void visitDefVar(LDefVar* lir);
     void visitDefLexical(LDefLexical* lir);
@@ -91,6 +93,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitStackArgT(LStackArgT* lir);
     void visitStackArgV(LStackArgV* lir);
     void visitMoveGroup(LMoveGroup* group);
+    void visitMoveGroups(LBlock* block);
     void visitValueToInt32(LValueToInt32* lir);
     void visitValueToDouble(LValueToDouble* lir);
     void visitValueToFloat32(LValueToFloat32* lir);
@@ -565,6 +568,11 @@ class CodeGenerator : public CodeGeneratorSpecific
 
     void registerSimdTemplate(SimdType simdType);
     void captureSimdTemplate(JSContext* cx);
+
+    LMoveGroup *movegroup_;
+    void flushMoveGroup();
+    LMoveGroup *getMoveGroup();
+    void emitMoveGroup(LMoveGroup *);
 };
 
 } // namespace jit

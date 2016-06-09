@@ -698,7 +698,7 @@ ModuleGenerator::declareExport(UniqueChars fieldName, uint32_t funcIndex, uint32
     }
 
     uint32_t newExportIndex = metadata_->exports.length();
-    MOZ_ASSERT(newExportIndex < MaxExports);
+    //MOZ_ASSERT(newExportIndex < MaxExports);
 
     if (exportIndex)
         *exportIndex = newExportIndex;

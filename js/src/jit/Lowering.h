@@ -70,6 +70,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitCallee(MCallee* callee);
     void visitIsConstructing(MIsConstructing* ins);
     void visitGoto(MGoto* ins);
+    void visitThreadedGoto(MThreadedGoto* ins);
     void visitTableSwitch(MTableSwitch* tableswitch);
     void visitNewArray(MNewArray* ins);
     void visitNewArrayCopyOnWrite(MNewArrayCopyOnWrite* ins);
@@ -284,6 +285,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitAsmJSStoreGlobalVar(MAsmJSStoreGlobalVar* ins);
     void visitAsmJSLoadFFIFunc(MAsmJSLoadFFIFunc* ins);
     void visitAsmJSParameter(MAsmJSParameter* ins);
+    void visitAsmJSEntry(MAsmJSEntry* ins);
     void visitAsmJSReturn(MAsmJSReturn* ins);
     void visitAsmJSVoidReturn(MAsmJSVoidReturn* ins);
     void visitAsmJSPassStackArg(MAsmJSPassStackArg* ins);

@@ -139,6 +139,16 @@ LIRGenerator::visitGoto(MGoto* ins)
 }
 
 void
+LIRGenerator::visitThreadedGoto(MThreadedGoto* ins)
+{
+    if (!gen->compilingAsmJS() && ins->block()->isLoopBackedge())
+        TryToUseImplicitInterruptCheck(graph, ins->block());
+
+    LThreadedGoto *lir = new(alloc()) LThreadedGoto(alloc(), ins->target(), ins->len(), ins->val());
+    add(lir);
+}
+
+void
 LIRGenerator::visitTableSwitch(MTableSwitch* tableswitch)
 {
     MDefinition* opd = tableswitch->getOperand(0);
@@ -4133,6 +4143,12 @@ void
 LIRGenerator::visitAsmJSVoidReturn(MAsmJSVoidReturn* ins)
 {
     add(new(alloc()) LAsmJSVoidReturn);
+}
+
+void
+LIRGenerator::visitAsmJSEntry(MAsmJSEntry *ins)
+{
+    add(new(alloc()) LAsmJSEntry);
 }
 
 void

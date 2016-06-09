@@ -420,7 +420,7 @@ wasm::GenerateInterpExit(MacroAssembler& masm, const Import& import, uint32_t im
     unsigned framePushed = StackDecrementForCall(masm, ABIStackAlignment, argOffset + argBytes);
 
     ProfilingOffsets offsets;
-    GenerateExitPrologue(masm, framePushed, ExitReason::ImportInterp, &offsets);
+    GenerateExitPrologue(masm, framePushed, ExitReason::ImportInterp, &offsets, LiveRegisterSet());
 
     // Fill the argument array.
     unsigned offsetToCallerStackArgs = sizeof(AsmJSFrame) + masm.framePushed();
@@ -497,7 +497,7 @@ wasm::GenerateInterpExit(MacroAssembler& masm, const Import& import, uint32_t im
         MOZ_CRASH("Limit");
     }
 
-    GenerateExitEpilogue(masm, framePushed, ExitReason::ImportInterp, &offsets);
+    GenerateExitEpilogue(masm, framePushed, ExitReason::ImportInterp, &offsets, LiveRegisterSet());
 
     offsets.end = masm.currentOffset();
     return offsets;
@@ -533,7 +533,7 @@ wasm::GenerateJitExit(MacroAssembler& masm, const Import& import, bool usesHeap)
                               sizeOfRetAddr;
 
     ProfilingOffsets offsets;
-    GenerateExitPrologue(masm, jitFramePushed, ExitReason::ImportJit, &offsets);
+    GenerateExitPrologue(masm, jitFramePushed, ExitReason::ImportJit, &offsets, LiveRegisterSet());
 
     // 1. Descriptor
     size_t argOffset = 0;
@@ -760,7 +760,7 @@ wasm::GenerateJitExit(MacroAssembler& masm, const Import& import, bool usesHeap)
     if (usesHeap)
         masm.loadAsmJSHeapRegisterFromGlobalData();
 
-    GenerateExitEpilogue(masm, masm.framePushed(), ExitReason::ImportJit, &offsets);
+    GenerateExitEpilogue(masm, masm.framePushed(), ExitReason::ImportJit, &offsets, LiveRegisterSet());
 
     if (oolConvert.used()) {
         masm.bind(&oolConvert);
