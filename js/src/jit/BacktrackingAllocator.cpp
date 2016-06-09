@@ -2219,7 +2219,7 @@ BacktrackingAllocator::populateSafepoints()
 }
 
 bool
-BacktrackingAllocator::annotateMoveGroups(LiveRegisterSet regsInUse)
+BacktrackingAllocator::annotateMoveGroups(LiveRegisterSet &regsInUse)
 {
     LiveRange* range = LiveRange::FallibleNew(alloc(), 0, CodePosition(), CodePosition().next());
     if (!range)
