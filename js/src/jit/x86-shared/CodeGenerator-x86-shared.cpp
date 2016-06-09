@@ -1833,6 +1833,9 @@ CodeGeneratorX86Shared::emitTableSwitchDispatch(MTableSwitch* mir, Register inde
         Label *firstcase = skipTrivialBlocks(mir->getSuccessor(1))->lir()->label();
         masm.subl(Imm32(mir->low()), index);
         masm.j(AssemblerX86Shared::Equal, firstcase);
+    } else {
+        masm.cmp32(0, index);
+        masm.j(AssemblerX86Shared::Equal, firstcase);
     }
     // Jump to default case if input is out of range
     int32_t cases = mir->numCases();
