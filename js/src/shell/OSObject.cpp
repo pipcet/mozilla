@@ -787,45 +787,6 @@ static const JSFunctionSpecWithHelp ossys_unsafe_functions[] = {
 };
 
 static bool
-ossys_call(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    unsigned long sysargs[6];
-
-    if (args.length() < 1 || args.length() > 6) {
-        JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr, JSSMSG_INVALID_ARGS, "sys.call");
-        return false;
-    }
-
-    size_t j = 0;
-    for (size_t i = 0; i < args.length(); i++) {
-        if (args[i].isNumber())
-            sysargs[j++] = args[i].toInt32();
-        else {
-            if (!args[i].isObject())
-                return false;
-            void *buf = args[i].toObject().as<TypedArrayObject>().viewDataUnshared();
-            buf += args[i+1].toInt32();
-            sysargs[j++] = (unsigned long)buf;
-            i++;
-        }
-    }
-
-    int ret = syscall(sysargs[0], sysargs[1], sysargs[2],
-                      sysargs[3], sysargs[4], sysargs[5]);
-
-    args.rval().setInt32(ret);
-    return true;
-}
-
-static const JSFunctionSpecWithHelp ossys_unsafe_functions[] = {
-    JS_FN_HELP("call", ossys_call, 6, 0,
-"call(number, ...)",
-"  Perform syscall."),
-    JS_FS_HELP_END
-};
-
-static bool
 ospath_isAbsolute(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -1230,12 +1191,6 @@ DefineOS(JSContext* cx, HandleObject global,
         if (!JS_DefineFunctionsWithHelp(cx, osfile, osfile_unsafe_functions))
             return false;
     }
-
-    RootedObject ossys(cx, JS_NewPlainObject(cx));
-    if (!ossys ||
-        !JS_DefineFunctionsWithHelp(cx, ossys, ossys_unsafe_functions) ||
-        !JS_DefineProperty(cx, obj, "sys", ossys, 0))
-        return false;
 
     RootedObject ossys(cx, JS_NewPlainObject(cx));
     if (!ossys ||
