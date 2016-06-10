@@ -3,13 +3,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/gfx/PrintTargetThebes.h"
+#include "nsDeviceContextSpecG.h"
+
+#include "mozilla/gfx/PrintTargetPDF.h"
+#include "mozilla/gfx/PrintTargetPS.h"
 #include "mozilla/Logging.h"
 
 #include "plstr.h"
-
-#include "nsDeviceContextSpecG.h"
-
 #include "prenv.h" /* for PR_GetEnv */
 
 #include "nsPrintfCString.h"
@@ -34,8 +34,10 @@
 
 using namespace mozilla;
 
+using mozilla::gfx::IntSize;
 using mozilla::gfx::PrintTarget;
-using mozilla::gfx::PrintTargetThebes;
+using mozilla::gfx::PrintTargetPDF;
+using mozilla::gfx::PrintTargetPS;
 
 static PRLogModuleInfo *
 GetDeviceContextSpecGTKLog()
@@ -104,8 +106,6 @@ nsDeviceContextSpecGTK::~nsDeviceContextSpecGTK()
 NS_IMPL_ISUPPORTS(nsDeviceContextSpecGTK,
                   nsIDeviceContextSpec)
 
-#include "gfxPDFSurface.h"
-#include "gfxPSSurface.h"
 already_AddRefed<PrintTarget> nsDeviceContextSpecGTK::MakePrintTarget()
 {
   double width, height;
@@ -150,9 +150,6 @@ already_AddRefed<PrintTarget> nsDeviceContextSpecGTK::MakePrintTarget()
   int16_t format;
   mPrintSettings->GetOutputFormat(&format);
 
-  RefPtr<gfxASurface> surface;
-  gfxSize surfaceSize(width, height);
-
   // Determine the real format with some GTK magic
   if (format == nsIPrintSettings::kOutputFormatNative) {
     if (mIsPPreview) {
@@ -163,23 +160,19 @@ already_AddRefed<PrintTarget> nsDeviceContextSpecGTK::MakePrintTarget()
     }
   }
 
+  IntSize size(width, height);
+
   if (format == nsIPrintSettings::kOutputFormatPDF) {
-    surface = new gfxPDFSurface(stream, surfaceSize);
-  } else {
-    int32_t orientation;
-    mPrintSettings->GetOrientation(&orientation);
-    if (nsIPrintSettings::kPortraitOrientation == orientation) {
-      surface = new gfxPSSurface(stream, surfaceSize, gfxPSSurface::PORTRAIT);
-    } else {
-      surface = new gfxPSSurface(stream, surfaceSize, gfxPSSurface::LANDSCAPE);
-    }
+    return PrintTargetPDF::CreateOrNull(stream, size);
   }
 
-  if (!surface) {
-    return nullptr;
-  }
-
-  return PrintTargetThebes::CreateOrNull(surface);
+  int32_t orientation;
+  mPrintSettings->GetOrientation(&orientation);
+  return PrintTargetPS::CreateOrNull(stream,
+                                     size,
+                                     orientation == nsIPrintSettings::kPortraitOrientation
+                                       ? PrintTargetPS::PORTRAIT
+                                       : PrintTargetPS::LANDSCAPE);
 }
 
 /** -------------------------------------------------------
