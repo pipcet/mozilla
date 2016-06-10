@@ -570,7 +570,7 @@ MacroAssemblerX64::ensureDouble(const ValueOperand& source, FloatRegister dest, 
 }
 
 void
-MacroAssembler::prologue(uint32_t amount, LiveRegisterSet regsInUse)
+MacroAssembler::prologue(uint32_t &amount, LiveRegisterSet regsInUse)
 {
     unsigned size = 0;
     int count = 0;
@@ -585,7 +585,9 @@ MacroAssembler::prologue(uint32_t amount, LiveRegisterSet regsInUse)
     if ((count&1) == 0)
         amount += 8;
     unsigned offset = amount;
-    subFromStackPtr(Imm32(amount + size)/* + AsmJSFrameBytesAfterReturnAddress */);
+    amount += size;
+    subFromStackPtr(Imm32(amount)/* + AsmJSFrameBytesAfterReturnAddress */);
+    amount -= 8;
     if (regsInUse.has(r12)) {
         movq(r12, Operand(rsp, offset));
         offset += 8;

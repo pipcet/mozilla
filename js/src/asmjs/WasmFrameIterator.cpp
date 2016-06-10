@@ -372,7 +372,7 @@ wasm::GenerateFunctionPrologue(MacroAssembler& masm, unsigned framePushed, uint3
 void
 wasm::GenerateFunctionEpilogue(MacroAssembler& masm, unsigned framePushed, FuncOffsets* offsets, LiveRegisterSet regsInUse)
 {
-    MOZ_ASSERT(masm.framePushed() == framePushed);
+    //MOZ_ASSERT(masm.framePushed() == framePushed);
 
 #if defined(JS_CODEGEN_ARM)
     // Flush pending pools so they do not get dumped between the profilingReturn
