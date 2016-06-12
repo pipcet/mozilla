@@ -570,7 +570,7 @@ MacroAssemblerX64::ensureDouble(const ValueOperand& source, FloatRegister dest, 
 }
 
 void
-MacroAssembler::prologue(uint32_t &amount, LiveRegisterSet regsInUse)
+MacroAssembler::prologue(uint32_t amount, LiveRegisterSet regsInUse)
 {
     unsigned size = 0;
     int count = 0;
