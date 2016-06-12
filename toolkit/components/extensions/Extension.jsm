@@ -88,6 +88,7 @@ ExtensionManagement.registerSchema("chrome://extensions/content/schemas/notifica
 ExtensionManagement.registerSchema("chrome://extensions/content/schemas/runtime.json");
 ExtensionManagement.registerSchema("chrome://extensions/content/schemas/storage.json");
 ExtensionManagement.registerSchema("chrome://extensions/content/schemas/test.json");
+ExtensionManagement.registerSchema("chrome://extensions/content/schemas/events.json");
 ExtensionManagement.registerSchema("chrome://extensions/content/schemas/web_navigation.json");
 ExtensionManagement.registerSchema("chrome://extensions/content/schemas/web_request.json");
 
@@ -478,12 +479,13 @@ ParentAPIManager.init();
 // For extensions that have called setUninstallURL(), send an event
 // so the browser can display the URL.
 let UninstallObserver = {
-  init: function() {
-    AddonManager.addAddonListener(this);
-  },
+  initialized: false,
 
-  uninit: function() {
-    AddonManager.removeAddonListener(this);
+  init: function() {
+    if (!this.initialized) {
+      AddonManager.addAddonListener(this);
+      this.initialized = true;
+    }
   },
 
   onUninstalling: function(addon) {
@@ -514,7 +516,6 @@ GlobalManager = {
 
     if (this.extensionMap.size == 0) {
       Services.obs.removeObserver(this, "content-document-global-created");
-      UninstallObserver.uninit();
     }
   },
 

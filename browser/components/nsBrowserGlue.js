@@ -21,6 +21,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "AboutHome",
 XPCOMUtils.defineLazyModuleGetter(this, "AboutNewTab",
                                   "resource:///modules/AboutNewTab.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "CaptivePortalWatcher",
+                                  "resource:///modules/CaptivePortalWatcher.jsm");
+
 XPCOMUtils.defineLazyModuleGetter(this, "DirectoryLinksProvider",
                                   "resource:///modules/DirectoryLinksProvider.jsm");
 
@@ -312,6 +315,9 @@ BrowserGlue.prototype = {
       case "fxaccounts:onverified":
         this._showSyncStartedDoorhanger();
         break;
+      case "fxaccounts:device_disconnected":
+        this._onDeviceDisconnected();
+        break;
       case "weave:engine:clients:display-uri":
         this._onDisplaySyncURI(subject);
         break;
@@ -530,6 +536,7 @@ BrowserGlue.prototype = {
     }
     os.addObserver(this, "weave:service:ready", false);
     os.addObserver(this, "fxaccounts:onverified", false);
+    os.addObserver(this, "fxaccounts:device_disconnected", false);
     os.addObserver(this, "weave:engine:clients:display-uri", false);
     os.addObserver(this, "session-save", false);
     os.addObserver(this, "places-init-complete", false);
@@ -596,6 +603,7 @@ BrowserGlue.prototype = {
     }
     os.removeObserver(this, "weave:service:ready");
     os.removeObserver(this, "fxaccounts:onverified");
+    os.removeObserver(this, "fxaccounts:device_disconnected");
     os.removeObserver(this, "weave:engine:clients:display-uri");
     os.removeObserver(this, "session-save");
     if (this._bookmarksBackupIdleTime) {
@@ -1145,6 +1153,8 @@ BrowserGlue.prototype = {
       this.checkForPendingCrashReports();
     }
 
+    CaptivePortalWatcher.init();
+
     this._firstWindowTelemetry(aWindow);
     this._firstWindowLoaded();
   },
@@ -1169,6 +1179,8 @@ BrowserGlue.prototype = {
 
     SelfSupportBackend.uninit();
     NewTabMessages.uninit();
+
+    CaptivePortalWatcher.uninit();
 
     AboutNewTab.uninit();
     webrtcUI.uninit();
@@ -2503,6 +2515,19 @@ BrowserGlue.prototype = {
     } catch (ex) {
       Cu.reportError("Error displaying tab received by Sync: " + ex);
     }
+  },
+
+  _onDeviceDisconnected() {
+    let bundle = Services.strings.createBundle("chrome://browser/locale/accounts.properties");
+    let title = bundle.GetStringFromName("deviceDisconnectedNotification.title");
+    let body = bundle.GetStringFromName("deviceDisconnectedNotification.body");
+
+    let clickCallback = (subject, topic, data) => {
+      if (topic != "alertclickcallback")
+        return;
+      this._openPreferences("sync");
+    }
+    AlertsService.showAlertNotification(null, title, body, true, null, clickCallback);
   },
 
   _handleFlashHang: function() {

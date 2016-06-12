@@ -579,6 +579,9 @@ pref("mousewheel.with_win.action", 1);
 pref("browser.xul.error_pages.enabled", true);
 pref("browser.xul.error_pages.expert_bad_cert", false);
 
+// Enable captive portal detection.
+pref("network.captive-portal-service.enabled", true);
+
 // If true, network link events will change the value of navigator.onLine
 pref("network.manage-offline-status", true);
 
@@ -614,6 +617,8 @@ pref("accessibility.typeaheadfind", false);
 pref("accessibility.typeaheadfind.timeout", 5000);
 pref("accessibility.typeaheadfind.linksonly", false);
 pref("accessibility.typeaheadfind.flashBar", 1);
+pref("findbar.highlightAll", true);
+pref("findbar.modalHighlight", true);
 
 // Tracks when accessibility is loaded into the previous session.
 pref("accessibility.loadedInLastSession", false);
@@ -1417,6 +1422,8 @@ pref("media.webspeech.synth.enabled", true);
 pref("browser.esedbreader.loglevel", "Error");
 
 pref("browser.laterrun.enabled", false);
+
+pref("browser.migration.automigrate", false);
 
 // Enable browser frames for use on desktop.  Only exposed to chrome callers.
 pref("dom.mozBrowserFramesEnabled", true);
