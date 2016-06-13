@@ -2675,7 +2675,7 @@ CodeGenerator::visitThreadedGoto(LThreadedGoto* lir)
         else
             index = val - ts->low() + 1;
 
-        block = ts->getSuccessor(index);
+        block = index ? ts->getCase(index-1) : ts->getDefault();
     }
 
     if (!path.append(block))
