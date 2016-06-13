@@ -590,7 +590,7 @@ MacroAssembler::prologue(uint32_t &amount, LiveRegisterSet regsInUse)
     amount += size;
     subFromStackPtr(Imm32(amount)/* + AsmJSFrameBytesAfterReturnAddress */);
     amount -= 8;
-    offset = (count&1) ? 16 : 8;
+    offset = 16;
     if (regsInUse.has(r12)) {
         movq(r12, Operand(rsp, offset));
         offset += 8;
@@ -615,6 +615,8 @@ MacroAssembler::prologue(uint32_t &amount, LiveRegisterSet regsInUse)
         movq(rbp, Operand(rsp, offset));
         offset += 8;
     }
+#else
+    subFromStackPtr(Imm32(amount + 8));
 #endif
 }
 
@@ -636,7 +638,7 @@ MacroAssembler::epilogue(uint32_t amount, LiveRegisterSet regsInUse)
     else
         amount += 16+16;
     unsigned offset = amount;
-    offset = (count&1) ? 16 : 8;
+    offset = 16;
     if (regsInUse.has(r12)) {
         movq(Operand(rsp, offset), r12);
         offset += 8;
@@ -662,6 +664,8 @@ MacroAssembler::epilogue(uint32_t amount, LiveRegisterSet regsInUse)
         offset += 8;
     }
     addToStackPtr(Imm32(amount + size)/* + AsmJSFrameBytesAfterReturnAddress */);
+#else
+    addToStackPtr(Imm32(amount + 8));
 #endif
 }
 
