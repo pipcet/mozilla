@@ -4121,7 +4121,7 @@ function updateUserContextUIIndicator()
   }
 
   let label = document.getElementById("userContext-label");
-  label.value = ContextualIdentityService.getUserContextLabel(userContextId);
+  label.setAttribute('value', ContextualIdentityService.getUserContextLabel(userContextId));
   label.style.color = identity.color;
 
   let indicator = document.getElementById("userContext-indicator");
@@ -5540,6 +5540,12 @@ function handleLinkClick(event, href, linkNode) {
                  referrerURI: referrerURI,
                  referrerPolicy: referrerPolicy,
                  noReferrer: BrowserUtils.linkHasNoReferrer(linkNode) };
+
+  // The new tab/window must use the same userContextId
+  if (doc.nodePrincipal.originAttributes.userContextId) {
+    params.userContextId = doc.nodePrincipal.originAttributes.userContextId;
+  }
+
   openLinkIn(href, where, params);
   event.preventDefault();
   return true;
@@ -6887,6 +6893,10 @@ var gIdentityHandler = {
         this._identityBox.classList.add("insecureLoginForms");
       }
       tooltip = gNavigatorBundle.getString("identity.unknown.tooltip");
+    }
+
+    if (SitePermissions.hasGrantedPermissions(this._uri)) {
+      this._identityBox.classList.add("grantedPermissions");
     }
 
     // Push the appropriate strings out to the UI

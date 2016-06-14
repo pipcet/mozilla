@@ -6,6 +6,7 @@
 #ifndef mozilla_dom_HTMLMediaElement_h
 #define mozilla_dom_HTMLMediaElement_h
 
+#include "nsAutoPtr.h"
 #include "nsIDOMHTMLMediaElement.h"
 #include "nsGenericHTMLElement.h"
 #include "MediaDecoderOwner.h"
@@ -703,6 +704,11 @@ public:
   void NotifyCueRemoved(TextTrackCue& aCue) {
     if (mTextTrackManager) {
       mTextTrackManager->NotifyCueRemoved(aCue);
+    }
+  }
+  void NotifyCueUpdated(TextTrackCue *aCue) {
+    if (mTextTrackManager) {
+      mTextTrackManager->NotifyCueUpdated(aCue);
     }
   }
 

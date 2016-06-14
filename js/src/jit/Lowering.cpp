@@ -388,9 +388,10 @@ LIRGenerator::visitCreateThis(MCreateThis* ins)
 void
 LIRGenerator::visitCreateArgumentsObject(MCreateArgumentsObject* ins)
 {
-    // LAllocation callObj = useRegisterAtStart(ins->getCallObject());
     LAllocation callObj = useFixed(ins->getCallObject(), CallTempReg0);
-    LCreateArgumentsObject* lir = new(alloc()) LCreateArgumentsObject(callObj, tempFixed(CallTempReg1));
+    LCreateArgumentsObject* lir = new(alloc()) LCreateArgumentsObject(callObj, tempFixed(CallTempReg1),
+                                                                      tempFixed(CallTempReg2),
+                                                                      tempFixed(CallTempReg3));
     defineReturn(lir, ins);
     assignSafepoint(lir, ins);
 }
@@ -935,6 +936,9 @@ LIRGenerator::visitTest(MTest* test)
       case MIRType::Int32:
       case MIRType::Boolean:
         add(new(alloc()) LTestIAndBranch(useRegister(opd), ifTrue, ifFalse));
+        break;
+      case MIRType::Int64:
+        add(new(alloc()) LTestI64AndBranch(useInt64Register(opd), ifTrue, ifFalse));
         break;
       default:
         MOZ_CRASH("Bad type");

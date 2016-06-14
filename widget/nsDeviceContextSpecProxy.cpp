@@ -6,9 +6,9 @@
 
 #include "nsDeviceContextSpecProxy.h"
 
-#include "gfxASurface.h"
 #include "gfxPlatform.h"
 #include "mozilla/gfx/DrawEventRecorder.h"
+#include "mozilla/gfx/PrintTargetRecording.h"
 #include "mozilla/layout/RemotePrintJobChild.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/unused.h"
@@ -17,6 +17,9 @@
 #include "nsIPrintSettings.h"
 
 using mozilla::Unused;
+
+using namespace mozilla;
+using namespace mozilla::gfx;
 
 NS_IMPL_ISUPPORTS(nsDeviceContextSpecProxy, nsIDeviceContextSpec)
 
@@ -61,28 +64,22 @@ nsDeviceContextSpecProxy::Init(nsIWidget* aWidget,
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsDeviceContextSpecProxy::GetSurfaceForPrinter(gfxASurface** aSurface)
+already_AddRefed<PrintTarget>
+nsDeviceContextSpecProxy::MakePrintTarget()
 {
-  MOZ_ASSERT(aSurface);
   MOZ_ASSERT(mRealDeviceContextSpec);
 
   double width, height;
   nsresult rv = mPrintSettings->GetEffectivePageSize(&width, &height);
   if (NS_WARN_IF(NS_FAILED(rv)) || width <= 0 || height <= 0) {
-    return NS_ERROR_FAILURE;
+    return nullptr;
   }
 
   // convert twips to points
   width /= TWIPS_PER_POINT_FLOAT;
   height /= TWIPS_PER_POINT_FLOAT;
 
-  RefPtr<gfxASurface> surface = gfxPlatform::GetPlatform()->
-    CreateOffscreenSurface(mozilla::gfx::IntSize(width, height),
-                           mozilla::gfx::SurfaceFormat::A8R8G8B8_UINT32);
-
-  surface.forget(aSurface);
-  return NS_OK;
+  return PrintTargetRecording::CreateOrNull(IntSize(width, height));
 }
 
 NS_IMETHODIMP

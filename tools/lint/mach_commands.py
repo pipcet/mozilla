@@ -33,7 +33,7 @@ here = os.path.abspath(os.path.dirname(__file__))
 ESLINT_PACKAGES = [
     "eslint@2.9.0",
     "eslint-plugin-html@1.4.0",
-    "eslint-plugin-mozilla@0.0.3",
+    "eslint-plugin-mozilla@0.1.0",
     "eslint-plugin-react@4.2.3"
 ]
 
@@ -81,6 +81,11 @@ class MachCommands(MachCommandBase):
     @CommandArgument(
         '-f', '--format', dest='fmt', default='stylish',
         help="Formatter to use. Defaults to 'stylish'.")
+    @CommandArgument(
+        '-n', '--no-filter', dest='use_filters', default=True, action='store_false',
+        help="Ignore all filtering. This is useful for quickly testing a "
+             "directory that otherwise wouldn't be run, without needing to "
+             "modify the config file.")
     def lint(self, paths, linters=None, fmt='stylish', **lintargs):
         """Run linters."""
         from mozlint import LintRoller, formatters
@@ -384,7 +389,7 @@ class MachCommands(MachCommandBase):
         return os.path.dirname(fullpath)
 
     def get_eslint_module_path(self):
-        return os.path.join(self.get_project_root(), "testing", "eslint")
+        return os.path.join(self.get_project_root(), "tools", "lint", "eslint")
 
     def _prompt_yn(self, msg):
         if not sys.stdin.isatty():

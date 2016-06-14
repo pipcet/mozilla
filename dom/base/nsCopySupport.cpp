@@ -572,7 +572,8 @@ nsCopySupport::GetSelectionForCopy(nsIDocument* aDocument, nsISelection** aSelec
   }
 
   // if no selection was found, use the main selection for the window
-  NS_IF_ADDREF(*aSelection = presShell->GetCurrentSelection(nsISelectionController::SELECTION_NORMAL));
+  NS_IF_ADDREF(*aSelection =
+                 presShell->GetCurrentSelection(SelectionType::eNormal));
   return nullptr;
 }
 
@@ -691,8 +692,8 @@ nsCopySupport::FireClipboardEvent(EventMessage aEventMessage,
   RefPtr<DataTransfer> clipboardData;
   if (chromeShell || Preferences::GetBool("dom.event.clipboardevents.enabled", true)) {
     clipboardData =
-      new DataTransfer(doc->GetScopeObject(), aEventMessage,
-                       aEventMessage == ePaste, aClipboardType);
+      new DataTransfer(piWindow, aEventMessage, aEventMessage == ePaste,
+                       aClipboardType);
 
     nsEventStatus status = nsEventStatus_eIgnore;
     InternalClipboardEvent evt(true, aEventMessage);

@@ -109,7 +109,6 @@
 #include "mozilla/unused.h"
 #include "nsAnonymousTemporaryFile.h"
 #include "nsAppRunner.h"
-#include "nsAutoPtr.h"
 #include "nsCDefaultURIFixup.h"
 #include "nsCExternalHandlerService.h"
 #include "nsCOMPtr.h"
@@ -1401,15 +1400,8 @@ ContentParent::GetAll(nsTArray<ContentParent*>& aArray)
 {
   aArray.Clear();
 
-  if (!sContentParents) {
-    return;
-  }
-
-  for (ContentParent* cp = sContentParents->getFirst(); cp;
-     cp = cp->LinkedListElement<ContentParent>::getNext()) {
-    if (cp->mIsAlive) {
-      aArray.AppendElement(cp);
-    }
+  for (auto* cp : AllProcesses(eLive)) {
+    aArray.AppendElement(cp);
   }
 }
 
@@ -1418,12 +1410,7 @@ ContentParent::GetAllEvenIfDead(nsTArray<ContentParent*>& aArray)
 {
   aArray.Clear();
 
-  if (!sContentParents) {
-    return;
-  }
-
-  for (ContentParent* cp = sContentParents->getFirst(); cp;
-     cp = cp->LinkedListElement<ContentParent>::getNext()) {
+  for (auto* cp : AllProcesses(eAll)) {
     aArray.AppendElement(cp);
   }
 }
@@ -1762,8 +1749,7 @@ ContentParent::ShutDownProcess(ShutDownMethod aMethod)
   }
 
   // If Close() fails with an error, we'll end up back in this function, but
-  // with aMethod = CLOSE_CHANNEL_WITH_ERROR.  It's important that we call
-  // CloseWithError() in this case; see bug 895204.
+  // with aMethod = CLOSE_CHANNEL_WITH_ERROR.
 
   if (aMethod == CLOSE_CHANNEL && !mCalledClose) {
     // Close() can only be called once: It kicks off the destruction
@@ -1777,14 +1763,6 @@ ContentParent::ShutDownProcess(ShutDownMethod aMethod)
       KillHard("ShutDownProcess");
     }
 #endif
-  }
-
-  if (aMethod == CLOSE_CHANNEL_WITH_ERROR && !mCalledCloseWithError) {
-    MessageChannel* channel = GetIPCChannel();
-    if (channel) {
-      mCalledCloseWithError = true;
-      channel->CloseWithError();
-    }
   }
 
   const ManagedContainer<POfflineCacheUpdateParent>& ocuParents =
@@ -2315,7 +2293,6 @@ ContentParent::InitializeMembers()
   mMetamorphosed = false;
   mSendPermissionUpdates = false;
   mCalledClose = false;
-  mCalledCloseWithError = false;
   mCalledKillHard = false;
   mCreatedPairedMinidumps = false;
   mShutdownPending = false;
@@ -3060,7 +3037,7 @@ ContentParent::OnNewProcessCreated(uint32_t aPid,
   }
 
   // Update offline settings.
-  bool isOffline, isLangRTL;
+  bool isOffline, isLangRTL, haveBidiKeyboards;
   bool isConnected;
   InfallibleTArray<nsString> unusedDictionaries;
   ClipboardCapabilities clipboardCaps;
@@ -3068,7 +3045,8 @@ ContentParent::OnNewProcessCreated(uint32_t aPid,
   StructuredCloneData initialData;
 
   RecvGetXPCOMProcessAttributes(&isOffline, &isConnected,
-                                &isLangRTL, &unusedDictionaries,
+                                &isLangRTL, &haveBidiKeyboards,
+                                &unusedDictionaries,
                                 &clipboardCaps, &domainPolicy, &initialData);
   mozilla::Unused << content->SendSetOffline(isOffline);
   mozilla::Unused << content->SendSetConnectivity(isConnected);
@@ -5120,17 +5098,14 @@ ContentParent::IgnoreIPCPrincipal()
 void
 ContentParent::NotifyUpdatedDictionaries()
 {
-  AutoTArray<ContentParent*, 8> processes;
-  GetAll(processes);
-
   nsCOMPtr<nsISpellChecker> spellChecker(do_GetService(NS_SPELLCHECKER_CONTRACTID));
   MOZ_ASSERT(spellChecker, "No spell checker?");
 
   InfallibleTArray<nsString> dictionaries;
   spellChecker->GetDictionaryList(&dictionaries);
 
-  for (size_t i = 0; i < processes.Length(); ++i) {
-    Unused << processes[i]->SendUpdateDictionaryList(dictionaries);
+  for (auto* cp : AllProcesses(eLive)) {
+    Unused << cp->SendUpdateDictionaryList(dictionaries);
   }
 }
 

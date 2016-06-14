@@ -7,6 +7,7 @@
 #define MOZILLA_TRACKUNIONSTREAM_H_
 
 #include "MediaStreamGraph.h"
+#include "nsAutoPtr.h"
 #include <algorithm>
 
 namespace mozilla {
@@ -22,6 +23,9 @@ public:
   void ProcessInput(GraphTime aFrom, GraphTime aTo, uint32_t aFlags) override;
 
   void SetTrackEnabledImpl(TrackID aTrackID, bool aEnabled) override;
+
+  MediaStream* GetInputStreamFor(TrackID aTrackID) override;
+  TrackID GetInputTrackIDFor(TrackID aTrackID) override;
 
 protected:
   // Only non-ended tracks are allowed to persist in this map.

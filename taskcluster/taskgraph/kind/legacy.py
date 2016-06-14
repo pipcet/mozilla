@@ -204,7 +204,10 @@ def set_expiration(task, timestamp):
     except KeyError:
         return
 
-    for artifact in artifacts.values():
+    # for docker-worker, artifacts is a dictionary
+    # for generic-worker, artifacts is a list
+    # for taskcluster-worker, it will depend on what we do in artifacts plugin
+    for artifact in artifacts.values() if hasattr(artifacts, "values") else artifacts:
         artifact['expires'] = timestamp
 
 def add_treeherder_revision_info(task, revision, revision_hash):
@@ -264,17 +267,16 @@ def validate_build_task(task):
     if 'extra' not in task_def:
         raise BuildTaskValidationException('build task must have task.extra props')
 
-    if 'locations' not in task_def['extra']:
-        raise BuildTaskValidationException('task.extra.locations missing')
+    if 'locations' in task_def['extra']:
 
-    locations = task_def['extra']['locations']
+        locations = task_def['extra']['locations']
 
-    if 'build' not in locations:
-        raise BuildTaskValidationException('task.extra.locations.build missing')
+        if 'build' not in locations:
+            raise BuildTaskValidationException('task.extra.locations.build missing')
 
-    if 'tests' not in locations and 'test_packages' not in locations:
-        raise BuildTaskValidationException('task.extra.locations.tests or '
-                                           'task.extra.locations.tests_packages missing')
+        if 'tests' not in locations and 'test_packages' not in locations:
+            raise BuildTaskValidationException('task.extra.locations.tests or '
+                                               'task.extra.locations.tests_packages missing')
 
 class LegacyKind(base.Kind):
     """
