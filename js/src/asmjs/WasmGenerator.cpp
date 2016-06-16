@@ -18,8 +18,10 @@
 
 #include "asmjs/WasmGenerator.h"
 
+#include "mozilla/CheckedInt.h"
 #include "mozilla/EnumeratedRange.h"
 
+#include "asmjs/WasmBaselineCompile.h"
 #include "asmjs/WasmIonCompile.h"
 #include "asmjs/WasmStubs.h"
 
@@ -29,6 +31,7 @@ using namespace js;
 using namespace js::jit;
 using namespace js::wasm;
 
+using mozilla::CheckedInt;
 using mozilla::MakeEnumeratedRange;
 
 // ****************************************************************************
@@ -542,14 +545,19 @@ ModuleGenerator::addImport(const Sig& sig, uint32_t globalDataOffset)
 bool
 ModuleGenerator::allocateGlobalBytes(uint32_t bytes, uint32_t align, uint32_t* globalDataOffset)
 {
-    uint32_t pad = ComputeByteAlignment(linkData_.globalDataLength, align);
-    if (UINT32_MAX - linkData_.globalDataLength < pad + bytes)
+    CheckedInt<uint32_t> newGlobalDataLength(linkData_.globalDataLength);
+
+    newGlobalDataLength += ComputeByteAlignment(newGlobalDataLength.value(), align);
+    if (!newGlobalDataLength.isValid())
         return false;
 
-    linkData_.globalDataLength += pad;
-    *globalDataOffset = linkData_.globalDataLength;
-    linkData_.globalDataLength += bytes;
+    *globalDataOffset = newGlobalDataLength.value();
+    newGlobalDataLength += bytes;
 
+    if (!newGlobalDataLength.isValid())
+        return false;
+
+    linkData_.globalDataLength = newGlobalDataLength.value();
     return true;
 }
 
@@ -802,14 +810,18 @@ ModuleGenerator::finishFuncDef(uint32_t funcIndex, FunctionGenerator* fg)
     if (!func)
         return false;
 
-    fg->task_->init(Move(func));
+    JSRuntime* rt = cx_->compartment()->runtimeFromAnyThread();
+    bool baselineCompile = rt->options().wasmAlwaysBaseline() && BaselineCanCompile(fg);
+
+    fg->task_->init(Move(func), baselineCompile ? IonCompileTask::CompileMode::Baseline
+                                                : IonCompileTask::CompileMode::Ion);
 
     if (parallel_) {
         if (!StartOffThreadWasmCompile(cx_, fg->task_))
             return false;
         outstanding_++;
     } else {
-        if (!IonCompileFunction(fg->task_))
+        if (!CompileFunction(fg->task_))
             return false;
         if (!finishTask(fg->task_))
             return false;
