@@ -15,6 +15,8 @@ builds:
   linux:
     platforms:
       - Linux
+    extra-builds:  # see RIDEALONG_BUILDS in `mach taskgraph`
+      - linux-l10n
     types:
       opt:
         task: tasks/builds/opt_linux32.yml
@@ -24,6 +26,7 @@ builds:
     platforms:
       - Linux64
     extra-builds:  # see RIDEALONG_BUILDS in `mach taskgraph`
+      - linux64-l10n
       - sm-plain
       - sm-nonunified
       - sm-arm-sim
@@ -542,6 +545,15 @@ tasks:
         - 'python/mozlint/**'
         - 'tools/lint/**'
         - 'testing/docker/lint/**'
+        - 'taskcluster/**'
+  taskgraph-tests:
+    task: tasks/tests/taskgraph-tests.yml
+    root: true
+    when:
+      file_patterns:
+        - 'taskcluster/**.py'
+        - 'config/mozunit.py'
+        - 'python/mach/**.py'
   android-api-15-gradle-dependencies:
     task: tasks/builds/android_api_15_gradle_dependencies.yml
     root: true

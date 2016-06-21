@@ -1606,10 +1606,14 @@ BuildTextRunsScanner::ContinueTextRunAcrossFrames(nsTextFrame* aFrame1, nsTextFr
   // that the font size inflation on all text frames in the text run is
   // already guaranteed to be the same as each other (and for the line
   // container).
-  if (mBidiEnabled &&
-      (NS_GET_EMBEDDING_LEVEL(aFrame1) != NS_GET_EMBEDDING_LEVEL(aFrame2) ||
-       NS_GET_PARAGRAPH_DEPTH(aFrame1) != NS_GET_PARAGRAPH_DEPTH(aFrame2)))
-    return false;
+  if (mBidiEnabled) {
+    FrameBidiData data1 = nsBidi::GetBidiData(aFrame1);
+    FrameBidiData data2 = nsBidi::GetBidiData(aFrame2);
+    if (data1.embeddingLevel != data2.embeddingLevel ||
+        data1.paragraphDepth != data2.paragraphDepth) {
+      return false;
+    }
+  }
 
   nsStyleContext* sc1 = aFrame1->StyleContext();
   const nsStyleText* textStyle1 = sc1->StyleText();
@@ -2075,7 +2079,7 @@ BuildTextRunsScanner::BuildTextRunForFrames(void* aTextBuffer)
   if (textFlags & nsTextFrameUtils::TEXT_HAS_SHY) {
     textFlags |= gfxTextRunFactory::TEXT_ENABLE_HYPHEN_BREAKS;
   }
-  if (mBidiEnabled && (IS_LEVEL_RTL(NS_GET_EMBEDDING_LEVEL(firstFrame)))) {
+  if (mBidiEnabled && (IS_LEVEL_RTL(nsBidi::GetEmbeddingLevel(firstFrame)))) {
     textFlags |= gfxTextRunFactory::TEXT_IS_RTL;
   }
   if (mNextRunContextInfo & nsTextFrameUtils::INCOMING_WHITESPACE) {
@@ -4147,18 +4151,8 @@ nsContinuingTextFrame::Init(nsIContent*       aContent,
     }
   }
   if (aPrevInFlow->GetStateBits() & NS_FRAME_IS_BIDI) {
-    FramePropertyTable *propTable = PresContext()->PropertyTable();
-    // Get all the properties from the prev-in-flow first to take
-    // advantage of the propTable's cache and simplify the assertion below
-    auto embeddingLevel =
-      propTable->Get(aPrevInFlow, nsBidi::EmbeddingLevelProperty());
-    auto baseLevel =
-      propTable->Get(aPrevInFlow, nsBidi::BaseLevelProperty());
-    auto paragraphDepth =
-      propTable->Get(aPrevInFlow, nsBidi::ParagraphDepthProperty());
-    propTable->Set(this, nsBidi::EmbeddingLevelProperty(), embeddingLevel);
-    propTable->Set(this, nsBidi::BaseLevelProperty(), baseLevel);
-    propTable->Set(this, nsBidi::ParagraphDepthProperty(), paragraphDepth);
+    FrameBidiData bidiData = nsBidi::GetBidiData(aPrevInFlow);
+    Properties().Set(nsBidi::BidiDataProperty(), bidiData);
 
     if (nextContinuation) {
       SetNextContinuation(nextContinuation);
@@ -4166,14 +4160,13 @@ nsContinuingTextFrame::Init(nsIContent*       aContent,
       // Adjust next-continuations' content offset as needed.
       while (nextContinuation &&
              nextContinuation->GetContentOffset() < mContentOffset) {
-        NS_ASSERTION(
-          embeddingLevel == propTable->Get(
-            nextContinuation, nsBidi::EmbeddingLevelProperty()) &&
-          baseLevel == propTable->Get(
-            nextContinuation, nsBidi::BaseLevelProperty()) &&
-          paragraphDepth == propTable->Get(
-            nextContinuation, nsBidi::ParagraphDepthProperty()),
-          "stealing text from different type of BIDI continuation");
+#ifdef DEBUG
+        FrameBidiData nextBidiData = nsBidi::GetBidiData(nextContinuation);
+        NS_ASSERTION(bidiData.embeddingLevel == nextBidiData.embeddingLevel &&
+                     bidiData.baseLevel == nextBidiData.baseLevel &&
+                     bidiData.paragraphDepth == nextBidiData.paragraphDepth,
+                     "stealing text from different type of BIDI continuation");
+#endif
         nextContinuation->mContentOffset = mContentOffset;
         nextContinuation = static_cast<nsTextFrame*>(nextContinuation->GetNextContinuation());
       }
@@ -5518,9 +5511,7 @@ nsTextFrame::DrawSelectionDecorations(gfxContext* aContext,
   params.context = aContext;
   params.dirtyRect = aDirtyRect;
   params.pt = aPt;
-  params.lineSize = Size(
-      aWidth, ComputeSelectionUnderlineHeight(aTextPaintStyle.PresContext(),
-                                              aFontMetrics, aSelectionType));
+  params.lineSize.width = aWidth;
   params.ascent = aAscent;
   params.offset = aDecoration == NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE ?
                   aFontMetrics.underlineOffset : aFontMetrics.maxAscent;
@@ -5533,34 +5524,42 @@ nsTextFrame::DrawSelectionDecorations(gfxContext* aContext,
                                              aFontMetrics);
 
   float relativeSize;
-  int32_t index =
-    nsTextPaintStyle::GetUnderlineStyleIndexForSelectionType(aSelectionType);
-  bool weDefineSelectionUnderline =
-    aTextPaintStyle.GetSelectionUnderlineForPaint(index, &params.color,
-                                                  &relativeSize, &params.style);
-
 
   switch (aSelectionType) {
     case SelectionType::eIMERawClause:
     case SelectionType::eIMESelectedRawClause:
     case SelectionType::eIMEConvertedClause:
-    case SelectionType::eIMESelectedClause: {
-      // IME decoration lines should not be drawn on the both ends, i.e., we
-      // need to cut both edges of the decoration lines.  Because same style
-      // IME selections can adjoin, but the users need to be able to know
-      // where are the boundaries of the selections.
-      //
-      //  X: underline
-      //
-      //     IME selection #1        IME selection #2      IME selection #3
-      //  |                     |                      |                    
-      //  | XXXXXXXXXXXXXXXXXXX | XXXXXXXXXXXXXXXXXXXX | XXXXXXXXXXXXXXXXXXX
-      //  +---------------------+----------------------+--------------------
-      //   ^                   ^ ^                    ^ ^
-      //  gap                  gap                    gap
-      params.pt.x += 1.0;
-      params.lineSize.width -= 2.0;
-      if (aRangeStyle.IsDefined()) {
+    case SelectionType::eIMESelectedClause:
+    case SelectionType::eSpellCheck: {
+      int32_t index = nsTextPaintStyle::
+        GetUnderlineStyleIndexForSelectionType(aSelectionType);
+      bool weDefineSelectionUnderline =
+        aTextPaintStyle.GetSelectionUnderlineForPaint(index, &params.color,
+                                                      &relativeSize,
+                                                      &params.style);
+      params.lineSize.height =
+        ComputeSelectionUnderlineHeight(aTextPaintStyle.PresContext(),
+                                        aFontMetrics, aSelectionType);
+      bool isIMEType = aSelectionType != SelectionType::eSpellCheck;
+
+      if (isIMEType) {
+        // IME decoration lines should not be drawn on the both ends, i.e., we
+        // need to cut both edges of the decoration lines.  Because same style
+        // IME selections can adjoin, but the users need to be able to know
+        // where are the boundaries of the selections.
+        //
+        //  X: underline
+        //
+        //     IME selection #1        IME selection #2      IME selection #3
+        //  |                     |                      |                    
+        //  | XXXXXXXXXXXXXXXXXXX | XXXXXXXXXXXXXXXXXXXX | XXXXXXXXXXXXXXXXXXX
+        //  +---------------------+----------------------+--------------------
+        //   ^                   ^ ^                    ^ ^
+        //  gap                  gap                    gap
+        params.pt.x += 1.0;
+        params.lineSize.width -= 2.0;
+      }
+      if (isIMEType && aRangeStyle.IsDefined()) {
         // If IME defines the style, that should override our definition.
         if (aRangeStyle.IsLineStyleDefined()) {
           if (aRangeStyle.mLineStyle == TextRangeStyle::LINESTYLE_NONE) {
@@ -5600,10 +5599,6 @@ nsTextFrame::DrawSelectionDecorations(gfxContext* aContext,
       }
       break;
     }
-    case SelectionType::eSpellCheck:
-      if (!weDefineSelectionUnderline)
-        return;
-      break;
     case SelectionType::eURLStrikeout: {
       nscoord inflationMinFontSize =
         nsLayoutUtils::InflationMinFontSizeFor(this);
@@ -5613,6 +5608,9 @@ nsTextFrame::DrawSelectionDecorations(gfxContext* aContext,
         GetFirstFontMetrics(GetFontGroupForFrame(this, inflation), aVertical);
 
       relativeSize = 2.0f;
+      aTextPaintStyle.GetURLSecondaryColor(&params.color);
+      params.style = NS_STYLE_TEXT_DECORATION_STYLE_SOLID;
+      params.lineSize.height = metrics.strikeoutSize;
       params.offset = metrics.strikeoutOffset + 0.5;
       params.decoration = NS_STYLE_TEXT_DECORATION_LINE_LINE_THROUGH;
       break;
@@ -7076,7 +7074,9 @@ nsTextFrame::CombineSelectionUnderlineRect(nsPresContext* aPresContext,
   SelectionDetails *details = GetSelectionDetails();
   for (SelectionDetails *sd = details; sd; sd = sd->mNext) {
     if (sd->mStart == sd->mEnd ||
-        !(sd->mSelectionType & kRawSelectionTypesWithDecorations)) {
+        !(sd->mSelectionType & kRawSelectionTypesWithDecorations) ||
+        // URL strikeout does not use underline.
+        sd->mSelectionType == SelectionType::eURLStrikeout) {
       continue;
     }
 
