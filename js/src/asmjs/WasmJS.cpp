@@ -47,9 +47,19 @@ InstantiateModule(JSContext* cx, unsigned argc, Value* vp)
         importObj = &args[1].toObject();
     }
 
+    const char* backingFile = nullptr;
+    if (!args.get(2).isUndefined()) {
+        if (!args.get(2).isString()) {
+            JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_IMPORT_ARG);
+            return false;
+        }
+        RootedString s(cx, args.get(2).toString());
+        backingFile = JS_EncodeStringToUTF8(cx, s);
+    }
+
     Rooted<TypedArrayObject*> code(cx, &args[0].toObject().as<TypedArrayObject>());
     RootedWasmInstanceObject instanceObj(cx);
-    if (!Eval(cx, code, importObj, &instanceObj))
+    if (!Eval(cx, code, importObj, backingFile, &instanceObj))
         return false;
 
     args.rval().setObject(*instanceObj);

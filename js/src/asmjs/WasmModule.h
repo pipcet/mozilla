@@ -155,6 +155,7 @@ class Module
     const ExportMap        exportMap_;
     const SharedMetadata   metadata_;
     const SharedBytes      bytecode_;
+    const char*            backingFile_;
 
   public:
     Module(Bytes&& code,
@@ -162,13 +163,15 @@ class Module
            ImportNameVector&& importNames,
            ExportMap&& exportMap,
            const Metadata& metadata,
-           const ShareableBytes& bytecode)
+           const ShareableBytes& bytecode,
+           const char* backingFile)
       : code_(Move(code)),
         linkData_(Move(linkData)),
         importNames_(Move(importNames)),
         exportMap_(Move(exportMap)),
         metadata_(&metadata),
-        bytecode_(&bytecode)
+        bytecode_(&bytecode),
+        backingFile_(backingFile)
     {}
 
     const Metadata& metadata() const { return *metadata_; }
@@ -179,6 +182,7 @@ class Module
     bool instantiate(JSContext* cx,
                      Handle<FunctionVector> funcImports,
                      Handle<ArrayBufferObjectMaybeShared*> heap,
+                     const char* backingFile,
                      MutableHandle<WasmInstanceObject*> instanceObj) const;
 
     // Structured clone support:

@@ -100,6 +100,7 @@ class Instance
                        HandleArrayBufferObjectMaybeShared heap,
                        Handle<FunctionVector> funcImports,
                        const ExportMap& exports,
+                       const char* backingFile,
                        MutableHandle<WasmInstanceObject*> instanceObj);
     ~Instance();
     void trace(JSTracer* trc);

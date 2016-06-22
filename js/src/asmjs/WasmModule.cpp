@@ -288,7 +288,8 @@ Module::deserialize(ExclusiveContext* cx, const uint8_t* cursor, UniquePtr<Modul
         return nullptr;
 
     *module = cx->make_unique<Module>(Move(code), Move(linkData), Move(importNames),
-                                      Move(exportMap), *metadata, *bytecode);
+                                      Move(exportMap), *metadata, *bytecode,
+                                      nullptr);
     if (!*module)
         return nullptr;
 
@@ -315,6 +316,7 @@ bool
 Module::instantiate(JSContext* cx,
                     Handle<FunctionVector> funcImports,
                     HandleArrayBufferObjectMaybeShared heap,
+                    const char* backingFile,
                     MutableHandleWasmInstanceObject instanceObj) const
 {
     MOZ_ASSERT(funcImports.length() == metadata_->imports.length());
@@ -326,7 +328,7 @@ Module::instantiate(JSContext* cx,
         heapLength = heap->byteLength();
     }
 
-    auto cs = CodeSegment::create(cx, code_, linkData_, *metadata_, heapBase, heapLength);
+    auto cs = CodeSegment::create(cx, code_, linkData_, *metadata_, heapBase, heapLength, backingFile);
     if (!cs)
         return false;
 
@@ -352,5 +354,6 @@ Module::instantiate(JSContext* cx,
     }
 
     return Instance::create(cx, Move(cs), *metadata_, maybeBytecode, Move(typedFuncTables),
-                            heap, funcImports, exportMap_, instanceObj);
+                            heap, funcImports, exportMap_, backingFile_,
+                            instanceObj);
 }

@@ -37,6 +37,8 @@ typedef UniquePtr<CodeSegment> UniqueCodeSegment;
 
 class CodeSegment
 {
+public:
+    void* dlhandle;
     // bytes_ points to a single allocation with two contiguous ranges:
     // executable machine code in the range [0, codeLength) and global data in
     // the range [codeLength, codeLength + globalDataLength). The range
@@ -69,7 +71,8 @@ class CodeSegment
                                     const LinkData& linkData,
                                     const Metadata& metadata,
                                     uint8_t* heapBase,
-                                    uint32_t heapLength);
+                                    uint32_t heapLength,
+                                    const char* backingFile);
     ~CodeSegment();
 
     uint8_t* code() const { return bytes_; }

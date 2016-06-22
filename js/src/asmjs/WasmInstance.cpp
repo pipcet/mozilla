@@ -461,6 +461,21 @@ Instance::Instance(UniqueCodeSegment codeSegment,
 
 static const char ExportField[] = "exports";
 
+static int64_t callBackToNative(JSContext* cx, Instance* instance,
+                                uint64_t index,
+                                int64_t a0, int64_t a1, int64_t a2, int64_t a3)
+{
+    auto import = instance->metadata().imports[index];
+    ImportExit& exit = instance->importToExit(import);
+    auto fun = exit.fun;
+
+    RootedValue rval(cx);
+    RootedValue f(cx, fun);
+
+    JS_CallFunctionValue (cx, nullptr, f, JS::HandleValueArray::empty(), &rval);
+    return 0;
+}
+
 /* static */ bool
 Instance::create(JSContext* cx,
                  UniqueCodeSegment codeSegment,
@@ -470,6 +485,7 @@ Instance::create(JSContext* cx,
                  HandleArrayBufferObjectMaybeShared heap,
                  Handle<FunctionVector> funcImports,
                  const ExportMap& exportMap,
+                 const char* backingFile,
                  MutableHandleWasmInstanceObject instanceObj)
 {
     // Ensure that the Instance is traceable via WasmInstanceObject before any
@@ -492,16 +508,33 @@ Instance::create(JSContext* cx,
 
     Instance& instance = instanceObj->instance();
 
+    uint64_t* ptr = (uint64_t*)instance.codeSegment_->code();
     for (size_t i = 0; i < metadata.imports.length(); i++) {
         const Import& import = metadata.imports[i];
         ImportExit& exit = instance.importToExit(import);
         exit.code = instance.codeSegment().code() + import.interpExitCodeOffset();
         exit.fun = funcImports[i];
         exit.baselineScript = nullptr;
+
+        MOZ_ASSERT (ptr[0] != -1);
+        ptr[1] = (uint64_t)(void*)funcImports[i];
+
+        ptr += 2;
     }
+
+    ptr[1] = (uint64_t)(void*)callBackToNative;
+    ptr += 2;
+
+    ptr[1] = (uint64_t)(void*)&instance;
+    ptr += 2;
 
     if (heap)
         *instance.addressOfHeapPtr() = heap->dataPointerEither().unwrap(/* wasm heap pointer */);
+
+    ptr[1] = (uint64_t)(void*)heap->dataPointerEither().unwrap();
+    ptr += 2;
+    ptr[1] = (uint64_t)(void*)cx;
+    ptr += 2;
 
     // Create the export object
 

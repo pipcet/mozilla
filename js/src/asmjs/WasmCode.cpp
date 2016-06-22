@@ -188,13 +188,16 @@ SendCodeRangesToProfiler(JSContext* cx, CodeSegment& cs, const Bytes& bytecode,
     return true;
 }
 
+#include <dlfcn.h>
+
 /* static */ UniqueCodeSegment
 CodeSegment::create(JSContext* cx,
                     const Bytes& bytecode,
                     const LinkData& linkData,
                     const Metadata& metadata,
                     uint8_t* heapBase,
-                    uint32_t heapLength)
+                    uint32_t heapLength,
+                    const char* backingFile)
 {
     MOZ_ASSERT(bytecode.length() % gc::SystemPageSize() == 0);
     MOZ_ASSERT(linkData.globalDataLength % gc::SystemPageSize() == 0);
@@ -203,6 +206,22 @@ CodeSegment::create(JSContext* cx,
     auto cs = cx->make_unique<CodeSegment>();
     if (!cs)
         return nullptr;
+
+    if (backingFile) {
+        dlhandle = dlopen(backingFile, RTLD_NOW);
+
+        if (!dlhandle)
+            return nullptr;
+
+        cs->bytes_ = (uint8_t*)dlsym(dlhandle, "wasm_start");
+        cs->functionCodeLength_ = 4096;
+        cs->codeLength_ = 4096;
+        cs->globalDataLength_ = 4096;
+        cs->interruptCode_ = cs->code();
+        cs->outOfBoundsCode_ = cs->code();
+
+        return cs;
+    }
 
     cs->bytes_ = AllocateCodeSegment(cx, bytecode.length() + linkData.globalDataLength);
     if (!cs->bytes_)

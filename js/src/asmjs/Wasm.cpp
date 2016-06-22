@@ -1104,7 +1104,7 @@ DecodeUnknownSections(JSContext* cx, Decoder& d)
 
 static UniqueModule
 DecodeModule(JSContext* cx, UniqueChars file, const ShareableBytes& bytecode,
-             MutableHandleArrayBufferObject heap)
+             MutableHandleArrayBufferObject heap, const char* backingFile)
 {
     UniqueModuleGeneratorData init = js::MakeUnique<ModuleGeneratorData>(cx);
     if (!init)
@@ -1128,7 +1128,7 @@ DecodeModule(JSContext* cx, UniqueChars file, const ShareableBytes& bytecode,
     if (!DecodeTableSection(cx, d, init.get()))
         return nullptr;
 
-    ModuleGenerator mg(cx);
+    ModuleGenerator mg(cx, backingFile);
     if (!mg.init(Move(init), Move(file)))
         return nullptr;
 
@@ -1194,7 +1194,7 @@ GetProperty(JSContext* cx, HandleObject obj, const char* chars, MutableHandleVal
 }
 
 static bool
-ImportFunctions(JSContext* cx, HandleObject importObj, const ImportNameVector& importNames,
+ImportFunctions(JSContext* cx, HandleObject importObj, const ImportNameVector& importNames, const char* backingFile,
                 MutableHandle<FunctionVector> imports)
 {
     if (!importNames.empty() && !importObj)
@@ -1226,6 +1226,7 @@ ImportFunctions(JSContext* cx, HandleObject importObj, const ImportNameVector& i
 
 bool
 wasm::Eval(JSContext* cx, Handle<TypedArrayObject*> view, HandleObject importObj,
+           const char* backingFile,
            MutableHandleWasmInstanceObject instanceObj)
 {
     if (!CheckCompilerSupport(cx))
@@ -1246,7 +1247,8 @@ wasm::Eval(JSContext* cx, Handle<TypedArrayObject*> view, HandleObject importObj
         return false;
 
     Rooted<ArrayBufferObject*> heap(cx);
-    UniqueModule module = DecodeModule(cx, Move(file), *bytecode, &heap);
+    UniqueModule module = DecodeModule(cx, Move(file), *bytecode, &heap,
+                                       backingFile);
     if (!module) {
         if (!cx->isExceptionPending())
             ReportOutOfMemory(cx);
@@ -1254,8 +1256,10 @@ wasm::Eval(JSContext* cx, Handle<TypedArrayObject*> view, HandleObject importObj
     }
 
     Rooted<FunctionVector> funcImports(cx, FunctionVector(cx));
-    if (!ImportFunctions(cx, importObj, module->importNames(), &funcImports))
+    if (!ImportFunctions(cx, importObj, module->importNames(),
+                         backingFile, &funcImports))
         return false;
 
-    return module->instantiate(cx, funcImports, heap, instanceObj);
+    return module->instantiate(cx, funcImports, heap, backingFile,
+                               instanceObj);
 }

@@ -101,6 +101,8 @@ class MOZ_STACK_CLASS ModuleGenerator
     ExclusiveContext*               cx_;
     jit::JitContext                 jcx_;
 
+    const char* backingFile_;
+
     // Data that is moved into the result of finish()
     LinkData                        linkData_;
     MutableMetadata                 metadata_;
@@ -140,7 +142,7 @@ class MOZ_STACK_CLASS ModuleGenerator
     MOZ_MUST_USE bool allocateGlobalBytes(uint32_t bytes, uint32_t align, uint32_t* globalDataOff);
 
   public:
-    explicit ModuleGenerator(ExclusiveContext* cx);
+    explicit ModuleGenerator(ExclusiveContext* cx, const char* backingFile);
     ~ModuleGenerator();
 
     MOZ_MUST_USE bool init(UniqueModuleGeneratorData shared,

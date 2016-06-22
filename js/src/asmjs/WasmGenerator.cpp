@@ -40,7 +40,7 @@ using mozilla::MakeEnumeratedRange;
 static const unsigned GENERATOR_LIFO_DEFAULT_CHUNK_SIZE = 4 * 1024;
 static const unsigned COMPILATION_LIFO_DEFAULT_CHUNK_SIZE = 64 * 1024;
 
-ModuleGenerator::ModuleGenerator(ExclusiveContext* cx)
+ModuleGenerator::ModuleGenerator(ExclusiveContext* cx, const char* backingFile)
   : cx_(cx),
     jcx_(CompileRuntime::get(cx->compartment()->runtimeFromAnyThread())),
     numSigs_(0),
@@ -56,7 +56,8 @@ ModuleGenerator::ModuleGenerator(ExclusiveContext* cx)
     freeTasks_(cx),
     activeFunc_(nullptr),
     startedFuncDefs_(false),
-    finishedFuncDefs_(false)
+    finishedFuncDefs_(false),
+    backingFile_(backingFile)
 {
     MOZ_ASSERT(IsCompilingAsmJS());
 }
@@ -951,5 +952,6 @@ ModuleGenerator::finish(ImportNameVector&& importNames, const ShareableBytes& by
         return nullptr;
 
     return cx_->make_unique<Module>(Move(code), Move(linkData_), Move(importNames),
-                                    Move(exportMap_), *metadata_, bytecode);
+                                    Move(exportMap_), *metadata_, bytecode,
+                                    backingFile_);
 }

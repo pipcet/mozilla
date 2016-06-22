@@ -1662,7 +1662,7 @@ class MOZ_STACK_CLASS ModuleValidator
         importMap_(cx),
         arrayViews_(cx),
         atomicsPresent_(false),
-        mg_(cx),
+        mg_(cx, nullptr),
         errorString_(nullptr),
         errorOffset_(UINT32_MAX),
         errorOverRecursed_(false)
@@ -7879,7 +7879,7 @@ TryInstantiate(JSContext* cx, CallArgs args, Module& module, const AsmJSMetadata
             return false;
     }
 
-    if (!module.instantiate(cx, funcImports, heap, instanceObj))
+    if (!module.instantiate(cx, funcImports, heap, nullptr, instanceObj))
         return false;
 
     // Now write the imported values into global data.
