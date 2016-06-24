@@ -208,12 +208,12 @@ CodeSegment::create(JSContext* cx,
         return nullptr;
 
     if (backingFile) {
-        dlhandle = dlopen(backingFile, RTLD_NOW);
+        cs->dlhandle = dlopen(backingFile, RTLD_NOW);
 
-        if (!dlhandle)
+        if (!cs->dlhandle)
             return nullptr;
 
-        cs->bytes_ = (uint8_t*)dlsym(dlhandle, "wasm_start");
+        cs->bytes_ = (uint8_t*)dlsym(cs->dlhandle, "wasm_start");
         cs->functionCodeLength_ = 4096;
         cs->codeLength_ = 4096;
         cs->globalDataLength_ = 4096;

@@ -67,8 +67,9 @@ class Instance
 
     // Internal helpers:
     uint8_t** addressOfHeapPtr() const;
-    ImportExit& importToExit(const Import& import);
     MOZ_MUST_USE bool toggleProfiling(JSContext* cx);
+
+    void* startPointer;
 
     // An instance keeps track of its innermost WasmActivation. A WasmActivation
     // is pushed for the duration of each call of an export.
@@ -92,6 +93,7 @@ class Instance
              HandleArrayBufferObjectMaybeShared heap);
 
   public:
+    ImportExit& importToExit(const Import& import);
     static bool create(JSContext* cx,
                        UniqueCodeSegment codeSegment,
                        const Metadata& metadata,
@@ -114,6 +116,7 @@ class Instance
     // value in args.rval.
 
     MOZ_MUST_USE bool callExport(JSContext* cx, uint32_t exportIndex, CallArgs args);
+    bool callNative(JSContext* cx, CallArgs args);
 
     // An instance has a profiling mode that is updated to match the runtime's
     // profiling mode when calling an instance's exports when there are no other

@@ -383,6 +383,37 @@ NewExportedFunction(JSContext* cx, Handle<WasmInstanceObject*> instanceObj, uint
 }
 
 static bool
+NativeCall(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    RootedFunction callee(cx, &args.callee().as<JSFunction>());
+    Instance& instance = ExportedFunctionToInstance(callee);
+
+    return instance.callNative(cx, args);
+}
+
+static JSFunction*
+NewStartFunction(JSContext* cx, Handle<WasmInstanceObject*> instanceObj)
+{
+    Instance& instance = instanceObj->instance();
+    const Metadata& metadata = instance.metadata();
+    unsigned numArgs = 0;
+
+    RootedAtom name(cx, AtomizeUTF8Chars(cx, "start", 5));;
+    if (!name)
+        return nullptr;
+
+    JSFunction* fun = NewNativeConstructor(cx, NativeCall, numArgs, name,
+                                           gc::AllocKind::FUNCTION_EXTENDED, GenericObject,
+                                           JSFunction::ASMJS_CTOR);
+    if (!fun)
+        return nullptr;
+
+    fun->setExtendedSlot(FunctionExtended::WASM_INSTANCE_SLOT, ObjectValue(*instanceObj));
+    return fun;
+}
+
+static bool
 CreateExportObject(JSContext* cx,
                    HandleWasmInstanceObject instanceObj,
                    HandleArrayBufferObjectMaybeShared heap,
@@ -443,6 +474,12 @@ CreateExportObject(JSContext* cx,
             return false;
     }
 
+    JSFunction* fun = NewStartFunction(cx, instanceObj);
+    RootedValue val(cx, ObjectValue(*fun));
+    if (!JS_DefineProperty(cx, exportObj, "start", val,
+                           JSPROP_ENUMERATE))
+        return false;
+
     return true;
 }
 
@@ -465,16 +502,17 @@ static int64_t callBackToNative(JSContext* cx, Instance* instance,
                                 uint64_t index,
                                 int64_t a0, int64_t a1, int64_t a2, int64_t a3)
 {
-    auto import = instance->metadata().imports[index];
-    ImportExit& exit = instance->importToExit(import);
-    auto fun = exit.fun;
+    ImportExit& exit = instance->importToExit(instance->metadata().imports[index]);
 
     RootedValue rval(cx);
-    RootedValue f(cx, fun);
+    RootedObject obj(cx, exit.fun);
+    RootedValue v(cx, ObjectValue(*obj));
 
-    JS_CallFunctionValue (cx, nullptr, f, JS::HandleValueArray::empty(), &rval);
+    JS_CallFunctionValue (cx, nullptr, v, JS::HandleValueArray::empty(), &rval);
     return 0;
 }
+
+#include <dlfcn.h>
 
 /* static */ bool
 Instance::create(JSContext* cx,
@@ -516,25 +554,33 @@ Instance::create(JSContext* cx,
         exit.fun = funcImports[i];
         exit.baselineScript = nullptr;
 
-        MOZ_ASSERT (ptr[0] != -1);
-        ptr[1] = (uint64_t)(void*)funcImports[i];
+        if (backingFile) {
+            MOZ_ASSERT (ptr[0] != -1);
+            ptr[1] = (uint64_t)(void*)funcImports[i];
 
-        ptr += 2;
+            ptr += 2;
+        }
     }
 
-    ptr[1] = (uint64_t)(void*)callBackToNative;
-    ptr += 2;
+    if (backingFile) {
+        ptr[1] = (uint64_t)(void*)callBackToNative;
+        ptr += 2;
 
-    ptr[1] = (uint64_t)(void*)&instance;
-    ptr += 2;
-
+        ptr[1] = (uint64_t)(void*)&instance;
+        ptr += 2;
+    }
+    
     if (heap)
         *instance.addressOfHeapPtr() = heap->dataPointerEither().unwrap(/* wasm heap pointer */);
 
-    ptr[1] = (uint64_t)(void*)heap->dataPointerEither().unwrap();
-    ptr += 2;
-    ptr[1] = (uint64_t)(void*)cx;
-    ptr += 2;
+    if (backingFile) {
+        ptr[1] = (uint64_t)(void*)heap->dataPointerEither().unwrap();
+        ptr += 2;
+        ptr[1] = (uint64_t)(void*)cx;
+        ptr += 2;
+        
+        instance.startPointer = dlsym(instance.codeSegment().dlhandle, "start");
+    }
 
     // Create the export object
 
@@ -789,6 +835,54 @@ Instance::callExport(JSContext* cx, uint32_t exportIndex, CallArgs args)
     return true;
 }
 
+bool
+Instance::callNative(JSContext* cx, CallArgs args)
+{
+    // The calling convention for an external call into wasm is to pass an
+    // array of 16-byte values where each value contains either a coerced int32
+    // (in the low word), a double value (in the low dword) or a SIMD vector
+    // value, with the coercions specified by the wasm signature. The external
+    // entry point unpacks this array into the system-ABI-specified registers
+    // and stack memory and then calls into the internal entry point. The return
+    // value is stored in the first element of the array (which, therefore, must
+    // have length >= 1).
+    Vector<ExportArg, 8> exportArgs(cx);
+
+    RootedValue v(cx);
+
+    {
+        // Push a WasmActivation to describe the wasm frames we're about to push
+        // when running this module. Additionally, push a JitActivation so that
+        // the optimized wasm-to-Ion FFI call path (which we want to be very
+        // fast) can avoid doing so. The JitActivation is marked as inactive so
+        // stack iteration will skip over it.
+        WasmActivation activation(cx, *this);
+        JitActivation jitActivation(cx, /* active */ false);
+
+        // Call the per-exported-function trampoline created by GenerateEntry.
+        auto funcPtr = JS_DATA_TO_FUNC_PTR(ExportFuncPtr, startPointer);
+        if (!CALL_GENERATED_2(funcPtr, exportArgs.begin(), codeSegment_->globalData()))
+            return false;
+    }
+
+    if (args.isConstructing()) {
+        // By spec, when a function is called as a constructor and this function
+        // returns a primary type, which is the case for all wasm exported
+        // functions, the returned value is discarded and an empty object is
+        // returned instead.
+        PlainObject* obj = NewBuiltinClassInstance<PlainObject>(cx);
+        if (!obj)
+            return false;
+        args.rval().set(ObjectValue(*obj));
+        return true;
+    }
+
+    JSObject* retObj = nullptr;
+    args.rval().set(UndefinedValue());
+
+    return true;
+}
+
 const char experimentalWarning[] =
     "Temporary\n"
     ".--.      .--.   ____       .-'''-. ,---.    ,---.\n"
@@ -931,7 +1025,8 @@ Instance::addSizeOfMisc(MallocSizeOf mallocSizeOf,
 bool
 wasm::IsExportedFunction(JSFunction* fun)
 {
-    return fun->maybeNative() == WasmCall;
+    return fun->maybeNative() == WasmCall ||
+        fun->maybeNative() == NativeCall;
 }
 
 Instance&
