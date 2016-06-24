@@ -894,6 +894,7 @@ AstDecodeExpr(AstDecodeContext& c)
       case Expr::I32Eqz:
         return AstDecodeConversion(c, ValType::I32, ValType::I32, expr);
       case Expr::I64Eqz:
+      case Expr::I32WrapI64:
         return AstDecodeConversion(c, ValType::I64, ValType::I32, expr);
       case Expr::I32TruncSF32:
       case Expr::I32TruncUF32:
