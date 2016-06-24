@@ -608,7 +608,7 @@ class Decoder
             }
             u |= UInt(byte & 0x7F) << shift;
             shift += 7;
-        } while (shift != numBitsInSevens);
+        } while (1);
         if (!readFixedU8(&byte) || (byte & (unsigned(-1) << remainderBits)))
             return false;
         *out = u | (UInt(byte) << numBitsInSevens);
@@ -634,7 +634,7 @@ class Decoder
                 *out = s;
                 return true;
             }
-        } while (shift < numBitsInSevens);
+        } while (1);
         if (!remainderBits || !readFixedU8(&byte) || (byte & 0x80))
             return false;
         uint8_t mask = 0x7f & (uint8_t(-1) << remainderBits);
