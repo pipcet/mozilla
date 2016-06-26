@@ -831,7 +831,7 @@ class Decoder
                 return decoded | (UInt(byte) << shift);
             decoded |= UInt(byte & 0x7f) << shift;
             shift += 7;
-        } while (shift != numBitsInSevens);
+        } while (1);
         uint8_t byte = *cur_++;
         MOZ_ASSERT(!(byte & 0xf0));
         return decoded | (UInt(byte) << numBitsInSevens);
