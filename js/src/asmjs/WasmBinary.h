@@ -608,6 +608,8 @@ class Decoder
             }
             u |= UInt(byte & 0x7F) << shift;
             shift += 7;
+            if (shift >= numBits)
+                shift = numBits - 1;
         } while (1);
         if (!readFixedU8(&byte) || (byte & (unsigned(-1) << remainderBits)))
             return false;
@@ -628,6 +630,8 @@ class Decoder
                 return false;
             s |= SInt(byte & 0x7f) << shift;
             shift += 7;
+            if (shift >= numBits)
+                shift = numBits - 1;
             if (!(byte & 0x80)) {
                 if (byte & 0x40)
                     s |= SInt(-1) << shift;
