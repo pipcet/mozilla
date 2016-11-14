@@ -614,7 +614,7 @@ ossys_call(JSContext* cx, unsigned argc, Value* vp)
     unsigned long sysargs[6];
 
     if (args.length() < 1 || args.length() > 12) {
-        JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr, JSSMSG_INVALID_ARGS, "sys.call");
+        JS_ReportErrorNumberASCII(cx, my_GetErrorMessage, nullptr, JSSMSG_INVALID_ARGS, "sys.call");
         return false;
     }
 
@@ -775,7 +775,7 @@ ossys_call64(JSContext *cx, unsigned argc, Value *vp)
     unsigned long buflen;
 
     if (args.length() != 1) {
-        JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr, JSSMSG_INVALID_ARGS, "sys.call64");
+        JS_ReportErrorNumberASCII(cx, my_GetErrorMessage, nullptr, JSSMSG_INVALID_ARGS, "sys.call64");
         return false;
     }
 
@@ -905,7 +905,7 @@ os_getenvironment(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     if (args.length() != 0) {
-        JS_ReportError(cx, "os.getenvironment requires no arguments");
+        JS_ReportErrorASCII(cx, "os.getenvironment requires no arguments");
         return false;
     }
     RootedObject ret(cx, JS_NewArrayObject(cx, 0));
