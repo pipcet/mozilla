@@ -25,6 +25,7 @@
 #include "Units.h"
 #include "nsIWebBrowserPersistable.h"
 #include "nsIFrame.h"
+#include "nsIGroupedSHistory.h"
 
 class nsIURI;
 class nsSubDocumentFrame;
@@ -74,6 +75,7 @@ class nsFrameLoader final : public nsIFrameLoader,
 
 public:
   static nsFrameLoader* Create(mozilla::dom::Element* aOwner,
+                               nsPIDOMWindowOuter* aOpener,
                                bool aNetworkCreated);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
@@ -130,12 +132,12 @@ public:
   // frame loader owner needs to call this, and pass in the two references to
   // nsRefPtrs for frame loaders that need to be swapped.
   nsresult SwapWithOtherLoader(nsFrameLoader* aOther,
-                               RefPtr<nsFrameLoader>& aFirstToSwap,
-                               RefPtr<nsFrameLoader>& aSecondToSwap);
+                               nsIFrameLoaderOwner* aThisOwner,
+                               nsIFrameLoaderOwner* aOtherOwner);
 
   nsresult SwapWithOtherRemoteLoader(nsFrameLoader* aOther,
-                                     RefPtr<nsFrameLoader>& aFirstToSwap,
-                                     RefPtr<nsFrameLoader>& aSecondToSwap);
+                                     nsIFrameLoaderOwner* aThisOwner,
+                                     nsIFrameLoaderOwner* aOtherOwner);
 
   /**
    * Return the primary frame for our owning content, or null if it
@@ -188,8 +190,6 @@ public:
    */
   void SetRemoteBrowser(nsITabParent* aTabParent);
 
-  nsresult SwapRemoteBrowser(nsITabParent* aTabParent);
-
   /**
    * Stashes a detached nsIFrame on the frame loader. We do this when we're
    * destroying the nsSubDocumentFrame. If the nsSubdocumentFrame is
@@ -218,18 +218,19 @@ public:
 
   void GetURL(nsString& aURL);
 
-  void ActivateUpdateHitRegion();
-  void DeactivateUpdateHitRegion();
-
   // Properly retrieves documentSize of any subdocument type.
   nsresult GetWindowDimensions(nsIntRect& aRect);
+
+  virtual nsIMessageSender* GetProcessMessageManager() const override;
 
   // public because a callback needs these.
   RefPtr<nsFrameMessageManager> mMessageManager;
   nsCOMPtr<nsIInProcessContentFrameMessageManager> mChildMessageManager;
 
 private:
-  nsFrameLoader(mozilla::dom::Element* aOwner, bool aNetworkCreated);
+  nsFrameLoader(mozilla::dom::Element* aOwner,
+                nsPIDOMWindowOuter* aOpener,
+                bool aNetworkCreated);
   ~nsFrameLoader();
 
   void SetOwnerContent(mozilla::dom::Element* aContent);
@@ -248,12 +249,6 @@ private:
    * <xul:browser> is not a mozbrowser or app, so this is false for that case.
    */
   bool OwnerIsMozBrowserOrAppFrame();
-
-  /**
-   * Is this a frameloader for a bona fide <iframe mozwidget>?  (I.e., does the
-   * frame return true for nsIMozBrowserFrame::GetReallyIsWidget()?)
-   */
-  bool OwnerIsWidget();
 
   /**
    * Is this a frameloader for a bona fide <iframe mozapp>?  (I.e., does the
@@ -326,15 +321,11 @@ private:
              ? nsGkAtoms::type : nsGkAtoms::mozframetype;
   }
 
-  // Update the permission manager's app-id refcount based on mOwnerContent's
-  // own-or-containing-app.
-  void ResetPermissionManagerStatus();
-
   void InitializeBrowserAPI();
+  void DestroyBrowserFrameScripts();
 
   nsresult GetNewTabContext(mozilla::dom::MutableTabContext* aTabContext,
-                            nsIURI* aURI = nullptr,
-                            const nsACString& aPackageId = EmptyCString());
+                            nsIURI* aURI = nullptr);
 
   enum TabParentChange {
     eTabParentRemoved,
@@ -354,9 +345,6 @@ private:
   // our <browser> element.
   RefPtr<mozilla::dom::Element> mOwnerContentStrong;
 
-  // Note: this variable must be modified only by ResetPermissionManagerStatus()
-  uint32_t mAppIdSentToPermissionManager;
-
   // Stores the root frame of the subdocument while the subdocument is being
   // reframed. Used to restore the presentation after reframing.
   nsWeakFrame mDetachedSubdocFrame;
@@ -367,6 +355,9 @@ private:
   // a reframe, so that we know not to restore the presentation.
   nsCOMPtr<nsIDocument> mContainerDocWhileDetached;
 
+  // An opener window which should be used when the docshell is created.
+  nsCOMPtr<nsPIDOMWindowOuter> mOpener;
+
   TabParent* mRemoteBrowser;
   uint64_t mChildID;
 
@@ -376,6 +367,9 @@ private:
 
   // Holds the last known size of the frame.
   mozilla::ScreenIntSize mLazySize;
+
+  nsCOMPtr<nsIPartialSHistory> mPartialSessionHistory;
+  nsCOMPtr<nsIGroupedSHistory> mGroupedSessionHistory;
 
   bool mIsPrerendered : 1;
   bool mDepthTooGreat : 1;
@@ -400,6 +394,7 @@ private:
   // whether this frameloader's <iframe mozbrowser> is setVisible(true)'ed, and
   // doesn't necessarily correlate with docshell/document visibility.
   bool mVisible : 1;
+  bool mFreshProcess : 1;
 };
 
 #endif

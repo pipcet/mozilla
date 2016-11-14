@@ -47,25 +47,20 @@ this.MarionetteServer = function(port, forceLocal) {
   this.conns = {};
   this.nextConnId = 0;
   this.alive = false;
+  this._acceptConnections = false;
 };
 
 /**
  * Function produces a GeckoDriver.
  *
- * Determines application name and device type to initialise the driver
- * with.
+ * Determines application nameto initialise the driver with.
  *
  * @return {GeckoDriver}
  *     A driver instance.
  */
 MarionetteServer.prototype.driverFactory = function() {
   let appName = isMulet() ? "B2G" : Services.appinfo.name;
-  let device = null;
   let bypassOffline = false;
-
-  if (!device) {
-    device = "desktop";
-  }
 
   Preferences.set(CONTENT_LISTENER_PREF, false);
 
@@ -76,9 +71,18 @@ MarionetteServer.prototype.driverFactory = function() {
       Services.io.offline = false;
   }
 
-  let stopSignal = () => this.stop();
-  return new GeckoDriver(appName, device, stopSignal);
+  return new GeckoDriver(appName, this);
 };
+
+MarionetteServer.prototype.__defineSetter__("acceptConnections", function(value) {
+  if (!value) {
+    logger.info("New connections will no longer be accepted");
+  } else {
+    logger.info("New connections are accepted again");
+  }
+
+  this._acceptConnections = value;
+});
 
 MarionetteServer.prototype.start = function() {
   if (this.alive) {
@@ -88,9 +92,10 @@ MarionetteServer.prototype.start = function() {
   if (this.forceLocal) {
     flags |= Ci.nsIServerSocket.LoopbackOnly;
   }
-  this.listener = new ServerSocket(this.port, flags, 0);
+  this.listener = new ServerSocket(this.port, flags, 1);
   this.listener.asyncListen(this);
   this.alive = true;
+  this._acceptConnections = true;
 };
 
 MarionetteServer.prototype.stop = function() {
@@ -99,6 +104,7 @@ MarionetteServer.prototype.stop = function() {
   }
   this.closeListener();
   this.alive = false;
+  this._acceptConnections = false;
 };
 
 MarionetteServer.prototype.closeListener = function() {
@@ -108,6 +114,11 @@ MarionetteServer.prototype.closeListener = function() {
 
 MarionetteServer.prototype.onSocketAccepted = function(
     serverSocket, clientSocket) {
+  if (!this._acceptConnections) {
+    logger.warn("New connections are currently not accepted");
+    return;
+  }
+
   let input = clientSocket.openInputStream(0, 0, 0);
   let output = clientSocket.openOutputStream(0, 0, 0);
   let transport = new DebuggerTransport(input, output);

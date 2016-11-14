@@ -1,0 +1,176 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
+"use strict";
+
+async function backgroundScript() {
+  let storage = browser.storage.local;
+  async function check(prop, value) {
+    let data = await storage.get(null);
+    browser.test.assertEq(value, data[prop], "null getter worked for " + prop);
+
+    data = await storage.get(prop);
+    browser.test.assertEq(value, data[prop], "string getter worked for " + prop);
+
+    data = await storage.get([prop]);
+    browser.test.assertEq(value, data[prop], "array getter worked for " + prop);
+
+    data = await storage.get({[prop]: undefined});
+    browser.test.assertEq(value, data[prop], "object getter worked for " + prop);
+  }
+
+  let globalChanges = {};
+
+  browser.storage.onChanged.addListener((changes, changedStorage) => {
+    browser.test.assertEq("local", changedStorage, "storage is local");
+    Object.assign(globalChanges, changes);
+  });
+
+  function checkChanges(changes) {
+    function checkSub(obj1, obj2) {
+      for (let prop in obj1) {
+        browser.test.assertEq(obj1[prop].oldValue, obj2[prop].oldValue);
+        browser.test.assertEq(obj1[prop].newValue, obj2[prop].newValue);
+      }
+    }
+
+    checkSub(changes, globalChanges);
+    checkSub(globalChanges, changes);
+    globalChanges = {};
+  }
+
+  /* eslint-disable dot-notation */
+
+  // Set some data and then test getters.
+
+  try {
+    await storage.set({"test-prop1": "value1", "test-prop2": "value2"});
+    checkChanges({"test-prop1": {newValue: "value1"}, "test-prop2": {newValue: "value2"}});
+
+    await check("test-prop1", "value1");
+    await check("test-prop2", "value2");
+
+    let data = await storage.get({"test-prop1": undefined, "test-prop2": undefined, "other": "default"});
+    browser.test.assertEq("value1", data["test-prop1"], "prop1 correct");
+    browser.test.assertEq("value2", data["test-prop2"], "prop2 correct");
+    browser.test.assertEq("default", data["other"], "other correct");
+
+    data = await storage.get(["test-prop1", "test-prop2", "other"]);
+    browser.test.assertEq("value1", data["test-prop1"], "prop1 correct");
+    browser.test.assertEq("value2", data["test-prop2"], "prop2 correct");
+    browser.test.assertFalse("other" in data, "other correct");
+
+    // Remove data in various ways.
+    await storage.remove("test-prop1");
+    checkChanges({"test-prop1": {oldValue: "value1"}});
+    data = await storage.get(["test-prop1", "test-prop2"]);
+    browser.test.assertFalse("test-prop1" in data, "prop1 absent");
+    browser.test.assertTrue("test-prop2" in data, "prop2 present");
+
+
+    await storage.set({"test-prop1": "value1"});
+    checkChanges({"test-prop1": {newValue: "value1"}});
+
+    data = await storage.get(["test-prop1", "test-prop2"]);
+    browser.test.assertEq("value1", data["test-prop1"], "prop1 correct");
+    browser.test.assertEq("value2", data["test-prop2"], "prop2 correct");
+
+    await storage.remove(["test-prop1", "test-prop2"]);
+    checkChanges({"test-prop1": {oldValue: "value1"}, "test-prop2": {oldValue: "value2"}});
+    data = await storage.get(["test-prop1", "test-prop2"]);
+    browser.test.assertFalse("test-prop1" in data, "prop1 absent");
+    browser.test.assertFalse("test-prop2" in data, "prop2 absent");
+
+    // test storage.clear
+    await storage.set({"test-prop1": "value1", "test-prop2": "value2"});
+    await storage.clear();
+
+    checkChanges({"test-prop1": {oldValue: "value1"}, "test-prop2": {oldValue: "value2"}});
+    data = await storage.get(["test-prop1", "test-prop2"]);
+    browser.test.assertFalse("test-prop1" in data, "prop1 absent");
+    browser.test.assertFalse("test-prop2" in data, "prop2 absent");
+
+    // Test cache invalidation.
+    await storage.set({"test-prop1": "value1", "test-prop2": "value2"});
+
+    globalChanges = {};
+    // Schedule sendMessage after onMessage because the other end immediately
+    // sends a message.
+    Promise.resolve().then(() => {
+      browser.test.sendMessage("invalidate");
+    });
+    await new Promise(resolve => browser.test.onMessage.addListener(resolve));
+
+    await check("test-prop1", "value1");
+    await check("test-prop2", "value2");
+
+    // Make sure we can store complex JSON data.
+    await storage.set({
+      "test-prop1": {
+        str: "hello",
+        bool: true,
+        null: null,
+        undef: undefined,
+        obj: {},
+        arr: [1, 2],
+        date: new Date(0),
+        regexp: /regexp/,
+        func: function func() {},
+        window,
+      },
+    });
+
+    await storage.set({"test-prop2": function func() {}});
+    browser.test.assertEq("value1", globalChanges["test-prop1"].oldValue, "oldValue correct");
+    browser.test.assertEq("object", typeof(globalChanges["test-prop1"].newValue), "newValue is obj");
+    globalChanges = {};
+
+    data = await storage.get({"test-prop1": undefined, "test-prop2": undefined});
+    let obj = data["test-prop1"];
+
+    browser.test.assertEq("hello", obj.str, "string part correct");
+    browser.test.assertEq(true, obj.bool, "bool part correct");
+    browser.test.assertEq(null, obj.null, "null part correct");
+    browser.test.assertEq(undefined, obj.undef, "undefined part correct");
+    browser.test.assertEq(undefined, obj.func, "function part correct");
+    browser.test.assertEq(undefined, obj.window, "window part correct");
+    browser.test.assertEq("1970-01-01T00:00:00.000Z", obj.date, "date part correct");
+    browser.test.assertEq("/regexp/", obj.regexp, "date part correct");
+    browser.test.assertEq("object", typeof(obj.obj), "object part correct");
+    browser.test.assertTrue(Array.isArray(obj.arr), "array part present");
+    browser.test.assertEq(1, obj.arr[0], "arr[0] part correct");
+    browser.test.assertEq(2, obj.arr[1], "arr[1] part correct");
+    browser.test.assertEq(2, obj.arr.length, "arr.length part correct");
+
+    obj = data["test-prop2"];
+
+    browser.test.assertEq("[object Object]", {}.toString.call(obj), "function serialized as a plain object");
+    browser.test.assertEq(0, Object.keys(obj).length, "function serialized as an empty object");
+
+    browser.test.notifyPass("storage");
+  } catch (e) {
+    browser.test.fail(`Error: ${e} :: ${e.stack}`);
+    browser.test.notifyFail("storage");
+  }
+}
+
+let extensionData = {
+  background: backgroundScript,
+  manifest: {
+    permissions: ["storage"],
+  },
+};
+
+add_task(function* test_backgroundScript() {
+  let extension = ExtensionTestUtils.loadExtension(extensionData);
+
+  yield extension.startup();
+
+  yield extension.awaitMessage("invalidate");
+
+  Services.obs.notifyObservers(null, "extension-invalidate-storage-cache", "");
+
+  extension.sendMessage("invalidated");
+
+  yield extension.awaitFinish("storage");
+  yield extension.unload();
+});

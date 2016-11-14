@@ -19,7 +19,11 @@ struct WorkaroundsGL
           rgba4IsNotSupportedForColorRendering(false),
           doesSRGBClearsOnLinearFramebufferAttachments(false),
           doWhileGLSLCausesGPUHang(false),
-          finishDoesNotCauseQueriesToBeAvailable(false)
+          finishDoesNotCauseQueriesToBeAvailable(false),
+          alwaysCallUseProgramAfterLink(false),
+          unpackOverlappingRowsSeparatelyUnpackBuffer(false),
+          emulateAbsIntFunction(false),
+          addAndTrueToLoopCondition(false)
     {
     }
 
@@ -56,6 +60,26 @@ struct WorkaroundsGL
     // (NVIDIA) drivers.  It was found that enabling GL_DEBUG_OUTPUT_SYNCHRONOUS before the finish
     // causes it to fully finish.
     bool finishDoesNotCauseQueriesToBeAvailable;
+
+    // Always call useProgram after a successful link to avoid a driver bug.
+    // This workaround is meant to reproduce the use_current_program_after_successful_link
+    // workaround in Chromium (http://crbug.com/110263). It has been shown that this workaround is
+    // not necessary for MacOSX 10.9 and higher (http://crrev.com/39eb535b).
+    bool alwaysCallUseProgramAfterLink;
+
+    // In the case of unpacking from a pixel unpack buffer, unpack overlapping rows row by row.
+    bool unpackOverlappingRowsSeparatelyUnpackBuffer;
+
+    // During initialization, assign the current vertex attributes to the spec-mandated defaults.
+    bool initializeCurrentVertexAttributes;
+
+    // abs(i) where i is an integer returns unexpected result on Intel Mac.
+    // Emulate abs(i) with i * sign(i).
+    bool emulateAbsIntFunction;
+
+    // On Intel Mac, calculation of loop conditions in for and while loop has bug.
+    // Add "&& true" to the end of the condition expression to work around the bug.
+    bool addAndTrueToLoopCondition;
 };
 }
 

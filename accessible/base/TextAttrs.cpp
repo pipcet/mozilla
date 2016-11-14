@@ -659,9 +659,7 @@ TextAttrsMgr::FontWeightTextAttr::
   // font->GetStyle()->weight will give the absolute weight requested of the
   // font face. The gfxPangoFontGroup code uses the gfxFontEntry constructor
   // which doesn't initialize the weight field.
-#if defined(MOZ_WIDGET_QT)
-  useFontEntryWeight = false;
-#elif defined(MOZ_WIDGET_GTK)
+#if defined(MOZ_WIDGET_GTK)
   useFontEntryWeight = gfxPlatformGtk::UseFcFontList();
 #endif
 
@@ -718,13 +716,9 @@ TextAttrsMgr::TextDecorValue::
   TextDecorValue(nsIFrame* aFrame)
 {
   const nsStyleTextReset* textReset = aFrame->StyleTextReset();
-  mStyle = textReset->GetDecorationStyle();
-
-  bool isForegroundColor = false;
-  textReset->GetDecorationColor(mColor, isForegroundColor);
-  if (isForegroundColor)
-    mColor = aFrame->StyleColor()->mColor;
-
+  mStyle = textReset->mTextDecorationStyle;
+  mColor = aFrame->StyleColor()->
+    CalcComplexColor(textReset->mTextDecorationColor);
   mLine = textReset->mTextDecorationLine &
     (NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE |
      NS_STYLE_TEXT_DECORATION_LINE_LINE_THROUGH);

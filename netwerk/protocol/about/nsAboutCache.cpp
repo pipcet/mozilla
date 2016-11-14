@@ -14,7 +14,6 @@
 #include "nsEscape.h"
 #include "nsAboutProtocolUtils.h"
 #include "nsPrintfCString.h"
-#include "nsDOMString.h"
 
 #include "nsICacheStorageService.h"
 #include "nsICacheStorage.h"
@@ -129,7 +128,10 @@ nsAboutCache::Channel::Init(nsIURI* aURI, nsILoadInfo* aLoadInfo)
         mBuffer.AppendLiteral("\">Back to overview</a>");
     }
 
-    FlushBuffer();
+    rv = FlushBuffer();
+    if (NS_FAILED(rv)) {
+        NS_WARNING("Failed to flush buffer");
+    }
 
     return NS_OK;
 }
@@ -146,7 +148,8 @@ NS_IMETHODIMP nsAboutCache::Channel::AsyncOpen(nsIStreamListener *aListener, nsI
     rv = VisitNextStorage();
     if (NS_FAILED(rv)) return rv;
 
-    rv = mChannel->AsyncOpen(aListener, aContext);
+    MOZ_ASSERT(!aContext, "asyncOpen2() does not take a context argument");
+    rv = NS_MaybeOpenChannelUsingAsyncOpen2(mChannel, aListener);
     if (NS_FAILED(rv)) return rv;
 
     return NS_OK;
@@ -159,25 +162,12 @@ NS_IMETHODIMP nsAboutCache::Channel::AsyncOpen2(nsIStreamListener *aListener)
 
 NS_IMETHODIMP nsAboutCache::Channel::Open(nsIInputStream * *_retval)
 {
-    nsresult rv;
-
-    if (!mChannel) {
-        return NS_ERROR_UNEXPECTED;
-    }
-
-    // Kick the walk loop.
-    rv = VisitNextStorage();
-    if (NS_FAILED(rv)) return rv;
-
-    rv = mChannel->Open(_retval);
-    if (NS_FAILED(rv)) return rv;
-
-    return NS_OK;
+    return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 NS_IMETHODIMP nsAboutCache::Channel::Open2(nsIInputStream * *_retval)
 {
-    return Open(_retval);
+    return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 nsresult
@@ -258,7 +248,10 @@ nsAboutCache::Channel::FireVisitStorage()
             free(escaped);
         }
 
-        FlushBuffer();
+        rv = FlushBuffer();
+        if (NS_FAILED(rv)) {
+            NS_WARNING("Failed to flush buffer");
+        }
 
         // Simulate finish of a visit cycle, this tries the next storage
         // or closes the output stream (i.e. the UI loader will stop spinning)
@@ -384,7 +377,10 @@ nsAboutCache::Channel::OnCacheStorageInfo(uint32_t aEntryCount, uint64_t aConsum
     // The entries header is added on encounter of the first entry
     mEntriesHeaderAdded = false;
 
-    FlushBuffer();
+    nsresult rv = FlushBuffer();
+    if (NS_FAILED(rv)) {
+        NS_WARNING("Failed to flush buffer");
+    }
 
     if (mOverview) {
         // OnCacheEntryVisitCompleted() is not called when we do not iterate
@@ -489,7 +485,7 @@ nsAboutCache::Channel::OnCacheEntryInfo(nsIURI *aURI, const nsACString & aIdEnha
         PrintTimeString(buf, sizeof(buf), aLastModified);
         mBuffer.Append(buf);
     } else {
-        mBuffer.AppendLiteral("No last modified time (bug 1000338)");
+        mBuffer.AppendLiteral("No last modified time");
     }
     mBuffer.AppendLiteral("</td>\n");
 
@@ -541,7 +537,10 @@ nsAboutCache::Channel::OnCacheEntryVisitCompleted()
     // We are done!
     mBuffer.AppendLiteral("</body>\n"
                           "</html>\n");
-    FlushBuffer();
+    nsresult rv = FlushBuffer();
+    if (NS_FAILED(rv)) {
+        NS_WARNING("Failed to flush buffer");
+    }
     mStream->Close();
 
     return NS_OK;
@@ -568,13 +567,6 @@ nsAboutCache::GetURIFlags(nsIURI *aURI, uint32_t *result)
 {
     *result = 0;
     return NS_OK;
-}
-
-NS_IMETHODIMP
-nsAboutCache::GetIndexedDBOriginPostfix(nsIURI *aURI, nsAString &result)
-{
-    SetDOMStringToNull(result);
-    return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 // static

@@ -114,6 +114,7 @@ var PrintUtils = {
     let mm = aBrowser.messageManager;
     mm.sendAsyncMessage("Printing:Print", {
       windowID: aWindowID,
+      simplifiedMode: this._shouldSimplify,
     });
   },
 
@@ -204,8 +205,15 @@ var PrintUtils = {
       // collapse the browser here -- it will be shown in
       // enterPrintPreview; this forces a reflow which fixes display
       // issues in bug 267422.
-      this._sourceBrowser = this._listener.getPrintPreviewBrowser();
-      this._sourceBrowser.collapsed = true;
+      let ppBrowser = this._listener.getPrintPreviewBrowser();
+      ppBrowser.collapsed = true;
+
+      // If the user transits too quickly within preview and we have a pending
+      // progress dialog, we will close it before opening a new one.
+      if (this._webProgressPP && this._webProgressPP.value) {
+        this._webProgressPP.value.onStateChange(null, null,
+          Components.interfaces.nsIWebProgressListener.STATE_STOP, 0);
+      }
     }
 
     this._webProgressPP = {};
@@ -292,9 +300,7 @@ var PrintUtils = {
     return document.getElementById("print-preview-toolbar") != null;
   },
 
-  ////////////////////////////////////////////////////
-  // "private" methods and members. Don't use them. //
-  ///////////////////////////////////////////////////
+  // "private" methods and members. Don't use them.
 
   _listener: null,
   _closeHandlerPP: null,
@@ -360,7 +366,7 @@ var PrintUtils = {
       let ppMsgName = msgName + "_PP";
       try {
         msg = this.bundle.GetStringFromName(ppMsgName);
-      } catch(e) {
+      } catch (e) {
         // We allow localizers to not have the print preview error string,
         // and just fall back to the printing error string.
       }
@@ -404,7 +410,6 @@ var PrintUtils = {
                                          data.maxSelfProgress,
                                          data.curTotalProgress,
                                          data.maxTotalProgress);
-        break;
       }
 
       case "Printing:Preview:StateChange": {
@@ -422,7 +427,6 @@ var PrintUtils = {
         return listener.onStateChange(null, null,
                                       data.stateFlags,
                                       data.status);
-        break;
       }
     }
     return undefined;
@@ -530,15 +534,15 @@ var PrintUtils = {
         // the original page. After we have parsed it, content will tell parent
         // that the document is ready for print previewing.
         spMM.sendAsyncMessage("Printing:Preview:ParseDocument", {
-          URL: this._listener.getSourceBrowser().currentURI.spec,
-          windowID: this._listener.getSourceBrowser().outerWindowID,
+          URL: this._sourceBrowser.currentURI.spec,
+          windowID: this._sourceBrowser.outerWindowID,
         });
 
         // Here we log telemetry data for when the user enters simplify mode.
         this.logTelemetry("PRINT_PREVIEW_SIMPLIFY_PAGE_OPENED_COUNT");
       }
     } else {
-      sendEnterPreviewMessage(this._listener.getSourceBrowser(), false);
+      sendEnterPreviewMessage(this._sourceBrowser, false);
     }
 
     if (this._webProgressPP.value) {
@@ -571,7 +575,11 @@ var PrintUtils = {
 
       // Set the original window as an active window so any mozPrintCallbacks can
       // run without delayed setTimeouts.
-      this._sourceBrowser.docShellIsActive = true;
+      if (this._listener.activateBrowser) {
+        this._listener.activateBrowser(this._sourceBrowser);
+      } else {
+        this._sourceBrowser.docShellIsActive = true;
+      }
 
       // show the toolbar after we go into print preview mode so
       // that we can initialize the toolbar with total num pages
@@ -587,10 +595,12 @@ var PrintUtils = {
       printPreviewTB.initialize(ppBrowser);
 
       // Enable simplify page checkbox when the page is an article
-      if (this._sourceBrowser.isArticle)
+      if (this._sourceBrowser.isArticle) {
         printPreviewTB.enableSimplifyPage();
-      else
+      } else {
+        this.logTelemetry("PRINT_PREVIEW_SIMPLIFY_PAGE_UNAVAILABLE_COUNT");
         printPreviewTB.disableSimplifyPage();
+      }
 
       // copy the window close handler
       if (document.documentElement.hasAttribute("onclose"))

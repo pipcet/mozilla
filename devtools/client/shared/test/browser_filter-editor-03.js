@@ -5,18 +5,19 @@
 
 // Tests the Filter Editor Widget add, removeAt, updateAt, getValueAt methods
 
-const BASE_URI = "chrome://devtools/content/shared/widgets/";
-const TEST_URI = BASE_URI + "filter-frame.xhtml";
 const {CSSFilterEditorWidget} = require("devtools/client/shared/widgets/FilterWidget");
+const {getClientCssProperties} = require("devtools/shared/fronts/css-properties");
 const GRAYSCALE_MAX = 100;
 const INVERT_MIN = 0;
 
-add_task(function* () {
-  yield addTab("about:blank");
-  let [host, win, doc] = yield createHost("bottom", TEST_URI);
+const TEST_URI = `data:text/html,<div id="filter-container" />`;
 
-  const container = doc.querySelector("#container");
-  let widget = new CSSFilterEditorWidget(container, "none");
+add_task(function* () {
+  let [host, win, doc] = yield createHost("bottom", TEST_URI);
+  const cssIsValid = getClientCssProperties().getValidityChecker(doc);
+
+  const container = doc.querySelector("#filter-container");
+  let widget = new CSSFilterEditorWidget(container, "none", cssIsValid);
 
   info("Test add method");
   const blur = widget.add("blur", "10.2px");

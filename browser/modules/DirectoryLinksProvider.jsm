@@ -228,7 +228,7 @@ var DirectoryLinksProvider = {
           enhanced = false;
         }
       }
-      catch(ex) {}
+      catch (ex) {}
       Services.prefs.setBoolPref(PREF_NEWTAB_ENHANCED, enhanced);
     }
   },
@@ -526,7 +526,6 @@ var DirectoryLinksProvider = {
    * @return download promise
    */
   reportSitesAction: function DirectoryLinksProvider_reportSitesAction(sites, action, triggeringSiteIndex) {
-    let pastImpressions;
     // Check if the suggested tile was shown
     if (action == "view") {
       sites.slice(0, triggeringSiteIndex + 1).filter(s => s).forEach(site => {
@@ -544,13 +543,6 @@ var DirectoryLinksProvider = {
       // suggested tile has targetedSite, or frecent_sites if it was pinned
       let {frecent_sites, targetedSite, url} = sites[triggeringSiteIndex].link;
       if (frecent_sites || targetedSite) {
-        // skip past_impressions for "unpin" to avoid chance of tracking
-        if (this._frequencyCaps[url] && action != "unpin") {
-          pastImpressions = {
-            total: this._frequencyCaps[url].totalViews,
-            daily: this._frequencyCaps[url].dailyViews
-          };
-        }
         this._setFrequencyCapClick(url);
       }
     }
@@ -609,7 +601,7 @@ var DirectoryLinksProvider = {
       // URIs without base domains will be allowed
       base = Services.eTLD.getBaseDomain(uri);
     }
-    catch(ex) {}
+    catch (ex) {}
     // Require a scheme match and the base only if desired
     return allowed.has(scheme) && (!checkBase || ALLOWED_URL_BASE.has(base));
   },
@@ -1206,7 +1198,7 @@ var DirectoryLinksProvider = {
    */
   _removeTileClick: function DirectoryLinksProvider_removeTileClick(url = "") {
     // remove trailing slash, to accomodate Places sending site urls ending with '/'
-    let noTrailingSlashUrl = url.replace(/\/$/,"");
+    let noTrailingSlashUrl = url.replace(/\/$/, "");
     let capObject = this._frequencyCaps[url] || this._frequencyCaps[noTrailingSlashUrl];
     // return resolved promise if capObject is not found
     if (!capObject) {

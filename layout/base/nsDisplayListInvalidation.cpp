@@ -106,7 +106,14 @@ nsDisplayBoxShadowOuterGeometry::nsDisplayBoxShadowOuterGeometry(nsDisplayItem* 
   , mOpacity(aOpacity)
 {}
 
-nsDisplaySVGEffectsGeometry::nsDisplaySVGEffectsGeometry(nsDisplaySVGEffects* aItem, nsDisplayListBuilder* aBuilder)
+void
+nsDisplaySolidColorRegionGeometry::MoveBy(const nsPoint& aOffset)
+{
+  nsDisplayItemGeometry::MoveBy(aOffset);
+  mRegion.MoveBy(aOffset);
+}
+
+nsDisplaySVGEffectGeometry::nsDisplaySVGEffectGeometry(nsDisplaySVGEffects* aItem, nsDisplayListBuilder* aBuilder)
   : nsDisplayItemGeometry(aItem, aBuilder)
   , mBBox(aItem->BBoxInUserSpace())
   , mUserSpaceOffset(aItem->UserSpaceOffset())
@@ -114,11 +121,22 @@ nsDisplaySVGEffectsGeometry::nsDisplaySVGEffectsGeometry(nsDisplaySVGEffects* aI
 {}
 
 void
-nsDisplaySVGEffectsGeometry::MoveBy(const nsPoint& aOffset)
+nsDisplaySVGEffectGeometry::MoveBy(const nsPoint& aOffset)
 {
   mBounds.MoveBy(aOffset);
   mFrameOffsetToReferenceFrame += aOffset;
 }
+
+nsDisplayMaskGeometry::nsDisplayMaskGeometry(nsDisplayMask* aItem, nsDisplayListBuilder* aBuilder)
+  : nsDisplaySVGEffectGeometry(aItem, aBuilder)
+  , nsImageGeometryMixin(aItem, aBuilder)
+  , mDestRects(aItem->GetDestRects())
+{}
+
+nsDisplayFilterGeometry::nsDisplayFilterGeometry(nsDisplayFilter* aItem, nsDisplayListBuilder* aBuilder)
+  : nsDisplaySVGEffectGeometry(aItem, aBuilder)
+  , nsImageGeometryMixin(aItem, aBuilder)
+{}
 
 nsCharClipGeometry::nsCharClipGeometry(nsCharClipDisplayItem* aItem, nsDisplayListBuilder* aBuilder)
   : nsDisplayItemGenericGeometry(aItem, aBuilder)

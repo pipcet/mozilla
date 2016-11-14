@@ -14,6 +14,7 @@
 #include "mozilla/layers/ImageClient.h"  // for ImageClient
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor, etc
 #include "mozilla/layers/TextureClient.h"
+#include "mozilla/layers/TextureClientRecycleAllocator.h"
 #include "mozilla/layers/BufferTexture.h"
 #include "mozilla/layers/ImageDataSerializer.h"
 #include "mozilla/layers/ImageBridgeChild.h"  // for ImageBridgeChild
@@ -42,8 +43,6 @@ SharedPlanarYCbCrImage::~SharedPlanarYCbCrImage() {
       ImageBridgeChild::DispatchReleaseTextureClient(mTextureClient);
       mTextureClient = nullptr;
     }
-
-    ImageBridgeChild::DispatchReleaseImageClient(mCompositable.forget().take());
   }
 }
 
@@ -58,7 +57,7 @@ SharedPlanarYCbCrImage::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
 }
 
 TextureClient*
-SharedPlanarYCbCrImage::GetTextureClient(CompositableClient* aClient)
+SharedPlanarYCbCrImage::GetTextureClient(KnowsCompositor* aForwarder)
 {
   return mTextureClient.get();
 }
@@ -117,8 +116,10 @@ SharedPlanarYCbCrImage::AllocateAndGetNewBuffer(uint32_t aSize)
     return nullptr;
   }
 
+  // XXX Add YUVColorSpace handling. Use YUVColorSpace::BT601 for now.
   mTextureClient = TextureClient::CreateForYCbCrWithBufferSize(mCompositable->GetForwarder(),
-                                                               gfx::SurfaceFormat::YUV, size,
+                                                               size,
+                                                               YUVColorSpace::BT601,
                                                                mCompositable->GetTextureFlags());
 
   // get new buffer _without_ setting mBuffer.
@@ -158,9 +159,13 @@ SharedPlanarYCbCrImage::AdoptData(const Data &aData)
   uint32_t cbOffset = aData.mCbChannel - base;
   uint32_t crOffset = aData.mCrChannel - base;
 
+  auto fwd = mCompositable->GetForwarder();
+  bool hasIntermediateBuffer = ComputeHasIntermediateBuffer(gfx::SurfaceFormat::YUV,
+                                                            fwd->GetCompositorBackendType());
+
   static_cast<BufferTextureData*>(mTextureClient->GetInternalData())->SetDesciptor(
     YCbCrDescriptor(aData.mYSize, aData.mCbCrSize, yOffset, cbOffset, crOffset,
-                    aData.mStereoMode)
+                    aData.mStereoMode, aData.mYUVColorSpace, hasIntermediateBuffer)
   );
 
   return true;
@@ -176,11 +181,18 @@ SharedPlanarYCbCrImage::Allocate(PlanarYCbCrData& aData)
 {
   MOZ_ASSERT(!mTextureClient,
              "This image already has allocated data");
+  static const uint32_t MAX_POOLED_VIDEO_COUNT = 5;
 
-  mTextureClient = TextureClient::CreateForYCbCr(mCompositable->GetForwarder(),
-                                                 aData.mYSize, aData.mCbCrSize,
-                                                 aData.mStereoMode,
-                                                 mCompositable->GetTextureFlags());
+  if (!mCompositable->HasTextureClientRecycler()) {
+    // Initialize TextureClientRecycler
+    mCompositable->GetTextureClientRecycler()->SetMaxPoolSize(MAX_POOLED_VIDEO_COUNT);
+  }
+
+  {
+    YCbCrTextureClientAllocationHelper helper(aData, mCompositable->GetTextureFlags());
+    mTextureClient = mCompositable->GetTextureClientRecycler()->CreateOrRecycle(helper);
+  }
+
   if (!mTextureClient) {
     NS_WARNING("SharedPlanarYCbCrImage::Allocate failed.");
     return false;
@@ -209,6 +221,7 @@ SharedPlanarYCbCrImage::Allocate(PlanarYCbCrData& aData)
   mData.mPicY = aData.mPicY;
   mData.mPicSize = aData.mPicSize;
   mData.mStereoMode = aData.mStereoMode;
+  mData.mYUVColorSpace = aData.mYUVColorSpace;
   // those members are not always equal to aData's, due to potentially different
   // packing.
   mData.mYSkip = 0;

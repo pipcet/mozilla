@@ -20,7 +20,7 @@
 #include "nsIDocument.h"
 #include "mozilla/net/ChannelDiverterParent.h"
 
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 
 using namespace mozilla::ipc;
 
@@ -501,18 +501,6 @@ ExternalHelperAppParent::GetPartID(uint32_t* aPartID)
 
 NS_IMETHODIMP
 ExternalHelperAppParent::GetIsLastPart(bool* aIsLastPart)
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
-ExternalHelperAppParent::GetPreamble(nsACString & aPreamble)
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
-ExternalHelperAppParent::GetOriginalResponseHeader(nsACString & aOriginalResponseHeader)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }

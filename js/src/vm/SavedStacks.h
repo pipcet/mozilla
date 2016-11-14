@@ -165,11 +165,11 @@ class SavedStacks {
     MOZ_MUST_USE bool init();
     bool initialized() const { return frames.initialized(); }
     MOZ_MUST_USE bool saveCurrentStack(JSContext* cx, MutableHandleSavedFrame frame,
-                                       unsigned maxFrameCount = 0);
+                                       JS::StackCapture&& capture = JS::StackCapture(JS::AllFrames()));
     MOZ_MUST_USE bool copyAsyncStack(JSContext* cx, HandleObject asyncStack,
                                      HandleString asyncCause,
                                      MutableHandleSavedFrame adoptedStack,
-                                     unsigned maxFrameCount = 0);
+                                     uint32_t maxFrameCount = 0);
     void sweep();
     void trace(JSTracer* trc);
     uint32_t count();
@@ -221,11 +221,11 @@ class SavedStacks {
 
     MOZ_MUST_USE bool insertFrames(JSContext* cx, FrameIter& iter,
                                    MutableHandleSavedFrame frame,
-                                   unsigned maxFrameCount = 0);
+                                   JS::StackCapture&& capture);
     MOZ_MUST_USE bool adoptAsyncStack(JSContext* cx, HandleSavedFrame asyncStack,
                                       HandleString asyncCause,
                                       MutableHandleSavedFrame adoptedStack,
-                                      unsigned maxFrameCount);
+                                      uint32_t maxFrameCount);
     SavedFrame* getOrCreateSavedFrame(JSContext* cx, SavedFrame::HandleLookup lookup);
     SavedFrame* createFrameFromLookup(JSContext* cx, SavedFrame::HandleLookup lookup);
 
@@ -301,7 +301,7 @@ class SavedStacks {
     };
 
     // We eagerly Atomize the script source stored in LocationValue because
-    // asm.js does not always have a JSScript and the source might not be
+    // wasm does not always have a JSScript and the source might not be
     // available when we need it later. However, since the JSScript does not
     // actually hold this atom, we have to trace it strongly to keep it alive.
     // Thus, it takes two GC passes to fully clean up this table: the first GC
@@ -323,6 +323,9 @@ template <>
 class MutableHandleBase<SavedStacks::LocationValue>
   : public SavedStacks::MutableLocationValueOperations<JS::MutableHandle<SavedStacks::LocationValue>>
 {};
+
+UTF8CharsZ
+BuildUTF8StackString(JSContext* cx, HandleObject stack);
 
 } /* namespace js */
 

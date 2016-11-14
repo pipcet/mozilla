@@ -274,11 +274,6 @@ class FloatRegisters
         return Names[code];
     }
 
-    static const char* GetName(uint32_t i) {
-        MOZ_ASSERT(i < Total);
-        return GetName(Encoding(i));
-    }
-
     static Code FromName(const char* name);
 
     static const Encoding Invalid = invalid_freg;
@@ -374,18 +369,18 @@ class VFPRegister
     bool _isMissing : 1;
 
   public:
-    MOZ_CONSTEXPR VFPRegister(uint32_t r, RegType k)
+    constexpr VFPRegister(uint32_t r, RegType k)
       : kind(k), code_ (Code(r)), _isInvalid(false), _isMissing(false)
     { }
-    MOZ_CONSTEXPR VFPRegister()
+    constexpr VFPRegister()
       : kind(Double), code_(Code(0)), _isInvalid(true), _isMissing(false)
     { }
 
-    MOZ_CONSTEXPR VFPRegister(RegType k, uint32_t id, bool invalid, bool missing) :
+    constexpr VFPRegister(RegType k, uint32_t id, bool invalid, bool missing) :
         kind(k), code_(Code(id)), _isInvalid(invalid), _isMissing(missing) {
     }
 
-    explicit MOZ_CONSTEXPR VFPRegister(Code id)
+    explicit constexpr VFPRegister(Code id)
       : kind(Double), code_(id), _isInvalid(false), _isMissing(false)
     { }
     bool operator==(const VFPRegister& other) const {
@@ -581,6 +576,7 @@ class VFPRegister
 typedef VFPRegister FloatRegister;
 
 uint32_t GetARMFlags();
+bool HasARMv7();
 bool HasMOVWT();
 bool HasLDSTREXBHD();           // {LD,ST}REX{B,H,D}
 bool HasDMBDSBISB();            // DMB, DSB, and ISB
@@ -594,6 +590,9 @@ extern volatile uint32_t armHwCapFlags;
 // Not part of the HWCAP flag, but we need to know these and these bits are not
 // used. Define these here so that their use can be inlined by the simulator.
 
+// A bit to flag when signaled alignment faults are to be fixed up.
+#define HWCAP_FIXUP_FAULT (1 << 24)
+
 // A bit to flag when the flags are uninitialized, so they can be atomically set.
 #define HWCAP_UNINITIALIZED (1 << 25)
 
@@ -606,6 +605,8 @@ extern volatile uint32_t armHwCapFlags;
 // A bit to flag the use of the ARMv7 arch, otherwise ARMv6.
 #define HWCAP_ARMv7 (1 << 28)
 
+// Top three bits are reserved, do not use them.
+
 // Returns true when cpu alignment faults are enabled and signaled, and thus we
 // should ensure loads and stores are aligned.
 inline bool HasAlignmentFault()
@@ -613,6 +614,16 @@ inline bool HasAlignmentFault()
     MOZ_ASSERT(armHwCapFlags != HWCAP_UNINITIALIZED);
     return armHwCapFlags & HWCAP_ALIGNMENT_FAULT;
 }
+
+#ifdef JS_SIMULATOR_ARM
+// Returns true when cpu alignment faults will be fixed up by the
+// "operating system", which functionality we will emulate.
+inline bool FixupFault()
+{
+    MOZ_ASSERT(armHwCapFlags != HWCAP_UNINITIALIZED);
+    return armHwCapFlags & HWCAP_FIXUP_FAULT;
+}
+#endif
 
 // Arm/D32 has double registers that can NOT be treated as float32 and this
 // requires some dances in lowering.
@@ -653,12 +664,6 @@ static inline bool UseHardFpABI()
 // In order to handle SoftFp ABI calls, we need to be able to express that we
 // have ABIArg which are represented by pair of general purpose registers.
 #define JS_CODEGEN_REGISTER_PAIR 1
-
-// See MIRGenerator::foldableOffsetRange for more info.
-// TODO: Implement this for ARM. Note that it requires Codegen to respect the
-// offset field of AsmJSHeapAccess.
-static const size_t WasmCheckedImmediateRange = 0;
-static const size_t WasmImmediateRange = 0;
 
 } // namespace jit
 } // namespace js

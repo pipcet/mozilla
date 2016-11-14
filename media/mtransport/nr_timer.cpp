@@ -58,6 +58,7 @@
 #include "nsITimer.h"
 #include "nsNetCID.h"
 #include "runnable_utils.h"
+#include "mozilla/DebugOnly.h"
 
 extern "C" {
 #include "nr_api.h"
@@ -119,7 +120,7 @@ NS_IMPL_ISUPPORTS(nrappkitTimerCallback, nsITimerCallback)
 NS_IMETHODIMP nrappkitTimerCallback::Notify(nsITimer *timer) {
   r_log(LOG_GENERIC, LOG_DEBUG, "Timer callback fired (set in %s:%d)",
         function_.c_str(), line_);
-  MOZ_ASSERT(timer == timer_);
+  MOZ_RELEASE_ASSERT(timer == timer_);
   cb_(0, 0, cb_arg_);
 
   // Allow the timer to go away.
@@ -166,9 +167,9 @@ static nsCOMPtr<nsIEventTarget> GetSTSThread() {
 // These timers must only be used from the STS thread.
 // This function is a helper that enforces that.
 static void CheckSTSThread() {
-  nsCOMPtr<nsIEventTarget> sts_thread = GetSTSThread();
+  DebugOnly<nsCOMPtr<nsIEventTarget>> sts_thread = GetSTSThread();
 
-  ASSERT_ON_THREAD(sts_thread);
+  ASSERT_ON_THREAD(sts_thread.value);
 }
 
 static int nr_async_timer_set_zero(NR_async_cb cb, void *arg,

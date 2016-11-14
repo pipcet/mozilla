@@ -9,31 +9,21 @@ const promise = require("promise");
 const protocol = require("devtools/shared/protocol");
 const {LongStringActor} = require("devtools/server/actors/string");
 const {getDefinedGeometryProperties} = require("devtools/server/actors/highlighters/geometry-editor");
-const {parseDeclarations} = require("devtools/shared/css-parsing-utils");
+const {parseDeclarations} = require("devtools/shared/css/parsing-utils");
 const {isCssPropertyKnown} = require("devtools/server/actors/css-properties");
 const {Task} = require("devtools/shared/task");
 const events = require("sdk/event/core");
 
 // This will also add the "stylesheet" actor type for protocol.js to recognize
 const {UPDATE_PRESERVING_RULES, UPDATE_GENERAL} = require("devtools/server/actors/stylesheets");
-const {pageStyleSpec, styleRuleSpec} = require("devtools/shared/specs/styles");
+const {pageStyleSpec, styleRuleSpec, ELEMENT_STYLE} = require("devtools/shared/specs/styles");
 
-loader.lazyRequireGetter(this, "CSS", "CSS");
-loader.lazyGetter(this, "CssLogic", () => require("devtools/shared/inspector/css-logic").CssLogic);
+loader.lazyGetter(this, "CssLogic", () => require("devtools/server/css-logic").CssLogic);
+loader.lazyGetter(this, "SharedCssLogic", () => require("devtools/shared/inspector/css-logic"));
 loader.lazyGetter(this, "DOMUtils", () => Cc["@mozilla.org/inspector/dom-utils;1"].getService(Ci.inIDOMUtils));
 
-// The PageStyle actor flattens the DOM CSS objects a little bit, merging
-// Rules and their Styles into one actor.  For elements (which have a style
-// but no associated rule) we fake a rule with the following style id.
-const ELEMENT_STYLE = 100;
-exports.ELEMENT_STYLE = ELEMENT_STYLE;
-
-// When gathering rules to read for pseudo elements, we will skip
-// :before and :after, which are handled as a special case.
-loader.lazyGetter(this, "PSEUDO_ELEMENTS_TO_READ", () => {
-  return DOMUtils.getCSSPseudoElementNames().filter(pseudo => {
-    return pseudo !== ":before" && pseudo !== ":after";
-  });
+loader.lazyGetter(this, "PSEUDO_ELEMENTS", () => {
+  return DOMUtils.getCSSPseudoElementNames();
 });
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
@@ -208,7 +198,7 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
   getComputed: function (node, options) {
     let ret = Object.create(null);
 
-    this.cssLogic.sourceFilter = options.filter || CssLogic.FILTER.UA;
+    this.cssLogic.sourceFilter = options.filter || SharedCssLogic.FILTER.UA;
     this.cssLogic.highlight(node.rawNode);
     let computed = this.cssLogic.computedStyle || [];
 
@@ -386,7 +376,7 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
    *  }
    */
   getMatchedSelectors: function (node, property, options) {
-    this.cssLogic.sourceFilter = options.filter || CssLogic.FILTER.UA;
+    this.cssLogic.sourceFilter = options.filter || SharedCssLogic.FILTER.UA;
     this.cssLogic.highlight(node.rawNode);
 
     let rules = new Set();
@@ -546,10 +536,9 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
           rules.push(oneRule);
         });
 
-    // Now any pseudos (except for ::before / ::after, which was handled as
-    // a 'normal rule' above.
+    // Now any pseudos.
     if (showElementStyles) {
-      for (let readPseudo of PSEUDO_ELEMENTS_TO_READ) {
+      for (let readPseudo of PSEUDO_ELEMENTS) {
         this._getElementRules(bindingElement, readPseudo, inherited, options)
             .forEach(oneRule => {
               rules.push(oneRule);
@@ -583,9 +572,9 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
     for (let i = domRules.Count() - 1; i >= 0; i--) {
       let domRule = domRules.GetElementAt(i);
 
-      let isSystem = !CssLogic.isContentStylesheet(domRule.parentStyleSheet);
+      let isSystem = !SharedCssLogic.isContentStylesheet(domRule.parentStyleSheet);
 
-      if (isSystem && options.filter != CssLogic.FILTER.UA) {
+      if (isSystem && options.filter != SharedCssLogic.FILTER.UA) {
         continue;
       }
 
@@ -771,7 +760,7 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
 
     let layout = {};
 
-    // First, we update the first part of the layout view, with
+    // First, we update the first part of the box model view, with
     // the size of the element.
 
     let clientRect = node.rawNode.getBoundingClientRect();

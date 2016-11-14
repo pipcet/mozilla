@@ -31,7 +31,8 @@
 #include "nsIObjectInputStream.h"
 #include "nsIObjectOutputStream.h"
 #include "nsScriptSecurityManager.h"
-
+#include "nsIPermissionManager.h"
+#include "nsContentUtils.h"
 #include "jsfriendapi.h"
 
 using namespace mozilla;
@@ -59,19 +60,18 @@ const char XPC_XPCONNECT_CONTRACTID[]     = "@mozilla.org/js/xpc/XPConnect;1";
 /***************************************************************************/
 
 nsXPConnect::nsXPConnect()
-    :   mRuntime(nullptr),
+    :   mContext(nullptr),
         mShuttingDown(false)
 {
-    mRuntime = XPCJSRuntime::newXPCJSRuntime();
-    if (!mRuntime) {
-        NS_RUNTIMEABORT("Couldn't create XPCJSRuntime.");
+    mContext = XPCJSContext::newXPCJSContext();
+    if (!mContext) {
+        NS_RUNTIMEABORT("Couldn't create XPCJSContext.");
     }
 }
 
 nsXPConnect::~nsXPConnect()
 {
-    mRuntime->DeleteSingletonScopes();
-    mRuntime->DestroyJSContextStack();
+    mContext->DeleteSingletonScopes();
 
     // In order to clean up everything properly, we need to GC twice: once now,
     // to clean anything that can go away on its own (like the Junk Scope, which
@@ -79,17 +79,16 @@ nsXPConnect::~nsXPConnect()
     // XPConnect, to clean the stuff we forcibly disconnected. The forced
     // shutdown code defaults to leaking in a number of situations, so we can't
     // get by with only the second GC. :-(
-    mRuntime->GarbageCollect(JS::gcreason::XPCONNECT_SHUTDOWN);
+    mContext->GarbageCollect(JS::gcreason::XPCONNECT_SHUTDOWN);
 
     mShuttingDown = true;
     XPCWrappedNativeScope::SystemIsBeingShutDown();
-    mRuntime->SystemIsBeingShutDown();
 
     // The above causes us to clean up a bunch of XPConnect data structures,
     // after which point we need to GC to clean everything up. We need to do
-    // this before deleting the XPCJSRuntime, because doing so destroys the
+    // this before deleting the XPCJSContext, because doing so destroys the
     // maps that our finalize callback depends on.
-    mRuntime->GarbageCollect(JS::gcreason::XPCONNECT_SHUTDOWN);
+    mContext->GarbageCollect(JS::gcreason::XPCONNECT_SHUTDOWN);
 
     NS_RELEASE(gSystemPrincipal);
     gScriptSecurityManager = nullptr;
@@ -97,7 +96,7 @@ nsXPConnect::~nsXPConnect()
     // shutdown the logging system
     XPC_LOG_FINISH();
 
-    delete mRuntime;
+    delete mContext;
 
     gSelf = nullptr;
     gOnceAliveNowDead = true;
@@ -109,8 +108,8 @@ nsXPConnect::InitStatics()
 {
     gSelf = new nsXPConnect();
     gOnceAliveNowDead = false;
-    if (!gSelf->mRuntime) {
-        NS_RUNTIMEABORT("Couldn't create XPCJSRuntime.");
+    if (!gSelf->mContext) {
+        NS_RUNTIMEABORT("Couldn't create XPCJSContext.");
     }
 
     // Initial extra ref to keep the singleton alive
@@ -123,11 +122,13 @@ nsXPConnect::InitStatics()
     gScriptSecurityManager->GetSystemPrincipal(&gSystemPrincipal);
     MOZ_RELEASE_ASSERT(gSystemPrincipal);
 
-    // Initialize the SafeJSContext.
-    gSelf->mRuntime->GetJSContextStack()->InitSafeJSContext();
+    if (!JS::InitSelfHostedCode(gSelf->mContext->Context()))
+        MOZ_CRASH("InitSelfHostedCode failed");
+    if (!gSelf->mContext->JSContextInitialized(gSelf->mContext->Context()))
+        MOZ_CRASH("JSContextInitialized failed");
 
     // Initialize our singleton scopes.
-    gSelf->mRuntime->InitSingletonScopes();
+    gSelf->mContext->InitSingletonScopes();
 }
 
 nsXPConnect*
@@ -150,11 +151,11 @@ nsXPConnect::ReleaseXPConnectSingleton()
 }
 
 // static
-XPCJSRuntime*
-nsXPConnect::GetRuntimeInstance()
+XPCJSContext*
+nsXPConnect::GetContextInstance()
 {
     nsXPConnect* xpc = XPConnect();
-    return xpc->GetRuntime();
+    return xpc->GetContext();
 }
 
 // static
@@ -168,7 +169,7 @@ nsXPConnect::IsISupportsDescendant(nsIInterfaceInfo* info)
 }
 
 void
-xpc::ErrorReport::Init(JSErrorReport* aReport, const char* aFallbackMessage,
+xpc::ErrorReport::Init(JSErrorReport* aReport, const char* aToStringResult,
                        bool aIsChrome, uint64_t aWindowID)
 {
     mCategory = aIsChrome ? NS_LITERAL_CSTRING("chrome javascript")
@@ -176,8 +177,8 @@ xpc::ErrorReport::Init(JSErrorReport* aReport, const char* aFallbackMessage,
     mWindowID = aWindowID;
 
     ErrorReportToMessageString(aReport, mErrorMsg);
-    if (mErrorMsg.IsEmpty() && aFallbackMessage) {
-        mErrorMsg.AssignWithConversion(aFallbackMessage);
+    if (mErrorMsg.IsEmpty() && aToStringResult) {
+        AppendUTF8toUTF16(aToStringResult, mErrorMsg);
     }
 
     if (!aReport->filename) {
@@ -289,14 +290,13 @@ xpc::ErrorReport::ErrorReportToMessageString(JSErrorReport* aReport,
                                              nsAString& aString)
 {
     aString.Truncate();
-    const char16_t* m = aReport->ucmessage;
-    if (m) {
-        JSFlatString* name = js::GetErrorTypeName(CycleCollectedJSRuntime::Get()->Runtime(), aReport->exnType);
+    if (aReport->message()) {
+        JSFlatString* name = js::GetErrorTypeName(CycleCollectedJSContext::Get()->Context(), aReport->exnType);
         if (name) {
             AssignJSFlatString(aString, name);
             aString.AppendLiteral(": ");
         }
-        aString.Append(m);
+        aString.Append(NS_ConvertUTF8toUTF16(aReport->message().c_str()));
     }
 }
 
@@ -319,7 +319,7 @@ nsXPConnect::GetInfoForName(const char * name, nsIInterfaceInfo** info)
 NS_IMETHODIMP
 nsXPConnect::GarbageCollect(uint32_t reason)
 {
-    GetRuntime()->GarbageCollect(reason);
+    GetContext()->GarbageCollect(reason);
     return NS_OK;
 }
 
@@ -341,10 +341,12 @@ xpc_MarkInCCGeneration(nsISupports* aVariant, uint32_t aGeneration)
 void
 xpc_TryUnmarkWrappedGrayObject(nsISupports* aWrappedJS)
 {
+#ifdef DEBUG
     nsCOMPtr<nsIXPConnectWrappedJSUnmarkGray> wjsug =
       do_QueryInterface(aWrappedJS);
     MOZ_ASSERT(!wjsug, "One should never be able to QI to "
                        "nsIXPConnectWrappedJSUnmarkGray successfully!");
+#endif
 }
 
 /***************************************************************************/
@@ -406,7 +408,7 @@ CreateGlobalObject(JSContext* cx, const JSClass* clasp, nsIPrincipal* principal,
         // TraceProtoAndIfaceCache unless that flag is set.
         if (!((const js::Class*)clasp)->isWrappedNative())
         {
-            VerifyTraceProtoAndIfaceCacheCalledTracer trc(JS_GetRuntime(cx));
+            VerifyTraceProtoAndIfaceCacheCalledTracer trc(cx);
             TraceChildren(&trc, GCCellPtr(global.get()));
             MOZ_ASSERT(trc.ok, "Trace hook on global needs to call TraceXPCGlobal for XPConnect compartments.");
         }
@@ -437,18 +439,8 @@ InitGlobalObjectOptions(JS::CompartmentOptions& aOptions,
         aOptions.creationOptions().setSecureContext(true);
     }
 
-    short status = aPrincipal->GetAppStatus();
-
-    // Enable the ECMA-402 experimental formatToParts in certified apps.
-    if (status == nsIPrincipal::APP_STATUS_CERTIFIED) {
-        aOptions.creationOptions()
-                .setExperimentalDateTimeFormatFormatToPartsEnabled(true);
-    }
-
     if (shouldDiscardSystemSource) {
-        bool discardSource = isSystem ||
-                             (status == nsIPrincipal::APP_STATUS_PRIVILEGED ||
-                              status == nsIPrincipal::APP_STATUS_CERTIFIED);
+        bool discardSource = isSystem;
 
         aOptions.behaviors().setDiscardSource(discardSource);
     }
@@ -540,7 +532,7 @@ NativeInterface2JSObject(HandleObject aScope,
     nsresult rv;
     xpcObjectHelper helper(aCOMObj, aCache);
     if (!XPCConvert::NativeInterface2JSObject(aVal, aHolder, helper, aIID,
-                                              nullptr, aAllowWrapping, &rv))
+                                              aAllowWrapping, &rv))
         return rv;
 
     MOZ_ASSERT(aAllowWrapping || !xpc::WrapperFactory::IsXrayWrapper(&aVal.toObject()),
@@ -738,8 +730,8 @@ nsXPConnect::GetWrappedNativeOfNativeObject(JSContext * aJSContext,
     if (!scope)
         return UnexpectedFailure(NS_ERROR_FAILURE);
 
-    AutoMarkingNativeInterfacePtr iface(aJSContext);
-    iface = XPCNativeInterface::GetNewOrUsed(&aIID);
+    RefPtr<XPCNativeInterface> iface =
+        XPCNativeInterface::GetNewOrUsed(&aIID);
     if (!iface)
         return NS_ERROR_FAILURE;
 
@@ -768,7 +760,7 @@ nsXPConnect::GetCurrentNativeCallContext(nsAXPCNativeCallContext * *aCurrentNati
 {
     MOZ_ASSERT(aCurrentNativeCallContext, "bad param");
 
-    *aCurrentNativeCallContext = XPCJSRuntime::Get()->GetCallContext();
+    *aCurrentNativeCallContext = XPCJSContext::Get()->GetCallContext();
     return NS_OK;
 }
 
@@ -776,8 +768,8 @@ NS_IMETHODIMP
 nsXPConnect::SetFunctionThisTranslator(const nsIID & aIID,
                                        nsIXPCFunctionThisTranslator* aTranslator)
 {
-    XPCJSRuntime* rt = GetRuntime();
-    IID2ThisTranslatorMap* map = rt->GetThisTranslatorMap();
+    XPCJSContext* cx = GetContext();
+    IID2ThisTranslatorMap* map = cx->GetThisTranslatorMap();
     map->Add(aIID, aTranslator);
     return NS_OK;
 }
@@ -866,13 +858,13 @@ nsXPConnect::DebugDump(int16_t depth)
     XPC_LOG_INDENT();
         XPC_LOG_ALWAYS(("gSelf @ %x", gSelf));
         XPC_LOG_ALWAYS(("gOnceAliveNowDead is %d", (int)gOnceAliveNowDead));
-        if (mRuntime) {
+        if (mContext) {
             if (depth)
-                mRuntime->DebugDump(depth);
+                mContext->DebugDump(depth);
             else
-                XPC_LOG_ALWAYS(("XPCJSRuntime @ %x", mRuntime));
+                XPC_LOG_ALWAYS(("XPCJSContext @ %x", mContext));
         } else
-            XPC_LOG_ALWAYS(("mRuntime is null"));
+            XPC_LOG_ALWAYS(("mContext is null"));
         XPCWrappedNativeScope::DebugDumpAllScopes(depth);
     XPC_LOG_OUTDENT();
 #endif
@@ -933,7 +925,7 @@ nsXPConnect::DebugPrintJSStack(bool showArgs,
                                bool showLocals,
                                bool showThisProps)
 {
-    JSContext* cx = GetCurrentJSContext();
+    JSContext* cx = nsContentUtils::GetCurrentJSContext();
     if (!cx)
         printf("there is no JSContext on the nsIThreadJSContextStack!\n");
     else
@@ -977,37 +969,6 @@ nsXPConnect::JSToVariant(JSContext* ctx, HandleValue value, nsIVariant** _retval
     return NS_OK;
 }
 
-/* virtual */
-JSContext*
-nsXPConnect::GetCurrentJSContext()
-{
-    return GetRuntime()->GetJSContextStack()->Peek();
-}
-
-/* virtual */
-JSContext*
-nsXPConnect::GetSafeJSContext()
-{
-    return GetRuntime()->GetJSContextStack()->GetSafeJSContext();
-}
-
-namespace xpc {
-
-void
-PushNullJSContext()
-{
-    XPCJSRuntime::Get()->GetJSContextStack()->Push(nullptr);
-}
-
-void
-PopNullJSContext()
-{
-    MOZ_ASSERT(XPCJSRuntime::Get()->GetJSContextStack()->Peek() == nullptr);
-    XPCJSRuntime::Get()->GetJSContextStack()->Pop();
-}
-
-} // namespace xpc
-
 nsIPrincipal*
 nsXPConnect::GetPrincipal(JSObject* obj, bool allowShortCircuit) const
 {
@@ -1050,7 +1011,7 @@ Base64Encode(JSContext* cx, HandleValue val, MutableHandleValue out)
 
     nsAutoCString result;
     if (NS_FAILED(mozilla::Base64Encode(encodedString, result))) {
-        JS_ReportError(cx, "Failed to encode base64 data!");
+        JS_ReportErrorASCII(cx, "Failed to encode base64 data!");
         return false;
     }
 
@@ -1074,7 +1035,7 @@ Base64Decode(JSContext* cx, HandleValue val, MutableHandleValue out)
 
     nsAutoCString result;
     if (NS_FAILED(mozilla::Base64Decode(encodedString, result))) {
-        JS_ReportError(cx, "Failed to decode base64 string!");
+        JS_ReportErrorASCII(cx, "Failed to decode base64 string!");
         return false;
     }
 
@@ -1105,7 +1066,7 @@ SetLocationForGlobal(JSObject* global, nsIURI* locationURI)
 NS_IMETHODIMP
 nsXPConnect::NotifyDidPaint()
 {
-    JS::NotifyDidPaint(GetRuntime()->Runtime());
+    JS::NotifyDidPaint(GetContext()->Context());
     return NS_OK;
 }
 
@@ -1128,22 +1089,29 @@ WriteScriptOrFunction(nsIObjectOutputStream* stream, JSContext* cx,
         return rv;
 
 
-    uint32_t size;
-    void* data;
+    TranscodeBuffer buffer;
+    TranscodeResult code;
     {
         if (functionObj)
-            data = JS_EncodeInterpretedFunction(cx, functionObj, &size);
+            code = EncodeInterpretedFunction(cx, buffer, functionObj);
         else
-            data = JS_EncodeScript(cx, script, &size);
+            code = EncodeScript(cx, buffer, script);
     }
 
-    if (!data)
+    if (code != TranscodeResult_Ok) {
+        if ((code & TranscodeResult_Failure) != 0)
+            return NS_ERROR_FAILURE;
+        MOZ_ASSERT((code & TranscodeResult_Throw) != 0);
+        JS_ClearPendingException(cx);
         return NS_ERROR_OUT_OF_MEMORY;
-    MOZ_ASSERT(size);
+    }
+
+    size_t size = buffer.length();
+    if (size > UINT32_MAX)
+        return NS_ERROR_FAILURE;
     rv = stream->Write32(size);
     if (NS_SUCCEEDED(rv))
-        rv = stream->WriteBytes(static_cast<char*>(data), size);
-    js_free(data);
+        rv = stream->WriteBytes(reinterpret_cast<char*>(buffer.begin()), size);
 
     return rv;
 }
@@ -1176,23 +1144,32 @@ ReadScriptOrFunction(nsIObjectInputStream* stream, JSContext* cx,
     if (NS_FAILED(rv))
         return rv;
 
+    TranscodeBuffer buffer;
+    buffer.replaceRawBuffer(reinterpret_cast<uint8_t*>(data), size);
+
     {
+        TranscodeResult code;
         if (scriptp) {
-            JSScript* script = JS_DecodeScript(cx, data, size);
-            if (!script)
-                rv = NS_ERROR_OUT_OF_MEMORY;
-            else
-                *scriptp = script;
+            Rooted<JSScript*> script(cx);
+            code = DecodeScript(cx, buffer, &script);
+            if (code == TranscodeResult_Ok)
+                *scriptp = script.get();
         } else {
-            JSObject* funobj = JS_DecodeInterpretedFunction(cx, data, size);
-            if (!funobj)
-                rv = NS_ERROR_OUT_OF_MEMORY;
-            else
-                *functionObjp = funobj;
+            Rooted<JSFunction*> funobj(cx);
+            code = DecodeInterpretedFunction(cx, buffer, &funobj);
+            if (code == TranscodeResult_Ok)
+                *functionObjp = JS_GetFunctionObject(funobj.get());
+        }
+
+        if (code != TranscodeResult_Ok) {
+            if ((code & TranscodeResult_Failure) != 0)
+                return NS_ERROR_FAILURE;
+            MOZ_ASSERT((code & TranscodeResult_Throw) != 0);
+            JS_ClearPendingException(cx);
+            return NS_ERROR_OUT_OF_MEMORY;
         }
     }
 
-    free(data);
     return rv;
 }
 
@@ -1302,11 +1279,27 @@ SetAddonInterposition(const nsACString& addonIdStr, nsIAddonInterposition* inter
     // We enter the junk scope just to allocate a string, which actually will go
     // in the system zone.
     AutoJSAPI jsapi;
-    jsapi.Init(xpc::PrivilegedJunkScope());
+    if (!jsapi.Init(xpc::PrivilegedJunkScope()))
+        return false;
     addonId = NewAddonId(jsapi.cx(), addonIdStr);
     if (!addonId)
         return false;
     return XPCWrappedNativeScope::SetAddonInterposition(jsapi.cx(), addonId, interposition);
+}
+
+bool
+AllowCPOWsInAddon(const nsACString& addonIdStr, bool allow)
+{
+    JSAddonId* addonId;
+    // We enter the junk scope just to allocate a string, which actually will go
+    // in the system zone.
+    AutoJSAPI jsapi;
+    if (!jsapi.Init(xpc::PrivilegedJunkScope()))
+        return false;
+    addonId = NewAddonId(jsapi.cx(), addonIdStr);
+    if (!addonId)
+        return false;
+    return XPCWrappedNativeScope::AllowCPOWsInAddon(jsapi.cx(), addonId, allow);
 }
 
 } // namespace xpc
@@ -1327,6 +1320,19 @@ IsChromeOrXBL(JSContext* cx, JSObject* /* unused */)
     // and instead rely on the fact that AllowContentXBLScope() only returns false in
     // remote XUL situations.
     return AccessCheck::isChrome(c) || IsContentXBLScope(c) || !AllowContentXBLScope(c);
+}
+
+namespace workers {
+extern bool IsCurrentThreadRunningChromeWorker();
+} // namespace workers
+
+bool
+ThreadSafeIsChromeOrXBL(JSContext* cx, JSObject* obj)
+{
+    if (NS_IsMainThread()) {
+        return IsChromeOrXBL(cx, obj);
+    }
+    return workers::IsCurrentThreadRunningChromeWorker();
 }
 
 } // namespace dom

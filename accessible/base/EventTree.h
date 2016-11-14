@@ -10,6 +10,7 @@
 #include "Accessible.h"
 
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtr.h"
 
 namespace mozilla {
 namespace a11y {
@@ -66,17 +67,9 @@ public:
     mFireReorder(aFireReorder) { }
   ~EventTree() { Clear(); }
 
-  void Shown(Accessible* aChild)
-  {
-    RefPtr<AccShowEvent> ev = new AccShowEvent(aChild);
-    Mutated(ev);
-  }
+  void Shown(Accessible* aChild);
 
-  void Hidden(Accessible* aChild, bool aNeedsShutdown = true)
-  {
-    RefPtr<AccHideEvent> ev = new AccHideEvent(aChild, aNeedsShutdown);
-    Mutated(ev);
-  }
+  void Hidden(Accessible* aChild, bool aNeedsShutdown = true);
 
   /**
    * Return an event tree node for the given accessible.
@@ -101,12 +94,15 @@ private:
   void Mutated(AccMutationEvent* aEv);
   void Clear();
 
-  nsAutoPtr<EventTree> mFirst;
-  nsAutoPtr<EventTree> mNext;
+  UniquePtr<EventTree> mFirst;
+  UniquePtr<EventTree> mNext;
 
   Accessible* mContainer;
   nsTArray<RefPtr<AccMutationEvent>> mDependentEvents;
   bool mFireReorder;
+
+  static NotificationController* Controller(Accessible* aAcc)
+    { return aAcc->Document()->Controller(); }
 
   friend class NotificationController;
 };

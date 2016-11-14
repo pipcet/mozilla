@@ -10,12 +10,12 @@ import urllib
 
 from unittest import skip
 
-from marionette import MarionetteTestCase
+from marionette import MarionetteTestCase, WindowManagerMixin
 from marionette_driver.by import By
 
 
 def inline(doc, mime="text/html;charset=utf-8"):
-    return "data:%s,%s" % (mime, urllib.quote(doc))
+    return "data:{0},{1}".format(mime, urllib.quote(doc))
 
 
 ELEMENT = "iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAYAAAAeP4ixAAAAVklEQVRoge3PMQ0AMAzAsPJHVWYbjEWTj/zx7O75oXk9AAISD6QWSC2QWiC1QGqB1AKpBVILpBZILZBaILVAaoHUAqkFUgukFkgtkFogtUBqgdT6BnIBMKa1DtYxhPkAAAAASUVORK5CYII="
@@ -44,14 +44,14 @@ class ScreenCaptureTestCase(MarionetteTestCase):
         return int(width), int(height)
 
 
-class Chrome(ScreenCaptureTestCase):
+class TestScreenCaptureChrome(WindowManagerMixin, ScreenCaptureTestCase):
     @property
     def primary_window_dimensions(self):
-        current_window = self.marionette.current_window_handle
-        self.marionette.switch_to_window(self.original_window)
+        current_window = self.marionette.current_chrome_window_handle
+        self.marionette.switch_to_window(self.start_window)
         with self.marionette.using_context("chrome"):
             rv = tuple(self.marionette.execute_script("""
-                let el = document.getElementsByTagName("window")[0];
+                let el = document.documentElement;
                 let rect = el.getBoundingClientRect();
                 return [rect.width, rect.height];
                 """))
@@ -59,12 +59,12 @@ class Chrome(ScreenCaptureTestCase):
         return rv
 
     def setUp(self):
-        ScreenCaptureTestCase.setUp(self)
+        super(TestScreenCaptureChrome, self).setUp()
         self.marionette.set_context("chrome")
-        self.original_window = self.marionette.current_window_handle
 
     def tearDown(self):
-        self.marionette.switch_to_window(self.original_window)
+        self.close_all_windows()
+        super(TestScreenCaptureChrome, self).tearDown()
 
     # A full chrome window screenshot is not the outer dimensions of
     # the window, but instead the bounding box of the <window> inside
@@ -83,19 +83,24 @@ class Chrome(ScreenCaptureTestCase):
 
     # This tests that GeckoDriver#takeScreenshot uses
     # currentContext.document.documentElement instead of looking for a
-    # <window> element, which does not exist for secondary windows.
+    # <window> element, which does not exist for all windows.
     def test_secondary_windows(self):
-        ss = self.marionette.screenshot()
-        self.marionette.execute_script("""
-            window.open('chrome://marionette/content/doesnotexist.xul',
-            'foo',
-            'chrome');
-            """)
-        self.marionette.switch_to_window("foo")
+        def open_window_with_js():
+            self.marionette.execute_script("""
+                window.open('chrome://marionette/content/test_dialog.xul', 'foo',
+                            'dialog,height=200,width=300');
+                """)
+
+        new_window = self.open_window(open_window_with_js)
+        self.marionette.switch_to_window(new_window)
+
         ss = self.marionette.screenshot()
         size = self.get_image_dimensions(ss)
         self.assert_png(ss)
         self.assertNotEqual(self.primary_window_dimensions, size)
+
+        self.marionette.close_chrome_window()
+        self.marionette.switch_to_window(self.start_window)
 
 
 class Content(ScreenCaptureTestCase):

@@ -5,6 +5,8 @@
 
 #include "GMPServiceChild.h"
 #include "mozilla/dom/ContentChild.h"
+#include "mozilla/ClearOnShutdown.h"
+#include "mozilla/StaticPtr.h"
 #include "mozIGeckoMediaPluginService.h"
 #include "mozIGeckoMediaPluginChromeService.h"
 #include "nsCOMPtr.h"
@@ -12,8 +14,11 @@
 #include "GMPContentParent.h"
 #include "nsXPCOMPrivate.h"
 #include "mozilla/SyncRunnable.h"
+#include "mozilla/StaticMutex.h"
 #include "runnable_utils.h"
 #include "base/task.h"
+#include "nsIObserverService.h"
+#include "nsComponentManagerUtils.h"
 
 namespace mozilla {
 
@@ -50,10 +55,11 @@ GeckoMediaPluginServiceChild::GetSingleton()
 class GetContentParentFromDone : public GetServiceChildCallback
 {
 public:
-  GetContentParentFromDone(const nsACString& aNodeId, const nsCString& aAPI,
+  GetContentParentFromDone(GMPCrashHelper* aHelper, const nsACString& aNodeId, const nsCString& aAPI,
                            const nsTArray<nsCString>& aTags,
                            UniquePtr<GetGMPContentParentCallback>&& aCallback)
-    : mNodeId(aNodeId),
+    : mHelper(aHelper),
+      mNodeId(aNodeId),
       mAPI(aAPI),
       mTags(aTags),
       mCallback(Move(aCallback))
@@ -67,16 +73,26 @@ public:
       return;
     }
 
+    uint32_t pluginId;
+    nsresult rv;
+    bool ok = aGMPServiceChild->SendSelectGMP(mNodeId, mAPI, mTags, &pluginId, &rv);
+    if (!ok || rv == NS_ERROR_ILLEGAL_DURING_SHUTDOWN) {
+      mCallback->Done(nullptr);
+      return;
+    }
+
+    if (mHelper) {
+      RefPtr<GeckoMediaPluginService> gmps(GeckoMediaPluginService::GetGeckoMediaPluginService());
+      gmps->ConnectCrashHelper(pluginId, mHelper);
+    }
+
     nsTArray<base::ProcessId> alreadyBridgedTo;
     aGMPServiceChild->GetAlreadyBridgedTo(alreadyBridgedTo);
 
     base::ProcessId otherProcess;
     nsCString displayName;
-    uint32_t pluginId;
-    nsresult rv;
-    bool ok = aGMPServiceChild->SendLoadGMP(mNodeId, mAPI, mTags,
-                                            alreadyBridgedTo, &otherProcess,
-                                            &displayName, &pluginId, &rv);
+    ok = aGMPServiceChild->SendLaunchGMP(pluginId, alreadyBridgedTo, &otherProcess,
+                                         &displayName, &rv);
     if (!ok || rv == NS_ERROR_ILLEGAL_DURING_SHUTDOWN) {
       mCallback->Done(nullptr);
       return;
@@ -94,6 +110,7 @@ public:
   }
 
 private:
+  RefPtr<GMPCrashHelper> mHelper;
   nsCString mNodeId;
   nsCString mAPI;
   const nsTArray<nsCString> mTags;
@@ -101,7 +118,8 @@ private:
 };
 
 bool
-GeckoMediaPluginServiceChild::GetContentParentFrom(const nsACString& aNodeId,
+GeckoMediaPluginServiceChild::GetContentParentFrom(GMPCrashHelper* aHelper,
+                                                   const nsACString& aNodeId,
                                                    const nsCString& aAPI,
                                                    const nsTArray<nsCString>& aTags,
                                                    UniquePtr<GetGMPContentParentCallback>&& aCallback)
@@ -109,30 +127,121 @@ GeckoMediaPluginServiceChild::GetContentParentFrom(const nsACString& aNodeId,
   MOZ_ASSERT(NS_GetCurrentThread() == mGMPThread);
 
   UniquePtr<GetServiceChildCallback> callback(
-    new GetContentParentFromDone(aNodeId, aAPI, aTags, Move(aCallback)));
+    new GetContentParentFromDone(aHelper, aNodeId, aAPI, aTags, Move(aCallback)));
   GetServiceChild(Move(callback));
 
   return true;
 }
 
-NS_IMETHODIMP
-GeckoMediaPluginServiceChild::GetPluginVersionForAPI(const nsACString& aAPI,
-                                                     nsTArray<nsCString>* aTags,
-                                                     bool* aHasPlugin,
-                                                     nsACString& aOutVersion)
+typedef mozilla::dom::GMPCapabilityData GMPCapabilityData;
+typedef mozilla::dom::GMPAPITags GMPAPITags;
+
+struct GMPCapabilityAndVersion
 {
-  dom::ContentChild* contentChild = dom::ContentChild::GetSingleton();
-  if (!contentChild) {
-    return NS_ERROR_FAILURE;
+  explicit GMPCapabilityAndVersion(const GMPCapabilityData& aCapabilities)
+    : mName(aCapabilities.name())
+    , mVersion(aCapabilities.version())
+  {
+    for (const GMPAPITags& tags : aCapabilities.capabilities()) {
+      GMPCapability cap;
+      cap.mAPIName = tags.api();
+      for (const nsCString& tag : tags.tags()) {
+        cap.mAPITags.AppendElement(tag);
+      }
+      mCapabilities.AppendElement(Move(cap));
+    }
   }
 
-  MOZ_ASSERT(NS_IsMainThread());
+  nsCString ToString() const
+  {
+    nsCString s;
+    s.Append(mName);
+    s.Append(" version=");
+    s.Append(mVersion);
+    s.Append(" tags=[");
+    nsCString tags;
+    for (const GMPCapability& cap : mCapabilities) {
+      if (!tags.IsEmpty()) {
+        tags.Append(" ");
+      }
+      tags.Append(cap.mAPIName);
+      for (const nsCString& tag : cap.mAPITags) {
+        tags.Append(":");
+        tags.Append(tag);
+      }
+    }
+    s.Append(tags);
+    s.Append("]");
+    return s;
+  }
 
-  nsCString version;
-  bool ok = contentChild->SendGetGMPPluginVersionForAPI(nsCString(aAPI), *aTags,
-                                                        aHasPlugin, &version);
-  aOutVersion = version;
-  return ok ? NS_OK : NS_ERROR_FAILURE;
+  nsCString mName;
+  nsCString mVersion;
+  nsTArray<GMPCapability> mCapabilities;
+};
+
+StaticMutex sGMPCapabilitiesMutex;
+StaticAutoPtr<nsTArray<GMPCapabilityAndVersion>> sGMPCapabilities;
+
+static nsCString
+GMPCapabilitiesToString()
+{
+  nsCString s;
+  for (const GMPCapabilityAndVersion& gmp : *sGMPCapabilities) {
+    if (!s.IsEmpty()) {
+      s.Append(", ");
+    }
+    s.Append(gmp.ToString());
+  }
+  return s;
+}
+
+/* static */
+void
+GeckoMediaPluginServiceChild::UpdateGMPCapabilities(nsTArray<GMPCapabilityData>&& aCapabilities)
+{
+  StaticMutexAutoLock lock(sGMPCapabilitiesMutex);
+  if (!sGMPCapabilities) {
+    sGMPCapabilities = new nsTArray<GMPCapabilityAndVersion>();
+    ClearOnShutdown(&sGMPCapabilities);
+  }
+  sGMPCapabilities->Clear();
+  for (const GMPCapabilityData& plugin : aCapabilities) {
+    sGMPCapabilities->AppendElement(GMPCapabilityAndVersion(plugin));
+  }
+
+  LOGD(("UpdateGMPCapabilities {%s}", GMPCapabilitiesToString().get()));
+
+  // Fire a notification so that any MediaKeySystemAccess
+  // requests waiting on a CDM to download will retry.
+  nsCOMPtr<nsIObserverService> obsService = mozilla::services::GetObserverService();
+  MOZ_ASSERT(obsService);
+  if (obsService) {
+    obsService->NotifyObservers(nullptr, "gmp-changed", nullptr);
+  }
+}
+
+NS_IMETHODIMP
+GeckoMediaPluginServiceChild::HasPluginForAPI(const nsACString& aAPI,
+                                              nsTArray<nsCString>* aTags,
+                                              bool* aHasPlugin)
+{
+  StaticMutexAutoLock lock(sGMPCapabilitiesMutex);
+  if (!sGMPCapabilities) {
+    *aHasPlugin = false;
+    return NS_OK;
+  }
+
+  nsCString api(aAPI);
+  for (const GMPCapabilityAndVersion& plugin : *sGMPCapabilities) {
+    if (GMPCapability::Supports(plugin.mCapabilities, api, *aTags)) {
+      *aHasPlugin = true;
+      return NS_OK;
+    }
+  }
+
+  *aHasPlugin = false;
+  return NS_OK;
 }
 
 class GetNodeIdDone : public GetServiceChildCallback
@@ -253,8 +362,6 @@ GMPServiceChild::GMPServiceChild()
 
 GMPServiceChild::~GMPServiceChild()
 {
-  RefPtr<DeleteTask<Transport>> task = new DeleteTask<Transport>(GetTransport());
-  XRE_GetIOMessageLoop()->PostTask(task.forget());
 }
 
 PGMPContentParent*
@@ -318,7 +425,7 @@ public:
   {
   }
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     RefPtr<GeckoMediaPluginServiceChild> gmp =
       GeckoMediaPluginServiceChild::GetSingleton();

@@ -132,12 +132,13 @@ enum class DrawTargetType : int8_t {
 enum class BackendType : int8_t {
   NONE = 0,
   DIRECT2D, // Used for version independent D2D objects.
-  COREGRAPHICS,
-  COREGRAPHICS_ACCELERATED,
   CAIRO,
   SKIA,
   RECORDING,
-  DIRECT2D1_1
+  DIRECT2D1_1,
+
+  // Add new entries above this line.
+  BACKEND_LAST
 };
 
 enum class FontType : int8_t {
@@ -146,7 +147,8 @@ enum class FontType : int8_t {
   MAC,
   SKIA,
   CAIRO,
-  COREGRAPHICS
+  COREGRAPHICS,
+  FONTCONFIG
 };
 
 enum class NativeSurfaceType : int8_t {

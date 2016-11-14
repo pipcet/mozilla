@@ -9,10 +9,8 @@
 
 // Service workers can't be loaded from chrome://, but http:// is ok with
 // dom.serviceWorkers.testing.enabled turned on.
-const HTTP_ROOT = CHROME_ROOT.replace(
-  "chrome://mochitests/content/", "http://mochi.test:8888/");
-const SERVICE_WORKER = HTTP_ROOT + "service-workers/empty-sw.js";
-const TAB_URL = HTTP_ROOT + "service-workers/empty-sw.html";
+const SERVICE_WORKER = URL_ROOT + "service-workers/empty-sw.js";
+const TAB_URL = URL_ROOT + "service-workers/empty-sw.html";
 
 const SW_TIMEOUT = 1000;
 
@@ -49,6 +47,8 @@ add_task(function* () {
   yield waitForServiceWorkerRegistered(swTab);
   ok(true, "Service worker registration resolved");
 
+  yield waitForServiceWorkerActivation(SERVICE_WORKER, document);
+
   // Retrieve the Target element corresponding to the service worker.
   let names = [...document.querySelectorAll("#service-workers .target-name")];
   let name = names.filter(element => element.textContent === SERVICE_WORKER)[0];
@@ -84,7 +84,7 @@ add_task(function* () {
 
   // Finally, unregister the service worker itself.
   try {
-    yield unregisterServiceWorker(swTab);
+    yield unregisterServiceWorker(swTab, serviceWorkersElement);
     ok(true, "Service worker registration unregistered");
   } catch (e) {
     ok(false, "SW not unregistered; " + e);

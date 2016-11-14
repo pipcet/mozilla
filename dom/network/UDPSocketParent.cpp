@@ -10,14 +10,11 @@
 #include "nsIUDPSocket.h"
 #include "nsINetAddr.h"
 #include "mozilla/AppProcessChecker.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/ipc/InputStreamUtils.h"
 #include "mozilla/net/DNS.h"
 #include "mozilla/net/NeckoCommon.h"
 #include "mozilla/net/PNeckoParent.h"
-#include "nsNetUtil.h"
-#include "mozilla/dom/ContentParent.h"
-#include "mozilla/dom/TabParent.h"
 #include "nsIPermissionManager.h"
 #include "nsIScriptSecurityManager.h"
 #include "mozilla/ipc/PBackgroundParent.h"
@@ -33,7 +30,6 @@ UDPSocketParent::UDPSocketParent(PBackgroundParent* aManager)
   , mNeckoManager(nullptr)
   , mIPCOpen(true)
 {
-  mObserver = new mozilla::net::OfflineObserver(this);
 }
 
 UDPSocketParent::UDPSocketParent(PNeckoParent* aManager)
@@ -41,49 +37,10 @@ UDPSocketParent::UDPSocketParent(PNeckoParent* aManager)
   , mNeckoManager(aManager)
   , mIPCOpen(true)
 {
-  mObserver = new mozilla::net::OfflineObserver(this);
 }
 
 UDPSocketParent::~UDPSocketParent()
 {
-  if (mObserver) {
-    mObserver->RemoveObserver();
-  }
-}
-
-nsresult
-UDPSocketParent::OfflineNotification(nsISupports *aSubject)
-{
-  nsCOMPtr<nsIAppOfflineInfo> info(do_QueryInterface(aSubject));
-  if (!info) {
-    return NS_OK;
-  }
-
-  uint32_t targetAppId = nsIScriptSecurityManager::UNKNOWN_APP_ID;
-  info->GetAppId(&targetAppId);
-
-  // Obtain App ID
-  uint32_t appId = GetAppId();
-  if (appId != targetAppId) {
-    return NS_OK;
-  }
-
-  // If the app is offline, close the socket
-  if (mSocket && NS_IsAppOffline(appId)) {
-    mSocket->Close();
-  }
-
-  return NS_OK;
-}
-
-uint32_t
-UDPSocketParent::GetAppId()
-{
-  uint32_t appId;
-  if (!mPrincipal || NS_FAILED(mPrincipal->GetAppId(&appId))) {
-    return nsIScriptSecurityManager::UNKNOWN_APP_ID;
-  }
-  return appId;
 }
 
 bool
@@ -284,9 +241,9 @@ static nsCOMPtr<nsIEventTarget> GetSTSThread()
 
 static void CheckSTSThread()
 {
-  nsCOMPtr<nsIEventTarget> sts_thread = GetSTSThread();
+  DebugOnly<nsCOMPtr<nsIEventTarget>> sts_thread = GetSTSThread();
 
-  ASSERT_ON_THREAD(sts_thread);
+  ASSERT_ON_THREAD(sts_thread.value);
 }
 
 
@@ -296,13 +253,14 @@ bool
 UDPSocketParent::RecvConnect(const UDPAddressInfo& aAddressInfo)
 {
   nsCOMPtr<nsIEventTarget> thread(NS_GetCurrentThread());
-  NS_WARN_IF(NS_FAILED(GetSTSThread()->Dispatch(WrapRunnable(
-                                                  this,
-                                                  &UDPSocketParent::DoConnect,
-                                                  mSocket,
-                                                  thread,
-                                                  aAddressInfo),
-                                                NS_DISPATCH_NORMAL)));
+  Unused <<
+    NS_WARN_IF(NS_FAILED(GetSTSThread()->Dispatch(WrapRunnable(
+                                                    this,
+                                                    &UDPSocketParent::DoConnect,
+                                                    mSocket,
+                                                    thread,
+                                                    aAddressInfo),
+                                                  NS_DISPATCH_NORMAL)));
   return true;
 }
 
@@ -317,11 +275,12 @@ void
 UDPSocketParent::SendConnectResponse(nsIEventTarget *aThread,
                                      const UDPAddressInfo& aAddressInfo)
 {
-  NS_WARN_IF(NS_FAILED(aThread->Dispatch(WrapRunnable(
-                                           this,
-                                           &UDPSocketParent::DoSendConnectResponse,
-                                           aAddressInfo),
-                                         NS_DISPATCH_NORMAL)));
+  Unused <<
+    NS_WARN_IF(NS_FAILED(aThread->Dispatch(WrapRunnable(
+                                             this,
+                                             &UDPSocketParent::DoSendConnectResponse,
+                                             aAddressInfo),
+                                           NS_DISPATCH_NORMAL)));
 }
 
 // Runs on STS thread
@@ -626,11 +585,12 @@ UDPSocketParent::SendInternalError(nsIEventTarget *aThread,
                                    uint32_t aLineNo)
 {
   UDPSOCKET_LOG(("SendInternalError: %u", aLineNo));
-  NS_WARN_IF(NS_FAILED(aThread->Dispatch(WrapRunnable(
-                                           this,
-                                           &UDPSocketParent::FireInternalError,
-                                           aLineNo),
-                                         NS_DISPATCH_NORMAL)));
+  Unused <<
+    NS_WARN_IF(NS_FAILED(aThread->Dispatch(WrapRunnable(
+                                             this,
+                                             &UDPSocketParent::FireInternalError,
+                                             aLineNo),
+                                           NS_DISPATCH_NORMAL)));
 }
 
 } // namespace dom

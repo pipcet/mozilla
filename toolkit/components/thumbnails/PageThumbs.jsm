@@ -368,17 +368,26 @@ this.PageThumbs = {
     let originalURL;
     let channelError = false;
 
-    if (!aBrowser.isRemoteBrowser) {
-      let channel = aBrowser.docShell.currentDocumentChannel;
-      originalURL = channel.originalURI.spec;
-      // see if this was an error response.
-      channelError = this._isChannelErrorResponse(channel);
-    } else {
-      // We need channel info (bug 1073957)
-      originalURL = url;
-    }
-
     Task.spawn((function* task() {
+      if (!aBrowser.isRemoteBrowser) {
+        let channel = aBrowser.docShell.currentDocumentChannel;
+        originalURL = channel.originalURI.spec;
+        // see if this was an error response.
+        channelError = PageThumbUtils.isChannelErrorResponse(channel);
+      } else {
+        let resp = yield new Promise(resolve => {
+          let mm = aBrowser.messageManager;
+          let respName = "Browser:Thumbnail:GetOriginalURL:Response";
+          mm.addMessageListener(respName, function onResp(msg) {
+            mm.removeMessageListener(respName, onResp);
+            resolve(msg.data);
+          });
+          mm.sendAsyncMessage("Browser:Thumbnail:GetOriginalURL");
+        });
+        originalURL = resp.originalURL || url;
+        channelError = resp.channelError;
+      }
+
       let isSuccess = true;
       try {
         let blob = yield this.captureToBlob(aBrowser);
@@ -495,25 +504,6 @@ this.PageThumbs = {
     return PageThumbUtils.createCanvas(aWindow);
   },
 
-  /**
-   * Given a channel, returns true if it should be considered an "error
-   * response", false otherwise.
-   */
-  _isChannelErrorResponse: function(channel) {
-    // No valid document channel sounds like an error to me!
-    if (!channel)
-      return true;
-    if (!(channel instanceof Ci.nsIHttpChannel))
-      // it might be FTP etc, so assume it's ok.
-      return false;
-    try {
-      return !channel.requestSucceeded;
-    } catch (_) {
-      // not being able to determine success is surely failure!
-      return true;
-    }
-  },
-
   _prefEnabled: function PageThumbs_prefEnabled() {
     try {
       return !Services.prefs.getBoolPref("browser.pagethumbnails.capturing_disabled");
@@ -621,10 +611,10 @@ this.PageThumbsStorage = {
         tmpPath: path + ".tmp",
         bytes: aData.byteLength,
         noOverwrite: aNoOverwrite,
-        flush: false /*thumbnails do not require the level of guarantee provided by flush*/
+        flush: false /* thumbnails do not require the level of guarantee provided by flush*/
       }];
     return PageThumbsWorker.post("writeAtomic", msg,
-      msg /*we don't want that message garbage-collected,
+      msg /* we don't want that message garbage-collected,
            as OS.Shared.Type.void_t.in_ptr.toMsg uses C-level
            memory tricks to enforce zero-copy*/).
       then(() => this._updateRevision(aURL), this._eatNoOverwriteError(aNoOverwrite));
@@ -862,7 +852,6 @@ var PageThumbsExpiration = {
   },
 
   expireThumbnails: function Expiration_expireThumbnails(aURLsToKeep) {
-    let path = this.path;
     let keep = aURLsToKeep.map(url => PageThumbsStorage.getLeafNameForURL(url));
     let msg = [
       PageThumbsStorage.path,

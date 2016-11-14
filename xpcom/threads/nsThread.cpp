@@ -21,7 +21,7 @@
 #include "nsCOMPtr.h"
 #include "nsQueryObject.h"
 #include "pratom.h"
-#include "mozilla/CycleCollectedJSRuntime.h"
+#include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/Logging.h"
 #include "nsIObserverService.h"
 #include "mozilla/HangMonitor.h"
@@ -32,17 +32,17 @@
 #include "nsXPCOMPrivate.h"
 #include "mozilla/ChaosMode.h"
 #include "mozilla/TimeStamp.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
+#include "mozilla/dom/ScriptSettings.h"
+#include "nsIIdlePeriod.h"
+#include "nsIIncrementalRunnable.h"
 #include "nsThreadSyncDispatch.h"
 #include "LeakRefPtr.h"
 
 #ifdef MOZ_CRASHREPORTER
 #include "nsServiceManagerUtils.h"
 #include "nsICrashReporter.h"
-#endif
-
-#ifdef MOZ_NUWA_PROCESS
-#include "private/pprthred.h"
+#include "mozilla/dom/ContentChild.h"
 #endif
 
 #ifdef XP_LINUX
@@ -203,11 +203,6 @@ public:
   // completion state.
   void Wait()
   {
-    if (mInitialized) {
-      // Maybe avoid locking...
-      return;
-    }
-
     ReentrantMonitorAutoEnter mon(mMon);
     while (!mInitialized) {
       mon.Wait();
@@ -219,7 +214,7 @@ public:
   virtual ~nsThreadStartupEvent() {}
 
 private:
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     ReentrantMonitorAutoEnter mon(mMon);
     mInitialized = true;
@@ -237,9 +232,11 @@ class DelayedRunnable : public Runnable,
                         public nsITimerCallback
 {
 public:
-  DelayedRunnable(already_AddRefed<nsIRunnable> aRunnable,
+  DelayedRunnable(already_AddRefed<nsIThread> aTargetThread,
+                  already_AddRefed<nsIRunnable> aRunnable,
                   uint32_t aDelay)
-    : mWrappedRunnable(aRunnable),
+    : mTargetThread(aTargetThread),
+      mWrappedRunnable(aRunnable),
       mDelayedFrom(TimeStamp::NowLoRes()),
       mDelay(aDelay)
   { }
@@ -253,6 +250,9 @@ public:
     NS_ENSURE_SUCCESS(rv, rv);
 
     MOZ_ASSERT(mTimer);
+    rv = mTimer->SetTarget(mTargetThread);
+
+    NS_ENSURE_SUCCESS(rv, rv);
     return mTimer->InitWithCallback(this, mDelay, nsITimer::TYPE_ONE_SHOT);
   }
 
@@ -290,6 +290,7 @@ public:
 private:
   ~DelayedRunnable() {}
 
+  nsCOMPtr<nsIThread> mTargetThread;
   nsCOMPtr<nsIRunnable> mWrappedRunnable;
   nsCOMPtr<nsITimer> mTimer;
   TimeStamp mDelayedFrom;
@@ -360,7 +361,7 @@ public:
     , mShutdownContext(aCtx)
   {
   }
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     mThread->mShutdownContext = mShutdownContext;
     MessageLoop::current()->Quit();
@@ -441,7 +442,7 @@ nsThread::ThreadFunc(void* aArg)
   SetupCurrentThreadForChaosMode();
 
   // Inform the ThreadManager
-  nsThreadManager::get()->RegisterCurrentThread(self);
+  nsThreadManager::get().RegisterCurrentThread(*self);
 
   mozilla::IOInterposer::RegisterCurrentThread();
 
@@ -498,7 +499,7 @@ nsThread::ThreadFunc(void* aArg)
   mozilla::IOInterposer::UnregisterCurrentThread();
 
   // Inform the threadmanager that this thread is going away
-  nsThreadManager::get()->UnregisterCurrentThread(self);
+  nsThreadManager::get().UnregisterCurrentThread(*self);
 
   // Dispatch shutdown ACK
   NotNull<nsThreadShutdownContext*> context =
@@ -522,30 +523,67 @@ nsThread::ThreadFunc(void* aArg)
 #ifdef MOZ_CRASHREPORTER
 // Tell the crash reporter to save a memory report if our heuristics determine
 // that an OOM failure is likely to occur soon.
-static bool SaveMemoryReportNearOOM()
+// Memory usage will not be checked more than every 30 seconds or saved more
+// than every 3 minutes
+// If |aShouldSave == kForceReport|, a report will be saved regardless of
+// whether the process is low on memory or not. However, it will still not be
+// saved if a report was saved less than 3 minutes ago.
+bool
+nsThread::SaveMemoryReportNearOOM(ShouldSaveMemoryReport aShouldSave)
 {
-  bool needMemoryReport = false;
+  // Keep an eye on memory usage (cheap, ~7ms) somewhat frequently,
+  // but save memory reports (expensive, ~75ms) less frequently.
+  const size_t kLowMemoryCheckSeconds = 30;
+  const size_t kLowMemorySaveSeconds = 3 * 60;
 
+  static TimeStamp nextCheck = TimeStamp::NowLoRes()
+    + TimeDuration::FromSeconds(kLowMemoryCheckSeconds);
+  static bool recentlySavedReport = false; // Keeps track of whether a report
+                                           // was saved last time we checked
+
+  // Are we checking again too soon?
+  TimeStamp now = TimeStamp::NowLoRes();
+  if ((aShouldSave == ShouldSaveMemoryReport::kMaybeReport ||
+      recentlySavedReport) && now < nextCheck) {
+    return false;
+  }
+
+  bool needMemoryReport = (aShouldSave == ShouldSaveMemoryReport::kForceReport);
 #ifdef XP_WIN // XXX implement on other platforms as needed
-  const size_t LOWMEM_THRESHOLD_VIRTUAL = 200 * 1024 * 1024;
-  MEMORYSTATUSEX statex;
-  statex.dwLength = sizeof(statex);
-  if (GlobalMemoryStatusEx(&statex)) {
-    if (statex.ullAvailVirtual < LOWMEM_THRESHOLD_VIRTUAL) {
-      needMemoryReport = true;
+  // If the report is forced there is no need to check whether it is necessary
+  if (aShouldSave != ShouldSaveMemoryReport::kForceReport) {
+    const size_t LOWMEM_THRESHOLD_VIRTUAL = 200 * 1024 * 1024;
+    MEMORYSTATUSEX statex;
+    statex.dwLength = sizeof(statex);
+    if (GlobalMemoryStatusEx(&statex)) {
+      if (statex.ullAvailVirtual < LOWMEM_THRESHOLD_VIRTUAL) {
+        needMemoryReport = true;
+      }
     }
   }
 #endif
 
   if (needMemoryReport) {
-    nsCOMPtr<nsICrashReporter> cr =
-      do_GetService("@mozilla.org/toolkit/crash-reporter;1");
-    if (cr) {
-      cr->SaveMemoryReport();
+    if (XRE_IsContentProcess()) {
+      dom::ContentChild* cc = dom::ContentChild::GetSingleton();
+      if (cc) {
+        cc->SendNotifyLowMemory();
+      }
+    } else {
+      nsCOMPtr<nsICrashReporter> cr =
+        do_GetService("@mozilla.org/toolkit/crash-reporter;1");
+      if (cr) {
+        cr->SaveMemoryReport();
+      }
     }
+    recentlySavedReport = true;
+    nextCheck = now + TimeDuration::FromSeconds(kLowMemorySaveSeconds);
+  } else {
+    recentlySavedReport = false;
+    nextCheck = now + TimeDuration::FromSeconds(kLowMemoryCheckSeconds);
   }
 
-  return needMemoryReport;
+  return recentlySavedReport;
 }
 #endif
 
@@ -558,6 +596,8 @@ nsThread::nsThread(MainThreadFlag aMainThread, uint32_t aStackSize)
   , mScriptObserver(nullptr)
   , mEvents(WrapNotNull(&mEventsRoot))
   , mEventsRoot(mLock)
+  , mIdleEventsAvailable(mLock, "[nsThread.mEventsAvailable]")
+  , mIdleEvents(mIdleEventsAvailable, nsEventQueue::eNormalQueue)
   , mPriority(PRIORITY_NORMAL)
   , mThread(nullptr)
   , mNestedEventLoopDepth(0)
@@ -566,6 +606,7 @@ nsThread::nsThread(MainThreadFlag aMainThread, uint32_t aStackSize)
   , mShutdownRequired(false)
   , mEventsAreDoomed(false)
   , mIsMainThread(aMainThread)
+  , mCanInvokeJS(false)
 {
 }
 
@@ -593,6 +634,8 @@ nsThread::Init()
   RefPtr<nsThreadStartupEvent> startup = new nsThreadStartupEvent();
 
   NS_ADDREF_THIS();
+
+  mIdlePeriod = new IdlePeriod();
 
   mShutdownRequired = true;
 
@@ -624,7 +667,9 @@ nsThread::InitCurrentThread()
   mThread = PR_GetCurrentThread();
   SetupCurrentThreadForChaosMode();
 
-  nsThreadManager::get()->RegisterCurrentThread(this);
+  mIdlePeriod = new IdlePeriod();
+
+  nsThreadManager::get().RegisterCurrentThread(*this);
   return NS_OK;
 }
 
@@ -642,12 +687,6 @@ nsThread::PutEvent(already_AddRefed<nsIRunnable> aEvent, nsNestedEventTarget* aT
   // we won't release the event in a wrong thread.
   LeakRefPtr<nsIRunnable> event(Move(aEvent));
   nsCOMPtr<nsIThreadObserver> obs;
-
-#ifdef MOZ_NUWA_PROCESS
-  // On debug build or when tests are enabled, assert that we are not about to
-  // create a deadlock in the Nuwa process.
-  NuwaAssertNotFrozen(PR_GetThreadID(mThread), PR_GetThreadName(mThread));
-#endif
 
   {
     MutexAutoLock lock(mLock);
@@ -696,7 +735,7 @@ nsThread::DispatchInternal(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlags
 #endif
 
   if (aFlags & DISPATCH_SYNC) {
-    nsThread* thread = nsThreadManager::get()->GetCurrentThread();
+    nsThread* thread = nsThreadManager::get().GetCurrentThread();
     if (NS_WARN_IF(!thread)) {
       return NS_ERROR_NOT_AVAILABLE;
     }
@@ -724,8 +763,43 @@ nsThread::DispatchInternal(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlags
     return NS_OK;
   }
 
-  NS_ASSERTION(aFlags == NS_DISPATCH_NORMAL, "unexpected dispatch flags");
+  NS_ASSERTION(aFlags == NS_DISPATCH_NORMAL ||
+               aFlags == NS_DISPATCH_AT_END, "unexpected dispatch flags");
   return PutEvent(event.take(), aTarget);
+}
+
+bool
+nsThread::nsChainedEventQueue::GetEvent(bool aMayWait, nsIRunnable** aEvent,
+                                        mozilla::MutexAutoLock& aProofOfLock)
+{
+  bool retVal = false;
+  do {
+    if (mProcessSecondaryQueueRunnable) {
+      MOZ_ASSERT(mSecondaryQueue->HasPendingEvent(aProofOfLock));
+      retVal = mSecondaryQueue->GetEvent(aMayWait, aEvent, aProofOfLock);
+      MOZ_ASSERT(*aEvent);
+      mProcessSecondaryQueueRunnable = false;
+      return retVal;
+    }
+
+    // We don't want to wait if mSecondaryQueue has some events.
+    bool reallyMayWait =
+      aMayWait && !mSecondaryQueue->HasPendingEvent(aProofOfLock);
+    retVal =
+      mNormalQueue->GetEvent(reallyMayWait, aEvent, aProofOfLock);
+
+    // Let's see if we should next time process an event from the secondary
+    // queue.
+    mProcessSecondaryQueueRunnable =
+      mSecondaryQueue->HasPendingEvent(aProofOfLock);
+
+    if (*aEvent) {
+      // We got an event, return early.
+      return retVal;
+    }
+  } while(aMayWait || mProcessSecondaryQueueRunnable);
+
+  return retVal;
 }
 
 //-----------------------------------------------------------------------------
@@ -751,7 +825,9 @@ nsThread::DelayedDispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aDelayM
 {
   NS_ENSURE_TRUE(!!aDelayMs, NS_ERROR_UNEXPECTED);
 
-  RefPtr<DelayedRunnable> r = new DelayedRunnable(Move(aEvent), aDelayMs);
+  RefPtr<DelayedRunnable> r = new DelayedRunnable(Move(do_AddRef(this)),
+                                                  Move(aEvent),
+                                                  aDelayMs);
   nsresult rv = r->Init();
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -772,6 +848,20 @@ NS_IMETHODIMP
 nsThread::GetPRThread(PRThread** aResult)
 {
   *aResult = mThread;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsThread::GetCanInvokeJS(bool* aResult)
+{
+  *aResult = mCanInvokeJS;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsThread::SetCanInvokeJS(bool aCanInvokeJS)
+{
+  mCanInvokeJS = aCanInvokeJS;
   return NS_OK;
 }
 
@@ -809,7 +899,7 @@ nsThread::ShutdownInternal(bool aSync)
   }
 
   NotNull<nsThread*> currentThread =
-    WrapNotNull(nsThreadManager::get()->GetCurrentThread());
+    WrapNotNull(nsThreadManager::get().GetCurrentThread());
 
   nsAutoPtr<nsThreadShutdownContext>& context =
     *currentThread->mRequestedShutdownContexts.AppendElement();
@@ -912,6 +1002,43 @@ nsThread::HasPendingEvents(bool* aResult)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsThread::RegisterIdlePeriod(already_AddRefed<nsIIdlePeriod> aIdlePeriod)
+{
+  if (NS_WARN_IF(PR_GetCurrentThread() != mThread)) {
+    return NS_ERROR_NOT_SAME_THREAD;
+  }
+
+  MutexAutoLock lock(mLock);
+  mIdlePeriod = aIdlePeriod;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsThread::IdleDispatch(already_AddRefed<nsIRunnable> aEvent)
+{
+  // Currently the only supported idle dispatch is from the same
+  // thread. To support idle dispatch from another thread we need to
+  // support waking threads that are waiting for an event queue that
+  // isn't mIdleEvents.
+  MOZ_ASSERT(PR_GetCurrentThread() == mThread);
+
+  MutexAutoLock lock(mLock);
+  LeakRefPtr<nsIRunnable> event(Move(aEvent));
+
+  if (NS_WARN_IF(!event)) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  if (mEventsAreDoomed) {
+    NS_WARNING("An idle event was posted to a thread that will never run it (rejected)");
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  mIdleEvents.PutEvent(event.take(), lock);
+  return NS_OK;
+}
+
 #ifdef MOZ_CANARY
 void canary_alarm_handler(int signum);
 
@@ -964,6 +1091,63 @@ void canary_alarm_handler(int signum)
     }                                                                          \
   PR_END_MACRO
 
+void
+nsThread::GetIdleEvent(nsIRunnable** aEvent, MutexAutoLock& aProofOfLock)
+{
+  MOZ_ASSERT(PR_GetCurrentThread() == mThread);
+  MOZ_ASSERT(aEvent);
+
+  TimeStamp idleDeadline;
+  {
+    MutexAutoUnlock unlock(mLock);
+    mIdlePeriod->GetIdlePeriodHint(&idleDeadline);
+  }
+
+  if (!idleDeadline || idleDeadline < TimeStamp::Now()) {
+    aEvent = nullptr;
+    return;
+  }
+
+  mIdleEvents.GetEvent(false, aEvent, aProofOfLock);
+
+  if (*aEvent) {
+    nsCOMPtr<nsIIncrementalRunnable> incrementalEvent(do_QueryInterface(*aEvent));
+    if (incrementalEvent) {
+      incrementalEvent->SetDeadline(idleDeadline);
+    }
+  }
+}
+
+void
+nsThread::GetEvent(bool aWait, nsIRunnable** aEvent, MutexAutoLock& aProofOfLock)
+{
+  MOZ_ASSERT(PR_GetCurrentThread() == mThread);
+  MOZ_ASSERT(aEvent);
+
+  // We'll try to get an event to execute in three stages.
+  // [1] First we just try to get it from the regular queue without waiting.
+  mEvents->GetEvent(false, aEvent, aProofOfLock);
+
+  // [2] If we didn't get an event from the regular queue, try to
+  // get one from the idle queue
+  if (!*aEvent) {
+    // Since events in mEvents have higher priority than idle
+    // events, we will only consider idle events when there are no
+    // pending events in mEvents. We will for the same reason never
+    // wait for an idle event, since a higher priority event might
+    // appear at any time.
+    GetIdleEvent(aEvent, aProofOfLock);
+  }
+
+  // [3] If we neither got an event from the regular queue nor the
+  // idle queue, then if we should wait for events we block on the
+  // main queue until an event is available.
+  // If we are shutting down, then do not wait for new events.
+  if (!*aEvent && aWait) {
+    mEvents->GetEvent(aWait, aEvent, aProofOfLock);
+  }
+}
+
 NS_IMETHODIMP
 nsThread::ProcessNextEvent(bool aMayWait, bool* aResult)
 {
@@ -990,8 +1174,13 @@ nsThread::ProcessNextEvent(bool aMayWait, bool* aResult)
 
   ++mNestedEventLoopDepth;
 
+  // We only want to create an AutoNoJSAPI on threads that actually do DOM stuff
+  // (including workers).  Those are exactly the threads that have an
+  // mScriptObserver.
+  Maybe<dom::AutoNoJSAPI> noJSAPI;
   bool callScriptObserver = !!mScriptObserver;
   if (callScriptObserver) {
+    noJSAPI.emplace();
     mScriptObserver->BeforeProcessTask(reallyWait);
   }
 
@@ -1011,12 +1200,10 @@ nsThread::ProcessNextEvent(bool aMayWait, bool* aResult)
     // Scope for |event| to make sure that its destructor fires while
     // mNestedEventLoopDepth has been incremented, since that destructor can
     // also do work.
-
-    // If we are shutting down, then do not wait for new events.
     nsCOMPtr<nsIRunnable> event;
     {
       MutexAutoLock lock(mLock);
-      mEvents->GetEvent(reallyWait, getter_AddRefs(event), lock);
+      GetEvent(reallyWait, getter_AddRefs(event), lock);
     }
 
     *aResult = (event.get() != nullptr);
@@ -1040,8 +1227,11 @@ nsThread::ProcessNextEvent(bool aMayWait, bool* aResult)
     obs->AfterProcessNextEvent(this, *aResult);
   }
 
-  if (callScriptObserver && mScriptObserver) {
-    mScriptObserver->AfterProcessTask(mNestedEventLoopDepth);
+  if (callScriptObserver) {
+    if (mScriptObserver) {
+      mScriptObserver->AfterProcessTask(mNestedEventLoopDepth);
+    }
+    noJSAPI.reset();
   }
 
   --mNestedEventLoopDepth;
@@ -1139,8 +1329,8 @@ nsThread::AddObserver(nsIThreadObserver* aObserver)
     return NS_ERROR_NOT_SAME_THREAD;
   }
 
-  NS_WARN_IF_FALSE(!mEventObservers.Contains(aObserver),
-                   "Adding an observer twice!");
+  NS_WARNING_ASSERTION(!mEventObservers.Contains(aObserver),
+                       "Adding an observer twice!");
 
   if (!mEventObservers.AppendElement(WrapNotNull(aObserver))) {
     NS_WARNING("Out of memory!");
@@ -1227,7 +1417,7 @@ nsThread::PopEventQueue(nsIEventTarget* aInnermostTarget)
 }
 
 void
-nsThread::SetScriptObserver(mozilla::CycleCollectedJSRuntime* aScriptObserver)
+nsThread::SetScriptObserver(mozilla::CycleCollectedJSContext* aScriptObserver)
 {
   if (!aScriptObserver) {
     mScriptObserver = nullptr;
@@ -1272,22 +1462,7 @@ nsThread::DoMainThreadSpecificProcessing(bool aReallyWait)
 
 #ifdef MOZ_CRASHREPORTER
   if (!ShuttingDown()) {
-    // Keep an eye on memory usage (cheap, ~7ms) somewhat frequently,
-    // but save memory reports (expensive, ~75ms) less frequently.
-    const size_t LOW_MEMORY_CHECK_SECONDS = 30;
-    const size_t LOW_MEMORY_SAVE_SECONDS = 3 * 60;
-
-    static TimeStamp nextCheck = TimeStamp::NowLoRes()
-      + TimeDuration::FromSeconds(LOW_MEMORY_CHECK_SECONDS);
-
-    TimeStamp now = TimeStamp::NowLoRes();
-    if (now >= nextCheck) {
-      if (SaveMemoryReportNearOOM()) {
-        nextCheck = now + TimeDuration::FromSeconds(LOW_MEMORY_SAVE_SECONDS);
-      } else {
-        nextCheck = now + TimeDuration::FromSeconds(LOW_MEMORY_CHECK_SECONDS);
-      }
-    }
+    SaveMemoryReportNearOOM(ShouldSaveMemoryReport::kMaybeReport);
   }
 #endif
 }

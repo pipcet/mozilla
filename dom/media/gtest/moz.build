@@ -1,4 +1,4 @@
-# -*- Mode: python; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 40 -*-
+# -*- Mode: python; indent-tabs-mode: nil; tab-width: 40 -*-
 # vim: set filetype=python:
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -6,7 +6,11 @@
 
 UNIFIED_SOURCES += [
     'MockMediaResource.cpp',
+    'TestAudioBuffers.cpp',
     'TestAudioCompactor.cpp',
+    'TestAudioMixer.cpp',
+    'TestAudioPacketizer.cpp',
+    'TestAudioSegment.cpp',
     'TestGMPCrossOrigin.cpp',
     'TestGMPRemoveAndDelete.cpp',
     'TestGMPUtils.cpp',
@@ -20,14 +24,10 @@ UNIFIED_SOURCES += [
     # 'TestMP4Reader.cpp', disabled so we can turn check tests back on (bug 1175752)
     'TestTrackEncoder.cpp',
     'TestVideoSegment.cpp',
+    'TestVideoUtils.cpp',
     'TestVPXDecoding.cpp',
     'TestWebMBuffered.cpp',
 ]
-
-if CONFIG['MOZ_EME']:
-    UNIFIED_SOURCES += [
-        'TestEME.cpp',
-    ]
 
 if CONFIG['MOZ_WEBM_ENCODER']:
     UNIFIED_SOURCES += [
@@ -36,7 +36,6 @@ if CONFIG['MOZ_WEBM_ENCODER']:
     ]
 
 if CONFIG['MOZ_RUST']:
-    SOURCES += ['hello.rs',]
     UNIFIED_SOURCES += ['TestRust.cpp',]
 
 
@@ -63,7 +62,6 @@ include('/ipc/chromium/chromium-config.mozbuild')
 
 LOCAL_INCLUDES += [
     '/dom/media',
-    '/dom/media/eme',
     '/dom/media/encoder',
     '/dom/media/fmp4',
     '/dom/media/gmp',

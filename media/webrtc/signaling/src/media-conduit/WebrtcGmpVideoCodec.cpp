@@ -233,7 +233,8 @@ WebrtcGmpVideoEncoder::InitEncode_g(
   UniquePtr<GetGMPVideoEncoderCallback> callback(
     new InitDoneCallback(aThis, aInitDone, aCodecParams, aMaxPayloadSize));
   aThis->mInitting = true;
-  nsresult rv = aThis->mMPS->GetGMPVideoEncoder(&tags,
+  nsresult rv = aThis->mMPS->GetGMPVideoEncoder(nullptr,
+                                                &tags,
                                                 NS_LITERAL_CSTRING(""),
                                                 Move(callback));
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -364,7 +365,8 @@ WebrtcGmpVideoEncoder::RegetEncoderForResolutionChange(
   nsTArray<nsCString> tags;
   tags.AppendElement(NS_LITERAL_CSTRING("h264"));
   mInitting = true;
-  if (NS_WARN_IF(NS_FAILED(mMPS->GetGMPVideoEncoder(&tags,
+  if (NS_WARN_IF(NS_FAILED(mMPS->GetGMPVideoEncoder(nullptr,
+                                                    &tags,
                                                     NS_LITERAL_CSTRING(""),
                                                     Move(callback))))) {
     aInitDone->Dispatch(WEBRTC_VIDEO_CODEC_ERROR,
@@ -644,13 +646,14 @@ WebrtcGmpVideoEncoder::Encoded(GMPVideoEncodedFrame* aEncodedFrame,
       webrtc::EncodedImage unit(aEncodedFrame->Buffer(), size, size);
       unit._frameType = ft;
       unit._timeStamp = timestamp;
+      // Ensure we ignore this when calculating RTCP timestamps
+      unit.capture_time_ms_ = -1;
       unit._completeFrame = true;
 
       // TODO: Currently the OpenH264 codec does not preserve any codec
       //       specific info passed into it and just returns default values.
-      //       Even if we were to add packetization mode to the codec specific info
-      //       the value passed in would not be returned to us. If this changes in
-      //       the future, it would be nice to get rid of mCodecSpecificInfo.
+      //       If this changes in the future, it would be nice to get rid of
+      //       mCodecSpecificInfo.
       mCallback->Encoded(unit, &mCodecSpecificInfo, &fragmentation);
     }
   }
@@ -718,7 +721,8 @@ WebrtcGmpVideoDecoder::InitDecode_g(
   UniquePtr<GetGMPVideoDecoderCallback> callback(
     new InitDoneCallback(aThis, aInitDone));
   aThis->mInitting = true;
-  nsresult rv = aThis->mMPS->GetGMPVideoDecoder(&tags,
+  nsresult rv = aThis->mMPS->GetGMPVideoDecoder(nullptr,
+                                                &tags,
                                                 NS_LITERAL_CSTRING(""),
                                                 Move(callback));
   if (NS_WARN_IF(NS_FAILED(rv))) {

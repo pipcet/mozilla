@@ -36,6 +36,7 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(nsGenericHTMLFrameElement)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(nsGenericHTMLFrameElement,
                                                   nsGenericHTMLElement)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mFrameLoader)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOpenerWindow)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mBrowserElementAPI)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mBrowserElementAudioChannels)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
@@ -47,6 +48,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(nsGenericHTMLFrameElement,
   }
 
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mFrameLoader)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mOpenerWindow)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mBrowserElementAPI)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mBrowserElementAudioChannels)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
@@ -79,13 +81,14 @@ nsresult
 nsGenericHTMLFrameElement::GetContentDocument(nsIDOMDocument** aContentDocument)
 {
   NS_PRECONDITION(aContentDocument, "Null out param");
-  nsCOMPtr<nsIDOMDocument> document = do_QueryInterface(GetContentDocument());
+  nsCOMPtr<nsIDOMDocument> document =
+    do_QueryInterface(GetContentDocument(*nsContentUtils::SubjectPrincipal()));
   document.forget(aContentDocument);
   return NS_OK;
 }
 
 nsIDocument*
-nsGenericHTMLFrameElement::GetContentDocument()
+nsGenericHTMLFrameElement::GetContentDocument(nsIPrincipal& aSubjectPrincipal)
 {
   nsCOMPtr<nsPIDOMWindowOuter> win = GetContentWindow();
   if (!win) {
@@ -98,8 +101,7 @@ nsGenericHTMLFrameElement::GetContentDocument()
   }
 
   // Return null for cross-origin contentDocument.
-  if (!nsContentUtils::SubjectPrincipal()->
-        SubsumesConsideringDomain(doc->NodePrincipal())) {
+  if (!aSubjectPrincipal.SubsumesConsideringDomain(doc->NodePrincipal())) {
     return nullptr;
   }
   return doc;
@@ -149,7 +151,9 @@ nsGenericHTMLFrameElement::EnsureFrameLoader()
 
   // Strangely enough, this method doesn't actually ensure that the
   // frameloader exists.  It's more of a best-effort kind of thing.
-  mFrameLoader = nsFrameLoader::Create(this, mNetworkCreated);
+  mFrameLoader = nsFrameLoader::Create(this,
+                                       nsPIDOMWindowOuter::From(mOpenerWindow),
+                                       mNetworkCreated);
   if (mIsPrerendered) {
     mFrameLoader->SetIsPrerendered();
   }
@@ -174,7 +178,7 @@ nsGenericHTMLFrameElement::CreateRemoteFrameLoader(nsITabParent* aTabParent)
 }
 
 NS_IMETHODIMP
-nsGenericHTMLFrameElement::GetFrameLoader(nsIFrameLoader **aFrameLoader)
+nsGenericHTMLFrameElement::GetFrameLoaderXPCOM(nsIFrameLoader **aFrameLoader)
 {
   NS_IF_ADDREF(*aFrameLoader = mFrameLoader);
   return NS_OK;
@@ -196,24 +200,33 @@ nsGenericHTMLFrameElement::GetParentApplication(mozIApplication** aApplication)
 
   *aApplication = nullptr;
 
-  uint32_t appId;
   nsIPrincipal *principal = NodePrincipal();
-  nsresult rv = principal->GetAppId(&appId);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  uint32_t appId = principal->GetAppId();
 
   nsCOMPtr<nsIAppsService> appsService = do_GetService(APPS_SERVICE_CONTRACTID);
   if (NS_WARN_IF(!appsService)) {
     return NS_ERROR_FAILURE;
   }
 
-  rv = appsService->GetAppByLocalId(appId, aApplication);
+  nsresult rv = appsService->GetAppByLocalId(appId, aApplication);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
 
   return NS_OK;
+}
+
+void
+nsGenericHTMLFrameElement::PresetOpenerWindow(mozIDOMWindowProxy* aWindow, ErrorResult& aRv)
+{
+  MOZ_ASSERT(!mFrameLoader);
+  mOpenerWindow = nsPIDOMWindowOuter::From(aWindow);
+}
+
+void
+nsGenericHTMLFrameElement::InternalSetFrameLoader(nsIFrameLoader* aNewFrameLoader)
+{
+  mFrameLoader = static_cast<nsFrameLoader*>(aNewFrameLoader);
 }
 
 void
@@ -225,28 +238,28 @@ nsGenericHTMLFrameElement::SwapFrameLoaders(HTMLIFrameElement& aOtherLoaderOwner
     return;
   }
 
-  SwapFrameLoaders(aOtherLoaderOwner.mFrameLoader, rv);
+  aOtherLoaderOwner.SwapFrameLoaders(this, rv);
 }
 
 void
 nsGenericHTMLFrameElement::SwapFrameLoaders(nsXULElement& aOtherLoaderOwner,
                                             ErrorResult& rv)
 {
-  aOtherLoaderOwner.SwapFrameLoaders(mFrameLoader, rv);
+  aOtherLoaderOwner.SwapFrameLoaders(this, rv);
 }
 
 void
-nsGenericHTMLFrameElement::SwapFrameLoaders(RefPtr<nsFrameLoader>& aOtherLoader,
+nsGenericHTMLFrameElement::SwapFrameLoaders(nsIFrameLoaderOwner* aOtherLoaderOwner,
                                             mozilla::ErrorResult& rv)
 {
-  if (!mFrameLoader || !aOtherLoader) {
+  RefPtr<nsFrameLoader> loader = GetFrameLoader();
+  RefPtr<nsFrameLoader> otherLoader = aOtherLoaderOwner->GetFrameLoader();
+  if (!loader || !otherLoader) {
     rv.Throw(NS_ERROR_NOT_IMPLEMENTED);
     return;
   }
 
-  rv = mFrameLoader->SwapWithOtherLoader(aOtherLoader,
-                                         mFrameLoader,
-                                         aOtherLoader);
+  rv = loader->SwapWithOtherLoader(otherLoader, this, aOtherLoaderOwner);
 }
 
 NS_IMETHODIMP
@@ -440,7 +453,7 @@ nsGenericHTMLFrameElement::CopyInnerTo(Element* aDest)
   if (doc->IsStaticDocument() && mFrameLoader) {
     nsGenericHTMLFrameElement* dest =
       static_cast<nsGenericHTMLFrameElement*>(aDest);
-    nsFrameLoader* fl = nsFrameLoader::Create(dest, false);
+    nsFrameLoader* fl = nsFrameLoader::Create(dest, nullptr, false);
     NS_ENSURE_STATE(fl);
     dest->mFrameLoader = fl;
     static_cast<nsFrameLoader*>(mFrameLoader.get())->CreateStaticClone(fl);
@@ -511,10 +524,6 @@ nsGenericHTMLFrameElement::GetReallyIsBrowserOrApp(bool *aOut)
   uint32_t permission = nsIPermissionManager::DENY_ACTION;
   nsresult rv = permMgr->TestPermissionFromPrincipal(principal, "browser", &permission);
   NS_ENSURE_SUCCESS(rv, NS_OK);
-  if (permission != nsIPermissionManager::ALLOW_ACTION) {
-    rv = permMgr->TestPermissionFromPrincipal(principal, "embed-widgets", &permission);
-    NS_ENSURE_SUCCESS(rv, NS_OK);
-  }
   *aOut = permission == nsIPermissionManager::ALLOW_ACTION;
   return NS_OK;
 }
@@ -530,20 +539,6 @@ nsGenericHTMLFrameElement::GetReallyIsApp(bool *aOut)
 }
 
 namespace {
-
-bool WidgetsEnabled()
-{
-  static bool sMozWidgetsEnabled = false;
-  static bool sBoolVarCacheInitialized = false;
-
-  if (!sBoolVarCacheInitialized) {
-    sBoolVarCacheInitialized = true;
-    Preferences::AddBoolVarCache(&sMozWidgetsEnabled,
-                                 "dom.enable_widgets");
-  }
-
-  return sMozWidgetsEnabled;
-}
 
 bool NestedEnabled()
 {
@@ -562,26 +557,6 @@ bool NestedEnabled()
 } // namespace
 
 /* [infallible] */ NS_IMETHODIMP
-nsGenericHTMLFrameElement::GetReallyIsWidget(bool *aOut)
-{
-  *aOut = false;
-  if (!WidgetsEnabled()) {
-    return NS_OK;
-  }
-
-  nsAutoString appManifestURL;
-  GetManifestURLByType(nsGkAtoms::mozapp, appManifestURL);
-  bool isApp = !appManifestURL.IsEmpty();
-
-  nsAutoString widgetManifestURL;
-  GetManifestURLByType(nsGkAtoms::mozwidget, widgetManifestURL);
-  bool isWidget = !widgetManifestURL.IsEmpty();
-
-  *aOut = isWidget && !isApp;
-  return NS_OK;
-}
-
-/* [infallible] */ NS_IMETHODIMP
 nsGenericHTMLFrameElement::GetIsolated(bool *aOut)
 {
   *aOut = true;
@@ -595,33 +570,15 @@ nsGenericHTMLFrameElement::GetIsolated(bool *aOut)
   return NS_OK;
 }
 
-/* [infallible] */ NS_IMETHODIMP
-nsGenericHTMLFrameElement::GetIsExpectingSystemMessage(bool *aOut)
-{
-  *aOut = false;
-
-  if (!nsIMozBrowserFrame::GetReallyIsApp()) {
-    return NS_OK;
-  }
-
-  *aOut = HasAttr(kNameSpaceID_None, nsGkAtoms::expectingSystemMessage);
-  return NS_OK;
-}
-
-/** Get manifest url of app or widget
- * @param AppType: nsGkAtoms::mozapp or nsGkAtoms::mozwidget
+/*
+ * Get manifest url of app.
  */
-void nsGenericHTMLFrameElement::GetManifestURLByType(nsIAtom *aAppType,
-                                                     nsAString& aManifestURL)
+void nsGenericHTMLFrameElement::GetManifestURL(nsAString& aManifestURL)
 {
   aManifestURL.Truncate();
 
-  if (aAppType != nsGkAtoms::mozapp && aAppType != nsGkAtoms::mozwidget) {
-    return;
-  }
-
   nsAutoString manifestURL;
-  GetAttr(kNameSpaceID_None, aAppType, manifestURL);
+  GetAttr(kNameSpaceID_None, nsGkAtoms::mozapp, manifestURL);
   if (manifestURL.IsEmpty()) {
     return;
   }
@@ -630,8 +587,7 @@ void nsGenericHTMLFrameElement::GetManifestURLByType(nsIAtom *aAppType,
   nsCOMPtr<nsIPermissionManager> permMgr = services::GetPermissionManager();
   NS_ENSURE_TRUE_VOID(permMgr);
   nsIPrincipal *principal = NodePrincipal();
-  const char* aPermissionType = (aAppType == nsGkAtoms::mozapp) ? "embed-apps"
-                                                                : "embed-widgets";
+  const char* aPermissionType = "embed-apps";
   uint32_t permission = nsIPermissionManager::DENY_ACTION;
   nsresult rv = permMgr->TestPermissionFromPrincipal(principal,
                                                      aPermissionType,
@@ -649,17 +605,6 @@ void nsGenericHTMLFrameElement::GetManifestURLByType(nsIAtom *aAppType,
 
   if (!app) {
     return;
-  }
-
-  bool hasWidgetPage = false;
-  nsAutoString src;
-  if (aAppType == nsGkAtoms::mozwidget) {
-    GetAttr(kNameSpaceID_None, nsGkAtoms::src, src);
-    nsresult rv = app->HasWidgetPage(src, &hasWidgetPage);
-
-    if (!NS_SUCCEEDED(rv) || !hasWidgetPage) {
-      return;
-    }
   }
 
   aManifestURL.Assign(manifestURL);
@@ -685,32 +630,24 @@ nsGenericHTMLFrameElement::GetAppManifestURL(nsAString& aOut)
   }
 
   nsAutoString appManifestURL;
-  nsAutoString widgetManifestURL;
 
-  GetManifestURLByType(nsGkAtoms::mozapp, appManifestURL);
-
-  if (WidgetsEnabled()) {
-    GetManifestURLByType(nsGkAtoms::mozwidget, widgetManifestURL);
-  }
+  GetManifestURL(appManifestURL);
 
   bool isApp = !appManifestURL.IsEmpty();
-  bool isWidget = !widgetManifestURL.IsEmpty();
 
-  if (!isApp && !isWidget) {
+  if (!isApp) {
     // No valid case to get manifest
     return NS_OK;
   }
 
-  if (isApp && isWidget) {
-    NS_WARNING("Can not simultaneously be mozapp and mozwidget");
+  if (isApp) {
+    NS_WARNING("Can not simultaneously be mozapp");
     return NS_OK;
   }
 
   nsAutoString manifestURL;
   if (isApp) {
     manifestURL.Assign(appManifestURL);
-  } else if (isWidget) {
-    manifestURL.Assign(widgetManifestURL);
   }
 
   aOut.Assign(manifestURL);
@@ -741,5 +678,13 @@ nsGenericHTMLFrameElement::InitializeBrowserAPI()
 {
   MOZ_ASSERT(mFrameLoader);
   InitBrowserElementAPI();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsGenericHTMLFrameElement::DestroyBrowserFrameScripts()
+{
+  MOZ_ASSERT(mFrameLoader);
+  DestroyBrowserElementFrameScripts();
   return NS_OK;
 }

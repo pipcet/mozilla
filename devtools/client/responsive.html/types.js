@@ -5,6 +5,7 @@
 "use strict";
 
 const { PropTypes } = require("devtools/client/shared/vendor/react");
+const { createEnum } = require("./utils/enum");
 
 // React PropTypes are used to describe the expected "shape" of various common
 // objects that get passed down as props to components.
@@ -41,6 +42,16 @@ const device = {
 };
 
 /**
+ * An enum containing the possible values for the device list state
+ */
+exports.deviceListState = createEnum([
+  "INITIALIZED",
+  "LOADING",
+  "LOADED",
+  "ERROR",
+]);
+
+/**
  * A list of devices and their types that can be displayed in the viewport.
  */
 exports.devices = {
@@ -69,6 +80,9 @@ exports.devices = {
   // Whether or not the device modal is open
   isModalOpen: PropTypes.bool,
 
+  // Device list state, possible values are exported above in an enum
+  listState: PropTypes.oneOf(Object.keys(exports.deviceListState)),
+
 };
 
 /**
@@ -81,7 +95,7 @@ exports.location = PropTypes.string;
  */
 exports.screenshot = {
 
-  isCapturing: PropTypes.bool.isRequired,
+  isCapturing: PropTypes.bool,
 
 };
 
@@ -90,8 +104,21 @@ exports.screenshot = {
  */
 exports.touchSimulation = {
 
-  // Whether or not the touch simulation is enabled
-  enabled: PropTypes.bool.isRequired,
+  // Whether or not touch simulation is enabled
+  enabled: PropTypes.bool,
+
+};
+
+/**
+ * Network throttling.
+ */
+exports.networkThrottling = {
+
+  // Whether or not network throttling is enabled
+  enabled: PropTypes.bool,
+
+  // Name of the selected throttling profile
+  profile: PropTypes.string,
 
 };
 
@@ -101,7 +128,7 @@ exports.touchSimulation = {
 exports.viewport = {
 
   // The id of the viewport
-  id: PropTypes.number.isRequired,
+  id: PropTypes.number,
 
   // The currently selected device applied to the viewport.
   device: PropTypes.string,

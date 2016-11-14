@@ -73,7 +73,6 @@
   <preference id="browser.privatebrowsing.autostart"
               name="browser.privatebrowsing.autostart"
               type="bool"/>
-
 </preferences>
 
 <hbox id="header-privacy"
@@ -81,8 +80,7 @@
       hidden="true"
       data-category="panePrivacy">
   <label class="header-name" flex="1">&panePrivacy.title;</label>
-  <button class="help-button"
-          aria-label="&helpButton.label;"/>
+  <html:a class="help-button" target="_blank" aria-label="&helpButton.label;"></html:a>
 </hbox>
 
 <!-- Tracking -->
@@ -136,9 +134,9 @@
     </hbox>
   </vbox>
   <vbox>
-    <description>&doNotTrack.pre.label;<html:a
-    class="inline-link" id="doNotTrackSettings" href="#"
-    >&doNotTrack.settings.label;</html:a>&doNotTrack.post.label;</description>
+    <description>&doNotTrack.pre.label;<label
+    class="text-link" id="doNotTrackSettings"
+    >&doNotTrack.settings.label;</label>&doNotTrack.post.label;</description>
   </vbox>
 </groupbox>
 
@@ -165,11 +163,11 @@
         <vbox flex="1">
           <description>&rememberDescription.label;</description>
           <separator class="thin"/>
-          <description>&rememberActions.pre.label;<html:a
-          class="inline-link" id="historyRememberClear" href="#"
-          >&rememberActions.clearHistory.label;</html:a>&rememberActions.middle.label;<html:a
-          class="inline-link" id="historyRememberCookies" href="#"
-          >&rememberActions.removeCookies.label;</html:a>&rememberActions.post.label;</description>
+          <description>&rememberActions.pre.label;<label
+          class="text-link" id="historyRememberClear"
+          >&rememberActions.clearHistory.label;</label>&rememberActions.middle.label;<label
+          class="text-link" id="historyRememberCookies"
+          >&rememberActions.removeCookies.label;</label>&rememberActions.post.label;</description>
         </vbox>
       </hbox>
     </vbox>
@@ -178,9 +176,9 @@
         <vbox flex="1">
           <description>&dontrememberDescription.label;</description>
           <separator class="thin"/>
-          <description>&dontrememberActions.pre.label;<html:a
-          class="inline-link" id="historyDontRememberClear" href="#"
-          >&dontrememberActions.clearHistory.label;</html:a>&dontrememberActions.post.label;</description>
+          <description>&dontrememberActions.pre.label;<label
+          class="text-link" id="historyDontRememberClear"
+          >&dontrememberActions.clearHistory.label;</label>&dontrememberActions.post.label;</description>
         </vbox>
       </hbox>
     </vbox>
@@ -279,7 +277,32 @@
   <checkbox id="openpageSuggestion" label="&locbar.openpage.label;"
             accesskey="&locbar.openpage.accesskey;"
             preference="browser.urlbar.suggest.openpage"/>
-  <label class="text-link" onclick="if (event.button == 0) gotoPref('search')">
+  <label class="text-link" onclick="gotoPref('search')">
     &suggestionSettings.label;
   </label>
+</groupbox>
+
+<!-- Containers -->
+<groupbox id="browserContainersGroup" data-category="panePrivacy" hidden="true">
+  <vbox id="browserContainersbox" hidden="true">
+    <caption><label>&browserContainersHeader.label;
+      <label id="browserContainersLearnMore" class="text-link"
+             value="&browserContainersLearnMore.label;"/>
+    </label></caption>
+    <hbox align="start">
+      <vbox>
+        <checkbox id="browserContainersCheckbox"
+                  label="&browserContainersEnabled.label;"
+                  accesskey="&browserContainersEnabled.accesskey;"
+                  preference="privacy.userContext.enabled"
+                  onsyncfrompreference="return gPrivacyPane.readBrowserContainersCheckbox();"/>
+      </vbox>
+      <spacer flex="1"/>
+      <vbox>
+        <button id="browserContainersSettings"
+                label="&browserContainersSettings.label;"
+                accesskey="&browserContainersSettings.accesskey;"/>
+      </vbox>
+    </hbox>
+  </vbox>
 </groupbox>

@@ -13,7 +13,7 @@
 #define nsStyleSet_h_
 
 #include "mozilla/Attributes.h"
-#include "mozilla/CSSStyleSheet.h"
+#include "mozilla/StyleSheetInlines.h"
 #include "mozilla/EnumeratedArray.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/MemoryReporting.h"
@@ -52,6 +52,8 @@ public:
   NS_DECL_ISUPPORTS
   virtual void MapRuleInfoInto(nsRuleData* aRuleData) override;
   virtual bool MightMapInheritedStyleData() override;
+  virtual bool GetDiscretelyAnimatedCSSValue(nsCSSPropertyID aProperty,
+                                             nsCSSValue* aValue) override;
 #ifdef DEBUG
   virtual void List(FILE* out = stdout, int32_t aIndent = 0) const override;
 #endif
@@ -66,6 +68,8 @@ public:
   NS_DECL_ISUPPORTS
   virtual void MapRuleInfoInto(nsRuleData* aRuleData) override;
   virtual bool MightMapInheritedStyleData() override;
+  virtual bool GetDiscretelyAnimatedCSSValue(nsCSSPropertyID aProperty,
+                                             nsCSSValue* aValue) override;
 #ifdef DEBUG
   virtual void List(FILE* out = stdout, int32_t aIndent = 0) const override;
 #endif
@@ -80,6 +84,8 @@ public:
   NS_DECL_ISUPPORTS
   virtual void MapRuleInfoInto(nsRuleData* aRuleData) override;
   virtual bool MightMapInheritedStyleData() override;
+  virtual bool GetDiscretelyAnimatedCSSValue(nsCSSPropertyID aProperty,
+                                             nsCSSValue* aValue) override;
 #ifdef DEBUG
   virtual void List(FILE* out = stdout, int32_t aIndent = 0) const override;
 #endif
@@ -461,14 +467,14 @@ private:
   // aLastPrevLevelNode.
   void AssertNoImportantRules(nsRuleNode* aCurrLevelNode,
                               nsRuleNode* aLastPrevLevelNode);
-  
+
   // Just like AddImportantRules except it doesn't actually add anything; it
   // just asserts that there are no CSS rules between aCurrLevelNode and
   // aLastPrevLevelNode.  Mostly useful for the preshint level.
   void AssertNoCSSRules(nsRuleNode* aCurrLevelNode,
                         nsRuleNode* aLastPrevLevelNode);
 #endif
-  
+
   // Enumerate the rules in a way that cares about the order of the
   // rules.
   // aElement is the element the rules are for.  It might be null.  aData

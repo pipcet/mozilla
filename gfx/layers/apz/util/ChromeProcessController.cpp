@@ -11,7 +11,7 @@
 #include "mozilla/layers/CompositorBridgeParent.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/layers/APZEventState.h"
-#include "mozilla/layers/APZCTreeManager.h"
+#include "mozilla/layers/IAPZCTreeManager.h"
 #include "mozilla/layers/DoubleTapToZoom.h"
 #include "nsIDocument.h"
 #include "nsIInterfaceRequestorUtils.h"
@@ -25,7 +25,7 @@ using namespace mozilla::widget;
 
 ChromeProcessController::ChromeProcessController(nsIWidget* aWidget,
                                                  APZEventState* aAPZEventState,
-                                                 APZCTreeManager* aAPZCTreeManager)
+                                                 IAPZCTreeManager* aAPZCTreeManager)
   : mWidget(aWidget)
   , mAPZEventState(aAPZEventState)
   , mAPZCTreeManager(aAPZCTreeManager)
@@ -50,7 +50,7 @@ ChromeProcessController::InitializeRoot()
 void
 ChromeProcessController::RequestContentRepaint(const FrameMetrics& aFrameMetrics)
 {
-  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(IsRepaintThread());
 
   FrameMetrics metrics = aFrameMetrics;
   if (metrics.IsRootContent()) {
@@ -66,6 +66,18 @@ ChromeProcessController::PostDelayedTask(already_AddRefed<Runnable> aTask, int a
   MessageLoop::current()->PostDelayedTask(Move(aTask), aDelayMs);
 }
 
+bool
+ChromeProcessController::IsRepaintThread()
+{
+  return NS_IsMainThread();
+}
+
+void
+ChromeProcessController::DispatchToRepaintThread(already_AddRefed<Runnable> aTask)
+{
+  NS_DispatchToMainThread(Move(aTask));
+}
+
 void
 ChromeProcessController::Destroy()
 {
@@ -76,6 +88,7 @@ ChromeProcessController::Destroy()
 
   MOZ_ASSERT(MessageLoop::current() == mUILoop);
   mWidget = nullptr;
+  mAPZEventState = nullptr;
 }
 
 nsIPresShell*
@@ -118,30 +131,20 @@ ChromeProcessController::HandleDoubleTap(const mozilla::CSSPoint& aPoint,
                                          Modifiers aModifiers,
                                          const ScrollableLayerGuid& aGuid)
 {
-  if (MessageLoop::current() != mUILoop) {
-    mUILoop->PostTask(NewRunnableMethod
-                      <CSSPoint,
-                       Modifiers,
-                       ScrollableLayerGuid>(this,
-                                            &ChromeProcessController::HandleDoubleTap,
-                                            aPoint, aModifiers, aGuid));
-    return;
-  }
+  MOZ_ASSERT(MessageLoop::current() == mUILoop);
 
   nsCOMPtr<nsIDocument> document = GetRootContentDocument(aGuid.mScrollId);
   if (!document.get()) {
     return;
   }
 
-  CSSPoint point = APZCCallbackHelper::ApplyCallbackTransform(aPoint, aGuid);
   // CalculateRectToZoomTo performs a hit test on the frame associated with the
   // Root Content Document. Unfortunately that frame does not know about the
   // resolution of the document and so we must remove it before calculating
   // the zoomToRect.
   nsIPresShell* presShell = document->GetShell();
   const float resolution = presShell->ScaleToResolution() ? presShell->GetResolution () : 1.0f;
-  point.x = point.x / resolution;
-  point.y = point.y / resolution;
+  CSSPoint point(aPoint.x / resolution, aPoint.y / resolution);
   CSSRect zoomToRect = CalculateRectToZoomTo(document, point);
 
   uint32_t presShellId;
@@ -154,40 +157,79 @@ ChromeProcessController::HandleDoubleTap(const mozilla::CSSPoint& aPoint,
 }
 
 void
-ChromeProcessController::HandleSingleTap(const CSSPoint& aPoint,
-                                         Modifiers aModifiers,
-                                         const ScrollableLayerGuid& aGuid)
+ChromeProcessController::HandleTap(TapType aType,
+                                   const mozilla::LayoutDevicePoint& aPoint,
+                                   Modifiers aModifiers,
+                                   const ScrollableLayerGuid& aGuid,
+                                   uint64_t aInputBlockId)
 {
   if (MessageLoop::current() != mUILoop) {
-    mUILoop->PostTask(NewRunnableMethod
-                      <CSSPoint,
-                       Modifiers,
-                      ScrollableLayerGuid>(this,
-                                           &ChromeProcessController::HandleSingleTap,
-                                           aPoint, aModifiers, aGuid));
+    mUILoop->PostTask(NewRunnableMethod<TapType, mozilla::LayoutDevicePoint, Modifiers,
+                                        ScrollableLayerGuid, uint64_t>(this,
+                        &ChromeProcessController::HandleTap,
+                        aType, aPoint, aModifiers, aGuid, aInputBlockId));
     return;
   }
 
-  mAPZEventState->ProcessSingleTap(aPoint, aModifiers, aGuid);
+  if (!mAPZEventState) {
+    return;
+  }
+
+  nsCOMPtr<nsIPresShell> presShell = GetPresShell();
+  if (!presShell) {
+    return;
+  }
+  if (!presShell->GetPresContext()) {
+    return;
+  }
+  CSSToLayoutDeviceScale scale(presShell->GetPresContext()->CSSToDevPixelScale());
+  CSSPoint point = APZCCallbackHelper::ApplyCallbackTransform(aPoint / scale, aGuid);
+
+  switch (aType) {
+  case TapType::eSingleTap:
+    mAPZEventState->ProcessSingleTap(point, scale, aModifiers, aGuid, 1);
+    break;
+  case TapType::eDoubleTap:
+    HandleDoubleTap(point, aModifiers, aGuid);
+    break;
+  case TapType::eSecondTap:
+    mAPZEventState->ProcessSingleTap(point, scale, aModifiers, aGuid, 2);
+    break;
+  case TapType::eLongTap:
+    mAPZEventState->ProcessLongTap(presShell, point, scale, aModifiers, aGuid,
+        aInputBlockId);
+    break;
+  case TapType::eLongTapUp:
+    mAPZEventState->ProcessLongTapUp(presShell, point, scale, aModifiers);
+    break;
+  case TapType::eSentinel:
+    // Should never happen, but we need to handle this case branch for the
+    // compiler to be happy.
+    MOZ_ASSERT(false);
+    break;
+  }
 }
 
 void
-ChromeProcessController::HandleLongTap(const mozilla::CSSPoint& aPoint, Modifiers aModifiers,
-                                       const ScrollableLayerGuid& aGuid,
-                                       uint64_t aInputBlockId)
+ChromeProcessController::NotifyPinchGesture(PinchGestureInput::PinchGestureType aType,
+                                            const ScrollableLayerGuid& aGuid,
+                                            LayoutDeviceCoord aSpanChange,
+                                            Modifiers aModifiers)
 {
   if (MessageLoop::current() != mUILoop) {
     mUILoop->PostTask(NewRunnableMethod
-                      <mozilla::CSSPoint,
-                       Modifiers,
+                      <PinchGestureInput::PinchGestureType,
                        ScrollableLayerGuid,
-                       uint64_t>(this, &ChromeProcessController::HandleLongTap,
-                                 aPoint, aModifiers, aGuid, aInputBlockId));
+                       LayoutDeviceCoord,
+                       Modifiers>(this,
+                          &ChromeProcessController::NotifyPinchGesture,
+                          aType, aGuid, aSpanChange, aModifiers));
     return;
   }
 
-  mAPZEventState->ProcessLongTap(GetPresShell(), aPoint, aModifiers, aGuid,
-      aInputBlockId);
+  if (mWidget) {
+    APZCCallbackHelper::NotifyPinchGesture(aType, aSpanChange, aModifiers, mWidget.get());
+  }
 }
 
 void
@@ -204,7 +246,11 @@ ChromeProcessController::NotifyAPZStateChange(const ScrollableLayerGuid& aGuid,
     return;
   }
 
-  mAPZEventState->ProcessAPZStateChange(GetRootDocument(), aGuid.mScrollId, aChange, aArg);
+  if (!mAPZEventState) {
+    return;
+  }
+
+  mAPZEventState->ProcessAPZStateChange(aGuid.mScrollId, aChange, aArg);
 }
 
 void
@@ -224,6 +270,7 @@ ChromeProcessController::NotifyMozMouseScrollEvent(const FrameMetrics::ViewID& a
 void
 ChromeProcessController::NotifyFlushComplete()
 {
-  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(IsRepaintThread());
+
   APZCCallbackHelper::NotifyFlushComplete(GetPresShell());
 }

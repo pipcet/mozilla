@@ -171,6 +171,28 @@ class AutoTry(object):
         "web-platform-tests": "web-platform-tests",
     }
 
+    compiled_suites = [
+        "cppunit",
+        "gtest",
+        "jittest",
+    ]
+
+    common_suites = [
+        "cppunit",
+        "crashtest",
+        "firefox-ui-functional",
+        "gtest",
+        "jittest",
+        "jsreftest",
+        "marionette",
+        "marionette-e10s",
+        "media-tests",
+        "mochitests",
+        "reftest",
+        "web-platform-tests",
+        "xpcshell",
+    ]
+
     # Arguments we will accept on the command line and pass through to try
     # syntax with no further intervention. The set is taken from
     # http://trychooser.pub.build.mozilla.org with a few additions.
@@ -225,6 +247,11 @@ class AutoTry(object):
             'action': 'store_true',
             'dest': 'all_emails',
             'help': 'Request all emails',
+        },
+        '--artifact': {
+            'action': 'store_true',
+            'dest': 'artifact',
+            'help': 'Force artifact builds where possible.',
         }
     }
 
@@ -372,6 +399,15 @@ class AutoTry(object):
         if not suites:
             raise ValueError("No tests found matching filters")
 
+        if extras.get('artifact'):
+            rejected = []
+            for suite in suites.keys():
+                if any([suite.startswith(c) for c in self.compiled_suites]):
+                    rejected.append(suite)
+            if rejected:
+                raise ValueError("You can't run {} with "
+                                 "--artifact option.".format(', '.join(rejected)))
+
         parts.append("-u")
         parts.append(",".join("%s%s" % (k, "[%s]" % ",".join(v) if v else "")
                               for k,v in sorted(suites.items())) if suites else "none")
@@ -401,7 +437,21 @@ class AutoTry(object):
             if action in ('store_true', 'store_false'):
                 parts.append(arg)
 
-        return " ".join(parts)
+        try_syntax = " ".join(parts)
+        if extras.get('artifact') and 'all' in suites.keys():
+            message = ('You asked for |-u all| with |--artifact| but compiled-code tests ({tests})'
+                       ' can\'t run against an artifact build. Try listing the suites you want'
+                       ' instead. For example, this syntax covers most suites:\n{try_syntax}')
+            string_format = {
+                'tests': ','.join(self.compiled_suites),
+                'try_syntax': try_syntax.replace(
+                    '-u all',
+                    '-u ' + ','.join(sorted(set(self.common_suites) - set(self.compiled_suites)))
+                )
+            }
+            raise ValueError(message.format(**string_format))
+
+        return try_syntax
 
     def _run_git(self, *args):
         args = ['git'] + list(args)
@@ -472,9 +522,18 @@ class AutoTry(object):
                 subprocess.check_call(hg_args, stderr=subprocess.STDOUT)
             except subprocess.CalledProcessError as e:
                 print('ERROR hg command %s returned %s' % (hg_args, e.returncode))
-                print('The "push-to-try" hg extension is required to push from '
-                      'hg to try with the autotry command.\n\nIt can be installed '
-                      'to Mercurial 3.3 or above by running ./mach mercurial-setup')
+                print('\nmach failed to push to try. There may be a problem '
+                      'with your ssh key, or another issue with your mercurial '
+                      'installation.')
+                # Check for the presence of the "push-to-try" extension, and
+                # provide instructions if it can't be found.
+                try:
+                    subprocess.check_output(['hg', 'showconfig',
+                                             'extensions.push-to-try'])
+                except subprocess.CalledProcessError:
+                    print('\nThe "push-to-try" hg extension is required. It '
+                          'can be installed to Mercurial 3.3 or above by '
+                          'running ./mach mercurial-setup')
                 sys.exit(1)
         else:
             try:

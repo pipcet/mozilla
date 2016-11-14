@@ -23,8 +23,6 @@ const SEARCH_VARIABLE_FLAG = "*";
 const SEARCH_AUTOFILL = [SEARCH_GLOBAL_FLAG, SEARCH_FUNCTION_FLAG, SEARCH_TOKEN_FLAG];
 const TOOLBAR_ORDER_POPUP_POSITION = "topcenter bottomleft";
 const RESIZE_REFRESH_RATE = 50; // ms
-const PROMISE_DEBUGGER_URL =
-  "chrome://devtools/content/promisedebugger/promise-debugger.xhtml";
 
 const EventListenersView = require("./content/views/event-listeners-view");
 const SourcesView = require("./content/views/sources-view");
@@ -55,7 +53,7 @@ var DebuggerView = {
    * @return object
    *         A promise that is resolved when the view finishes initializing.
    */
-  initialize: function () {
+  initialize: function (isWorker) {
     if (this._startup) {
       return this._startup;
     }
@@ -70,7 +68,7 @@ var DebuggerView = {
     this.StackFrames.initialize();
     this.StackFramesClassicList.initialize();
     this.Workers.initialize();
-    this.Sources.initialize();
+    this.Sources.initialize(isWorker);
     this.VariableBubble.initialize();
     this.WatchExpressions.initialize();
     this.EventListeners.initialize();
@@ -79,8 +77,6 @@ var DebuggerView = {
 
     this._editorSource = {};
     this._editorDocuments = {};
-
-    document.title = L10N.getStr("DebuggerWindowTitle");
 
     this.editor.on("cursorActivity", this.Sources._onEditorCursorActivity);
 
@@ -137,7 +133,6 @@ var DebuggerView = {
     this.WatchExpressions.destroy();
     this.EventListeners.destroy();
     this.GlobalSearch.destroy();
-    this._destroyPromiseDebugger();
     this._destroyPanes();
 
     this.editor.destroy();
@@ -157,7 +152,6 @@ var DebuggerView = {
     this._workersAndSourcesPane = document.getElementById("workers-and-sources-pane");
     this._instrumentsPane = document.getElementById("instruments-pane");
     this._instrumentsPaneToggleButton = document.getElementById("instruments-pane-toggle");
-    this._promisePane = document.getElementById("promise-debugger-pane");
 
     this.showEditor = this.showEditor.bind(this);
     this.showBlackBoxMessage = this.showBlackBoxMessage.bind(this);
@@ -193,7 +187,6 @@ var DebuggerView = {
     this._workersAndSourcesPane = null;
     this._instrumentsPane = null;
     this._instrumentsPaneToggleButton = null;
-    this._promisePane = null;
   },
 
   /**
@@ -238,41 +231,6 @@ var DebuggerView = {
           break;
       }
     });
-  },
-
-  /**
-   * Initialie the Promise Debugger instance.
-   */
-  _initializePromiseDebugger: function () {
-    let iframe = this._promiseDebuggerIframe = document.createElement("iframe");
-    iframe.setAttribute("flex", 1);
-
-    let onLoad = (event) => {
-      iframe.removeEventListener("load", onLoad, true);
-
-      let doc = event.target;
-      let win = doc.defaultView;
-
-      win.setPanel(DebuggerController._toolbox);
-    };
-
-    iframe.addEventListener("load", onLoad, true);
-    iframe.setAttribute("src", PROMISE_DEBUGGER_URL);
-    this._promisePane.appendChild(iframe);
-  },
-
-  /**
-   * Destroy the Promise Debugger instance.
-   */
-  _destroyPromiseDebugger: function () {
-    if (this._promiseDebuggerIframe) {
-      this._promiseDebuggerIframe.contentWindow.destroy();
-
-      this._promiseDebuggerIframe.parentNode.removeChild(
-        this._promiseDebuggerIframe);
-
-      this._promiseDebuggerIframe = null;
-    }
   },
 
   /**
@@ -451,6 +409,10 @@ var DebuggerView = {
     // Use JS mode for files with .js and .jsm extensions.
     if (SourceUtils.isJavaScript(aUrl, aContentType)) {
       return void this.editor.setMode(Editor.modes.js);
+    }
+
+    if (aContentType === "text/wasm") {
+      return void this.editor.setMode(Editor.modes.text);
     }
 
     // Use HTML mode for files in which the first non whitespace character is
@@ -657,7 +619,7 @@ var DebuggerView = {
    * @return boolean
    */
   get instrumentsPaneHidden() {
-    return this._instrumentsPane.hasAttribute("pane-collapsed");
+    return this._instrumentsPane.classList.contains("pane-collapsed");
   },
 
   /**
@@ -687,10 +649,10 @@ var DebuggerView = {
     ViewHelpers.togglePane(aFlags, pane);
 
     if (aFlags.visible) {
-      button.removeAttribute("pane-collapsed");
+      button.classList.remove("pane-collapsed");
       button.setAttribute("tooltiptext", this._collapsePaneString);
     } else {
-      button.setAttribute("pane-collapsed", "");
+      button.classList.add("pane-collapsed");
       button.setAttribute("tooltiptext", this._expandPaneString);
     }
 

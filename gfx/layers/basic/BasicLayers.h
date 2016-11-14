@@ -74,6 +74,8 @@ protected:
   virtual ~BasicLayerManager();
 
 public:
+  BasicLayerManager* AsBasicLayerManager() override { return this; }
+
   /**
    * Set the default target context that will be used when BeginTransaction
    * is called. This can only be called outside a transaction.
@@ -95,8 +97,8 @@ public:
   virtual bool IsWidgetLayerManager() override { return mWidget != nullptr; }
   virtual bool IsInactiveLayerManager() override { return mType == BLM_INACTIVE; }
 
-  virtual void BeginTransaction() override;
-  virtual void BeginTransactionWithTarget(gfxContext* aTarget) override;
+  virtual bool BeginTransaction() override;
+  virtual bool BeginTransactionWithTarget(gfxContext* aTarget) override;
   virtual bool EndEmptyTransaction(EndTransactionFlags aFlags = END_DEFAULT) override;
   virtual void EndTransaction(DrawPaintedLayerCallback aCallback,
                               void* aCallbackData,
@@ -151,7 +153,10 @@ public:
     gfx::Matrix mMaskTransform;
   };
 
-  PushedGroup PushGroupForLayer(gfxContext* aContext, Layer* aLayerContext, const nsIntRegion& aRegion);
+  // Construct a PushedGroup for a specific layer.
+  // Return false if it has some errors in PushGroupForLayer(). Then, the
+  // "aGroupResult" is unavailable for future using.
+  bool PushGroupForLayer(gfxContext* aContext, Layer* aLayerContext, const nsIntRegion& aRegion, PushedGroup& aGroupResult);
 
   void PopGroupForLayer(PushedGroup& aGroup);
 

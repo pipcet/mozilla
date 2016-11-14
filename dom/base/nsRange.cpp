@@ -30,6 +30,7 @@
 #include "mozilla/dom/DocumentType.h"
 #include "mozilla/dom/RangeBinding.h"
 #include "mozilla/dom/DOMRect.h"
+#include "mozilla/dom/DOMStringList.h"
 #include "mozilla/dom/ShadowRoot.h"
 #include "mozilla/dom/Selection.h"
 #include "mozilla/Telemetry.h"
@@ -240,9 +241,6 @@ nsRange::~nsRange()
 {
   NS_ASSERTION(!IsInSelection(), "deleting nsRange that is in use");
 
-  // Maybe we can remove Detach() -- bug 702948.
-  Telemetry::Accumulate(Telemetry::DOM_RANGE_DETACHED, mIsDetached);
-
   // we want the side effects (releases and list removals)
   DoSetRange(nullptr, 0, nullptr, 0, nullptr);
 }
@@ -252,7 +250,6 @@ nsRange::nsRange(nsINode* aNode)
   , mStartOffset(0)
   , mEndOffset(0)
   , mIsPositioned(false)
-  , mIsDetached(false)
   , mMaySpanAnonymousSubtrees(false)
   , mIsGenerated(false)
   , mStartOffsetWasIncremented(false)
@@ -1842,8 +1839,23 @@ ValidateCurrentNode(nsRange* aRange, RangeSubtreeIterator& aIter)
   }
 
   nsresult res = nsRange::CompareNodeToRange(node, aRange, &before, &after);
+  NS_ENSURE_SUCCESS(res, false);
 
-  return NS_SUCCEEDED(res) && !before && !after;
+  if (before || after) {
+    nsCOMPtr<nsIDOMCharacterData> charData = do_QueryInterface(node);
+    if (charData) {
+      // If we're dealing with the start/end container which is a character
+      // node, pretend that the node is in the range.
+      if (before && node == aRange->GetStartParent()) {
+        before = false;
+      }
+      if (after && node == aRange->GetEndParent()) {
+        after = false;
+      }
+    }
+  }
+
+  return !before && !after;
 }
 
 nsresult
@@ -2524,6 +2536,11 @@ nsRange::InsertNode(nsINode& aNode, ErrorResult& aRv)
     return;
   }
 
+  if (&aNode == tStartContainer) {
+    aRv.Throw(NS_ERROR_DOM_HIERARCHY_REQUEST_ERR);
+    return;
+  }
+
   // This is the node we'll be inserting before, and its parent
   nsCOMPtr<nsINode> referenceNode;
   nsCOMPtr<nsINode> referenceParentNode = tStartContainer;
@@ -2809,8 +2826,6 @@ nsRange::ToString(nsAString& aReturn)
 NS_IMETHODIMP
 nsRange::Detach()
 {
-  // No-op, but still set mIsDetached for telemetry (bug 702948)
-  mIsDetached = true;
   return NS_OK;
 }
 
@@ -2883,17 +2898,29 @@ GetTextFrameForContent(nsIContent* aContent, bool aFlushLayout)
 }
 
 static nsresult GetPartialTextRect(nsLayoutUtils::RectCallback* aCallback,
+                                   mozilla::dom::DOMStringList* aTextList,
                                    nsIContent* aContent, int32_t aStartOffset,
                                    int32_t aEndOffset, bool aClampToEdge,
                                    bool aFlushLayout)
 {
   nsTextFrame* textFrame = GetTextFrameForContent(aContent, aFlushLayout);
   if (textFrame) {
+    // If we'll need it later, collect the full content text now.
+    nsAutoString textContent;
+    if (aTextList) {
+      mozilla::ErrorResult err; // ignored
+      aContent->GetTextContent(textContent, err);
+    }
+
     nsIFrame* relativeTo = nsLayoutUtils::GetContainingBlockForClientRect(textFrame);
     for (nsTextFrame* f = textFrame; f; f = static_cast<nsTextFrame*>(f->GetNextContinuation())) {
       int32_t fstart = f->GetContentOffset(), fend = f->GetContentEnd();
       if (fend <= aStartOffset || fstart >= aEndOffset)
         continue;
+
+      // Calculate the text content offsets we'll need if text is requested.
+      int32_t textContentStart = fstart;
+      int32_t textContentEnd = fend;
 
       // overlapping with the offset we want
       f->EnsureTextRun(nsTextFrame::eInflated);
@@ -2903,24 +2930,36 @@ static nsresult GetPartialTextRect(nsLayoutUtils::RectCallback* aCallback,
       if (fstart < aStartOffset) {
         // aStartOffset is within this frame
         ExtractRectFromOffset(f, aStartOffset, &r, rtl, aClampToEdge);
+        textContentStart = aStartOffset;
       }
       if (fend > aEndOffset) {
         // aEndOffset is in the middle of this frame
         ExtractRectFromOffset(f, aEndOffset, &r, !rtl, aClampToEdge);
+        textContentEnd = aEndOffset;
       }
       r = nsLayoutUtils::TransformFrameRectToAncestor(f, r, relativeTo);
       aCallback->AddRect(r);
+
+      // Finally capture the text, if requested.
+      if (aTextList) {
+        const nsAString& textSubstring =
+          Substring(textContent,
+                    textContentStart,
+                    (textContentEnd - textContentStart));
+        aTextList->Add(textSubstring);
+      }
     }
   }
   return NS_OK;
 }
 
 /* static */ void
-nsRange::CollectClientRects(nsLayoutUtils::RectCallback* aCollector,
-                            nsRange* aRange,
-                            nsINode* aStartParent, int32_t aStartOffset,
-                            nsINode* aEndParent, int32_t aEndOffset,
-                            bool aClampToEdge, bool aFlushLayout)
+nsRange::CollectClientRectsAndText(nsLayoutUtils::RectCallback* aCollector,
+                                   mozilla::dom::DOMStringList* aTextList,
+                                   nsRange* aRange,
+                                   nsINode* aStartParent, int32_t aStartOffset,
+                                   nsINode* aEndParent, int32_t aEndOffset,
+                                   bool aClampToEdge, bool aFlushLayout)
 {
   // Hold strong pointers across the flush
   nsCOMPtr<nsINode> startContainer = aStartParent;
@@ -2978,11 +3017,11 @@ nsRange::CollectClientRects(nsLayoutUtils::RectCallback* aCollector,
        if (node == startContainer) {
          int32_t offset = startContainer == endContainer ?
            aEndOffset : content->GetText()->GetLength();
-         GetPartialTextRect(aCollector, content, aStartOffset, offset,
+         GetPartialTextRect(aCollector, aTextList, content, aStartOffset, offset,
                             aClampToEdge, aFlushLayout);
          continue;
        } else if (node == endContainer) {
-         GetPartialTextRect(aCollector, content, 0, aEndOffset,
+         GetPartialTextRect(aCollector, aTextList, content, 0, aEndOffset,
                             aClampToEdge, aFlushLayout);
          continue;
        }
@@ -2990,8 +3029,9 @@ nsRange::CollectClientRects(nsLayoutUtils::RectCallback* aCollector,
 
     nsIFrame* frame = content->GetPrimaryFrame();
     if (frame) {
-      nsLayoutUtils::GetAllInFlowRects(frame,
+      nsLayoutUtils::GetAllInFlowRectsAndTexts(frame,
         nsLayoutUtils::GetContainingBlockForClientRect(frame), aCollector,
+        aTextList,
         nsLayoutUtils::RECTS_ACCOUNT_FOR_TRANSFORMS);
     }
   } while (!iter.IsDone());
@@ -3013,8 +3053,8 @@ nsRange::GetBoundingClientRect(bool aClampToEdge, bool aFlushLayout)
   }
 
   nsLayoutUtils::RectAccumulator accumulator;
-  CollectClientRects(&accumulator, this, mStartParent, mStartOffset, 
-    mEndParent, mEndOffset, aClampToEdge, aFlushLayout);
+  CollectClientRectsAndText(&accumulator, nullptr, this, mStartParent,
+    mStartOffset, mEndParent, mEndOffset, aClampToEdge, aFlushLayout);
 
   nsRect r = accumulator.mResultRect.IsEmpty() ? accumulator.mFirstRect : 
     accumulator.mResultRect;
@@ -3041,9 +3081,27 @@ nsRange::GetClientRects(bool aClampToEdge, bool aFlushLayout)
 
   nsLayoutUtils::RectListBuilder builder(rectList);
 
-  CollectClientRects(&builder, this, mStartParent, mStartOffset, 
-    mEndParent, mEndOffset, aClampToEdge, aFlushLayout);
+  CollectClientRectsAndText(&builder, nullptr, this, mStartParent,
+    mStartOffset, mEndParent, mEndOffset, aClampToEdge, aFlushLayout);
   return rectList.forget();
+}
+
+void
+nsRange::GetClientRectsAndTexts(
+  mozilla::dom::ClientRectsAndTexts& aResult,
+  ErrorResult& aErr)
+{
+  if (!mStartParent) {
+    return;
+  }
+
+  aResult.mRectList = new DOMRectList(static_cast<nsIDOMRange*>(this));
+  aResult.mTextList = new DOMStringList();
+
+  nsLayoutUtils::RectListBuilder builder(aResult.mRectList);
+
+  CollectClientRectsAndText(&builder, aResult.mTextList, this,
+    mStartParent, mStartOffset, mEndParent, mEndOffset, true, true);
 }
 
 NS_IMETHODIMP
@@ -3306,7 +3364,8 @@ IsVisibleAndNotInReplacedElement(nsIFrame* aFrame)
   }
   for (nsIFrame* f = aFrame->GetParent(); f; f = f->GetParent()) {
     if (f->IsFrameOfType(nsIFrame::eReplaced) &&
-        !f->GetContent()->IsHTMLElement(nsGkAtoms::button)) {
+        !f->GetContent()->IsHTMLElement(nsGkAtoms::button) &&
+        !f->GetContent()->IsHTMLElement(nsGkAtoms::select)) {
       return false;
     }
   }
@@ -3357,7 +3416,7 @@ GetRequiredInnerTextLineBreakCount(nsIFrame* aFrame)
   }
   const nsStyleDisplay* styleDisplay = aFrame->StyleDisplay();
   if (styleDisplay->IsBlockOutside(aFrame) ||
-      styleDisplay->mDisplay == NS_STYLE_DISPLAY_TABLE_CAPTION) {
+      styleDisplay->mDisplay == StyleDisplay::TableCaption) {
     return 1;
   }
   return 0;
@@ -3474,17 +3533,19 @@ nsRange::GetInnerTextNoFlush(DOMString& aValue, ErrorResult& aError,
         result.Append('\n');
       }
       switch (f->StyleDisplay()->mDisplay) {
-      case NS_STYLE_DISPLAY_TABLE_CELL:
+      case StyleDisplay::TableCell:
         if (!IsLastCellOfRow(f)) {
           result.Append('\t');
         }
         break;
-      case NS_STYLE_DISPLAY_TABLE_ROW:
+      case StyleDisplay::TableRow:
         if (!IsLastRowOfRowGroup(f) ||
             !IsLastNonemptyRowGroupOfTable(f->GetParent())) {
           result.Append('\n');
         }
         break;
+      default:
+        break; // Do nothing
       }
       result.AddRequiredLineBreakCount(GetRequiredInnerTextLineBreakCount(f));
     }

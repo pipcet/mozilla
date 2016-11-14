@@ -36,8 +36,8 @@ public:
                                 const nsDisplayListSet& aLists) override;
 
   virtual void Reflow(nsPresContext*           aCX,
-                      nsHTMLReflowMetrics&     aDesiredSize,
-                      const nsHTMLReflowState& aReflowState,
+                      ReflowOutput&     aDesiredSize,
+                      const ReflowInput& aReflowInput,
                       nsReflowStatus&          aStatus) override;
 
   virtual nsIAtom* GetType() const override;
@@ -60,14 +60,14 @@ public:
                                     int32_t  aModType) override;
 
   virtual mozilla::LogicalSize
-  ComputeAutoSize(nsRenderingContext *aRenderingContext,
-                  mozilla::WritingMode aWritingMode,
+  ComputeAutoSize(nsRenderingContext*         aRenderingContext,
+                  mozilla::WritingMode        aWM,
                   const mozilla::LogicalSize& aCBSize,
-                  nscoord aAvailableISize,
+                  nscoord                     aAvailableISize,
                   const mozilla::LogicalSize& aMargin,
                   const mozilla::LogicalSize& aBorder,
                   const mozilla::LogicalSize& aPadding,
-                  bool aShrinkWrap) override;
+                  ComputeSizeFlags            aFlags) override;
 
   virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
   virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
@@ -89,7 +89,7 @@ protected:
   // Helper function which reflow the anonymous div frame.
   void ReflowBarFrame(nsIFrame*                aBarFrame,
                       nsPresContext*           aPresContext,
-                      const nsHTMLReflowState& aReflowState,
+                      const ReflowInput& aReflowInput,
                       nsReflowStatus&          aStatus);
 
   /**

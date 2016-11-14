@@ -49,7 +49,7 @@
 #include "nsIWritablePropertyBag2.h"
 #include "nsITimedChannel.h"
 #include "mozilla/Attributes.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "nsIScriptSecurityManager.h"
 
 #include "nsISimpleEnumerator.h"
@@ -164,7 +164,7 @@ void PrintTimingInformation(nsITimedChannel* channel) {
 
 class HeaderVisitor : public nsIHttpHeaderVisitor
 {
-  virtual ~HeaderVisitor() {}
+  virtual ~HeaderVisitor() = default;
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIHTTPHEADERVISITOR
@@ -210,9 +210,7 @@ URLLoadInfo::URLLoadInfo(const char *aUrl) : mURLString(aUrl)
   mConnectTime = mTotalTime = PR_Now();
 }
 
-URLLoadInfo::~URLLoadInfo()
-{
-}
+URLLoadInfo::~URLLoadInfo() = default;
 
 
 NS_IMPL_ISUPPORTS0(URLLoadInfo)
@@ -236,9 +234,7 @@ TestChannelEventSink::TestChannelEventSink()
 {
 }
 
-TestChannelEventSink::~TestChannelEventSink()
-{
-}
+TestChannelEventSink::~TestChannelEventSink() = default;
 
 
 NS_IMPL_ISUPPORTS(TestChannelEventSink, nsIChannelEventSink)
@@ -276,9 +272,7 @@ TestAuthPrompt::TestAuthPrompt()
 {
 }
 
-TestAuthPrompt::~TestAuthPrompt()
-{
-}
+TestAuthPrompt::~TestAuthPrompt() = default;
 
 NS_IMETHODIMP
 TestAuthPrompt::Prompt(const char16_t *dialogTitle,
@@ -432,9 +426,7 @@ InputTestConsumer::OnStartRequest(nsIRequest *request, nsISupports* context)
                                     NS_GET_IID(nsIURI),
                                     getter_AddRefs(foo));
       if (foo) {
-          nsAutoCString spec;
-          foo->GetSpec(spec);
-          LOG(("\ttest.foo: %s\n", spec.get()));
+          LOG(("\ttest.foo: %s\n", foo->GetSpecOrDefault().get()));
       }
   }
 
@@ -448,7 +440,7 @@ InputTestConsumer::OnStartRequest(nsIRequest *request, nsISupports* context)
   }
   nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(request));
   if (httpChannel) {
-    HeaderVisitor *visitor = new HeaderVisitor();
+    auto *visitor = new HeaderVisitor();
     if (!visitor)
       return NS_ERROR_OUT_OF_MEMORY;
     NS_ADDREF(visitor);
@@ -569,7 +561,7 @@ InputTestConsumer::OnStopRequest(nsIRequest *request, nsISupports* context,
 
 class NotificationCallbacks final : public nsIInterfaceRequestor {
 
-    ~NotificationCallbacks() {}
+    ~NotificationCallbacks() = default;
 
 public:
     NS_DECL_ISUPPORTS
@@ -626,7 +618,7 @@ nsresult StartLoadingURL(const char* aUrlString)
         }
         nsCOMPtr<nsIChannel> pChannel;
 
-        NotificationCallbacks* callbacks = new NotificationCallbacks();
+        auto* callbacks = new NotificationCallbacks();
         if (!callbacks) {
             LOG(("Failed to create a new consumer!"));
             return NS_ERROR_OUT_OF_MEMORY;;
@@ -684,13 +676,13 @@ nsresult StartLoadingURL(const char* aUrlString)
                                             false);
             if (NS_FAILED(rv)) return rv;
         }            
-        URLLoadInfo* info = new URLLoadInfo(aUrlString);
+        auto* info = new URLLoadInfo(aUrlString);
         if (!info) {
             NS_ERROR("Failed to create a load info!");
             return NS_ERROR_OUT_OF_MEMORY;
         }
 
-        InputTestConsumer* listener = new InputTestConsumer(info);
+        auto* listener = new InputTestConsumer(info);
         NS_IF_ADDREF(listener);
         if (!listener) {
             NS_ERROR("Failed to create a new stream listener!");
@@ -807,7 +799,7 @@ nsresult LoadURLsFromFile(char *aFileName)
 nsresult LoadURLFromConsole()
 {
     char buffer[1024];
-    printf("Enter URL (\"q\" to start): ");
+    printf(R"(Enter URL ("q" to start): )");
     Unused << scanf("%s", buffer);
     if (buffer[0]=='q') 
         gAskUserForInput = false;

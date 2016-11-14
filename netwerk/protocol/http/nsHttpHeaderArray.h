@@ -96,9 +96,9 @@ public:
 
     // parse a header line, return the header atom and a pointer to the
     // header value (the substring of the header line -- do not free).
-    static nsresult ParseHeaderLine(const char *line,
+    static nsresult ParseHeaderLine(const nsACString& line,
                                     nsHttpAtom *header=nullptr,
-                                    char **value=nullptr);
+                                    nsACString* value=nullptr);
 
     void Flatten(nsACString &, bool pruneProxyHeaders, bool pruneTransients);
     void FlattenOriginalHeader(nsACString &);
@@ -110,9 +110,18 @@ public:
     void Clear();
 
     // Must be copy-constructable and assignable
+#if defined(XP_WIN) && (defined(_M_IX86) || defined(_M_X64))
+#pragma pack(1)
+#endif
     struct nsEntry
     {
         nsHttpAtom header;
+#if defined(XP_WIN) && (defined(_M_IX86) || defined(_M_X64))
+        char padding[4096 -
+                     sizeof(nsTArrayHeader) -
+                     sizeof(nsHttpAtom) -
+                     sizeof(void*)];
+#endif
         nsCString value;
         HeaderVariety variety = eVarietyUnknown;
 
@@ -127,6 +136,9 @@ public:
             return header == aOther.header && value == aOther.value;
         }
     };
+#if defined(XP_WIN) && (defined(_M_IX86) || defined(_M_X64))
+#pragma pack()
+#endif
 
     bool operator==(const nsHttpHeaderArray& aOther) const
     {
@@ -158,6 +170,7 @@ private:
     nsTArray<nsEntry> mHeaders;
 
     friend struct IPC::ParamTraits<nsHttpHeaderArray>;
+    friend class nsHttpRequestHead;
 };
 
 
@@ -203,18 +216,18 @@ nsHttpHeaderArray::LookupEntry(nsHttpAtom header, nsEntry **entry)
 inline bool
 nsHttpHeaderArray::IsSingletonHeader(nsHttpAtom header)
 {
-    return header == nsHttp::Content_Type        ||
-           header == nsHttp::Content_Disposition ||
-           header == nsHttp::Content_Length      ||
-           header == nsHttp::User_Agent          ||
-           header == nsHttp::Referer             ||
-           header == nsHttp::Host                ||
-           header == nsHttp::Authorization       ||
-           header == nsHttp::Proxy_Authorization ||
-           header == nsHttp::If_Modified_Since   ||
-           header == nsHttp::If_Unmodified_Since ||
-           header == nsHttp::From                ||
-           header == nsHttp::Location            ||
+    return header == nsHttp::Content_Type                ||
+           header == nsHttp::Content_Disposition         ||
+           header == nsHttp::Content_Length              ||
+           header == nsHttp::User_Agent                  ||
+           header == nsHttp::Referer                     ||
+           header == nsHttp::Host                        ||
+           header == nsHttp::Authorization               ||
+           header == nsHttp::Proxy_Authorization         ||
+           header == nsHttp::If_Modified_Since           ||
+           header == nsHttp::If_Unmodified_Since         ||
+           header == nsHttp::From                        ||
+           header == nsHttp::Location                    ||
            header == nsHttp::Max_Forwards;
 }
 
@@ -222,7 +235,8 @@ inline bool
 nsHttpHeaderArray::TrackEmptyHeader(nsHttpAtom header)
 {
     return header == nsHttp::Content_Length ||
-           header == nsHttp::Location;
+           header == nsHttp::Location ||
+           header == nsHttp::Access_Control_Allow_Origin;
 }
 
 inline nsresult

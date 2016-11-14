@@ -11,6 +11,7 @@
 #include "gfxFontEntry.h"
 #include "nsString.h"
 #include "gfxPoint.h"
+#include "gfxPattern.h"
 #include "nsTArray.h"
 #include "nsTHashtable.h"
 #include "nsHashKeys.h"
@@ -45,7 +46,7 @@ class gfxGlyphExtents;
 class gfxShapedText;
 class gfxShapedWord;
 class gfxSkipChars;
-class gfxTextContextPaint;
+class gfxMathTable;
 
 #define FONT_MAX_SIZE                  2000.0
 
@@ -57,7 +58,7 @@ class gfxTextContextPaint;
 // we use a platform-dependent value to harmonize with the platform's own APIs.
 #ifdef XP_WIN
 #define OBLIQUE_SKEW_FACTOR  0.3
-#elif defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)
+#elif defined(MOZ_WIDGET_GTK)
 #define OBLIQUE_SKEW_FACTOR  0.2
 #else
 #define OBLIQUE_SKEW_FACTOR  0.25
@@ -66,6 +67,7 @@ class gfxTextContextPaint;
 struct gfxTextRunDrawCallbacks;
 
 namespace mozilla {
+class SVGContextPaint;
 namespace gfx {
 class GlyphRenderingOptions;
 } // namespace gfx
@@ -302,7 +304,7 @@ public:
     already_AddRefed<gfxFont>
     Lookup(const gfxFontEntry* aFontEntry,
            const gfxFontStyle* aStyle,
-           const gfxCharacterMap* aUnicodeRangeMap = nullptr);
+           const gfxCharacterMap* aUnicodeRangeMap);
 
     // We created a new font (presumably because Lookup returned null);
     // put it in the cache. The font's refcount should be nonzero. It is
@@ -567,8 +569,6 @@ public:
 
         // Set if the textrun should use the OpenType 'math' script.
         TEXT_USE_MATH_SCRIPT = 0x80000000,
-
-        TEXT_UNUSED_FLAGS = 0x10000000
     };
 
     /**
@@ -900,6 +900,7 @@ public:
 
     // Accessor for the array of CompressedGlyph records, which will be in
     // a different place in gfxShapedWord vs gfxTextRun
+    virtual const CompressedGlyph *GetCharacterGlyphs() const = 0;
     virtual CompressedGlyph *GetCharacterGlyphs() = 0;
 
     /**
@@ -939,7 +940,7 @@ public:
     // NOTE that this must not be called for a character offset that does
     // not have any DetailedGlyph records; callers must have verified that
     // GetCharacterGlyphs()[aCharIndex].GetGlyphCount() is greater than zero.
-    DetailedGlyph *GetDetailedGlyphs(uint32_t aCharIndex) {
+    DetailedGlyph *GetDetailedGlyphs(uint32_t aCharIndex) const {
         NS_ASSERTION(GetCharacterGlyphs() && HasDetailedGlyphs() &&
                      !GetCharacterGlyphs()[aCharIndex].IsSimpleGlyph() &&
                      GetCharacterGlyphs()[aCharIndex].GetGlyphCount() > 0,
@@ -1239,6 +1240,9 @@ public:
         free(p);
     }
 
+    virtual const CompressedGlyph *GetCharacterGlyphs() const override {
+        return &mCharGlyphsStorage[0];
+    }
     virtual CompressedGlyph *GetCharacterGlyphs() override {
         return &mCharGlyphsStorage[0];
     }
@@ -1332,6 +1336,7 @@ class gfxFont {
 protected:
     typedef mozilla::gfx::DrawTarget DrawTarget;
     typedef mozilla::unicode::Script Script;
+    typedef mozilla::SVGContextPaint SVGContextPaint;
 
 public:
     nsrefcnt AddRef(void) {
@@ -1429,7 +1434,7 @@ public:
         return nullptr;
     }
 
-    virtual gfxFloat GetAdjustedSize() const {
+    gfxFloat GetAdjustedSize() const {
         return mAdjustedSize > 0.0
                  ? mAdjustedSize
                  : (mStyle.sizeAdjust == 0.0 ? 0.0 : mStyle.size);
@@ -1508,6 +1513,7 @@ public:
 
     // Font metrics
     struct Metrics {
+        gfxFloat capHeight;
         gfxFloat xHeight;
         gfxFloat strikeoutSize;
         gfxFloat strikeoutOffset;
@@ -1616,7 +1622,7 @@ public:
      * -- aStart and aEnd are aligned to cluster and ligature boundaries
      * -- all glyphs use this font
      */
-    void Draw(gfxTextRun *aTextRun, uint32_t aStart, uint32_t aEnd,
+    void Draw(const gfxTextRun *aTextRun, uint32_t aStart, uint32_t aEnd,
               gfxPoint *aPt, const TextRunDrawParams& aRunParams,
               uint16_t aOrientation);
 
@@ -1626,7 +1632,7 @@ public:
      * @param aPt the baseline origin of the emphasis marks.
      * @param aParams some drawing parameters, see EmphasisMarkDrawParams.
      */
-    void DrawEmphasisMarks(gfxTextRun* aShapedText, gfxPoint* aPt,
+    void DrawEmphasisMarks(const gfxTextRun* aShapedText, gfxPoint* aPt,
                            uint32_t aOffset, uint32_t aCount,
                            const EmphasisMarkDrawParams& aParams);
 
@@ -1651,7 +1657,7 @@ public:
      * advances, and assumes no characters fall outside the font box. In
      * general this is insufficient, because that assumption is not always true.
      */
-    virtual RunMetrics Measure(gfxTextRun *aTextRun,
+    virtual RunMetrics Measure(const gfxTextRun *aTextRun,
                                uint32_t aStart, uint32_t aEnd,
                                BoundingBoxType aBoundingBoxType,
                                DrawTarget* aDrawTargetForTightBoundingBox,
@@ -1789,7 +1795,8 @@ public:
         FONT_TYPE_FT2,
         FONT_TYPE_MAC,
         FONT_TYPE_OS2,
-        FONT_TYPE_CAIRO
+        FONT_TYPE_CAIRO,
+        FONT_TYPE_FONTCONFIG
     } FontType;
 
     virtual FontType GetType() const = 0;
@@ -1838,22 +1845,13 @@ public:
         delete sDefaultFeatures;
     }
 
-    // Get a font dimension from the MATH table, scaled to appUnits;
-    // may only be called if mFontEntry->TryGetMathTable has succeeded
-    // (i.e. the font is known to be a valid OpenType math font).
-    nscoord GetMathConstant(gfxFontEntry::MathConstant aConstant,
-                            uint32_t aAppUnitsPerDevPixel)
-    {
-        return NSToCoordRound(mFontEntry->GetMathConstant(aConstant) *
-                              GetAdjustedSize() * aAppUnitsPerDevPixel);
-    }
-
-    // Get a dimensionless math constant (e.g. a percentage);
-    // may only be called if mFontEntry->TryGetMathTable has succeeded
-    // (i.e. the font is known to be a valid OpenType math font).
-    float GetMathConstant(gfxFontEntry::MathConstant aConstant)
-    {
-        return mFontEntry->GetMathConstant(aConstant);
+    // Call TryGetMathTable() to try and load the Open Type MATH table.
+    // If (and ONLY if) TryGetMathTable() has returned true, the MathTable()
+    // method may be called to access the gfxMathTable data.
+    bool          TryGetMathTable();
+    gfxMathTable* MathTable() {
+        MOZ_RELEASE_ASSERT(mMathTable, "A successful call to TryGetMathTable() must be performed before calling this function");
+        return mMathTable.get();
     }
 
     // return a cloned font resized and offset to simulate sub/superscript glyphs
@@ -1883,7 +1881,7 @@ protected:
     // Output a run of glyphs at *aPt, which is updated to follow the last glyph
     // in the run. This method also takes account of any letter-spacing provided
     // in aRunParams.
-    bool DrawGlyphs(gfxShapedText            *aShapedText,
+    bool DrawGlyphs(const gfxShapedText      *aShapedText,
                     uint32_t                  aOffset, // offset in the textrun
                     uint32_t                  aCount, // length of run to draw
                     gfxPoint                 *aPt,
@@ -1917,7 +1915,7 @@ protected:
     }
 
     bool IsSpaceGlyphInvisible(DrawTarget* aRefDrawTarget,
-                               gfxTextRun* aTextRun);
+                               const gfxTextRun* aTextRun);
 
     void AddGlyphChangeObserver(GlyphChangeObserver *aObserver);
     void RemoveGlyphChangeObserver(GlyphChangeObserver *aObserver);
@@ -2090,6 +2088,8 @@ protected:
     bool                       mKerningSet;     // kerning explicitly set?
     bool                       mKerningEnabled; // if set, on or off?
 
+    bool                       mMathInitialized; // TryGetMathTable() called?
+
     nsExpirationState          mExpirationState;
     gfxFontStyle               mStyle;
     nsTArray<mozilla::UniquePtr<gfxGlyphExtents>> mGlyphExtentsArray;
@@ -2125,6 +2125,9 @@ protected:
     // For vertical metrics, created on demand.
     mozilla::UniquePtr<const Metrics> mVerticalMetrics;
 
+    // Table used for MathML layout.
+    mozilla::UniquePtr<gfxMathTable> mMathTable;
+
     // Helper for subclasses that want to initialize standard metrics from the
     // tables of sfnt (TrueType/OpenType) fonts.
     // This will use mFUnitsConvFactor if it is already set, else compute it
@@ -2144,13 +2147,14 @@ protected:
     void SanitizeMetrics(Metrics *aMetrics, bool aIsBadUnderlineFont);
 
     bool RenderSVGGlyph(gfxContext *aContext, gfxPoint aPoint,
-                        uint32_t aGlyphId, gfxTextContextPaint *aContextPaint) const;
+                        uint32_t aGlyphId, SVGContextPaint* aContextPaint) const;
     bool RenderSVGGlyph(gfxContext *aContext, gfxPoint aPoint,
-                        uint32_t aGlyphId, gfxTextContextPaint *aContextPaint,
+                        uint32_t aGlyphId, SVGContextPaint* aContextPaint,
                         gfxTextRunDrawCallbacks *aCallbacks,
                         bool& aEmittedGlyphs) const;
 
     bool RenderColorGlyph(DrawTarget* aDrawTarget,
+                          gfxContext* aContext,
                           mozilla::gfx::ScaledFont* scaledFont,
                           mozilla::gfx::GlyphRenderingOptions* renderingOptions,
                           mozilla::gfx::DrawOptions drawOptions,
@@ -2179,12 +2183,14 @@ struct TextRunDrawParams {
     gfxContext              *context;
     gfxFont::Spacing        *spacing;
     gfxTextRunDrawCallbacks *callbacks;
-    gfxTextContextPaint     *runContextPaint;
+    mozilla::SVGContextPaint *runContextPaint;
     mozilla::gfx::Color      fontSmoothingBGColor;
     gfxFloat                 direction;
     double                   devPerApp;
-    float                    textStrokeWidth;
     nscolor                  textStrokeColor;
+    gfxPattern              *textStrokePattern;
+    const mozilla::gfx::StrokeOptions *strokeOpts;
+    const mozilla::gfx::DrawOptions   *drawOpts;
     DrawMode                 drawMode;
     bool                     isVerticalRun;
     bool                     isRTL;
@@ -2194,7 +2200,7 @@ struct TextRunDrawParams {
 struct FontDrawParams {
     RefPtr<mozilla::gfx::ScaledFont>            scaledFont;
     RefPtr<mozilla::gfx::GlyphRenderingOptions> renderingOptions;
-    gfxTextContextPaint      *contextPaint;
+    mozilla::SVGContextPaint *contextPaint;
     mozilla::gfx::Matrix     *passedInvMatrix;
     mozilla::gfx::Matrix      matInv;
     double                    synBoldOnePixelOffset;

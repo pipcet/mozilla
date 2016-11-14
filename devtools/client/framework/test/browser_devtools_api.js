@@ -3,7 +3,6 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-// /////////////////
 //
 // Whitelisting this test.
 // As part of bug 1077403, the leaking uncaught rejections should be fixed.
@@ -18,9 +17,7 @@ thisTestLeaksUncaughtRejectionsAndShouldBeFixed("TypeError: this.doc is undefine
 const toolId1 = "test-tool-1";
 const toolId2 = "test-tool-2";
 
-var tempScope = {};
-Cu.import("resource://devtools/shared/event-emitter.js", tempScope);
-var EventEmitter = tempScope.EventEmitter;
+var EventEmitter = require("devtools/shared/event-emitter");
 
 function test() {
   addTab("about:blank").then(runTests1);
@@ -73,7 +70,7 @@ function runTests1(aTab) {
 
   gDevTools.showToolbox(target, toolId1).then(function (toolbox) {
     is(toolbox.target, target, "toolbox target is correct");
-    is(toolbox._host.hostTab, gBrowser.selectedTab, "toolbox host is correct");
+    is(toolbox.target.tab, gBrowser.selectedTab, "targeted tab is correct");
 
     ok(events["init"], "init event fired");
     ok(events["ready"], "ready event fired");
@@ -141,7 +138,7 @@ function runTests2() {
 
   gDevTools.showToolbox(target, toolId2).then(function (toolbox) {
     is(toolbox.target, target, "toolbox target is correct");
-    is(toolbox._host.hostTab, gBrowser.selectedTab, "toolbox host is correct");
+    is(toolbox.target.tab, gBrowser.selectedTab, "targeted tab is correct");
 
     ok(events["init"], "init event fired");
     ok(events["build"], "build event fired");
@@ -203,13 +200,12 @@ function destroyToolbox(toolbox) {
   toolbox.destroy().then(function () {
     let target = TargetFactory.forTab(gBrowser.selectedTab);
     ok(gDevTools._toolboxes.get(target) == null, "gDevTools doesn't know about target");
-    ok(toolbox._target == null, "toolbox doesn't know about target.");
+    ok(toolbox.target == null, "toolbox doesn't know about target.");
     finishUp();
   });
 }
 
 function finishUp() {
-  tempScope = null;
   gBrowser.removeCurrentTab();
   finish();
 }
@@ -237,7 +233,7 @@ function DevToolPanel(iframeWindow, toolbox) {
 
 DevToolPanel.prototype = {
   open: function () {
-    let deferred = promise.defer();
+    let deferred = defer();
 
     executeSoon(() => {
       this._isReady = true;
@@ -263,6 +259,6 @@ DevToolPanel.prototype = {
   _isReady: false,
 
   destroy: function DTI_destroy() {
-    return promise.defer(null);
+    return defer(null);
   },
 };

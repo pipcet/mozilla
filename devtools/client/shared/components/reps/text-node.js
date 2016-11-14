@@ -11,9 +11,7 @@ define(function (require, exports, module) {
   const React = require("devtools/client/shared/vendor/react");
 
   // Reps
-  const { createFactories, isGrip } = require("./rep-utils");
-  const { ObjectLink } = createFactories(require("./object-link"));
-  const { cropMultipleLines } = require("./string");
+  const { isGrip, cropString } = require("./rep-utils");
 
   // Shortcuts
   const DOM = React.DOM;
@@ -30,11 +28,16 @@ define(function (require, exports, module) {
     },
 
     getTextContent: function (grip) {
-      return cropMultipleLines(grip.preview.textContent);
+      return cropString(grip.preview.textContent);
     },
 
-    getTitle: function (win, context) {
-      return "textNode";
+    getTitle: function (grip) {
+      if (this.props.objectLink) {
+        return this.props.objectLink({
+          object: grip
+        }, "#text ");
+      }
+      return "";
     },
 
     render: function () {
@@ -43,22 +46,31 @@ define(function (require, exports, module) {
 
       if (mode == "short" || mode == "tiny") {
         return (
-          ObjectLink({className: "textNode"},
-            "\"" + this.getTextContent(grip) + "\""
+          DOM.span({className: "objectBox objectBox-textNode"},
+            this.getTitle(grip),
+            DOM.span({className: "nodeValue"},
+              "\"" + this.getTextContent(grip) + "\""
+            )
           )
         );
       }
 
+      let objectLink = this.props.objectLink || DOM.span;
       return (
-        ObjectLink({className: "textNode"},
-          "<",
+        DOM.span({className: "objectBox objectBox-textNode"},
+          this.getTitle(grip),
+          objectLink({
+            object: grip
+          }, "<"),
           DOM.span({className: "nodeTag"}, "TextNode"),
           " textContent=\"",
           DOM.span({className: "nodeValue"},
             this.getTextContent(grip)
           ),
           "\"",
-          ">;"
+          objectLink({
+            object: grip
+          }, ">;")
         )
       );
     },

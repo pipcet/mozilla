@@ -14,7 +14,8 @@ const Cu = Components.utils;
 const {require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
 const Editor = require("devtools/client/sourceeditor/editor");
 const promise = require("promise");
-const {CssLogic} = require("devtools/shared/inspector/css-logic");
+const defer = require("devtools/shared/defer");
+const {shortSource, prettifyCSS} = require("devtools/shared/inspector/css-logic");
 const {console} = require("resource://gre/modules/Console.jsm");
 const Services = require("Services");
 const EventEmitter = require("devtools/shared/event-emitter");
@@ -195,7 +196,7 @@ StyleSheetEditor.prototype = {
 
     if (!this._friendlyName) {
       let sheetURI = this.styleSheet.href;
-      this._friendlyName = CssLogic.shortSource({ href: sheetURI });
+      this._friendlyName = shortSource({ href: sheetURI });
       try {
         this._friendlyName = decodeURI(this._friendlyName);
       } catch (ex) {
@@ -261,9 +262,8 @@ StyleSheetEditor.prototype = {
 
   /**
    * A helper function that fetches the source text from the style
-   * sheet.  The text is possibly prettified using
-   * CssLogic.prettifyCSS.  This also sets |this._state.text| to the
-   * new text.
+   * sheet.  The text is possibly prettified using prettifyCSS.  This
+   * also sets |this._state.text| to the new text.
    *
    * @return {Promise} a promise that resolves to the new text
    */
@@ -273,7 +273,7 @@ StyleSheetEditor.prototype = {
     }).then((source) => {
       let ruleCount = this.styleSheet.ruleCount;
       if (!this.styleSheet.isOriginalSource) {
-        source = CssLogic.prettifyCSS(source, ruleCount);
+        source = prettifyCSS(source, ruleCount);
       }
       this._state.text = source;
       return source;
@@ -417,11 +417,13 @@ StyleSheetEditor.prototype = {
    * Create source editor and load state into it.
    * @param  {DOMElement} inputElement
    *         Element to load source editor in
+   * @param  {CssProperties} cssProperties
+   *         A css properties database.
    *
    * @return {Promise}
    *         Promise that will resolve when the style editor is loaded.
    */
-  load: function (inputElement) {
+  load: function (inputElement, cssProperties) {
     if (this._isDestroyed) {
       return promise.reject("Won't load source editor as the style sheet has " +
                             "already been removed from Style Editor.");
@@ -438,7 +440,8 @@ StyleSheetEditor.prototype = {
       extraKeys: this._getKeyBindings(),
       contextMenu: "sourceEditorContextMenu",
       autocomplete: Services.prefs.getBoolPref(AUTOCOMPLETION_PREF),
-      autocompleteOpts: { walker: this.walker }
+      autocompleteOpts: { walker: this.walker, cssProperties },
+      cssProperties
     };
     let sourceEditor = this._sourceEditor = new Editor(config);
 
@@ -476,7 +479,7 @@ StyleSheetEditor.prototype = {
    *         Promise that will resolve with the editor.
    */
   getSourceEditor: function () {
-    let deferred = promise.defer();
+    let deferred = defer();
 
     if (this.sourceEditor) {
       return promise.resolve(this);

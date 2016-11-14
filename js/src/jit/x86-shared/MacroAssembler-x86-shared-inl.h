@@ -14,6 +14,33 @@ namespace jit {
 
 //{{{ check_macroassembler_style
 // ===============================================================
+// Move instructions
+
+void
+MacroAssembler::moveFloat32ToGPR(FloatRegister src, Register dest)
+{
+    vmovd(src, dest);
+}
+
+void
+MacroAssembler::moveGPRToFloat32(Register src, FloatRegister dest)
+{
+    vmovd(src, dest);
+}
+
+void
+MacroAssembler::move8SignExtend(Register src, Register dest)
+{
+    movsbl(src, dest);
+}
+
+void
+MacroAssembler::move16SignExtend(Register src, Register dest)
+{
+    movswl(src, dest);
+}
+
+// ===============================================================
 // Logical instructions
 
 void
@@ -200,9 +227,65 @@ MacroAssembler::subDouble(FloatRegister src, FloatRegister dest)
 }
 
 void
+MacroAssembler::subFloat32(FloatRegister src, FloatRegister dest)
+{
+    vsubss(src, dest, dest);
+}
+
+void
+MacroAssembler::mul32(Register rhs, Register srcDest)
+{
+    MOZ_ASSERT(srcDest == eax);
+    imull(rhs, srcDest);        // Clobbers edx
+}
+
+void
+MacroAssembler::mulFloat32(FloatRegister src, FloatRegister dest)
+{
+    vmulss(src, dest, dest);
+}
+
+void
 MacroAssembler::mulDouble(FloatRegister src, FloatRegister dest)
 {
     vmulsd(src, dest, dest);
+}
+
+void
+MacroAssembler::quotient32(Register rhs, Register srcDest, bool isUnsigned)
+{
+    MOZ_ASSERT(srcDest == eax);
+
+    // Sign extend eax into edx to make (edx:eax): idiv/udiv are 64-bit.
+    if (isUnsigned) {
+        mov(ImmWord(0), edx);
+        udiv(rhs);
+    } else {
+        cdq();
+        idiv(rhs);
+    }
+}
+
+void
+MacroAssembler::remainder32(Register rhs, Register srcDest, bool isUnsigned)
+{
+    MOZ_ASSERT(srcDest == eax);
+
+    // Sign extend eax into edx to make (edx:eax): idiv/udiv are 64-bit.
+    if (isUnsigned) {
+        mov(ImmWord(0), edx);
+        udiv(rhs);
+    } else {
+        cdq();
+        idiv(rhs);
+    }
+    mov(edx, eax);
+}
+
+void
+MacroAssembler::divFloat32(FloatRegister src, FloatRegister dest)
+{
+    vdivss(src, dest, dest);
 }
 
 void
@@ -240,12 +323,65 @@ MacroAssembler::negateDouble(FloatRegister reg)
     vxorpd(scratch, reg, reg); // s ^ 0x80000000000000
 }
 
+void
+MacroAssembler::absFloat32(FloatRegister src, FloatRegister dest)
+{
+    ScratchFloat32Scope scratch(*this);
+    loadConstantFloat32(mozilla::SpecificNaN<float>(0, mozilla::FloatingPoint<float>::kSignificandBits), scratch);
+    vandps(scratch, src, dest);
+}
+
+void
+MacroAssembler::absDouble(FloatRegister src, FloatRegister dest)
+{
+    ScratchDoubleScope scratch(*this);
+    loadConstantDouble(mozilla::SpecificNaN<double>(0, mozilla::FloatingPoint<double>::kSignificandBits), scratch);
+    vandpd(scratch, src, dest);
+}
+
+void
+MacroAssembler::sqrtFloat32(FloatRegister src, FloatRegister dest)
+{
+    vsqrtss(src, src, dest);
+}
+
+void
+MacroAssembler::sqrtDouble(FloatRegister src, FloatRegister dest)
+{
+    vsqrtsd(src, src, dest);
+}
+
+void
+MacroAssembler::minFloat32(FloatRegister other, FloatRegister srcDest, bool handleNaN)
+{
+    minMaxFloat32(srcDest, other, handleNaN, false);
+}
+
+void
+MacroAssembler::minDouble(FloatRegister other, FloatRegister srcDest, bool handleNaN)
+{
+    minMaxDouble(srcDest, other, handleNaN, false);
+}
+
+void
+MacroAssembler::maxFloat32(FloatRegister other, FloatRegister srcDest, bool handleNaN)
+{
+    minMaxFloat32(srcDest, other, handleNaN, true);
+}
+
+void
+MacroAssembler::maxDouble(FloatRegister other, FloatRegister srcDest, bool handleNaN)
+{
+    minMaxDouble(srcDest, other, handleNaN, true);
+}
+
 // ===============================================================
 // Rotation instructions
 void
 MacroAssembler::rotateLeft(Imm32 count, Register input, Register dest)
 {
     MOZ_ASSERT(input == dest, "defineReuseInput");
+    count.value &= 0x1f;
     if (count.value)
         roll(count, input);
 }
@@ -262,6 +398,7 @@ void
 MacroAssembler::rotateRight(Imm32 count, Register input, Register dest)
 {
     MOZ_ASSERT(input == dest, "defineReuseInput");
+    count.value &= 0x1f;
     if (count.value)
         rorl(count, input);
 }
@@ -298,11 +435,41 @@ MacroAssembler::rshift32Arithmetic(Register shift, Register srcDest)
     sarl_cl(srcDest);
 }
 
+void
+MacroAssembler::lshift32(Imm32 shift, Register srcDest)
+{
+    shll(shift, srcDest);
+}
+
+void
+MacroAssembler::rshift32(Imm32 shift, Register srcDest)
+{
+    shrl(shift, srcDest);
+}
+
+void
+MacroAssembler::rshift32Arithmetic(Imm32 shift, Register srcDest)
+{
+    sarl(shift, srcDest);
+}
+
+// ===============================================================
+// Condition functions
+
+template <typename T1, typename T2>
+void
+MacroAssembler::cmp32Set(Condition cond, T1 lhs, T2 rhs, Register dest)
+{
+    cmp32(lhs, rhs);
+    emitSet(cond, dest);
+}
+
 // ===============================================================
 // Branch instructions
 
+template <class L>
 void
-MacroAssembler::branch32(Condition cond, Register lhs, Register rhs, Label* label)
+MacroAssembler::branch32(Condition cond, Register lhs, Register rhs, L label)
 {
     cmp32(lhs, rhs);
     j(cond, label);
@@ -389,8 +556,9 @@ MacroAssembler::branchPtr(Condition cond, Register lhs, ImmWord rhs, Label* labe
     branchPtrImpl(cond, lhs, rhs, label);
 }
 
+template <class L>
 void
-MacroAssembler::branchPtr(Condition cond, const Address& lhs, Register rhs, Label* label)
+MacroAssembler::branchPtr(Condition cond, const Address& lhs, Register rhs, L label)
 {
     branchPtrImpl(cond, lhs, rhs, label);
 }
@@ -413,9 +581,9 @@ MacroAssembler::branchPtr(Condition cond, const Address& lhs, ImmWord rhs, Label
     branchPtrImpl(cond, lhs, rhs, label);
 }
 
-template <typename T, typename S>
+template <typename T, typename S, typename L>
 void
-MacroAssembler::branchPtrImpl(Condition cond, const T& lhs, const S& rhs, Label* label)
+MacroAssembler::branchPtrImpl(Condition cond, const T& lhs, const S& rhs, L label)
 {
     cmpPtr(Operand(lhs), rhs);
     j(cond, label);
@@ -484,9 +652,9 @@ MacroAssembler::branchDouble(DoubleCondition cond, FloatRegister lhs, FloatRegis
     j(ConditionFromDoubleCondition(cond), label);
 }
 
-template <typename T>
+template <typename T, typename L>
 void
-MacroAssembler::branchAdd32(Condition cond, T src, Register dest, Label* label)
+MacroAssembler::branchAdd32(Condition cond, T src, Register dest, L label)
 {
     addl(src, dest);
     j(cond, label);
@@ -533,8 +701,9 @@ MacroAssembler::branchTest32(Condition cond, const Address& lhs, Imm32 rhs, Labe
     j(cond, label);
 }
 
+template <class L>
 void
-MacroAssembler::branchTestPtr(Condition cond, Register lhs, Register rhs, Label* label)
+MacroAssembler::branchTestPtr(Condition cond, Register lhs, Register rhs, L label)
 {
     testPtr(lhs, rhs);
     j(cond, label);
@@ -1012,14 +1181,91 @@ MacroAssembler::storeFloat32x3(FloatRegister src, const BaseIndex& dest)
     storeFloat32(scratch, destZ);
 }
 
-//}}} check_macroassembler_style
-// ===============================================================
+void
+MacroAssembler::memoryBarrier(MemoryBarrierBits barrier)
+{
+    if (barrier & MembarStoreLoad)
+        storeLoadFence();
+}
+
+// ========================================================================
+// Truncate floating point.
 
 void
-MacroAssemblerX86Shared::clampIntToUint8(Register reg)
+MacroAssembler::truncateFloat32ToInt64(Address src, Address dest, Register temp)
+{
+    if (Assembler::HasSSE3()) {
+        fld32(Operand(src));
+        fisttp(Operand(dest));
+        return;
+    }
+
+    if (src.base == esp)
+        src.offset += 2 * sizeof(int32_t);
+    if (dest.base == esp)
+        dest.offset += 2 * sizeof(int32_t);
+
+    reserveStack(2 * sizeof(int32_t));
+
+    // Set conversion to truncation.
+    fnstcw(Operand(esp, 0));
+    load32(Operand(esp, 0), temp);
+    andl(Imm32(~0xFF00), temp);
+    orl(Imm32(0xCFF), temp);
+    store32(temp, Address(esp, sizeof(int32_t)));
+    fldcw(Operand(esp, sizeof(int32_t)));
+
+    // Load double on fp stack, convert and load regular stack.
+    fld32(Operand(src));
+    fistp(Operand(dest));
+
+    // Reset the conversion flag.
+    fldcw(Operand(esp, 0));
+
+    freeStack(2 * sizeof(int32_t));
+}
+void
+MacroAssembler::truncateDoubleToInt64(Address src, Address dest, Register temp)
+{
+    if (Assembler::HasSSE3()) {
+        fld(Operand(src));
+        fisttp(Operand(dest));
+        return;
+    }
+
+    if (src.base == esp)
+        src.offset += 2*sizeof(int32_t);
+    if (dest.base == esp)
+        dest.offset += 2*sizeof(int32_t);
+
+    reserveStack(2*sizeof(int32_t));
+
+    // Set conversion to truncation.
+    fnstcw(Operand(esp, 0));
+    load32(Operand(esp, 0), temp);
+    andl(Imm32(~0xFF00), temp);
+    orl(Imm32(0xCFF), temp);
+    store32(temp, Address(esp, 1*sizeof(int32_t)));
+    fldcw(Operand(esp, 1*sizeof(int32_t)));
+
+    // Load double on fp stack, convert and load regular stack.
+    fld(Operand(src));
+    fistp(Operand(dest));
+
+    // Reset the conversion flag.
+    fldcw(Operand(esp, 0));
+
+    freeStack(2*sizeof(int32_t));
+}
+
+// ===============================================================
+// Clamping functions.
+
+void
+MacroAssembler::clampIntToUint8(Register reg)
 {
     Label inRange;
-    asMasm().branchTest32(Assembler::Zero, reg, Imm32(0xffffff00), &inRange);
+    branchTest32(Assembler::Zero, reg, Imm32(0xffffff00), &inRange);
     {
         sarl(Imm32(31), reg);
         notl(reg);
@@ -1027,6 +1273,9 @@ MacroAssemblerX86Shared::clampIntToUint8(Register reg)
     }
     bind(&inRange);
 }
+
+//}}} check_macroassembler_style
+// ===============================================================
 
 } // namespace jit
 } // namespace js

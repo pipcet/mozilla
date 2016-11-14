@@ -45,6 +45,7 @@ public class BrowserContract {
     public static final String PARAM_PROFILE_PATH = "profilePath";
     public static final String PARAM_LIMIT = "limit";
     public static final String PARAM_SUGGESTEDSITES_LIMIT = "suggestedsites_limit";
+    public static final String PARAM_TOPSITES_DISABLE_PINNED = "topsites_disable_pinned";
     public static final String PARAM_IS_SYNC = "sync";
     public static final String PARAM_SHOW_DELETED = "show_deleted";
     public static final String PARAM_IS_TEST = "test";
@@ -180,6 +181,13 @@ public class BrowserContract {
         public static final String IS_LOCAL = "is_local";
     }
 
+    public interface PageMetadataColumns {
+        public static final String HISTORY_GUID = "history_guid";
+        public static final String DATE_CREATED = "created";
+        public static final String HAS_IMAGE = "has_image";
+        public static final String JSON = "json";
+    }
+
     public interface DeletedColumns {
         public static final String ID = "id";
         public static final String GUID = "guid";
@@ -233,6 +241,12 @@ public class BrowserContract {
         public static final int FIXED_PINNED_LIST_ID = -3;
         public static final int FIXED_SCREENSHOT_FOLDER_ID = -4;
         public static final int FAKE_READINGLIST_SMARTFOLDER_ID = -5;
+
+        /**
+         * This ID and the following negative IDs are reserved for bookmarks from Android's partner
+         * bookmark provider.
+         */
+        public static final long FAKE_PARTNER_BOOKMARKS_START = -1000;
 
         public static final String MOBILE_FOLDER_GUID = "mobile";
         public static final String PLACES_FOLDER_GUID = "places";
@@ -583,6 +597,12 @@ public class BrowserContract {
         public static final Uri CONTENT_URI = Uri.withAppendedPath(AUTHORITY_URI, "topsites");
     }
 
+    public static final class Highlights {
+        public static final Uri CONTENT_URI = Uri.withAppendedPath(AUTHORITY_URI, "highlights");
+
+        public static final String DATE = "date";
+    }
+
     @RobocopTarget
     public static final class SearchHistory implements CommonColumns, HistoryColumns {
         private SearchHistory() {}
@@ -600,6 +620,16 @@ public class BrowserContract {
         private SuggestedSites() {}
 
         public static final Uri CONTENT_URI = Uri.withAppendedPath(AUTHORITY_URI, "suggestedsites");
+    }
+
+    public static final class ActivityStreamBlocklist implements CommonColumns {
+        private ActivityStreamBlocklist() {}
+
+        public static final String TABLE_NAME = "activity_stream_blocklist";
+        public static final Uri CONTENT_URI = Uri.withAppendedPath(AUTHORITY_URI, TABLE_NAME);
+
+        public static final String URL = "url";
+        public static final String CREATED = "created";
     }
 
     @RobocopTarget
@@ -736,6 +766,14 @@ public class BrowserContract {
         public static final String TABLE_DISABLED_HOSTS = "logins_disabled_hosts";
 
         public static final String HOSTNAME = "hostname";
+    }
+
+    @RobocopTarget
+    public static final class PageMetadata implements CommonColumns, PageMetadataColumns {
+        private PageMetadata() {}
+
+        public static final String TABLE_NAME = "page_metadata";
+        public static final Uri CONTENT_URI = Uri.withAppendedPath(AUTHORITY_URI, "page_metadata");
     }
 
     // We refer to the service by name to decouple services from the rest of the code base.

@@ -16,12 +16,13 @@
 #endif
 #include "mozilla/Tuple.h"
 
-#if defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_ANDROID)
+#if defined(MOZ_WIDGET_ANDROID)
 #include "nsDebug.h"
 #endif
 #include "Point.h"
 #include "BaseRect.h"
 #include "Matrix.h"
+#include "LoggingConstants.h"
 
 #if defined(MOZ_LOGGING)
 extern GFX2D_API mozilla::LogModule* GetGFX2DLog();
@@ -29,21 +30,6 @@ extern GFX2D_API mozilla::LogModule* GetGFX2DLog();
 
 namespace mozilla {
 namespace gfx {
-
-// Attempting to be consistent with prlog values, but that isn't critical
-// (and note that 5 has a special meaning - see the description
-// with sGfxLogLevel)
-const int LOG_CRITICAL = 1;
-const int LOG_WARNING = 2;
-const int LOG_DEBUG = 3;
-const int LOG_DEBUG_PRLOG = 4;
-const int LOG_EVERYTHING = 5; // This needs to be the highest value
-
-#if defined(DEBUG)
-const int LOG_DEFAULT = LOG_EVERYTHING;
-#else
-const int LOG_DEFAULT = LOG_CRITICAL;
-#endif
 
 #if defined(MOZ_LOGGING)
 inline mozilla::LogLevel PRLogLevelForLevel(int aLevel) {
@@ -140,6 +126,9 @@ enum class LogReason : int {
   AsyncTransactionTimeout, // 30
   TextureCreation,
   InvalidCacheSurface,
+  AlphaWithBasicClient,
+  UnbalancedClipStack,
+  ProcessingError,
   // End
   MustBeLessThanThis = 101,
 };
@@ -151,7 +140,7 @@ struct BasicLogger
   // in the appropriate places in that method.
   static bool ShouldOutputMessage(int aLevel) {
     if (LoggingPrefs::sGfxLogLevel >= aLevel) {
-#if defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_ANDROID)
+#if defined(MOZ_WIDGET_ANDROID)
       return true;
 #else
 #if defined(MOZ_LOGGING)
@@ -184,7 +173,7 @@ struct BasicLogger
     // make the corresponding change in the ShouldOutputMessage method
     // above.
     if (LoggingPrefs::sGfxLogLevel >= aLevel) {
-#if defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_ANDROID)
+#if defined(MOZ_WIDGET_ANDROID)
       printf_stderr("%s%s", aString.c_str(), aNoNewline ? "" : "\n");
 #else
 #if defined(MOZ_LOGGING)
@@ -508,16 +497,23 @@ private:
       if ((mOptions & int(LogOptions::CrashAction)) && ValidReason()) {
         mMessage << " " << (int)mReason;
       }
-      mMessage << "]: ";
+      if (AutoPrefix()) {
+        mMessage << "]: ";
+      }
     }
   }
 
   void WriteLog(const std::string &aString) {
     if (MOZ_UNLIKELY(LogIt())) {
       Logger::OutputMessage(aString, L, NoNewline());
+      // Assert if required.  We don't have a three parameter MOZ_ASSERT
+      // so use the underlying functions instead (see bug 1281702):
+#ifdef DEBUG
       if (mOptions & int(LogOptions::AssertOnCall)) {
-        MOZ_ASSERT(false, "An assert from the graphics logger");
+        MOZ_ReportAssertionFailure(aString.c_str(), __FILE__, __LINE__);
+        MOZ_CRASH("GFX: An assert from the graphics logger");
       }
+#endif
       if ((mOptions & int(LogOptions::CrashAction)) && ValidReason()) {
         Logger::CrashAction(mReason);
       }
@@ -647,7 +643,10 @@ public:
   }
 
   void IncreaseIndent() { ++mDepth; }
-  void DecreaseIndent() { --mDepth; }
+  void DecreaseIndent() {
+    MOZ_ASSERT(mDepth > 0);
+    --mDepth;
+  }
 
   void ConditionOnPrefFunction(bool(*aPrefFunction)()) {
     mConditionedOnPref = true;
@@ -685,6 +684,14 @@ public:
   explicit TreeAutoIndent(TreeLog& aTreeLog) : mTreeLog(aTreeLog) {
     mTreeLog.IncreaseIndent();
   }
+
+  TreeAutoIndent(const TreeAutoIndent& aTreeAutoIndent) :
+      TreeAutoIndent(aTreeAutoIndent.mTreeLog) {
+    mTreeLog.IncreaseIndent();
+  }
+
+  TreeAutoIndent& operator=(const TreeAutoIndent& aTreeAutoIndent) = delete;
+
   ~TreeAutoIndent() {
     mTreeLog.DecreaseIndent();
   }

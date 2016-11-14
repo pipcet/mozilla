@@ -30,7 +30,7 @@ function test() {
     label: "FAKE TOOL!!!",
     isTargetSupported: () => true,
     build: function (iframeWindow, toolbox) {
-      let deferred = promise.defer();
+      let deferred = defer();
       executeSoon(() => {
         deferred.resolve({
           target: toolbox.target,
@@ -50,6 +50,7 @@ function test() {
     let target = TargetFactory.forTab(aTab);
     gDevTools.showToolbox(target, toolDefinition.id).then(function (toolbox) {
       let panel = toolbox.getPanel(toolDefinition.id);
+      panel.toolbox = toolbox;
       ok(true, "Tool open");
 
       let tabbox = panel.panelDoc.getElementById("sidebar");
@@ -83,7 +84,7 @@ function test() {
         allTabsReady(panel);
       });
 
-      panel.sidebar.addTab("tab1", tab1URL, true);
+      panel.sidebar.addTab("tab1", tab1URL, {selected: true});
       panel.sidebar.addTab("tab2", tab2URL);
       panel.sidebar.addTab("tab3", tab3URL);
 
@@ -167,12 +168,14 @@ function test() {
 
   function finishUp(panel) {
     panel.sidebar.destroy();
-    gDevTools.unregisterTool(toolDefinition.id);
+    panel.toolbox.destroy().then(function () {
+      gDevTools.unregisterTool(toolDefinition.id);
 
-    gBrowser.removeCurrentTab();
+      gBrowser.removeCurrentTab();
 
-    executeSoon(function () {
-      finish();
+      executeSoon(function () {
+        finish();
+      });
     });
   }
 }

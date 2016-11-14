@@ -25,7 +25,8 @@
 
 namespace mozilla {
 namespace layers {
-class CompositableForwarder;
+class KnowsCompositor;
+class LayersIPCChannel;
 class SharedSurfaceTextureClient;
 } // namespace layers
 
@@ -137,7 +138,13 @@ public:
     static UniquePtr<SurfaceFactory>
     CreateFactory(GLContext* gl,
                   const SurfaceCaps& caps,
-                  const RefPtr<layers::CompositableForwarder>& forwarder,
+                  layers::KnowsCompositor* compositorConnection,
+                  const layers::TextureFlags& flags);
+    static UniquePtr<SurfaceFactory>
+    CreateFactory(GLContext* gl,
+                  const SurfaceCaps& caps,
+                  layers::LayersIPCChannel* ipcChannel,
+                  const mozilla::layers::LayersBackend backend,
                   const layers::TextureFlags& flags);
 
 protected:
@@ -246,7 +253,7 @@ public:
      * otherwise.
      */
     bool ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
-                    GLenum format, GLenum type, GLvoid *pixels);
+                    GLenum format, GLenum type, GLvoid* pixels);
 
     // Morph changes the factory used to create surfaces.
     void Morph(UniquePtr<SurfaceFactory> newFactory);

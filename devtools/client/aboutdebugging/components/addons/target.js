@@ -3,16 +3,19 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* eslint-env browser */
-/* globals BrowserToolboxProcess */
 
 "use strict";
+
+const { createClass, DOM: dom, PropTypes } =
+  require("devtools/client/shared/vendor/react");
+const { debugAddon } = require("../../modules/addon");
+const Services = require("Services");
 
 loader.lazyImporter(this, "BrowserToolboxProcess",
   "resource://devtools/client/framework/ToolboxProcess.jsm");
 
-const { createClass, DOM: dom } =
-  require("devtools/client/shared/vendor/react");
-const Services = require("Services");
+loader.lazyRequireGetter(this, "DebuggerClient",
+  "devtools/shared/client/main", true);
 
 const Strings = Services.strings.createBundle(
   "chrome://devtools/locale/aboutdebugging.properties");
@@ -20,9 +23,21 @@ const Strings = Services.strings.createBundle(
 module.exports = createClass({
   displayName: "AddonTarget",
 
+  propTypes: {
+    client: PropTypes.instanceOf(DebuggerClient).isRequired,
+    debugDisabled: PropTypes.bool,
+    target: PropTypes.shape({
+      addonActor: PropTypes.string.isRequired,
+      addonID: PropTypes.string.isRequired,
+      icon: PropTypes.string,
+      name: PropTypes.string.isRequired,
+      temporarilyInstalled: PropTypes.bool
+    }).isRequired
+  },
+
   debug() {
     let { target } = this.props;
-    BrowserToolboxProcess.init({ addonID: target.addonID });
+    debugAddon(target.addonID);
   },
 
   reload() {
@@ -50,7 +65,7 @@ module.exports = createClass({
         src: target.icon
       }),
       dom.div({ className: "target" },
-        dom.div({ className: "target-name" }, target.name)
+        dom.div({ className: "target-name", title: target.name }, target.name)
       ),
       dom.button({
         className: "debug-button",

@@ -11,10 +11,11 @@
 #include "nsDataHashtable.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/dom/CrashReporterChild.h"
+#include "mozilla/ipc/CrashReporterClient.h"
 #include "mozilla/Services.h"
 #include "nsIObserverService.h"
-#include "mozilla/unused.h"
-#include "mozilla/Snprintf.h"
+#include "mozilla/Unused.h"
+#include "mozilla/Sprintf.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/TimeStamp.h"
 
@@ -108,9 +109,15 @@ using google_breakpad::ClientInfo;
 #ifdef XP_LINUX
 using google_breakpad::MinidumpDescriptor;
 #endif
+#if defined(MOZ_WIDGET_ANDROID)
+using google_breakpad::auto_wasteful_vector;
+using google_breakpad::FileID;
+using google_breakpad::PageAllocator;
+#endif
 using namespace mozilla;
 using mozilla::dom::CrashReporterChild;
 using mozilla::dom::PCrashReporterChild;
+using mozilla::ipc::CrashReporterClient;
 
 namespace CrashReporter {
 
@@ -174,19 +181,21 @@ static const XP_CHAR dumpFileExtension[] = XP_TEXT(".dmp");
 static const XP_CHAR childCrashAnnotationBaseName[] = XP_TEXT("GeckoChildCrash");
 static const XP_CHAR extraFileExtension[] = XP_TEXT(".extra");
 static const XP_CHAR memoryReportExtension[] = XP_TEXT(".memory.json.gz");
+static xpstring *defaultMemoryReportPath = nullptr;
 
 // A whitelist of crash annotations which do not contain sensitive data
 // and are saved in the crash record and sent with Firefox Health Report.
 static char const * const kCrashEventAnnotations[] = {
   "AsyncShutdownTimeout",
   "BuildID",
-  "TelemetryEnvironment",
   "ProductID",
   "ProductName",
   "ReleaseChannel",
   "SecondsSinceLastCrash",
   "ShutdownProgress",
-  "Version"
+  "StartupCrash",
+  "TelemetryEnvironment",
+  "Version",
   // The following entries are not normal annotations but are included
   // in the crash record/FHR:
   // "ContainsMemoryReport"
@@ -328,11 +337,11 @@ private:
 };
 #endif // MOZ_CRASHREPORTER_INJECTOR
 
-// Crashreporter annotations that we don't send along in subprocess
-// reports
+// Crashreporter annotations that we don't send along in subprocess reports.
 static const char* kSubprocessBlacklist[] = {
   "FramePoisonBase",
   "FramePoisonSize",
+  "StartupCrash",
   "StartupTime",
   "URL"
 };
@@ -514,7 +523,7 @@ CreatePathFromFile(nsIFile* file)
   if (NS_FAILED(rv)) {
     return nullptr;
   }
-  return new xpstring(path.get(), path.Length());
+  return new xpstring(static_cast<wchar_t*>(path.get()), path.Length());
 }
 #else
 static void
@@ -549,13 +558,6 @@ Concat(XP_CHAR* str, const XP_CHAR* toAppend, int* size)
   return str;
 }
 
-static const char* gMozCrashReason = nullptr;
-
-void AnnotateMozCrashReason(const char* aReason)
-{
-  gMozCrashReason = aReason;
-}
-
 static size_t gOOMAllocationSize = 0;
 
 void AnnotateOOMAllocationSize(size_t size)
@@ -568,6 +570,22 @@ static size_t gTexturesSize = 0;
 void AnnotateTexturesSize(size_t size)
 {
   gTexturesSize = size;
+}
+
+static size_t gNumOfPendingIPC = 0;
+static uint32_t gTopPendingIPCCount = 0;
+static const char* gTopPendingIPCName = nullptr;
+static uint32_t gTopPendingIPCType = 0;
+
+void AnnotatePendingIPC(size_t aNumOfPendingIPC,
+                        uint32_t aTopPendingIPCCount,
+                        const char* aTopPendingIPCName,
+                        uint32_t aTopPendingIPCType)
+{
+  gNumOfPendingIPC = aNumOfPendingIPC;
+  gTopPendingIPCCount = aTopPendingIPCCount;
+  gTopPendingIPCName = aTopPendingIPCName;
+  gTopPendingIPCType = aTopPendingIPCType;
 }
 
 #ifndef XP_WIN
@@ -871,6 +889,19 @@ bool MinidumpCallback(
     XP_STOA(gTexturesSize, texturesSizeBuffer, 10);
   }
 
+  char numOfPendingIPCBuffer[32] = "";
+  char topPendingIPCCountBuffer[32] = "";
+  char topPendingIPCTypeBuffer[11] = "0x";
+  if (gNumOfPendingIPC) {
+    XP_STOA(gNumOfPendingIPC, numOfPendingIPCBuffer, 10);
+    if (gTopPendingIPCCount) {
+      XP_STOA(gTopPendingIPCCount, topPendingIPCCountBuffer, 10);
+    }
+    if (gTopPendingIPCType) {
+      XP_STOA(gTopPendingIPCType, &topPendingIPCTypeBuffer[2], 16);
+    }
+  }
+
   // calculate time since last crash (if possible), and store
   // the time of this crash.
   time_t crashTime;
@@ -1019,6 +1050,23 @@ bool MinidumpCallback(
       WriteAnnotation(eventFile, "TextureUsage", texturesSizeBuffer);
     }
 
+    if (numOfPendingIPCBuffer[0]) {
+      WriteAnnotation(apiData, "NumberOfPendingIPC", numOfPendingIPCBuffer);
+      WriteAnnotation(eventFile, "NumberOfPendingIPC", numOfPendingIPCBuffer);
+      if (topPendingIPCCountBuffer[0]) {
+        WriteAnnotation(apiData, "TopPendingIPCCount", topPendingIPCCountBuffer);
+        WriteAnnotation(eventFile, "TopPendingIPCCount", topPendingIPCCountBuffer);
+      }
+      if (gTopPendingIPCName) {
+        WriteAnnotation(apiData, "TopPendingIPCName", gTopPendingIPCName);
+        WriteAnnotation(eventFile, "TopPendingIPCName", gTopPendingIPCName);
+      }
+      if (topPendingIPCTypeBuffer[2]) {
+        WriteAnnotation(apiData, "TopPendingIPCType", topPendingIPCTypeBuffer);
+        WriteAnnotation(eventFile, "TopPendingIPCType", topPendingIPCTypeBuffer);
+      }
+    }
+
     if (memoryReportPath) {
       WriteLiteral(apiData, "ContainsMemoryReport=1\n");
       WriteLiteral(eventFile, "ContainsMemoryReport=1\n");
@@ -1131,12 +1179,14 @@ bool MinidumpCallback(
   return returnValue;
 }
 
-#if defined(XP_MACOSX) || defined(__ANDROID__)
+#if defined(XP_MACOSX) || defined(__ANDROID__) || defined(XP_LINUX)
 static size_t
 EnsureTrailingSlash(XP_CHAR* aBuf, size_t aBufLen)
 {
   size_t len = XP_STRLEN(aBuf);
-  if ((len + 2) < aBufLen && aBuf[len - 1] != XP_PATH_SEPARATOR_CHAR) {
+  if ((len + 1) < aBufLen
+      && len > 0
+      && aBuf[len - 1] != XP_PATH_SEPARATOR_CHAR) {
     aBuf[len] = XP_PATH_SEPARATOR_CHAR;
     ++len;
     aBuf[len] = 0;
@@ -1159,13 +1209,11 @@ BuildTempPath(wchar_t* aBuf, size_t aBufLen)
   return GetTempPath(pathLen, aBuf);
 }
 
-#ifdef MOZ_CHAR16_IS_NOT_WCHAR
 static size_t
 BuildTempPath(char16_t* aBuf, size_t aBufLen)
 {
   return BuildTempPath(reinterpret_cast<wchar_t*>(aBuf), aBufLen);
 }
-#endif
 
 #elif defined(XP_MACOSX)
 
@@ -1211,11 +1259,14 @@ BuildTempPath(char* aBuf, size_t aBufLen)
 static size_t
 BuildTempPath(char* aBuf, size_t aBufLen)
 {
-  // we assume it's always /tmp on unix systems
-  NS_NAMED_LITERAL_CSTRING(tmpPath, "/tmp/");
+  const char *tempenv = PR_GetEnv("TMPDIR");
+  const char *tmpPath = "/tmp/";
+  if (!tempenv) {
+    tempenv = tmpPath;
+  }
   int size = (int)aBufLen;
-  Concat(aBuf, tmpPath.get(), &size);
-  return tmpPath.Length();
+  Concat(aBuf, tempenv, &size);
+  return EnsureTrailingSlash(aBuf, aBufLen);
 }
 
 #else
@@ -1301,6 +1352,32 @@ PrepareChildExceptionTimeAnnotations()
 
   if (gMozCrashReason) {
     WriteAnnotation(apiData, "MozCrashReason", gMozCrashReason);
+  }
+
+  char numOfPendingIPCBuffer[32] = "";
+  char topPendingIPCCountBuffer[32] = "";
+  char topPendingIPCTypeBuffer[11] = "0x";
+  if (gNumOfPendingIPC) {
+    XP_STOA(gNumOfPendingIPC, numOfPendingIPCBuffer, 10);
+    if (gTopPendingIPCCount) {
+      XP_STOA(gTopPendingIPCCount, topPendingIPCCountBuffer, 10);
+    }
+    if (gTopPendingIPCType) {
+      XP_STOA(gTopPendingIPCType, &topPendingIPCTypeBuffer[2], 16);
+    }
+  }
+
+  if (numOfPendingIPCBuffer[0]) {
+    WriteAnnotation(apiData, "NumberOfPendingIPC", numOfPendingIPCBuffer);
+    if (topPendingIPCCountBuffer[0]) {
+      WriteAnnotation(apiData, "TopPendingIPCCount", topPendingIPCCountBuffer);
+    }
+    if (gTopPendingIPCName) {
+      WriteAnnotation(apiData, "TopPendingIPCName", gTopPendingIPCName);
+    }
+    if (topPendingIPCTypeBuffer[2]) {
+      WriteAnnotation(apiData, "TopPendingIPCType", topPendingIPCTypeBuffer);
+    }
   }
 }
 
@@ -1662,10 +1739,12 @@ nsresult SetExceptionHandler(nsIFile* aXREDirectory,
 
 #if defined(MOZ_WIDGET_ANDROID)
   for (unsigned int i = 0; i < library_mappings.size(); i++) {
-    u_int8_t guid[sizeof(MDGUID)];
-    google_breakpad::FileID::ElfFileIdentifierFromMappedFile((void const *)library_mappings[i].start_address, guid);
+    PageAllocator allocator;
+    auto_wasteful_vector<uint8_t, sizeof(MDGUID)> guid(&allocator);
+    FileID::ElfFileIdentifierFromMappedFile(
+      (void const *)library_mappings[i].start_address, guid);
     gExceptionHandler->AddMappingInfo(library_mappings[i].name,
-                                      guid,
+                                      guid.data(),
                                       library_mappings[i].start_address,
                                       library_mappings[i].length,
                                       library_mappings[i].file_offset);
@@ -1799,7 +1878,7 @@ InitInstallTime(nsACString& aInstallTime)
 {
   time_t t = time(nullptr);
   char buf[16];
-  snprintf_literal(buf, "%ld", t);
+  SprintfLiteral(buf, "%ld", t);
   aInstallTime = buf;
 
   return NS_OK;
@@ -2017,17 +2096,19 @@ nsresult UnsetExceptionHandler()
 static void ReplaceChar(nsCString& str, const nsACString& character,
                         const nsACString& replacement)
 {
-  nsCString::const_iterator start, end;
+  nsCString::const_iterator iter, end;
 
-  str.BeginReading(start);
+  str.BeginReading(iter);
   str.EndReading(end);
 
-  while (FindInReadable(character, start, end)) {
-    int32_t pos = end.size_backward();
+  while (FindInReadable(character, iter, end)) {
+    nsCString::const_iterator start;
+    str.BeginReading(start);
+    int32_t pos = end - start;
     str.Replace(pos - 1, 1, replacement);
 
-    str.BeginReading(start);
-    start.advance(pos + replacement.Length() - 1);
+    str.BeginReading(iter);
+    iter.advance(pos + replacement.Length() - 1);
     str.EndReading(end);
   }
 }
@@ -2127,7 +2208,7 @@ public:
     , mAppendAppNotes(true)
     {}
 
-  NS_METHOD Run() override;
+  NS_IMETHOD Run() override;
 
 private:
   nsCString mKey;
@@ -2140,20 +2221,27 @@ nsresult AnnotateCrashReport(const nsACString& key, const nsACString& data)
   if (!GetEnabled())
     return NS_ERROR_NOT_INITIALIZED;
 
-  bool isParentProcess = XRE_IsParentProcess();
-  if (!isParentProcess && !NS_IsMainThread()) {
-    // Child process needs to handle this in the main thread:
-    nsCOMPtr<nsIRunnable> r = new CrashReporterHelperRunnable(key, data);
-    NS_DispatchToMainThread(r);
-    return NS_OK;
-  }
-
   nsCString escapedData;
   nsresult rv = EscapeAnnotation(key, data, escapedData);
   if (NS_FAILED(rv))
     return rv;
 
-  if (!isParentProcess) {
+  if (!XRE_IsParentProcess()) {
+    // The newer CrashReporterClient can be used from any thread.
+    if (RefPtr<CrashReporterClient> client = CrashReporterClient::GetSingleton()) {
+      client->AnnotateCrashReport(nsCString(key), escapedData);
+      return NS_OK;
+    }
+
+    // Otherwise, we have to handle this on the main thread since we will go
+    // through IPDL.
+    if (!NS_IsMainThread()) {
+      // Child process needs to handle this in the main thread:
+      nsCOMPtr<nsIRunnable> r = new CrashReporterHelperRunnable(key, data);
+      NS_DispatchToMainThread(r);
+      return NS_OK;
+    }
+
     MOZ_ASSERT(NS_IsMainThread());
     PCrashReporterChild* reporter = CrashReporterChild::GetCrashReporter();
     if (!reporter) {
@@ -2218,22 +2306,7 @@ nsresult AppendAppNotesToCrashReport(const nsACString& data)
   if (DoFindInReadable(data, NS_LITERAL_CSTRING("\0")))
     return NS_ERROR_INVALID_ARG;
 
-  bool isParentProcess = XRE_IsParentProcess();
-  if (!isParentProcess && !NS_IsMainThread()) {
-    // Child process needs to handle this in the main thread:
-    nsCOMPtr<nsIRunnable> r = new CrashReporterHelperRunnable(data);
-    NS_DispatchToMainThread(r);
-    return NS_OK;
-  }
-
   if (!XRE_IsParentProcess()) {
-    MOZ_ASSERT(NS_IsMainThread());
-    PCrashReporterChild* reporter = CrashReporterChild::GetCrashReporter();
-    if (!reporter) {
-      EnqueueDelayedNote(new DelayedNote(data));
-      return NS_OK;
-    }
-
     // Since we don't go through AnnotateCrashReport in the parent process,
     // we must ensure that the data is escaped and valid before the parent
     // sees it.
@@ -2241,6 +2314,25 @@ nsresult AppendAppNotesToCrashReport(const nsACString& data)
     nsresult rv = EscapeAnnotation(NS_LITERAL_CSTRING("Notes"), data, escapedData);
     if (NS_FAILED(rv))
       return rv;
+
+    if (RefPtr<CrashReporterClient> client = CrashReporterClient::GetSingleton()) {
+      client->AppendAppNotes(escapedData);
+      return NS_OK;
+    }
+
+    if (!NS_IsMainThread()) {
+      // Child process needs to handle this in the main thread:
+      nsCOMPtr<nsIRunnable> r = new CrashReporterHelperRunnable(data);
+      NS_DispatchToMainThread(r);
+      return NS_OK;
+    }
+
+    MOZ_ASSERT(NS_IsMainThread());
+    PCrashReporterChild* reporter = CrashReporterChild::GetCrashReporter();
+    if (!reporter) {
+      EnqueueDelayedNote(new DelayedNote(data));
+      return NS_OK;
+    }
 
     if (!reporter->SendAppendAppNotes(escapedData))
       return NS_ERROR_FAILURE;
@@ -2751,6 +2843,31 @@ SetMemoryReportFile(nsIFile* aFile)
 #endif
 }
 
+nsresult
+GetDefaultMemoryReportFile(nsIFile** aFile)
+{
+  nsCOMPtr<nsIFile> defaultMemoryReportFile;
+  if (!defaultMemoryReportPath) {
+    nsresult rv = NS_GetSpecialDirectory(NS_APP_PROFILE_DIR_STARTUP,
+                                         getter_AddRefs(defaultMemoryReportFile));
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+    defaultMemoryReportFile->AppendNative(NS_LITERAL_CSTRING("memory-report.json.gz"));
+    defaultMemoryReportPath = CreatePathFromFile(defaultMemoryReportFile);
+    if (!defaultMemoryReportPath) {
+      return NS_ERROR_FAILURE;
+    }
+  } else {
+    CreateFileFromPath(*defaultMemoryReportPath,
+                       getter_AddRefs(defaultMemoryReportFile));
+    if (!defaultMemoryReportFile) {
+      return NS_ERROR_FAILURE;
+    }
+  }
+  defaultMemoryReportFile.forget(aFile);
+  return NS_OK;
+}
 
 void
 SetTelemetrySessionId(const nsACString& id)
@@ -2943,6 +3060,13 @@ WriteAnnotation(PRFileDesc* fd, const nsACString& key, const nsACString& value)
   PR_Write(fd, "\n", 1);
 }
 
+template<int N>
+void
+WriteLiteral(PRFileDesc* fd, const char (&str)[N])
+{
+  PR_Write(fd, str, N - 1);
+}
+
 static bool
 WriteExtraData(nsIFile* extraFile,
                const AnnotationTable& data,
@@ -2985,6 +3109,10 @@ WriteExtraData(nsIFile* extraFile,
     WriteAnnotation(fd,
                     nsDependentCString("UptimeTS"),
                     nsDependentCString(uptimeTSString));
+  }
+
+  if (memoryReportPath) {
+    WriteLiteral(fd, "ContainsMemoryReport=1\n");
   }
 
   PR_Close(fd);
@@ -3137,8 +3265,10 @@ WriteExtraForMinidump(nsIFile* minidump,
 
 // It really only makes sense to call this function when
 // ShouldReport() is true.
+// Uses dumpFile's filename to generate memoryReport's filename (same name with
+// a different extension)
 static bool
-MoveToPending(nsIFile* dumpFile, nsIFile* extraFile)
+MoveToPending(nsIFile* dumpFile, nsIFile* extraFile, nsIFile* memoryReport)
 {
   nsCOMPtr<nsIFile> pendingDir;
   if (!GetPendingDir(getter_AddRefs(pendingDir)))
@@ -3150,6 +3280,20 @@ MoveToPending(nsIFile* dumpFile, nsIFile* extraFile)
 
   if (extraFile && NS_FAILED(extraFile->MoveTo(pendingDir, EmptyString()))) {
     return false;
+  }
+
+  if (memoryReport) {
+    nsAutoString leafName;
+    nsresult rv = dumpFile->GetLeafName(leafName);
+    if (NS_FAILED(rv)) {
+      return false;
+    }
+    // Generate the correct memory report filename from the dumpFile's name
+    leafName.Replace(leafName.Length() - 4, 4,
+                     static_cast<nsString>(CONVERT_XP_CHAR_TO_UTF16(memoryReportExtension)));
+    if (NS_FAILED(memoryReport->MoveTo(pendingDir, leafName))) {
+      return false;
+    }
   }
 
   return true;
@@ -3197,8 +3341,14 @@ OnChildProcessDumpRequested(void* aContext,
                              getter_AddRefs(extraFile)))
     return;
 
-  if (ShouldReport())
-    MoveToPending(minidump, extraFile);
+  if (ShouldReport()) {
+    nsCOMPtr<nsIFile> memoryReport;
+    if (memoryReportPath) {
+      CreateFileFromPath(memoryReportPath, getter_AddRefs(memoryReport));
+      MOZ_ASSERT(memoryReport);
+    }
+    MoveToPending(minidump, extraFile, memoryReport);
+  }
 
   {
 
@@ -3234,7 +3384,7 @@ OOPInit()
   class ProxyToMainThread : public Runnable
   {
   public:
-    NS_IMETHOD Run() {
+    NS_IMETHOD Run() override {
       OOPInit();
       return NS_OK;
     }
@@ -3480,10 +3630,16 @@ CheckForLastRunCrash()
     return false;
   }
 
+  nsCOMPtr<nsIFile> memoryReportFile;
+  nsresult rv = GetDefaultMemoryReportFile(getter_AddRefs(memoryReportFile));
+  if (NS_FAILED(rv) || NS_FAILED(memoryReportFile->Exists(&exists)) || !exists) {
+    memoryReportFile = nullptr;
+  }
+
   FindPendingDir();
 
-  // Move {dump,extra} to pending folder
-  if (!MoveToPending(lastMinidumpFile, lastExtraFile)) {
+  // Move {dump,extra,memory} to pending folder
+  if (!MoveToPending(lastMinidumpFile, lastExtraFile, memoryReportFile)) {
     return false;
   }
 
@@ -3800,12 +3956,16 @@ bool TakeMinidump(nsIFile** aResult, bool aMoveToPending)
          true,
 #endif
          PairedDumpCallback,
-         static_cast<void*>(aResult))) {
+         static_cast<void*>(aResult)
+#ifdef XP_WIN32
+         , GetMinidumpType()
+#endif
+      )) {
     return false;
   }
 
   if (aMoveToPending) {
-    MoveToPending(*aResult, nullptr);
+    MoveToPending(*aResult, nullptr, nullptr);
   }
   return true;
 }
@@ -3841,7 +4001,11 @@ CreateMinidumpsAndPair(ProcessHandle aTargetPid,
          targetThread,
          dump_path,
          PairedDumpCallbackExtra,
-         static_cast<void*>(&targetMinidump)))
+         static_cast<void*>(&targetMinidump)
+#ifdef XP_WIN32
+         , GetMinidumpType()
+#endif
+      ))
     return false;
 
   nsCOMPtr<nsIFile> targetExtra;
@@ -3856,8 +4020,11 @@ CreateMinidumpsAndPair(ProcessHandle aTargetPid,
         true,
 #endif
         PairedDumpCallback,
-        static_cast<void*>(&incomingDump))) {
-
+        static_cast<void*>(&incomingDump)
+#ifdef XP_WIN32
+        , GetMinidumpType()
+#endif
+        )) {
       targetMinidump->Remove(false);
       targetExtra->Remove(false);
       return false;
@@ -3869,8 +4036,8 @@ CreateMinidumpsAndPair(ProcessHandle aTargetPid,
   RenameAdditionalHangMinidump(incomingDump, targetMinidump, aIncomingPairName);
 
   if (ShouldReport()) {
-    MoveToPending(targetMinidump, targetExtra);
-    MoveToPending(incomingDump, nullptr);
+    MoveToPending(targetMinidump, targetExtra, nullptr);
+    MoveToPending(incomingDump, nullptr, nullptr);
   }
 
   targetMinidump.forget(aMainDumpOut);
@@ -3907,7 +4074,11 @@ CreateAdditionalChildMinidump(ProcessHandle childPid,
          childThread,
          dump_path,
          PairedDumpCallback,
-         static_cast<void*>(&childMinidump))) {
+         static_cast<void*>(&childMinidump)
+#ifdef XP_WIN32
+         , GetMinidumpType()
+#endif
+      )) {
     return false;
   }
 
@@ -3939,10 +4110,11 @@ void AddLibraryMapping(const char* library_name,
     library_mappings.push_back(info);
   }
   else {
-    u_int8_t guid[sizeof(MDGUID)];
-    google_breakpad::FileID::ElfFileIdentifierFromMappedFile((void const *)start_address, guid);
+    PageAllocator allocator;
+    auto_wasteful_vector<uint8_t, sizeof(MDGUID)> guid(&allocator);
+    FileID::ElfFileIdentifierFromMappedFile((void const *)start_address, guid);
     gExceptionHandler->AddMappingInfo(library_name,
-                                      guid,
+                                      guid.data(),
                                       start_address,
                                       mapping_length,
                                       file_offset);

@@ -50,6 +50,7 @@ namespace mozilla {
 class MediaEngineRemoteVideoSource : public MediaEngineCameraVideoSource,
                                      public webrtc::ExternalRenderer
 {
+  typedef MediaEngineCameraVideoSource Super;
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
 
@@ -69,18 +70,23 @@ public:
   // MediaEngineCameraVideoSource
   MediaEngineRemoteVideoSource(int aIndex, mozilla::camera::CaptureEngine aCapEngine,
                                dom::MediaSourceEnum aMediaSource,
+                               bool aScary = false,
                                const char* aMonitorName = "RemoteVideo.Monitor");
 
   nsresult Allocate(const dom::MediaTrackConstraints& aConstraints,
                     const MediaEnginePrefs& aPrefs,
                     const nsString& aDeviceId,
-                    const nsACString& aOrigin) override;
-  nsresult Deallocate() override;;
+                    const nsACString& aOrigin,
+                    AllocationHandle** aOutHandle,
+                    const char** aOutBadConstraint) override;
+  nsresult Deallocate(AllocationHandle* aHandle) override;
   nsresult Start(SourceMediaStream*, TrackID, const PrincipalHandle&) override;
   nsresult Stop(SourceMediaStream*, TrackID) override;
-  nsresult Restart(const dom::MediaTrackConstraints& aConstraints,
+  nsresult Restart(AllocationHandle* aHandle,
+                   const dom::MediaTrackConstraints& aConstraints,
                    const MediaEnginePrefs &aPrefs,
-                   const nsString& aDeviceId) override;
+                   const nsString& aDeviceId,
+                   const char** aOutBadConstraint) override;
   void NotifyPull(MediaStreamGraph* aGraph,
                   SourceMediaStream* aSource,
                   TrackID aId,
@@ -90,7 +96,7 @@ public:
     return mMediaSource;
   }
 
-  bool ChooseCapability(const dom::MediaTrackConstraints &aConstraints,
+  bool ChooseCapability(const NormalizedConstraints &aConstraints,
                         const MediaEnginePrefs &aPrefs,
                         const nsString& aDeviceId) override;
 
@@ -98,17 +104,31 @@ public:
 
   void Shutdown() override;
 
+  bool GetScary() const override { return mScary; }
+
 protected:
-  ~MediaEngineRemoteVideoSource() { Shutdown(); }
+  ~MediaEngineRemoteVideoSource() { }
 
 private:
   // Initialize the needed Video engine interfaces.
   void Init();
-  size_t NumCapabilities() override;
-  void GetCapability(size_t aIndex, webrtc::CaptureCapability& aOut) override;
+  size_t NumCapabilities() const override;
+  void GetCapability(size_t aIndex, webrtc::CaptureCapability& aOut) const override;
+  void SetLastCapability(const webrtc::CaptureCapability& aCapability);
+
+  nsresult
+  UpdateSingleSource(const AllocationHandle* aHandle,
+                     const NormalizedConstraints& aNetConstraints,
+                     const MediaEnginePrefs& aPrefs,
+                     const nsString& aDeviceId,
+                     const char** aOutBadConstraint) override;
 
   dom::MediaSourceEnum mMediaSource; // source of media (camera | application | screen)
   mozilla::camera::CaptureEngine mCapEngine;
+
+  // To only restart camera when needed, we keep track previous settings.
+  webrtc::CaptureCapability mLastCapability;
+  bool mScary;
 };
 
 }

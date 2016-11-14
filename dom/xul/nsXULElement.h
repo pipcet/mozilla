@@ -235,16 +235,15 @@ public:
 
     void Set(JSScript* aObject);
 
-    // It's safe to return a handle because we trace mScriptObject, no one ever
-    // uses the handle (or the script object) past the point at which the
-    // nsXULPrototypeScript dies, and we can't get memmoved so the
-    // &mScriptObject pointer can't go stale.
-    JS::Handle<JSScript*> GetScriptObject()
+    bool HasScriptObject()
     {
-        // Calling fromMarkedLocation() is safe because we trace mScriptObject in
-        // TraceScriptObject() and because its value is never changed after it has
-        // been set.
-        return JS::Handle<JSScript*>::fromMarkedLocation(mScriptObject.address());
+        // Conversion to bool doesn't trigger mScriptObject's read barrier.
+        return mScriptObject;
+    }
+
+    JSScript* GetScriptObject()
+    {
+        return mScriptObject;
     }
 
     void TraceScriptObject(JSTracer* aTrc)
@@ -341,6 +340,8 @@ class nsXULElement final : public nsStyledElement,
                            public nsIDOMXULElement
 {
 public:
+    using Element::Blur;
+    using Element::Focus;
     explicit nsXULElement(already_AddRefed<mozilla::dom::NodeInfo> aNodeInfo);
 
     static nsresult
@@ -409,8 +410,9 @@ public:
     virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
     virtual mozilla::EventStates IntrinsicState() const override;
 
-    nsresult GetFrameLoader(nsIFrameLoader** aFrameLoader);
+    nsresult GetFrameLoaderXPCOM(nsIFrameLoader** aFrameLoader);
     nsresult GetParentApplication(mozIApplication** aApplication);
+    void PresetOpenerWindow(mozIDOMWindowProxy* aWindow, ErrorResult& aRv);
     nsresult SetIsPrerendered();
 
     virtual void RecompileScriptEventListeners() override;
@@ -561,8 +563,6 @@ public:
     already_AddRefed<nsIRDFResource> GetResource(mozilla::ErrorResult& rv);
     nsIControllers* GetControllers(mozilla::ErrorResult& rv);
     already_AddRefed<mozilla::dom::BoxObject> GetBoxObject(mozilla::ErrorResult& rv);
-    void Focus(mozilla::ErrorResult& rv);
-    void Blur(mozilla::ErrorResult& rv);
     void Click(mozilla::ErrorResult& rv);
     // The XPCOM DoCommand never fails, so it's OK for us.
     already_AddRefed<nsINodeList>
@@ -575,11 +575,12 @@ public:
                                mozilla::ErrorResult& rv);
     // Style() inherited from nsStyledElement
     already_AddRefed<nsFrameLoader> GetFrameLoader();
+    void InternalSetFrameLoader(nsIFrameLoader* aNewFrameLoader);
     void SwapFrameLoaders(mozilla::dom::HTMLIFrameElement& aOtherLoaderOwner,
                           mozilla::ErrorResult& rv);
     void SwapFrameLoaders(nsXULElement& aOtherLoaderOwner,
                           mozilla::ErrorResult& rv);
-    void SwapFrameLoaders(RefPtr<nsFrameLoader>& aOtherLoader,
+    void SwapFrameLoaders(nsIFrameLoaderOwner* aOtherLoaderOwner,
                           mozilla::ErrorResult& rv);
 
     nsINode* GetScopeChainParent() const override
@@ -616,7 +617,7 @@ protected:
 
         void Traverse(nsCycleCollectionTraversalCallback &cb);
 
-        RefPtr<nsFrameLoader> mFrameLoader;
+        nsCOMPtr<nsISupports> mFrameLoaderOrOpener;
     };
 
     virtual nsINode::nsSlots* CreateSlots() override;

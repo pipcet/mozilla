@@ -46,8 +46,10 @@ const TEST_URI = `data:text/xml;charset=UTF-8,<?xml version="1.0"?>
     </vbox>
   </window>`;
 
-const {HTMLTooltip} = require("devtools/client/shared/widgets/HTMLTooltip");
+const {HTMLTooltip} = require("devtools/client/shared/widgets/tooltip/HTMLTooltip");
 loadHelperScript("helper_html_tooltip.js");
+
+let useXulWrapper;
 
 add_task(function* () {
   // Force the toolbox to be 200px high;
@@ -56,11 +58,21 @@ add_task(function* () {
   yield addTab("about:blank");
   let [,, doc] = yield createHost("bottom", TEST_URI);
 
+  info("Run tests for a Tooltip without using a XUL panel");
+  useXulWrapper = false;
+  yield runTests(doc);
+
+  info("Run tests for a Tooltip with a XUL panel");
+  useXulWrapper = true;
+  yield runTests(doc);
+});
+
+function* runTests(doc) {
   info("Create HTML tooltip");
-  let tooltip = new HTMLTooltip({doc}, {type: "arrow"});
+  let tooltip = new HTMLTooltip(doc, {type: "arrow", useXulWrapper});
   let div = doc.createElementNS(HTML_NS, "div");
   div.style.height = "35px";
-  yield tooltip.setContent(div, 200, 35);
+  tooltip.setContent(div, {width: 200, height: 35});
 
   let {right: docRight} = doc.documentElement.getBoundingClientRect();
 
@@ -91,4 +103,6 @@ add_task(function* () {
 
     yield hideTooltip(tooltip);
   }
-});
+
+  tooltip.destroy();
+}

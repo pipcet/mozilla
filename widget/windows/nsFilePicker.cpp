@@ -595,6 +595,11 @@ nsFilePicker::ShowFolderPicker(const nsString& aInitialDir, bool &aWasInitError)
  
   // initial strings
   dialog->SetTitle(mTitle.get());
+
+  if (!mOkButtonLabel.IsEmpty()) {
+    dialog->SetOkButtonLabel(mOkButtonLabel.get());
+  }
+
   if (!aInitialDir.IsEmpty()) {
     RefPtr<IShellItem> folder;
     if (SUCCEEDED(
@@ -1048,6 +1053,10 @@ nsFilePicker::ShowW(int16_t *aReturnVal)
   // Clear previous file selections
   mUnicodeFile.Truncate();
   mFiles.Clear();
+
+  // On Win10, the picker doesn't support per-monitor DPI, so we open it
+  // with our context set temporarily to system-dpi-aware
+  WinUtils::AutoSystemDpiAware dpiAwareness;
 
   // Launch the XP file/folder picker on XP and as a fallback on Vista+. 
   // The CoCreateInstance call to CLSID_FileOpenDialog fails with "(0x80040111)

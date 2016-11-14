@@ -60,12 +60,13 @@ interface nsIContentSecurityPolicy : nsISerializable
   const unsigned short CHILD_SRC_DIRECTIVE            = 18;
   const unsigned short BLOCK_ALL_MIXED_CONTENT        = 19;
   const unsigned short REQUIRE_SRI_FOR                = 20;
+  const unsigned short SANDBOX_DIRECTIVE              = 21;
 
   /**
    * Accessor method for a read-only string version of the policy at a given
    * index.
    */
-  AString getPolicy(in unsigned long index);
+  [binaryname(GetPolicyString)] AString getPolicy(in unsigned long index);
 
   /**
    * Accessor method for a read-only pointer the policy object at a given
@@ -130,6 +131,7 @@ interface nsIContentSecurityPolicy : nsISerializable
    * Whether this policy allows inline script or style.
    * @param aContentPolicyType Either TYPE_SCRIPT or TYPE_STYLESHEET
    * @param aNonce The nonce string to check against the policy
+   * @param aParserCreated If the script element was created by the HTML Parser
    * @param aContent  The content of the inline resource to hash
    *        (and compare to the hashes listed in the policy)
    * @param aLineNumber The line number of the inline resource
@@ -140,6 +142,7 @@ interface nsIContentSecurityPolicy : nsISerializable
    */
   boolean getAllowsInline(in nsContentPolicyType aContentPolicyType,
                           in AString aNonce,
+                          in boolean aParserCreated,
                           in AString aContent,
                           in unsigned long aLineNumber);
 
@@ -156,6 +159,17 @@ interface nsIContentSecurityPolicy : nsISerializable
    *     (block the call if false).
    */
   boolean getAllowsEval(out boolean shouldReportViolations);
+
+  /**
+   * Delegate method called by the service when the protected document is loaded.
+   * Returns the union of all the sandbox flags contained in CSP policies. This is the most
+   * restrictive interpretation of flags set in multiple policies.
+   * See nsSandboxFlags.h for the possible flags.
+   *
+   * @return
+   *    sandbox flags or SANDBOXED_NONE if no sandbox directive exists
+   */
+  uint32_t getCSPSandboxFlags();
 
   /**
    * For each violated policy (of type violationType), log policy violation on

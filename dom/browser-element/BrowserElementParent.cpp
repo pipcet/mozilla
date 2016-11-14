@@ -111,8 +111,8 @@ DispatchCustomDOMEvent(Element* aFrameElement, const nsAString& aEventName,
   ErrorResult res;
   event->InitCustomEvent(cx,
                          aEventName,
-                         /* bubbles = */ true,
-                         /* cancelable = */ true,
+                         /* aCanBubble = */ true,
+                         /* aCancelable = */ true,
                          aDetailValue,
                          res);
   if (res.Failed()) {
@@ -175,13 +175,6 @@ BrowserElementParent::DispatchOpenWindowEvent(Element* aOpenerFrameElement,
   if (!ToJSValue(cx, detail, &val)) {
     MOZ_CRASH("Failed to convert dictionary to JS::Value due to OOM.");
     return BrowserElementParent::OPEN_WINDOW_IGNORED;
-  }
-
-  // Do not dispatch a mozbrowseropenwindow event of a widget to its embedder
-  nsCOMPtr<nsIMozBrowserFrame> browserFrame =
-    do_QueryInterface(aOpenerFrameElement);
-  if (browserFrame && browserFrame->GetReallyIsWidget()) {
-    return BrowserElementParent::OPEN_WINDOW_CANCELLED;
   }
 
   nsEventStatus status = nsEventStatus_eIgnore;
@@ -263,6 +256,7 @@ BrowserElementParent::OpenWindowInProcess(nsPIDOMWindowOuter* aOpenerWindow,
                                           nsIURI* aURI,
                                           const nsAString& aName,
                                           const nsACString& aFeatures,
+                                          bool aForceNoOpener,
                                           mozIDOMWindowProxy** aReturnWindow)
 {
   *aReturnWindow = nullptr;
@@ -290,6 +284,12 @@ BrowserElementParent::OpenWindowInProcess(nsPIDOMWindowOuter* aOpenerWindow,
     aURI->GetSpec(spec);
   }
 
+  if (!aForceNoOpener) {
+    ErrorResult res;
+    popupFrameElement->PresetOpenerWindow(aOpenerWindow, res);
+    MOZ_ASSERT(!res.Failed());
+  }
+
   OpenWindowResult opened =
     DispatchOpenWindowEvent(openerFrameElement, popupFrameElement,
                             NS_ConvertUTF8toUTF16(spec),
@@ -301,8 +301,7 @@ BrowserElementParent::OpenWindowInProcess(nsPIDOMWindowOuter* aOpenerWindow,
   }
 
   // Return popupFrameElement's window.
-  nsCOMPtr<nsIFrameLoader> frameLoader;
-  popupFrameElement->GetFrameLoader(getter_AddRefs(frameLoader));
+  RefPtr<nsFrameLoader> frameLoader = popupFrameElement->GetFrameLoader();
   NS_ENSURE_TRUE(frameLoader, BrowserElementParent::OPEN_WINDOW_IGNORED);
 
   nsCOMPtr<nsIDocShell> docshell;

@@ -21,6 +21,7 @@
 #include "nsIWeakReferenceUtils.h"
 #include "nsIInterfaceRequestor.h"
 #include "mozilla/dom/ChannelInfo.h"
+#include "mozilla/net/ReferrerPolicy.h"
 
 #define BEGIN_WORKERS_NAMESPACE \
   namespace mozilla { namespace dom { namespace workers {
@@ -140,7 +141,7 @@ struct JSSettings
   JSContentChromeSettings chrome;
   JSContentChromeSettings content;
   JSGCSettingsArray gcSettings;
-  JS::RuntimeOptions runtimeOptions;
+  JS::ContextOptions contextOptions;
 
 #ifdef JS_GC_ZEAL
   uint8_t gcZeal;
@@ -261,16 +262,15 @@ struct WorkerLoadInfo
   uint64_t mWindowID;
   uint64_t mServiceWorkerID;
 
+  net::ReferrerPolicy mReferrerPolicy;
   bool mFromWindow;
   bool mEvalAllowed;
   bool mReportCSPViolations;
   bool mXHRParamsAllowed;
   bool mPrincipalIsSystem;
-  bool mIsInPrivilegedApp;
-  bool mIsInCertifiedApp;
   bool mStorageAllowed;
-  bool mPrivateBrowsing;
   bool mServiceWorkersTestingInWindow;
+  PrincipalOriginAttributes mOriginAttributes;
 
   WorkerLoadInfo();
   ~WorkerLoadInfo();
@@ -348,7 +348,7 @@ public:
 };
 
 WorkerCrossThreadDispatcher*
-GetWorkerCrossThreadDispatcher(JSContext* aCx, JS::Value aWorker);
+GetWorkerCrossThreadDispatcher(JSContext* aCx, const JS::Value& aWorker);
 
 // Random unique constant to facilitate JSPrincipal debugging
 const uint32_t kJSPrincipalsDebugToken = 0x7e2df9d2;

@@ -32,7 +32,6 @@ fi
 # Enable building ./signmar and running libmar signature tests
 MOZ_ENABLE_SIGNMAR=1
 
-MOZ_SAFE_BROWSING=1
 MOZ_APP_VERSION=$FIREFOX_VERSION
 MOZ_APP_VERSION_DISPLAY=$FIREFOX_VERSION_DISPLAY
 MOZ_EXTENSIONS_DEFAULT=" gio"
@@ -54,12 +53,9 @@ MAR_CHANNEL_ID=firefox-mozilla-central
 MOZ_PROFILE_MIGRATOR=1
 MOZ_APP_STATIC_INI=1
 MOZ_WEBGL_CONFORMANT=1
-# Enable navigator.mozPay
-MOZ_PAY=1
-# Enable activities. These are used for FxOS developers currently.
-MOZ_ACTIVITIES=1
 MOZ_JSDOWNLOADS=1
 MOZ_RUST_MP4PARSE=1
+MOZ_RUST_URLPARSE=1
 
 # Enable checking that add-ons are signed by the trusted root
 MOZ_ADDON_SIGNING=1

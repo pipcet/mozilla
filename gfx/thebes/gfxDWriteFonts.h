@@ -41,14 +41,10 @@ public:
 
     bool IsValid() const;
 
-    virtual gfxFloat GetAdjustedSize() const override {
-        return mAdjustedSize;
-    }
-
     IDWriteFontFace *GetFontFace();
 
     /* override Measure to add padding for antialiasing */
-    virtual RunMetrics Measure(gfxTextRun *aTextRun,
+    virtual RunMetrics Measure(const gfxTextRun *aTextRun,
                                uint32_t aStart, uint32_t aEnd,
                                BoundingBoxType aBoundingBoxType,
                                DrawTarget *aDrawTargetForTightBoundingBox,
@@ -92,8 +88,6 @@ protected:
     bool GetForceGDIClassic();
 
     RefPtr<IDWriteFontFace> mFontFace;
-    RefPtr<IDWriteFont> mFont;
-    RefPtr<IDWriteFontFamily> mFontFamily;
     cairo_font_face_t *mCairoFontFace;
 
     Metrics *mMetrics;

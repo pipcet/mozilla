@@ -142,7 +142,6 @@ CERT_NewCertList
 CERT_NewTempCertificate
 CERT_NicknameStringsFromCertList
 CERT_OCSPCacheSettings
-CERT_PKIXVerifyCert
 CERT_RemoveCertListNode
 CERT_RFC1485_EscapeAndQuote
 CERT_SaveSMimeProfile
@@ -557,7 +556,6 @@ SECMOD_DeleteInternalModule
 SECMOD_DeleteModule
 SECMOD_DestroyModule
 SECMOD_FindModule
-SECMOD_FindSlot
 SECMOD_GetDeadModuleList
 SECMOD_GetDefaultModuleList
 SECMOD_GetDefaultModuleListLock
@@ -675,13 +673,16 @@ SSL_HandshakeCallback
 SSL_HandshakeNegotiatedExtension
 SSL_ImplementedCiphers @DATA@
 SSL_ImportFD
+SSL_NamedGroupConfig
 SSL_NumImplementedCiphers @DATA@
 SSL_OptionSet
 SSL_OptionSetDefault
 SSL_PeerCertificate
 SSL_PeerCertificateChain
+SSL_PeerSignedCertTimestamps
 SSL_PeerStapledOCSPResponses
 SSL_ResetHandshake
+SSL_SendAdditionalKeyShares
 SSL_SetCanFalseStartCallback
 SSL_SetDowngradeCheckVersion
 SSL_SetNextProtoNego
@@ -691,6 +692,7 @@ SSL_SetSRTPCiphers
 SSL_SetStapledOCSPResponses
 SSL_SetURL
 SSL_ShutdownServerSessionIDCache
+SSL_SignatureSchemePrefSet
 SSL_SNISocketConfigHook
 SSL_VersionRangeGet
 SSL_VersionRangeGetDefault

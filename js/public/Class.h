@@ -40,9 +40,7 @@ extern JS_FRIEND_DATA(const js::Class* const) FunctionClassPtr;
 
 namespace JS {
 
-template <typename T>
-class AutoVectorRooter;
-typedef AutoVectorRooter<jsid> AutoIdVector;
+class AutoIdVector;
 
 /**
  * The answer to a successful query as to whether an object is an Array per
@@ -381,8 +379,8 @@ typedef bool
 /**
  * Function type for trace operation of the class called to enumerate all
  * traceable things reachable from obj's private data structure. For each such
- * thing, a trace implementation must call one of the JS_Call*Tracer variants
- * on the thing.
+ * thing, a trace implementation must call JS::TraceEdge on the thing's
+ * location.
  *
  * JSTraceOp implementation can assume that no other threads mutates object
  * state. It must not change state of the object or corresponding native
@@ -556,11 +554,11 @@ struct ClassSpec
     FinishClassInitOp finishInit_;
     uintptr_t flags;
 
-    static const size_t ParentKeyWidth = JSCLASS_CACHED_PROTO_WIDTH;
+    static const size_t ProtoKeyWidth = JSCLASS_CACHED_PROTO_WIDTH;
 
-    static const uintptr_t ParentKeyMask = (1 << ParentKeyWidth) - 1;
-    static const uintptr_t DontDefineConstructor = 1 << ParentKeyWidth;
-    static const uintptr_t IsDelegated = 1 << (ParentKeyWidth + 1);
+    static const uintptr_t ProtoKeyMask = (1 << ProtoKeyWidth) - 1;
+    static const uintptr_t DontDefineConstructor = 1 << ProtoKeyWidth;
+    static const uintptr_t IsDelegated = 1 << (ProtoKeyWidth + 1);
 
     bool defined() const { return !!createConstructor_; }
 
@@ -568,14 +566,16 @@ struct ClassSpec
         return (flags & IsDelegated);
     }
 
-    bool dependent() const {
+    // The ProtoKey this class inherits from.
+    JSProtoKey inheritanceProtoKey() const {
         MOZ_ASSERT(defined());
-        return (flags & ParentKeyMask);
-    }
-
-    JSProtoKey parentKey() const {
         static_assert(JSProto_Null == 0, "zeroed key must be null");
-        return JSProtoKey(flags & ParentKeyMask);
+
+        // Default: Inherit from Object.
+        if (!(flags & ProtoKeyMask))
+            return JSProto_Object;
+
+        return JSProtoKey(flags & ProtoKeyMask);
     }
 
     bool shouldDefineConstructor() const {
@@ -767,6 +767,7 @@ struct JSClass {
 #define JSCLASS_USERBIT3                (1<<(JSCLASS_HIGH_FLAGS_SHIFT+7))
 
 #define JSCLASS_BACKGROUND_FINALIZE     (1<<(JSCLASS_HIGH_FLAGS_SHIFT+8))
+#define JSCLASS_FOREGROUND_FINALIZE     (1<<(JSCLASS_HIGH_FLAGS_SHIFT+9))
 
 // Bits 26 through 31 are reserved for the CACHED_PROTO_KEY mechanism, see
 // below.
@@ -786,7 +787,7 @@ struct JSClass {
 // application.
 #define JSCLASS_GLOBAL_APPLICATION_SLOTS 5
 #define JSCLASS_GLOBAL_SLOT_COUNT                                             \
-    (JSCLASS_GLOBAL_APPLICATION_SLOTS + JSProto_LIMIT * 3 + 36)
+    (JSCLASS_GLOBAL_APPLICATION_SLOTS + JSProto_LIMIT * 2 + 39)
 #define JSCLASS_GLOBAL_FLAGS_WITH_SLOTS(n)                                    \
     (JSCLASS_IS_GLOBAL | JSCLASS_HAS_RESERVED_SLOTS(JSCLASS_GLOBAL_SLOT_COUNT + (n)))
 #define JSCLASS_GLOBAL_FLAGS                                                  \
@@ -866,8 +867,8 @@ struct Class
     static size_t offsetOfFlags() { return offsetof(Class, flags); }
 
     bool specDefined()         const { return spec ? spec->defined()   : false; }
-    bool specDependent()       const { return spec ? spec->dependent() : false; }
-    JSProtoKey specParentKey() const { return spec ? spec->parentKey() : JSProto_Null; }
+    JSProtoKey specInheritanceProtoKey()
+                               const { return spec ? spec->inheritanceProtoKey() : JSProto_Null; }
     bool specShouldDefineConstructor()
                                const { return spec ? spec->shouldDefineConstructor() : true; }
     ClassObjectCreationOp specCreateConstructorHook()
@@ -958,14 +959,26 @@ Valueify(const JSClass* c)
  * Enumeration describing possible values of the [[Class]] internal property
  * value of objects.
  */
-enum ESClassValue {
-    ESClass_Object, ESClass_Array, ESClass_Number, ESClass_String,
-    ESClass_Boolean, ESClass_RegExp, ESClass_ArrayBuffer, ESClass_SharedArrayBuffer,
-    ESClass_Date, ESClass_Set, ESClass_Map, ESClass_Promise, ESClass_MapIterator,
-    ESClass_SetIterator,
+enum class ESClass {
+    Object,
+    Array,
+    Number,
+    String,
+    Boolean,
+    RegExp,
+    ArrayBuffer,
+    SharedArrayBuffer,
+    Date,
+    Set,
+    Map,
+    Promise,
+    MapIterator,
+    SetIterator,
+    Arguments,
+    Error,
 
     /** None of the above. */
-    ESClass_Other
+    Other
 };
 
 /* Fills |vp| with the unboxed value for boxed types, or undefined otherwise. */

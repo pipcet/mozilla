@@ -42,6 +42,7 @@
 #include "nsRefreshDriver.h"
 #include "nsStreamUtils.h"
 #include "ActiveLayerTracker.h"
+#include "VRManagerChild.h"
 #include "WebGL1Context.h"
 #include "WebGL2Context.h"
 
@@ -119,6 +120,8 @@ public:
       return;
     }
 
+    mOwningElement->ProcessDestroyedFrameListeners();
+
     if (!mOwningElement->IsFrameCaptureRequested()) {
       return;
     }
@@ -129,6 +132,9 @@ public:
     }
 
     RefPtr<DataSourceSurface> copy = CopySurface(snapshot);
+    if (!copy) {
+      return;
+    }
 
     mOwningElement->SetFrameCapture(copy.forget());
     mOwningElement->MarkContextCleanForFrameCapture();
@@ -352,9 +358,9 @@ NS_IMPL_ISUPPORTS(HTMLCanvasElementObserver, nsIObserver)
 HTMLCanvasElement::HTMLCanvasElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
   : nsGenericHTMLElement(aNodeInfo),
     mResetLayer(true) ,
+    mVRPresentationActive(false),
     mWriteOnly(false)
-{
-}
+{}
 
 HTMLCanvasElement::~HTMLCanvasElement()
 {
@@ -396,8 +402,9 @@ HTMLCanvasElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 already_AddRefed<nsICanvasRenderingContextInternal>
 HTMLCanvasElement::CreateContext(CanvasContextType aContextType)
 {
+  // Note that the compositor backend will be LAYERS_NONE if there is no widget.
   RefPtr<nsICanvasRenderingContextInternal> ret =
-    CanvasRenderingContextHelper::CreateContext(aContextType);
+    CreateContextHelper(aContextType, GetCompositorBackendType());
 
   // Add Observer for webgl canvas.
   if (aContextType == CanvasContextType::WebGL1 ||
@@ -646,6 +653,49 @@ HTMLCanvasElement::GetMozPrintCallback() const
   return mPrintCallback;
 }
 
+class CanvasCaptureTrackSource : public MediaStreamTrackSource
+{
+public:
+  NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(CanvasCaptureTrackSource,
+                                           MediaStreamTrackSource)
+
+  CanvasCaptureTrackSource(nsIPrincipal* aPrincipal,
+                           CanvasCaptureMediaStream* aCaptureStream)
+    : MediaStreamTrackSource(aPrincipal, nsString())
+    , mCaptureStream(aCaptureStream) {}
+
+  MediaSourceEnum GetMediaSource() const override
+  {
+    return MediaSourceEnum::Other;
+  }
+
+  void Stop() override
+  {
+    if (!mCaptureStream) {
+      NS_ERROR("No stream");
+      return;
+    }
+
+    mCaptureStream->StopCapture();
+  }
+
+private:
+  virtual ~CanvasCaptureTrackSource() {}
+
+  RefPtr<CanvasCaptureMediaStream> mCaptureStream;
+};
+
+NS_IMPL_ADDREF_INHERITED(CanvasCaptureTrackSource,
+                         MediaStreamTrackSource)
+NS_IMPL_RELEASE_INHERITED(CanvasCaptureTrackSource,
+                          MediaStreamTrackSource)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(CanvasCaptureTrackSource)
+NS_INTERFACE_MAP_END_INHERITING(MediaStreamTrackSource)
+NS_IMPL_CYCLE_COLLECTION_INHERITED(CanvasCaptureTrackSource,
+                                   MediaStreamTrackSource,
+                                   mCaptureStream)
+
 already_AddRefed<CanvasCaptureMediaStream>
 HTMLCanvasElement::CaptureStream(const Optional<double>& aFrameRate,
                                  ErrorResult& aRv)
@@ -682,8 +732,10 @@ HTMLCanvasElement::CaptureStream(const Optional<double>& aFrameRate,
     return nullptr;
   }
 
+  RefPtr<MediaStreamTrack> track =
   stream->CreateDOMTrack(videoTrackId, MediaSegment::VIDEO,
-                         new BasicUnstoppableTrackSource(principal));
+                         new CanvasCaptureTrackSource(principal, stream));
+  stream->AddTrackInternal(track);
 
   rv = RegisterFrameCaptureListener(stream->FrameCaptureListener());
   if (NS_FAILED(rv)) {
@@ -754,7 +806,7 @@ HTMLCanvasElement::ToDataURLImpl(JSContext* aCx,
 
 void
 HTMLCanvasElement::ToBlob(JSContext* aCx,
-                          FileCallback& aCallback,
+                          BlobCallback& aCallback,
                           const nsAString& aType,
                           JS::Handle<JS::Value> aParams,
                           ErrorResult& aRv)
@@ -976,14 +1028,7 @@ HTMLCanvasElement::InvalidateCanvasContent(const gfx::Rect* damageRect)
   if (damageRect) {
     nsIntSize size = GetWidthHeight();
     if (size.width != 0 && size.height != 0) {
-
-      gfx::Rect realRect(*damageRect);
-      realRect.RoundOut();
-
-      // then make it a nsIntRect
-      nsIntRect invalRect(realRect.X(), realRect.Y(),
-                          realRect.Width(), realRect.Height());
-
+      gfx::IntRect invalRect = gfx::IntRect::Truncate(*damageRect);
       layer = frame->InvalidateLayer(nsDisplayItem::TYPE_CANVAS, &invalRect);
     }
   } else {
@@ -1066,7 +1111,7 @@ HTMLCanvasElement::GetCanvasLayer(nsDisplayListBuilder* aBuilder,
   static uint8_t sOffscreenCanvasLayerUserDataDummy = 0;
 
   if (mCurrentContext) {
-    return mCurrentContext->GetCanvasLayer(aBuilder, aOldLayer, aManager);
+    return mCurrentContext->GetCanvasLayer(aBuilder, aOldLayer, aManager, mVRPresentationActive);
   }
 
   if (mOffscreenCanvas) {
@@ -1200,11 +1245,8 @@ HTMLCanvasElement::IsFrameCaptureRequested() const
 }
 
 void
-HTMLCanvasElement::SetFrameCapture(already_AddRefed<SourceSurface> aSurface)
+HTMLCanvasElement::ProcessDestroyedFrameListeners()
 {
-  RefPtr<SourceSurface> surface = aSurface;
-  RefPtr<SourceSurfaceImage> image = new SourceSurfaceImage(surface->GetSize(), surface);
-
   // Loop backwards to allow removing elements in the loop.
   for (int i = mRequestedFrameListeners.Length() - 1; i >= 0; --i) {
     WeakPtr<FrameCaptureListener> listener = mRequestedFrameListeners[i];
@@ -1213,13 +1255,26 @@ HTMLCanvasElement::SetFrameCapture(already_AddRefed<SourceSurface> aSurface)
       mRequestedFrameListeners.RemoveElementAt(i);
       continue;
     }
-
-    RefPtr<Image> imageRefCopy = image.get();
-    listener->NewFrame(imageRefCopy.forget());
   }
 
   if (mRequestedFrameListeners.IsEmpty()) {
     mRequestedFrameRefreshObserver->Unregister();
+  }
+}
+
+void
+HTMLCanvasElement::SetFrameCapture(already_AddRefed<SourceSurface> aSurface)
+{
+  RefPtr<SourceSurface> surface = aSurface;
+  RefPtr<SourceSurfaceImage> image = new SourceSurfaceImage(surface->GetSize(), surface);
+
+  for (WeakPtr<FrameCaptureListener> listener : mRequestedFrameListeners) {
+    if (!listener) {
+      continue;
+    }
+
+    RefPtr<Image> imageRefCopy = image.get();
+    listener->NewFrame(imageRefCopy.forget());
   }
 }
 
@@ -1249,7 +1304,9 @@ HTMLCanvasElement::GetCompositorBackendType() const
   nsIWidget* docWidget = nsContentUtils::WidgetForDocument(OwnerDoc());
   if (docWidget) {
     layers::LayerManager* layerManager = docWidget->GetLayerManager();
-    return layerManager->GetCompositorBackendType();
+    if (layerManager) {
+      return layerManager->GetCompositorBackendType();
+    }
   }
 
   return LayersBackend::LAYERS_NONE;
@@ -1270,7 +1327,7 @@ HTMLCanvasElement::OnVisibilityChange()
         : mRenderer(aRenderer)
       {}
 
-      NS_IMETHOD Run()
+      NS_IMETHOD Run() override
       {
         if (mRenderer && mRenderer->mContext) {
           mRenderer->mContext->OnVisibilityChange();
@@ -1312,7 +1369,7 @@ HTMLCanvasElement::OnMemoryPressure()
         : mRenderer(aRenderer)
       {}
 
-      NS_IMETHOD Run()
+      NS_IMETHOD Run() override
       {
         if (mRenderer && mRenderer->mContext) {
           mRenderer->mContext->OnMemoryPressure();
@@ -1382,6 +1439,43 @@ HTMLCanvasElement::InvalidateFromAsyncCanvasRenderer(AsyncCanvasRenderer *aRende
   }
 
   element->InvalidateCanvasContent(nullptr);
+}
+
+void
+HTMLCanvasElement::StartVRPresentation()
+{
+  WebGLContext* webgl = static_cast<WebGLContext*>(GetContextAtIndex(0));
+  if (!webgl) {
+    return;
+  }
+
+  if (!webgl->StartVRPresentation()) {
+    return;
+  }
+
+  mVRPresentationActive = true;
+}
+
+void
+HTMLCanvasElement::StopVRPresentation()
+{
+  mVRPresentationActive = false;
+}
+
+already_AddRefed<layers::SharedSurfaceTextureClient>
+HTMLCanvasElement::GetVRFrame()
+{
+  if (GetCurrentContextType() != CanvasContextType::WebGL1 &&
+      GetCurrentContextType() != CanvasContextType::WebGL2) {
+    return nullptr;
+  }
+
+  WebGLContext* webgl = static_cast<WebGLContext*>(GetContextAtIndex(0));
+  if (!webgl) {
+    return nullptr;
+  }
+
+  return webgl->GetVRFrame();
 }
 
 } // namespace dom

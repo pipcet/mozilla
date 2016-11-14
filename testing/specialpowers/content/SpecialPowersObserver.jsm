@@ -6,7 +6,6 @@
 // https://bugzilla.mozilla.org/show_bug.cgi?id=549539
 // https://bug549539.bugzilla.mozilla.org/attachment.cgi?id=429661
 // https://developer.mozilla.org/en/XPCOM/XPCOM_changes_in_Gecko_1.9.3
-// http://mxr.mozilla.org/mozilla-central/source/toolkit/components/console/hudservice/HUDService.jsm#3240
 // https://developer.mozilla.org/en/how_to_build_an_xpcom_component_in_javascript
 
 var EXPORTED_SYMBOLS = ["SpecialPowersObserver", "SpecialPowersObserverFactory"];
@@ -77,7 +76,6 @@ SpecialPowersObserver.prototype._loadFrameScript = function()
     this._messageManager.addMessageListener("SpecialPowers.CreateFiles", this);
     this._messageManager.addMessageListener("SpecialPowers.RemoveFiles", this);
     this._messageManager.addMessageListener("SPPermissionManager", this);
-    this._messageManager.addMessageListener("SPWebAppService", this);
     this._messageManager.addMessageListener("SPObserverService", this);
     this._messageManager.addMessageListener("SPLoadChromeScript", this);
     this._messageManager.addMessageListener("SPImportInMainProcess", this);
@@ -150,7 +148,6 @@ SpecialPowersObserver.prototype.uninit = function()
     this._messageManager.removeMessageListener("SpecialPowers.CreateFiles", this);
     this._messageManager.removeMessageListener("SpecialPowers.RemoveFiles", this);
     this._messageManager.removeMessageListener("SPPermissionManager", this);
-    this._messageManager.removeMessageListener("SPWebAppService", this);
     this._messageManager.removeMessageListener("SPObserverService", this);
     this._messageManager.removeMessageListener("SPLoadChromeScript", this);
     this._messageManager.removeMessageListener("SPImportInMainProcess", this);
@@ -273,7 +270,7 @@ SpecialPowersObserver.prototype.receiveMessage = function(aMessage) {
             outStream.write(request.data, request.data.length);
             outStream.close();
           }
-          filePaths.push(new File(testFile.path, request.options));
+          filePaths.push(File.createFromFileName(testFile.path, request.options));
           createdFiles.push(testFile);
         });
         aMessage.target

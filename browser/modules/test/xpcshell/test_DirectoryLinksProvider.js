@@ -30,7 +30,7 @@ do_get_profile();
 const DIRECTORY_LINKS_FILE = "directoryLinks.json";
 const DIRECTORY_FRECENCY = 1000;
 const SUGGESTED_FRECENCY = Infinity;
-const kURLData = {"directory": [{"url":"http://example.com","title":"LocalSource"}]};
+const kURLData = {"directory": [{"url":"http://example.com", "title":"LocalSource"}]};
 const kTestURL = 'data:application/json,' + JSON.stringify(kURLData);
 
 // DirectoryLinksProvider preferences
@@ -57,7 +57,7 @@ Services.prefs.setCharPref(kPingUrlPref, kPingUrl);
 Services.prefs.setBoolPref(kNewtabEnhancedPref, true);
 
 const kHttpHandlerData = {};
-kHttpHandlerData[kExamplePath] = {"directory": [{"url":"http://example.com","title":"RemoteSource"}]};
+kHttpHandlerData[kExamplePath] = {"directory": [{"url":"http://example.com", "title":"RemoteSource"}]};
 
 const BinaryInputStream = CC("@mozilla.org/binaryinputstream;1",
                               "nsIBinaryInputStream",
@@ -247,7 +247,7 @@ function setTimeout(fun, timeout) {
   let timer = Components.classes["@mozilla.org/timer;1"]
                         .createInstance(Components.interfaces.nsITimer);
   var event = {
-    notify: function (timer) {
+    notify: function () {
       fun();
     }
   };
@@ -480,7 +480,7 @@ add_task(function* test_topSitesWithSuggestedLinks() {
   let dataURI = 'data:application/json,' + JSON.stringify(data);
 
   yield promiseSetupDirectoryLinksProvider({linksURL: dataURI});
-  let links = yield fetchData();
+  yield fetchData();
 
   // Check we've populated suggested links as expected.
   do_check_eq(DirectoryLinksProvider._suggestedLinks.size, 5);
@@ -1438,7 +1438,7 @@ add_task(function* test_DirectoryLinksProvider_getFrequencyCapLogic() {
 
   // now step into the furture
   let _wasTodayOrig = DirectoryLinksProvider._wasToday;
-  DirectoryLinksProvider._wasToday = function () {return false;}
+  DirectoryLinksProvider._wasToday = function () { return false; }
   // exhaust total views
   DirectoryLinksProvider._addFrequencyCapView("1")
   do_check_true(DirectoryLinksProvider._testFrequencyCapLimits("1"));
@@ -1487,7 +1487,7 @@ add_task(function* test_DirectoryLinksProvider_getFrequencyCapReportSiteAction()
       targetedSite: "foo.com",
       url: "bar.com"
     },
-    isPinned: function() {return false;},
+    isPinned: function() { return false; },
   }], "view", 0);
 
   // read file content and ensure that view counters are updated
@@ -1531,9 +1531,9 @@ add_task(function* test_DirectoryLinksProvider_ClickRemoval() {
         }]
       },
       {
-        handleError: function () {do_check_true(false);},
+        handleError: function () { do_check_true(false); },
         handleResult: function () {},
-        handleCompletion: function () {resolve();}
+        handleCompletion: function () { resolve(); }
       }
     );
   });
@@ -1609,7 +1609,7 @@ add_task(function* test_sanitizeExplanation() {
   let dataURI = 'data:application/json,' + encodeURIComponent(JSON.stringify(data));
 
   yield promiseSetupDirectoryLinksProvider({linksURL: dataURI});
-  let links = yield fetchData();
+  yield fetchData();
 
   let suggestedSites = [...DirectoryLinksProvider._suggestedLinks.keys()];
   do_check_eq(suggestedSites.indexOf("eviltarget.com"), 0);
@@ -1662,8 +1662,8 @@ add_task(function* test_inadjecentSites() {
       badSiteB64.push(DirectoryLinksProvider._generateHash(site));
     });
     let theList = {"domains": badSiteB64};
-    let dataURI = 'data:application/json,' + JSON.stringify(theList);
-    DirectoryLinksProvider._inadjacentSitesUrl = dataURI;
+    let uri = 'data:application/json,' + JSON.stringify(theList);
+    DirectoryLinksProvider._inadjacentSitesUrl = uri;
     return DirectoryLinksProvider._loadInadjacentSites();
   }
 
@@ -1796,7 +1796,6 @@ add_task(function* test_inadjecentSites() {
 
 add_task(function* test_blockSuggestedTiles() {
   // Initial setup
-  let suggestedTile = suggestedTile1;
   let topSites = ["site0.com", "1040.com", "site2.com", "hrblock.com", "site4.com", "freetaxusa.com", "site6.com"];
   let data = {"suggested": [suggestedTile1, suggestedTile2, suggestedTile3], "directory": [someOtherSite]};
   let dataURI = 'data:application/json,' + JSON.stringify(data);
@@ -1828,8 +1827,8 @@ add_task(function* test_blockSuggestedTiles() {
 
   // block suggested tile in a regular way
   DirectoryLinksProvider.reportSitesAction([{
-      isPinned: function() {return false;},
-      link: Object.assign({frecency: 1000},suggestedLink)
+      isPinned: function() { return false; },
+      link: Object.assign({frecency: 1000}, suggestedLink)
   }], "block", 0);
 
   // suggested tile still must be recommended

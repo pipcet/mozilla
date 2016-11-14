@@ -19,6 +19,7 @@ class nsCOMPtr_helper;
 
 namespace mozilla {
 template<class T> class OwningNonNull;
+template<class T> class StaticRefPtr;
 
 // Traditionally, RefPtr supports automatic refcounting of any pointer type
 // with AddRef() and Release() methods that follow the traditional semantics.
@@ -81,7 +82,7 @@ public:
   // Constructors
 
   RefPtr()
-    : mRawPtr(0)
+    : mRawPtr(nullptr)
     // default constructor
   {
   }
@@ -109,6 +110,11 @@ public:
     if (mRawPtr) {
       ConstRemovingRefPtrTraits<T>::AddRef(mRawPtr);
     }
+  }
+
+  MOZ_IMPLICIT RefPtr(decltype(nullptr))
+    : mRawPtr(nullptr)
+  {
   }
 
   template <typename I>
@@ -148,7 +154,18 @@ public:
   template<class U>
   MOZ_IMPLICIT RefPtr(const mozilla::OwningNonNull<U>& aOther);
 
+  // Defined in StaticPtr.h
+  template<class U>
+  MOZ_IMPLICIT RefPtr(const mozilla::StaticRefPtr<U>& aOther);
+
   // Assignment operators
+
+  RefPtr<T>&
+  operator=(decltype(nullptr))
+  {
+    assign_assuming_AddRef(nullptr);
+    return *this;
+  }
 
   RefPtr<T>&
   operator=(const RefPtr<T>& aRhs)
@@ -208,6 +225,11 @@ public:
   RefPtr<T>&
   operator=(const mozilla::OwningNonNull<U>& aOther);
 
+  // Defined in StaticPtr.h
+  template<class U>
+  RefPtr<T>&
+  operator=(const mozilla::StaticRefPtr<U>& aOther);
+
   // Other pointer operators
 
   void
@@ -233,7 +255,7 @@ public:
   // return the value of mRawPtr and null out mRawPtr. Useful for
   // already_AddRefed return values.
   {
-    T* temp = 0;
+    T* temp = nullptr;
     swap(temp);
     return already_AddRefed<T>(temp);
   }
@@ -248,7 +270,7 @@ public:
   {
     MOZ_ASSERT(aRhs, "Null pointer passed to forget!");
     *aRhs = mRawPtr;
-    mRawPtr = 0;
+    mRawPtr = nullptr;
   }
 
   T*
@@ -293,7 +315,7 @@ public:
   T*
   operator->() const MOZ_NO_ADDREF_RELEASE_ON_RETURN
   {
-    MOZ_ASSERT(mRawPtr != 0,
+    MOZ_ASSERT(mRawPtr != nullptr,
                "You can't dereference a NULL RefPtr with operator->().");
     return get();
   }
@@ -320,7 +342,7 @@ public:
   template <typename R, typename... Args>
   Proxy<R, Args...> operator->*(R (T::*aFptr)(Args...)) const
   {
-    MOZ_ASSERT(mRawPtr != 0,
+    MOZ_ASSERT(mRawPtr != nullptr,
                "You can't dereference a NULL RefPtr with operator->*().");
     return Proxy<R, Args...>(get(), aFptr);
   }
@@ -345,7 +367,7 @@ public:
   T&
   operator*() const
   {
-    MOZ_ASSERT(mRawPtr != 0,
+    MOZ_ASSERT(mRawPtr != nullptr,
                "You can't dereference a NULL RefPtr with operator*().");
     return *get();
   }
@@ -353,7 +375,7 @@ public:
   T**
   StartAssignment()
   {
-    assign_assuming_AddRef(0);
+    assign_assuming_AddRef(nullptr);
     return reinterpret_cast<T**>(&mRawPtr);
   }
 private:
@@ -597,6 +619,14 @@ operator!=(decltype(nullptr), const RefPtr<T>& aRhs)
 template <class T>
 inline already_AddRefed<T>
 do_AddRef(T* aObj)
+{
+  RefPtr<T> ref(aObj);
+  return ref.forget();
+}
+
+template <class T>
+inline already_AddRefed<T>
+do_AddRef(const RefPtr<T>& aObj)
 {
   RefPtr<T> ref(aObj);
   return ref.forget();

@@ -9,12 +9,14 @@ import android.app.Activity;
 import android.graphics.Rect;
 import android.os.Build;
 import android.util.Log;
+import android.util.TypedValue;
 import android.view.ActionMode;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import org.mozilla.gecko.EventDispatcher;
+import org.mozilla.gecko.GeckoApp;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
@@ -33,12 +35,17 @@ import ch.boye.httpclientandroidlib.util.TextUtils;
 public class FloatingToolbarTextSelection implements TextSelection, GeckoEventListener {
     private static final String LOGTAG = "GeckoFloatTextSelection";
 
-    private Activity activity;
+    // This is an additional offset we add to the height of the selection. This will avoid that the
+    // floating toolbar overlays the bottom handle(s).
+    private static final int HANDLES_OFFSET_DP = 20;
+
+    private final Activity activity;
+    private final LayerView layerView;
+    private final int[] locationInWindow;
+    private final float handlesOffset;
+
     private ActionMode actionMode;
     private FloatingActionModeCallback actionModeCallback;
-    private LayerView layerView;
-    private int[] locationInWindow;
-
     private String selectionID;
     /* package-private */ Rect contentRect;
 
@@ -46,6 +53,9 @@ public class FloatingToolbarTextSelection implements TextSelection, GeckoEventLi
         this.activity = activity;
         this.layerView = layerView;
         this.locationInWindow = new int[2];
+
+        this.handlesOffset = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP,
+                HANDLES_OFFSET_DP, activity.getResources().getDisplayMetrics());
     }
 
     @Override
@@ -85,7 +95,7 @@ public class FloatingToolbarTextSelection implements TextSelection, GeckoEventLi
     }
 
     private void registerForEvents() {
-        EventDispatcher.getInstance().registerGeckoThreadListener(this,
+        GeckoApp.getEventDispatcher().registerGeckoThreadListener(this,
                 "TextSelection:ActionbarInit",
                 "TextSelection:ActionbarStatus",
                 "TextSelection:ActionbarUninit",
@@ -94,7 +104,7 @@ public class FloatingToolbarTextSelection implements TextSelection, GeckoEventLi
     }
 
     private void unregisterFromEvents() {
-        EventDispatcher.getInstance().unregisterGeckoThreadListener(this,
+        GeckoApp.getEventDispatcher().unregisterGeckoThreadListener(this,
                 "TextSelection:ActionbarInit",
                 "TextSelection:ActionbarStatus",
                 "TextSelection:ActionbarUninit",
@@ -185,9 +195,10 @@ public class FloatingToolbarTextSelection implements TextSelection, GeckoEventLi
 
             contentRect = new Rect(
                     (int) (x * zoomFactor + locationInWindow[0]),
-                    (int) (y * zoomFactor + locationInWindow[1]  + layerView.getSurfaceTranslation()),
+                    (int) (y * zoomFactor + locationInWindow[1]),
                     (int) ((x + width) * zoomFactor + locationInWindow[0]),
-                    (int) ((y + height) * zoomFactor + locationInWindow[1] + layerView.getSurfaceTranslation()));
+                    (int) ((y + height) * zoomFactor + locationInWindow[1] +
+                           (height > 0 ? handlesOffset : 0)));
         } catch (JSONException e) {
             Log.w(LOGTAG, "Could not calculate content rect", e);
         }

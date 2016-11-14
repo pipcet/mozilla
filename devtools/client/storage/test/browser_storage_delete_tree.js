@@ -20,6 +20,9 @@ add_task(function* () {
     [["cookies", "test1.example.org"], ["c1", "c3", "cs2", "uc1"]],
     [["localStorage", "http://test1.example.org"], ["ls1", "ls2"]],
     [["sessionStorage", "http://test1.example.org"], ["ss1"]],
+    [["indexedDB", "http://test1.example.org", "idb1", "obj1"], [1, 2, 3]],
+    [["Cache", "http://test1.example.org", "plop"],
+      [MAIN_DOMAIN + "404_cached_file.js", MAIN_DOMAIN + "browser_storage_basic.js"]],
   ]);
 
   info("do the delete");
@@ -27,6 +30,8 @@ add_task(function* () {
     ["cookies", "test1.example.org"],
     ["localStorage", "http://test1.example.org"],
     ["sessionStorage", "http://test1.example.org"],
+    ["indexedDB", "http://test1.example.org", "idb1", "obj1"],
+    ["Cache", "http://test1.example.org", "plop"],
   ];
 
   for (let store of deleteHosts) {
@@ -54,6 +59,8 @@ add_task(function* () {
     [["cookies", "test1.example.org"], []],
     [["localStorage", "http://test1.example.org"], []],
     [["sessionStorage", "http://test1.example.org"], []],
+    [["indexedDB", "http://test1.example.org", "idb1", "obj1"], []],
+    [["Cache", "http://test1.example.org", "plop"], []],
   ]);
 
   yield finishTests();

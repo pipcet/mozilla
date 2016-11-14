@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const CURRENT_SCHEMA_VERSION = 32;
+const CURRENT_SCHEMA_VERSION = 35;
 const FIRST_UPGRADABLE_SCHEMA_VERSION = 11;
 
 const NS_APP_USER_PROFILE_50_DIR = "ProfD";
@@ -236,7 +236,7 @@ function clearDB() {
     file.append("places.sqlite");
     if (file.exists())
       file.remove(false);
-  } catch(ex) { dump("Exception: " + ex); }
+  } catch (ex) { dump("Exception: " + ex); }
 }
 
 
@@ -299,7 +299,7 @@ function page_in_database(aURI)
 {
   let url = aURI instanceof Ci.nsIURI ? aURI.spec : aURI;
   let stmt = DBConn().createStatement(
-    "SELECT id FROM moz_places WHERE url = :url"
+    "SELECT id FROM moz_places WHERE url_hash = hash(:url) AND url = :url"
   );
   stmt.params.url = url;
   try {
@@ -324,7 +324,7 @@ function visits_in_database(aURI)
   let stmt = DBConn().createStatement(
     `SELECT count(*) FROM moz_historyvisits v
      JOIN moz_places h ON h.id = v.place_id
-     WHERE url = :url`
+     WHERE url_hash = hash(:url) AND url = :url`
   );
   stmt.params.url = url;
   try {
@@ -370,9 +370,9 @@ function check_no_bookmarks() {
 function promiseTopicObserved(aTopic)
 {
   return new Promise(resolve => {
-    Services.obs.addObserver(function observe(aSubject, aTopic, aData) {
-      Services.obs.removeObserver(observe, aTopic);
-      resolve([aSubject, aData]);
+    Services.obs.addObserver(function observe(aObsSubject, aObsTopic, aObsData) {
+      Services.obs.removeObserver(observe, aObsTopic);
+      resolve([aObsSubject, aObsData]);
     }, aTopic, false);
   });
 }
@@ -509,7 +509,6 @@ function check_JSON_backup(aIsAutomaticBackup) {
     let bookmarksBackupDir = gProfD.clone();
     bookmarksBackupDir.append("bookmarkbackups");
     let files = bookmarksBackupDir.directoryEntries;
-    let backup_date = PlacesBackups.toISODateString(new Date());
     while (files.hasMoreElements()) {
       let entry = files.getNext().QueryInterface(Ci.nsIFile);
       if (PlacesBackups.filenamesRegex.test(entry.leafName)) {
@@ -542,7 +541,7 @@ function frecencyForUrl(aURI)
     url = aURI.href;
   }
   let stmt = DBConn().createStatement(
-    "SELECT frecency FROM moz_places WHERE url = ?1"
+    "SELECT frecency FROM moz_places WHERE url_hash = hash(?1) AND url = ?1"
   );
   stmt.bindByIndex(0, url);
   try {
@@ -566,7 +565,7 @@ function isUrlHidden(aURI)
 {
   let url = aURI instanceof Ci.nsIURI ? aURI.spec : aURI;
   let stmt = DBConn().createStatement(
-    "SELECT hidden FROM moz_places WHERE url = ?1"
+    "SELECT hidden FROM moz_places WHERE url_hash = hash(?1) AND url = ?1"
   );
   stmt.bindByIndex(0, url);
   if (!stmt.executeStep())
@@ -643,7 +642,7 @@ function do_get_guid_for_uri(aURI,
   let stmt = DBConn().createStatement(
     `SELECT guid
      FROM moz_places
-     WHERE url = :url`
+     WHERE url_hash = hash(:url) AND url = :url`
   );
   stmt.params.url = aURI.spec;
   do_check_true(stmt.executeStep(), aStack);
@@ -738,10 +737,8 @@ function do_compare_arrays(a1, a2, sorted)
   if (sorted) {
     return a1.every((e, i) => e == a2[i]);
   }
-  else {
-    return a1.filter(e => !a2.includes(e)).length == 0 &&
-           a2.filter(e => !a1.includes(e)).length == 0;
-  }
+  return a1.filter(e => !a2.includes(e)).length == 0 &&
+         a2.filter(e => !a1.includes(e)).length == 0;
 }
 
 /**
@@ -823,7 +820,7 @@ NavHistoryResultObserver.prototype = {
 function promiseIsURIVisited(aURI) {
   let deferred = Promise.defer();
 
-  PlacesUtils.asyncHistory.isURIVisited(aURI, function(aURI, aIsVisited) {
+  PlacesUtils.asyncHistory.isURIVisited(aURI, function(unused, aIsVisited) {
     deferred.resolve(aIsVisited);
   });
 
@@ -866,7 +863,7 @@ function* foreign_count(url) {
   let db = yield PlacesUtils.promiseDBConnection();
   let rows = yield db.executeCached(
     `SELECT foreign_count FROM moz_places
-     WHERE url = :url
+     WHERE url_hash = hash(:url) AND url = :url
     `, { url });
   return rows.length == 0 ? 0 : rows[0].getResultByName("foreign_count");
 }

@@ -22,7 +22,7 @@ import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.animation.PropertyAnimator;
 import org.mozilla.gecko.animation.ViewHelper;
 import org.mozilla.gecko.toolbar.BrowserToolbarTabletBase.ForwardButtonAnimation;
-import org.mozilla.gecko.util.Experiments;
+import org.mozilla.gecko.Experiments;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.widget.themed.ThemedLinearLayout;
@@ -115,7 +115,7 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
     private int mSecurityImageLevel;
 
     // Security level constants, which map to the icons / levels defined in:
-    // http://mxr.mozilla.org/mozilla-central/source/mobile/android/base/java/org/mozilla/gecko/resources/drawable/site_security_level.xml
+    // http://dxr.mozilla.org/mozilla-central/source/mobile/android/base/java/org/mozilla/gecko/resources/drawable/site_security_level.xml
     // Default level (unverified pages) - globe icon:
     private static final int LEVEL_DEFAULT_GLOBE = 0;
     // Levels for displaying Mixed Content state icons.
@@ -278,6 +278,11 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
             strippedURL = StringUtils.stripCommonSubdomains(StringUtils.stripScheme(strippedURL));
         }
 
+        // The URL bar does not support RTL currently (See bug 928688 and meta bug 702845).
+        // Displaying a URL using RTL (or mixed) characters can lead to an undesired reordering
+        // of elements of the URL. That's why we are forcing the URL to use LTR (bug 1284372).
+        strippedURL = StringUtils.forceLTR(strippedURL);
+
         // This value is not visible to screen readers but we rely on it when running UI tests. Screen
         // readers will instead focus BrowserToolbar and read the "base domain" from there. UI tests
         // will read the content description to obtain the full URL for performing assertions.
@@ -338,7 +343,7 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
             return url;
         }
 
-        return ReaderModeUtils.getUrlFromAboutReader(url);
+        return ReaderModeUtils.stripAboutReaderUrl(url);
     }
 
     private void updateSiteIdentity(@NonNull Tab tab) {
@@ -350,19 +355,16 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
         final MixedMode activeMixedMode;
         final MixedMode displayMixedMode;
         final TrackingMode trackingMode;
-        final boolean loginInsecure;
         if (siteIdentity == null) {
             securityMode = SecurityMode.UNKNOWN;
             activeMixedMode = MixedMode.UNKNOWN;
             displayMixedMode = MixedMode.UNKNOWN;
             trackingMode = TrackingMode.UNKNOWN;
-            loginInsecure = false;
         } else {
             securityMode = siteIdentity.getSecurityMode();
             activeMixedMode = siteIdentity.getMixedModeActive();
             displayMixedMode = siteIdentity.getMixedModeDisplay();
             trackingMode = siteIdentity.getTrackingMode();
-            loginInsecure = siteIdentity.loginInsecure();
         }
 
         // This is a bit tricky, but we have one icon and three potential indicators.
@@ -381,8 +383,6 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
         if (AboutPages.isTitlelessAboutPage(tab.getURL())) {
             // We always want to just show a search icon on about:home
             imageLevel = LEVEL_SEARCH_ICON;
-        } else if (loginInsecure) {
-            imageLevel = LEVEL_LOCK_DISABLED;
         } else if (trackingMode == TrackingMode.TRACKING_CONTENT_LOADED) {
             imageLevel = LEVEL_SHIELD_DISABLED;
         } else if (trackingMode == TrackingMode.TRACKING_CONTENT_BLOCKED) {

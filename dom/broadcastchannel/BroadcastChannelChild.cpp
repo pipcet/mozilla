@@ -91,14 +91,14 @@ BroadcastChannelChild::RecvNotify(const ClonedMessageData& aData)
   cloneData.BlobImpls().AppendElements(blobs);
 
   const SerializedStructuredCloneBuffer& buffer = aData.data();
-  cloneData.UseExternalData(buffer.data, buffer.dataLength);
-
   JSContext* cx = jsapi.cx();
   JS::Rooted<JS::Value> value(cx, JS::NullValue());
-  if (buffer.dataLength) {
+  if (buffer.data.Size()) {
     ErrorResult rv;
+    cloneData.UseExternalData(buffer.data);
     cloneData.Read(cx, &value, rv);
     if (NS_WARN_IF(rv.Failed())) {
+      rv.SuppressException();
       return true;
     }
   }
@@ -106,14 +106,14 @@ BroadcastChannelChild::RecvNotify(const ClonedMessageData& aData)
   RootedDictionary<MessageEventInit> init(cx);
   init.mBubbles = false;
   init.mCancelable = false;
-  init.mOrigin.Construct(mOrigin);
+  init.mOrigin = mOrigin;
   init.mData = value;
 
   ErrorResult rv;
   RefPtr<MessageEvent> event =
     MessageEvent::Constructor(mBC, NS_LITERAL_STRING("message"), init, rv);
-  if (rv.Failed()) {
-    NS_WARNING("Failed to create a MessageEvent object.");
+  if (NS_WARN_IF(rv.Failed())) {
+    rv.SuppressException();
     return true;
   }
 

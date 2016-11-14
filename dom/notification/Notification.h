@@ -9,7 +9,7 @@
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/NotificationBinding.h"
-#include "mozilla/dom/workers/bindings/WorkerFeature.h"
+#include "mozilla/dom/workers/bindings/WorkerHolder.h"
 
 #include "nsIObserver.h"
 
@@ -36,14 +36,14 @@ namespace workers {
 } // namespace workers
 
 class Notification;
-class NotificationFeature final : public workers::WorkerFeature
+class NotificationWorkerHolder final : public workers::WorkerHolder
 {
   // Since the feature is strongly held by a Notification, it is ok to hold
   // a raw pointer here.
   Notification* mNotification;
 
 public:
-  explicit NotificationFeature(Notification* aNotification);
+  explicit NotificationWorkerHolder(Notification* aNotification);
 
   bool
   Notify(workers::Status aStatus) override;
@@ -155,6 +155,7 @@ public:
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(Notification, DOMEventTargetHelper)
   NS_DECL_NSIOBSERVER
 
+  static bool RequireInteractionEnabled(JSContext* aCx, JSObject* aObj);
   static bool PrefEnabled(JSContext* aCx, JSObject* aObj);
   // Returns if Notification.get() is allowed for the current global.
   static bool IsGetEnabled(JSContext* aCx, JSObject* aObj);
@@ -185,7 +186,7 @@ public:
     const nsAString& aTag,
     const nsAString& aIcon,
     const nsAString& aData,
-    const nsAString& aServiceWorkerRegistrationID,
+    const nsAString& aServiceWorkerRegistrationScope,
     ErrorResult& aRv);
 
   void GetID(nsAString& aRetval) {
@@ -280,6 +281,8 @@ public:
 
   virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
+  bool RequireInteraction() const;
+
   void GetData(JSContext* aCx, JS::MutableHandle<JS::Value> aRetval);
 
   void InitFromJSVal(JSContext* aCx, JS::Handle<JS::Value> aData, ErrorResult& aRv);
@@ -329,6 +332,7 @@ protected:
                const nsAString& aTitle, const nsAString& aBody,
                NotificationDirection aDir, const nsAString& aLang,
                const nsAString& aTag, const nsAString& aIconUrl,
+               bool aRequireNotification,
                const NotificationBehavior& aBehavior);
 
   static already_AddRefed<Notification> CreateInternal(nsIGlobalObject* aGlobal,
@@ -397,6 +401,7 @@ protected:
   const nsString mLang;
   const nsString mTag;
   const nsString mIconUrl;
+  const bool mRequireInteraction;
   nsString mDataAsBase64;
   const NotificationBehavior mBehavior;
 
@@ -448,13 +453,13 @@ private:
     return NS_IsMainThread() == !mWorkerPrivate;
   }
 
-  bool RegisterFeature();
-  void UnregisterFeature();
+  bool RegisterWorkerHolder();
+  void UnregisterWorkerHolder();
 
   nsresult ResolveIconAndSoundURL(nsString&, nsString&);
 
   // Only used for Notifications on Workers, worker thread only.
-  UniquePtr<NotificationFeature> mFeature;
+  UniquePtr<NotificationWorkerHolder> mWorkerHolder;
   // Target thread only.
   uint32_t mTaskCount;
 };

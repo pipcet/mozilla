@@ -56,6 +56,10 @@ class MockBufferFactoryD3D : public rx::BufferFactoryD3D
     MOCK_METHOD0(createVertexBuffer, rx::VertexBuffer*());
     MOCK_CONST_METHOD1(getVertexConversionType, rx::VertexConversionType(gl::VertexFormatType));
     MOCK_CONST_METHOD1(getVertexComponentType, GLenum(gl::VertexFormatType));
+    MOCK_CONST_METHOD3(getVertexSpaceRequired,
+                       gl::ErrorOrResult<unsigned int>(const gl::VertexAttribute &,
+                                                       GLsizei,
+                                                       GLsizei));
 
     // Dependency injection
     rx::IndexBuffer* createIndexBuffer() override
@@ -78,7 +82,7 @@ class MockBufferD3D : public rx::BufferD3D
     }
 
     // BufferImpl
-    gl::Error setData(const void *data, size_t size, GLenum) override
+    gl::Error setData(GLenum target, const void *data, size_t size, GLenum) override
     {
         mData.resize(size);
         if (data && size > 0)
@@ -88,14 +92,14 @@ class MockBufferD3D : public rx::BufferD3D
         return gl::Error(GL_NO_ERROR);
     }
 
-    MOCK_METHOD3(setSubData, gl::Error(const void*, size_t, size_t));
+    MOCK_METHOD4(setSubData, gl::Error(GLenum, const void *, size_t, size_t));
     MOCK_METHOD4(copySubData, gl::Error(BufferImpl*, GLintptr, GLintptr, GLsizeiptr));
     MOCK_METHOD2(map, gl::Error(GLenum, GLvoid **));
     MOCK_METHOD4(mapRange, gl::Error(size_t, size_t, GLbitfield, GLvoid **));
     MOCK_METHOD1(unmap, gl::Error(GLboolean *));
 
     // BufferD3D
-    MOCK_METHOD0(markTransformFeedbackUsage, void());
+    MOCK_METHOD0(markTransformFeedbackUsage, gl::Error());
 
     // inlined for speed
     bool supportsDirectBinding() const override { return false; }
@@ -148,7 +152,8 @@ IndexDataManagerPerfTest::IndexDataManagerPerfTest()
     {
         indexData[index] = static_cast<GLushort>(index);
     }
-    mIndexBuffer.bufferData(&indexData[0], indexData.size() * sizeof(GLushort), GL_STATIC_DRAW);
+    mIndexBuffer.bufferData(GL_ARRAY_BUFFER, &indexData[0], indexData.size() * sizeof(GLushort),
+                            GL_STATIC_DRAW);
 }
 
 void IndexDataManagerPerfTest::step()

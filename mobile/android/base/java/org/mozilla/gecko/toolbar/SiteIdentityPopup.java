@@ -20,13 +20,13 @@ import org.mozilla.gecko.AboutPages;
 import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.R;
+import org.mozilla.gecko.GeckoApp;
 import org.mozilla.gecko.GeckoAppShell;
-import org.mozilla.gecko.GeckoEvent;
 import org.mozilla.gecko.SiteIdentity;
 import org.mozilla.gecko.SiteIdentity.SecurityMode;
 import org.mozilla.gecko.SiteIdentity.MixedMode;
 import org.mozilla.gecko.SiteIdentity.TrackingMode;
-import org.mozilla.gecko.SnackbarHelper;
+import org.mozilla.gecko.SnackbarBuilder;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.util.GeckoEventListener;
@@ -97,8 +97,10 @@ public class SiteIdentityPopup extends AnchoredPopup implements GeckoEventListen
         mResources = mContext.getResources();
 
         mContentButtonClickListener = new ContentNotificationButtonListener();
-        EventDispatcher.getInstance().registerGeckoThreadListener(this, "Doorhanger:Logins");
-        EventDispatcher.getInstance().registerGeckoThreadListener(this, "Permissions:CheckResult");
+
+        GeckoApp.getEventDispatcher().registerGeckoThreadListener(this,
+                                                                  "Doorhanger:Logins",
+                                                                  "Permissions:CheckResult");
     }
 
     @Override
@@ -226,17 +228,21 @@ public class SiteIdentityPopup extends AnchoredPopup implements GeckoEventListen
                         } else {
                             password = login.getString("password");
                         }
-                        if (AppConstants.Versions.feature11Plus) {
-                            manager.setPrimaryClip(ClipData.newPlainText("password", password));
-                        } else {
-                            manager.setText(password);
-                        }
-                        SnackbarHelper.showSnackbar(activity, activity.getString(R.string.doorhanger_login_select_toast_copy), Snackbar.LENGTH_SHORT);
+
+                        manager.setPrimaryClip(ClipData.newPlainText("password", password));
+
+                        SnackbarBuilder.builder(activity)
+                                .message(R.string.doorhanger_login_select_toast_copy)
+                                .duration(Snackbar.LENGTH_SHORT)
+                                .buildAndShow();
                     }
                     dismiss();
                 } catch (JSONException e) {
                     Log.e(LOGTAG, "Error handling Select login button click", e);
-                    SnackbarHelper.showSnackbar(activity, activity.getString(R.string.doorhanger_login_select_toast_copy_error), Snackbar.LENGTH_SHORT);
+                    SnackbarBuilder.builder(activity)
+                            .message(R.string.doorhanger_login_select_toast_copy_error)
+                            .duration(Snackbar.LENGTH_SHORT)
+                            .buildAndShow();
                 }
             }
         };
@@ -323,14 +329,7 @@ public class SiteIdentityPopup extends AnchoredPopup implements GeckoEventListen
             mMixedContentActivity.setVisibility(View.GONE);
             mLink.setVisibility(View.GONE);
         } else if (!siteIdentity.isSecure()) {
-            if (siteIdentity.loginInsecure()) {
-                // Login detected on an insecure page.
-                mIcon.setImageResource(R.drawable.lock_disabled);
-                clearSecurityStateIcon();
-
-                mMixedContentActivity.setVisibility(View.VISIBLE);
-                mMixedContentActivity.setText(R.string.identity_login_insecure);
-            } else if (siteIdentity.getMixedModeActive() == MixedMode.MIXED_CONTENT_LOADED) {
+            if (siteIdentity.getMixedModeActive() == MixedMode.MIXED_CONTENT_LOADED) {
                 // Active Mixed Content loaded because user has disabled blocking.
                 mIcon.setImageResource(R.drawable.lock_disabled);
                 clearSecurityStateIcon();
@@ -548,8 +547,9 @@ public class SiteIdentityPopup extends AnchoredPopup implements GeckoEventListen
     }
 
     void destroy() {
-        EventDispatcher.getInstance().unregisterGeckoThreadListener(this, "Doorhanger:Logins");
-        EventDispatcher.getInstance().unregisterGeckoThreadListener(this, "Permissions:CheckResult");
+        GeckoApp.getEventDispatcher().unregisterGeckoThreadListener(this,
+                                                                    "Doorhanger:Logins",
+                                                                    "Permissions:CheckResult");
     }
 
     @Override

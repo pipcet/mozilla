@@ -23,6 +23,7 @@ namespace image {
 using namespace gfx;
 
 using std::abs;
+using std::vector;
 
 ///////////////////////////////////////////////////////////////////////////////
 // General Helpers
@@ -42,9 +43,21 @@ using std::abs;
     return rv;                        \
   }
 
+#define ASSERT_GE_OR_RETURN(a, b, rv) \
+  EXPECT_GE(a, b);                    \
+  if (!((a) >= (b))) {                \
+    return rv;                        \
+  }
+
 #define ASSERT_LE_OR_RETURN(a, b, rv) \
   EXPECT_LE(a, b);                    \
-  if (!((a) <= (b))) {                 \
+  if (!((a) <= (b))) {                \
+    return rv;                        \
+  }
+
+#define ASSERT_LT_OR_RETURN(a, b, rv) \
+  EXPECT_LT(a, b);                    \
+  if (!((a) < (b))) {                 \
     return rv;                        \
   }
 
@@ -205,6 +218,41 @@ PalettedRectIsSolidColor(Decoder* aDecoder, const IntRect& aRect, uint8_t aColor
   return true;
 }
 
+bool
+RowHasPixels(SourceSurface* aSurface,
+             int32_t aRow,
+             const vector<BGRAColor>& aPixels)
+{
+  ASSERT_GE_OR_RETURN(aRow, 0, false);
+
+  IntSize surfaceSize = aSurface->GetSize();
+  ASSERT_EQ_OR_RETURN(aPixels.size(), size_t(surfaceSize.width), false);
+  ASSERT_LT_OR_RETURN(aRow, surfaceSize.height, false);
+
+  RefPtr<DataSourceSurface> dataSurface = aSurface->GetDataSurface();
+  ASSERT_TRUE_OR_RETURN(dataSurface, false);
+
+  ASSERT_EQ_OR_RETURN(dataSurface->Stride(), surfaceSize.width * 4, false);
+
+  DataSourceSurface::ScopedMap mapping(dataSurface,
+                                       DataSourceSurface::MapType::READ);
+  ASSERT_TRUE_OR_RETURN(mapping.IsMapped(), false);
+
+  uint8_t* data = dataSurface->GetData();
+  ASSERT_TRUE_OR_RETURN(data != nullptr, false);
+
+  int32_t rowLength = dataSurface->Stride();
+  for (int32_t col = 0; col < surfaceSize.width; ++col) {
+    int32_t i = aRow * rowLength + col * 4;
+    ASSERT_EQ_OR_RETURN(aPixels[col].mBlue,  data[i + 0], false);
+    ASSERT_EQ_OR_RETURN(aPixels[col].mGreen, data[i + 1], false);
+    ASSERT_EQ_OR_RETURN(aPixels[col].mRed,   data[i + 2], false);
+    ASSERT_EQ_OR_RETURN(aPixels[col].mAlpha, data[i + 3], false);
+  }
+
+  return true;
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////
 // SurfacePipe Helpers
@@ -215,7 +263,7 @@ CreateTrivialDecoder()
 {
   gfxPrefs::GetSingleton();
   DecoderType decoderType = DecoderFactory::GetDecoderType("image/gif");
-  RefPtr<SourceBuffer> sourceBuffer = new SourceBuffer();
+  NotNull<RefPtr<SourceBuffer>> sourceBuffer = WrapNotNull(new SourceBuffer());
   RefPtr<Decoder> decoder =
     DecoderFactory::CreateAnonymousDecoder(decoderType, sourceBuffer, Nothing(),
                                            DefaultSurfaceFlags());
@@ -240,7 +288,7 @@ CheckGeneratedImage(Decoder* aDecoder,
                     uint8_t aFuzz /* = 0 */)
 {
   RawAccessFrameRef currentFrame = aDecoder->GetCurrentFrameRef();
-  RefPtr<SourceSurface> surface = currentFrame->GetSurface();
+  RefPtr<SourceSurface> surface = currentFrame->GetSourceSurface();
   const IntSize surfaceSize = surface->GetSize();
 
   // This diagram shows how the surface is divided into regions that the code
@@ -485,6 +533,31 @@ ImageTestCase CorruptTestCase()
                        TEST_CASE_HAS_ERROR);
 }
 
+ImageTestCase CorruptBMPWithTruncatedHeader()
+{
+  // This BMP has a header which is truncated right between the BIH and the
+  // bitfields, which is a particularly error-prone place w.r.t. the BMP decoder
+  // state machine.
+  return ImageTestCase("invalid-truncated-metadata.bmp", "image/bmp",
+                       IntSize(100, 100), TEST_CASE_HAS_ERROR);
+}
+
+ImageTestCase CorruptICOWithBadBMPWidthTestCase()
+{
+  // This ICO contains a BMP icon which has a width that doesn't match the size
+  // listed in the corresponding ICO directory entry.
+  return ImageTestCase("corrupt-with-bad-bmp-width.ico", "image/x-icon",
+                       IntSize(100, 100), TEST_CASE_HAS_ERROR);
+}
+
+ImageTestCase CorruptICOWithBadBMPHeightTestCase()
+{
+  // This ICO contains a BMP icon which has a height that doesn't match the size
+  // listed in the corresponding ICO directory entry.
+  return ImageTestCase("corrupt-with-bad-bmp-height.ico", "image/x-icon",
+                       IntSize(100, 100), TEST_CASE_HAS_ERROR);
+}
+
 ImageTestCase TransparentPNGTestCase()
 {
   return ImageTestCase("transparent.png", "image/png", IntSize(32, 32),
@@ -589,6 +662,11 @@ ImageTestCase DownscaledTransparentICOWithANDMaskTestCase()
   return ImageTestCase("transparent-ico-with-and-mask.ico", "image/x-icon",
                        IntSize(32, 32), IntSize(20, 20),
                        TEST_CASE_IS_TRANSPARENT | TEST_CASE_IGNORE_OUTPUT);
+}
+
+ImageTestCase TruncatedSmallGIFTestCase()
+{
+  return ImageTestCase("green-1x1-truncated.gif", "image/gif", IntSize(1, 1));
 }
 
 } // namespace image

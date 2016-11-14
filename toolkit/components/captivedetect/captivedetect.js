@@ -174,7 +174,7 @@ function LoginObserver(captivePortalDetector) {
      * Check if login activity is finished according to HTTP burst.
      */
     notify : function notify() {
-      switch(state) {
+      switch (state) {
         case LOGIN_OBSERVER_STATE_BURST:
           // Wait while network stays idle for a short period
           state = LOGIN_OBSERVER_STATE_VERIFY_NEEDED;
@@ -213,7 +213,7 @@ function CaptivePortalDetector() {
       Services.prefs.getCharPref('captivedetect.canonicalURL');
     this._canonicalSiteExpectedContent =
       Services.prefs.getCharPref('captivedetect.canonicalContent');
-  } catch(e) {
+  } catch (e) {
     debug('canonicalURL or canonicalContent not set.')
   }
 
@@ -277,7 +277,6 @@ CaptivePortalDetector.prototype = {
         || this._runningRequest.interfaceName !== aInterfaceName) {
       debug('invalid finishPreparation for ' + aInterfaceName);
       throw Components.Exception('only first request is allowed to invoke |finishPreparation|');
-      return;
     }
 
     this._startDetection();

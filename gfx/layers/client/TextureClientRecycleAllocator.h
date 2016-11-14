@@ -18,6 +18,7 @@ namespace mozilla {
 namespace layers {
 
 class TextureClientHolder;
+struct PlanarYCbCrData;
 
 class ITextureClientRecycleAllocator
 {
@@ -47,7 +48,7 @@ public:
     , mAllocationFlags(aAllocationFlags)
   {}
 
-  virtual already_AddRefed<TextureClient> Allocate(TextureForwarder* aAllocator) = 0;
+  virtual already_AddRefed<TextureClient> Allocate(KnowsCompositor* aAllocator) = 0;
   virtual bool IsCompatible(TextureClient* aTextureClient) = 0;
 
   const gfx::SurfaceFormat mFormat;
@@ -56,6 +57,21 @@ public:
   const TextureFlags mTextureFlags;
   const TextureAllocationFlags mAllocationFlags;
 };
+
+class YCbCrTextureClientAllocationHelper : public ITextureClientAllocationHelper
+{
+public:
+  YCbCrTextureClientAllocationHelper(const PlanarYCbCrData& aData,
+                                     TextureFlags aTextureFlags);
+
+  bool IsCompatible(TextureClient* aTextureClient) override;
+
+  already_AddRefed<TextureClient> Allocate(KnowsCompositor* aAllocator) override;
+
+protected:
+  const PlanarYCbCrData& mData;
+};
+
 
 /**
  * TextureClientRecycleAllocator provides TextureClients allocation and
@@ -72,7 +88,7 @@ protected:
   virtual ~TextureClientRecycleAllocator();
 
 public:
-  explicit TextureClientRecycleAllocator(TextureForwarder* aAllocator);
+  explicit TextureClientRecycleAllocator(KnowsCompositor* aAllocator);
 
   void SetMaxPoolSize(uint32_t aMax);
 
@@ -89,6 +105,8 @@ public:
 
   void ShrinkToMinimumSize();
 
+  void Destroy();
+
 protected:
   virtual already_AddRefed<TextureClient>
   Allocate(gfx::SurfaceFormat aFormat,
@@ -97,7 +115,7 @@ protected:
            TextureFlags aTextureFlags,
            TextureAllocationFlags aAllocFlags);
 
-  RefPtr<TextureForwarder> mSurfaceAllocator;
+  RefPtr<KnowsCompositor> mSurfaceAllocator;
 
   friend class DefaultTextureClientAllocationHelper;
   void RecycleTextureClient(TextureClient* aClient) override;
@@ -113,6 +131,7 @@ protected:
   // stack is good from Graphics cache usage point of view.
   std::stack<RefPtr<TextureClientHolder> > mPooledClients;
   Mutex mLock;
+  bool mIsDestroyed;
 };
 
 } // namespace layers

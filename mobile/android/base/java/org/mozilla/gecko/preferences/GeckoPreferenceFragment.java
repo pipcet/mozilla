@@ -17,7 +17,7 @@ import org.mozilla.gecko.R;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.TelemetryContract.Method;
-import org.mozilla.gecko.fxa.AccountLoaderNative;
+import org.mozilla.gecko.fxa.AccountLoader;
 import org.mozilla.gecko.fxa.authenticator.AndroidFxAccount;
 
 import android.accounts.Account;
@@ -166,7 +166,7 @@ public class GeckoPreferenceFragment extends PreferenceFragment {
         }
 
         final GeckoPreferences activity = (GeckoPreferences) getActivity();
-        if (Versions.feature11Plus && activity.isMultiPane()) {
+        if (activity.isMultiPane()) {
             // In a multi-pane activity, the title is "Settings", and the action
             // bar is along the top of the screen. We don't want to change those.
             activity.showBreadCrumbs(newTitle, newTitle);
@@ -237,8 +237,7 @@ public class GeckoPreferenceFragment extends PreferenceFragment {
             // The resource was invalid. Use the default resource.
             Log.e(LOGTAG, "Failed to find resource: " + resourceName + ". Displaying default settings.");
 
-            boolean isMultiPane = Versions.feature11Plus &&
-                                  ((GeckoPreferences) activity).isMultiPane();
+            boolean isMultiPane = ((GeckoPreferences) activity).isMultiPane();
             resid = isMultiPane ? R.xml.preferences_general_tablet : R.xml.preferences;
         }
 
@@ -270,7 +269,7 @@ public class GeckoPreferenceFragment extends PreferenceFragment {
     private class AccountLoaderCallbacks implements LoaderManager.LoaderCallbacks<Account> {
         @Override
         public Loader<Account> onCreateLoader(int id, Bundle args) {
-            return new AccountLoaderNative(getActivity());
+            return new AccountLoader(getActivity());
         }
 
         @Override

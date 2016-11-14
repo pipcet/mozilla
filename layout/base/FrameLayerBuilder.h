@@ -24,6 +24,7 @@ class nsDisplayList;
 class nsDisplayItem;
 class gfxContext;
 class nsDisplayItemGeometry;
+class nsDisplayMask;
 
 namespace mozilla {
 class DisplayItemScrollClip;
@@ -63,7 +64,7 @@ struct ContainerLayerParameters {
     , mInActiveTransformedSubtree(false)
     , mDisableSubpixelAntialiasingInDescendants(false)
     , mInLowPrecisionDisplayPort(false)
-    , mForEventsOnly(false)
+    , mForEventsAndPluginsOnly(false)
     , mLayerCreationHint(layers::LayerManager::NONE)
   {}
   ContainerLayerParameters(float aXScale, float aYScale)
@@ -77,7 +78,7 @@ struct ContainerLayerParameters {
     , mInActiveTransformedSubtree(false)
     , mDisableSubpixelAntialiasingInDescendants(false)
     , mInLowPrecisionDisplayPort(false)
-    , mForEventsOnly(false)
+    , mForEventsAndPluginsOnly(false)
     , mLayerCreationHint(layers::LayerManager::NONE)
   {}
   ContainerLayerParameters(float aXScale, float aYScale,
@@ -94,7 +95,7 @@ struct ContainerLayerParameters {
     , mInActiveTransformedSubtree(aParent.mInActiveTransformedSubtree)
     , mDisableSubpixelAntialiasingInDescendants(aParent.mDisableSubpixelAntialiasingInDescendants)
     , mInLowPrecisionDisplayPort(aParent.mInLowPrecisionDisplayPort)
-    , mForEventsOnly(aParent.mForEventsOnly)
+    , mForEventsAndPluginsOnly(aParent.mForEventsAndPluginsOnly)
     , mLayerCreationHint(aParent.mLayerCreationHint)
   {}
 
@@ -129,7 +130,7 @@ struct ContainerLayerParameters {
   bool mInActiveTransformedSubtree;
   bool mDisableSubpixelAntialiasingInDescendants;
   bool mInLowPrecisionDisplayPort;
-  bool mForEventsOnly;
+  bool mForEventsAndPluginsOnly;
   layers::LayerManager::PaintedLayerCreationHint mLayerCreationHint;
 
   /**

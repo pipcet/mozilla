@@ -58,7 +58,8 @@ SharedSurface_EGLImage::HasExtensions(GLLibraryEGL* egl, GLContext* gl)
 {
     return egl->HasKHRImageBase() &&
            egl->IsExtensionSupported(GLLibraryEGL::KHR_gl_texture_2D_image) &&
-           gl->IsExtensionSupported(GLContext::OES_EGL_image_external);
+           (gl->IsExtensionSupported(GLContext::OES_EGL_image_external) ||
+            gl->IsExtensionSupported(GLContext::OES_EGL_image));
 }
 
 SharedSurface_EGLImage::SharedSurface_EGLImage(GLContext* gl,
@@ -79,8 +80,6 @@ SharedSurface_EGLImage::SharedSurface_EGLImage(GLContext* gl,
     , mFormats(formats)
     , mProdTex(prodTex)
     , mImage(image)
-    , mCurConsGL(nullptr)
-    , mConsTex(0)
     , mSync(0)
 {}
 
@@ -95,13 +94,7 @@ SharedSurface_EGLImage::~SharedSurface_EGLImage()
         mSync = 0;
     }
 
-    if (mConsTex) {
-        MOZ_ASSERT(mGarbageBin);
-        mGarbageBin->Trash(mConsTex);
-        mConsTex = 0;
-    }
-
-    if (!mGL->MakeCurrent())
+    if (!mGL || !mGL->MakeCurrent())
         return;
 
     mGL->fDeleteTextures(1, &mProdTex);
@@ -157,28 +150,6 @@ SharedSurface_EGLImage::Display() const
     return mEGL->Display();
 }
 
-void
-SharedSurface_EGLImage::AcquireConsumerTexture(GLContext* consGL, GLuint* out_texture, GLuint* out_target)
-{
-    MutexAutoLock lock(mMutex);
-    MOZ_ASSERT(!mCurConsGL || consGL == mCurConsGL);
-
-    if (!mConsTex) {
-        consGL->fGenTextures(1, &mConsTex);
-        MOZ_ASSERT(mConsTex);
-
-        ScopedBindTexture autoTex(consGL, mConsTex, LOCAL_GL_TEXTURE_EXTERNAL);
-        consGL->fEGLImageTargetTexture2D(LOCAL_GL_TEXTURE_EXTERNAL, mImage);
-
-        mCurConsGL = consGL;
-        mGarbageBin = consGL->TexGarbageBin();
-    }
-
-    MOZ_ASSERT(consGL == mCurConsGL);
-    *out_texture = mConsTex;
-    *out_target = LOCAL_GL_TEXTURE_EXTERNAL;
-}
-
 bool
 SharedSurface_EGLImage::ToSurfaceDescriptor(layers::SurfaceDescriptor* const out_descriptor)
 {
@@ -199,7 +170,7 @@ SharedSurface_EGLImage::ReadbackBySharedHandle(gfx::DataSourceSurface* out_surfa
 
 /*static*/ UniquePtr<SurfaceFactory_EGLImage>
 SurfaceFactory_EGLImage::Create(GLContext* prodGL, const SurfaceCaps& caps,
-                                const RefPtr<layers::ClientIPCAllocator>& allocator,
+                                const RefPtr<layers::LayersIPCChannel>& allocator,
                                 const layers::TextureFlags& flags)
 {
     EGLContext context = GLContextEGL::Cast(prodGL)->mContext;

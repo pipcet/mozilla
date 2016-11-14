@@ -13,6 +13,7 @@ const {
 const { nodeSpec } = require("devtools/shared/specs/node");
 require("devtools/shared/specs/styles");
 require("devtools/shared/specs/highlighters");
+require("devtools/shared/specs/layout");
 
 exports.nodeSpec = nodeSpec;
 
@@ -103,6 +104,10 @@ const walkerSpec = generateActorSpec({
     },
     "picker-node-picked": {
       type: "pickerNodePicked",
+      node: Arg(0, "disconnectedNode")
+    },
+    "picker-node-previewed": {
+      type: "pickerNodePreviewed",
       node: Arg(0, "disconnectedNode")
     },
     "picker-node-hovered": {
@@ -362,6 +367,12 @@ const walkerSpec = generateActorSpec({
       response: {
         node: RetVal("nullable:disconnectedNode")
       }
+    },
+    getLayoutInspector: {
+      request: {},
+      response: {
+        actor: RetVal("layout")
+      }
     }
   }
 });
@@ -370,6 +381,16 @@ exports.walkerSpec = walkerSpec;
 
 const inspectorSpec = generateActorSpec({
   typeName: "inspector",
+
+  events: {
+    "color-picked": {
+      type: "colorPicked",
+      color: Arg(0, "string")
+    },
+    "color-pick-canceled": {
+      type: "colorPickCanceled"
+    }
+  },
 
   methods: {
     getWalker: {
@@ -409,6 +430,14 @@ const inspectorSpec = generateActorSpec({
     resolveRelativeURL: {
       request: {url: Arg(0, "string"), node: Arg(1, "nullable:domnode")},
       response: {value: RetVal("string")}
+    },
+    pickColorFromPage: {
+      request: {options: Arg(0, "nullable:json")},
+      response: {}
+    },
+    cancelPickColorFromPage: {
+      request: {},
+      response: {}
     }
   }
 });

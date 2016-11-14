@@ -18,6 +18,7 @@
 #define MAC_OS_X_VERSION_10_9_HEX  0x00001090
 #define MAC_OS_X_VERSION_10_10_HEX 0x000010A0
 #define MAC_OS_X_VERSION_10_11_HEX 0x000010B0
+#define MAC_OS_X_VERSION_10_12_HEX 0x000010C0
 
 #include "nsCocoaFeatures.h"
 #include "nsCocoaUtils.h"
@@ -149,24 +150,6 @@ nsCocoaFeatures::OSXVersionBugFix()
 }
 
 /* static */ bool
-nsCocoaFeatures::OnLionOrLater()
-{
-    return (OSXVersion() >= MAC_OS_X_VERSION_10_7_HEX);
-}
-
-/* static */ bool
-nsCocoaFeatures::OnMountainLionOrLater()
-{
-    return (OSXVersion() >= MAC_OS_X_VERSION_10_8_HEX);
-}
-
-/* static */ bool
-nsCocoaFeatures::OnMavericksOrLater()
-{
-    return (OSXVersion() >= MAC_OS_X_VERSION_10_9_HEX);
-}
-
-/* static */ bool
 nsCocoaFeatures::OnYosemiteOrLater()
 {
     return (OSXVersion() >= MAC_OS_X_VERSION_10_10_HEX);
@@ -176,6 +159,12 @@ nsCocoaFeatures::OnYosemiteOrLater()
 nsCocoaFeatures::OnElCapitanOrLater()
 {
     return (OSXVersion() >= MAC_OS_X_VERSION_10_11_HEX);
+}
+
+/* static */ bool
+nsCocoaFeatures::OnSierraOrLater()
+{
+    return (OSXVersion() >= MAC_OS_X_VERSION_10_12_HEX);
 }
 
 /* static */ bool

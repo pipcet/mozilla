@@ -18,7 +18,7 @@
 #include "nsIPrincipal.h"
 #include "FrameMetrics.h"
 #include "nsIWidget.h"
-#include "nsCSSProperty.h"
+#include "nsCSSPropertyID.h"
 #include "nsStyleCoord.h"
 #include "nsStyleConsts.h"
 #include "nsGkAtoms.h"
@@ -27,7 +27,7 @@
 #include "mozilla/gfx/2D.h"
 #include "Units.h"
 #include "mozilla/ToString.h"
-#include "nsHTMLReflowMetrics.h"
+#include "mozilla/ReflowOutput.h"
 #include "ImageContainer.h"
 #include "gfx2DGlue.h"
 
@@ -281,7 +281,7 @@ public:
    * @return the ::before frame or nullptr if there isn't one
    */
   static nsIFrame* GetBeforeFrameForContent(nsIFrame* aGenConParentFrame,
-                                            nsIContent* aContent);
+                                            const nsIContent* aContent);
 
   /**
    * GetBeforeFrame returns the outermost ::before frame of the given frame, if
@@ -304,7 +304,7 @@ public:
    * @return the ::after frame or nullptr if there isn't one
    */
   static nsIFrame* GetAfterFrameForContent(nsIFrame* aGenConParentFrame,
-                                           nsIContent* aContent);
+                                           const nsIContent* aContent);
 
   /**
    * GetAfterFrame returns the outermost ::after frame of the given frame, if one
@@ -694,8 +694,9 @@ public:
   static nsIFrame* GetFloatFromPlaceholder(nsIFrame* aPlaceholder);
 
   // Combine aNewBreakType with aOrigBreakType, but limit the break types
-  // to NS_STYLE_CLEAR_LEFT, RIGHT, LEFT_AND_RIGHT.
-  static uint8_t CombineBreakType(uint8_t aOrigBreakType, uint8_t aNewBreakType);
+  // to StyleClear::Left, Right, Both.
+  static mozilla::StyleClear CombineBreakType(mozilla::StyleClear aOrigBreakType,
+                                              mozilla::StyleClear aNewBreakType);
 
   /**
    * Get the coordinates of a given DOM mouse event, relative to a given
@@ -1197,6 +1198,11 @@ public:
   static void GetAllInFlowRects(nsIFrame* aFrame, nsIFrame* aRelativeTo,
                                 RectCallback* aCallback, uint32_t aFlags = 0);
 
+  static void GetAllInFlowRectsAndTexts(nsIFrame* aFrame, nsIFrame* aRelativeTo,
+                                        RectCallback* aCallback,
+                                        mozilla::dom::DOMStringList* aTextList,
+                                        uint32_t aFlags = 0);
+
   /**
    * Computes the union of all rects returned by GetAllInFlowRects. If
    * the union is empty, returns the first rect.
@@ -1372,6 +1378,9 @@ public:
    * width, its 'width', 'min-width', and 'max-width' properties (or 'height'
    * variations if that's what matches aAxis) and its padding, border and margin
    * in the corresponding dimension.
+   * @param aMarginBoxMinSizeClamp make the result fit within this margin-box
+   * size by reducing the *content size* (flooring at zero).  This is used for:
+   * https://drafts.csswg.org/css-grid/#min-size-auto
    */
   enum class IntrinsicISizeType { MIN_ISIZE, PREF_ISIZE };
   static const auto MIN_ISIZE = IntrinsicISizeType::MIN_ISIZE;
@@ -1380,12 +1389,15 @@ public:
     IGNORE_PADDING = 0x01,
     BAIL_IF_REFLOW_NEEDED = 0x02, // returns NS_INTRINSIC_WIDTH_UNKNOWN if so
     MIN_INTRINSIC_ISIZE = 0x04, // use min-width/height instead of width/height
+    ADD_PERCENTS = 0x08, // apply AddPercents also for MIN_ISIZE
   };
-  static nscoord IntrinsicForAxis(mozilla::PhysicalAxis aAxis,
-                                  nsRenderingContext*   aRenderingContext,
-                                  nsIFrame*             aFrame,
-                                  IntrinsicISizeType    aType,
-                                  uint32_t              aFlags = 0);
+  static nscoord
+  IntrinsicForAxis(mozilla::PhysicalAxis aAxis,
+                   nsRenderingContext*   aRenderingContext,
+                   nsIFrame*             aFrame,
+                   IntrinsicISizeType    aType,
+                   uint32_t              aFlags = 0,
+                   nscoord               aMarginBoxMinSizeClamp = NS_MAXSIZE);
   /**
    * Calls IntrinsicForAxis with aFrame's parent's inline physical axis.
    */
@@ -1400,8 +1412,9 @@ public:
    * given axis is vertical), and its padding, border, and margin in the
    * corresponding dimension.  If the 'min-' property is 'auto' (and 'overflow'
    * is 'visible') and the corresponding 'width'/'height' is definite it returns
-   * the "specified / transferred size" for:
+   * the "specified size" for:
    * https://drafts.csswg.org/css-grid/#min-size-auto
+   * Note that the "transferred size" is not handled here; use IntrinsicForAxis.
    * Note that any percentage in 'width'/'height' makes it count as indefinite.
    * If the 'min-' property is 'auto' and 'overflow' is not 'visible', then it
    * calculates the result as if the 'min-' computed value is zero.
@@ -1422,14 +1435,10 @@ public:
    * 'aPercent' percent of the returned value.  If 'aPercent' is less than
    * or equal to zero the original 'aCurrent' value is returned. If 'aPercent'
    * is greater than or equal to 1.0 the value nscoord_MAX is returned.
-   * (We don't increase the size if MIN_ISIZE is passed in, though.)
    */
-  static nscoord AddPercents(IntrinsicISizeType aType, nscoord aCurrent,
-                             float aPercent)
+  static nscoord AddPercents(nscoord aCurrent, float aPercent)
   {
-    if (aPercent > 0.0f && aType == nsLayoutUtils::PREF_ISIZE) {
-      // XXX Should we also consider percentages for min widths, up to a
-      // limit?
+    if (aPercent > 0.0f) {
       return MOZ_UNLIKELY(aPercent >= 1.0f) ? nscoord_MAX
         : NSToCoordRound(float(aCurrent) / (1.0f - aPercent));
     }
@@ -1444,14 +1453,6 @@ public:
    */
   static nscoord ComputeCBDependentValue(nscoord aPercentBasis,
                                          const nsStyleCoord& aCoord);
-
-  static nscoord ComputeISizeValue(
-                   nsRenderingContext* aRenderingContext,
-                   nsIFrame*           aFrame,
-                   nscoord             aContainingBlockISize,
-                   nscoord             aContentEdgeToBoxSizing,
-                   nscoord             aBoxSizingToMarginEdge,
-                   const nsStyleCoord& aCoord);
 
   static nscoord ComputeBSizeDependentValue(
                    nscoord              aContainingBlockBSize,
@@ -1523,21 +1524,6 @@ public:
   static void MarkIntrinsicISizesDirtyIfDependentOnBSize(nsIFrame* aFrame);
 
   /*
-   * Calculate the used values for 'width' and 'height' for a replaced element.
-   *
-   *   http://www.w3.org/TR/CSS21/visudet.html#min-max-widths
-   */
-  static mozilla::LogicalSize
-  ComputeSizeWithIntrinsicDimensions(mozilla::WritingMode aWM,
-                    nsRenderingContext* aRenderingContext, nsIFrame* aFrame,
-                    const mozilla::IntrinsicSize& aIntrinsicSize,
-                    nsSize aIntrinsicRatio,
-                    const mozilla::LogicalSize& aCBSize,
-                    const mozilla::LogicalSize& aMargin,
-                    const mozilla::LogicalSize& aBorder,
-                    const mozilla::LogicalSize& aPadding);
-
-  /*
    * Calculate the used values for 'width' and 'height' when width
    * and height are 'auto'. The tentWidth and tentHeight arguments should be
    * the result of applying the rules for computing intrinsic sizes and ratios.
@@ -1556,7 +1542,7 @@ public:
                                     nsRenderingContext* aRenderingContext);
 
   // Get a suitable foreground color for painting aProperty for aFrame.
-  static nscolor GetColor(nsIFrame* aFrame, nsCSSProperty aProperty);
+  static nscolor GetColor(nsIFrame* aFrame, nsCSSPropertyID aProperty);
 
   // Get a baseline y position in app units that is snapped to device pixels.
   static gfxFloat GetSnappedBaselineY(nsIFrame* aFrame, gfxContext* aContext,
@@ -2232,13 +2218,6 @@ public:
                                         bool clear);
 
   /**
-   * Returns true if the frame has current (i.e. running or scheduled-to-run)
-   * animations or transitions for the property.
-   */
-  static bool HasCurrentAnimationOfProperty(const nsIFrame* aFrame,
-                                            nsCSSProperty aProperty);
-
-  /**
    * Returns true if the frame has any current CSS transitions.
    * A current transition is any transition that has not yet finished playing
    * including paused transitions.
@@ -2246,12 +2225,18 @@ public:
   static bool HasCurrentTransitions(const nsIFrame* aFrame);
 
   /**
-   * Returns true if the frame has any current animations or transitions
-   * for any of the specified properties.
+   * Returns true if |aFrame| has an animation of |aProperty| regardless of
+   * whether the property is overridden by !important rule.
    */
-  static bool HasCurrentAnimationsForProperties(const nsIFrame* aFrame,
-                                                const nsCSSProperty* aProperties,
-                                                size_t aPropertyCount);
+  static bool HasAnimationOfProperty(const nsIFrame* aFrame,
+                                     nsCSSPropertyID aProperty);
+
+  /**
+   * Returns true if |aFrame| has an animation of |aProperty| which is
+   * not overridden by !important rules.
+   */
+  static bool HasEffectiveAnimation(const nsIFrame* aFrame,
+                                    nsCSSPropertyID aProperty);
 
   /**
    * Checks if off-main-thread animations are enabled.
@@ -2277,12 +2262,6 @@ public:
   static gfxSize ComputeSuitableScaleForAnimation(const nsIFrame* aFrame,
                                                   const nsSize& aVisibleSize,
                                                   const nsSize& aDisplaySize);
-
-  /**
-   * Checks if we should forcibly use nearest pixel filtering for the
-   * background.
-   */
-  static bool UseBackgroundNearestFiltering();
 
   /**
    * Checks whether we want to use the GPU to scale images when
@@ -2425,6 +2404,25 @@ public:
 
   static bool TextCombineUprightDigitsEnabled() {
     return sTextCombineUprightDigitsEnabled;
+  }
+
+  // Stylo (the Servo backend for Gecko's style system) is generally enabled
+  // or disabled at compile-time. However, we provide the additional capability
+  // to disable it dynamically in stylo-enabled builds via a pref.
+  static bool StyloEnabled() {
+#ifdef MOZ_STYLO
+    return sStyloEnabled;
+#else
+    return false;
+#endif
+  }
+
+  static uint32_t IdlePeriodDeadlineLimit() {
+    return sIdlePeriodDeadlineLimit;
+  }
+
+  static uint32_t QuiescentFramesBeforeIdlePeriod() {
+    return sQuiescentFramesBeforeIdlePeriod;
   }
 
   /**
@@ -2730,7 +2728,7 @@ public:
   static bool IsOutlineStyleAutoEnabled();
 
   static void SetBSizeFromFontMetrics(const nsIFrame* aFrame,
-                                      nsHTMLReflowMetrics& aMetrics,
+                                      mozilla::ReflowOutput& aMetrics,
                                       const mozilla::LogicalMargin& aFramePadding,
                                       mozilla::WritingMode aLineWM,
                                       mozilla::WritingMode aFrameWM);
@@ -2836,6 +2834,37 @@ public:
    */
   static bool IsTransformed(nsIFrame* aForFrame, nsIFrame* aTopFrame = nullptr);
 
+  /**
+   * Walk up from aFrame to the cross-doc root, accumulating all the APZ callback
+   * transforms on the content elements encountered along the way. Return the
+   * accumulated value.
+   * XXX: Note that this does not take into account CSS transforms, nor
+   * differences in structure between the frame tree and the layer tree (which
+   * is probably what we *want* to be computing).
+   */
+  static CSSPoint GetCumulativeApzCallbackTransform(nsIFrame* aFrame);
+
+  /*
+   * Returns whether the given document supports being rendered with a
+   * Servo-backed style system.  This checks whether Stylo is enabled
+   * globally, that the document is an HTML document, and that it is
+   * being presented in a content docshell.
+   */
+  static bool SupportsServoStyleBackend(nsIDocument* aDocument);
+
+  /*
+   * Checks whether a node is an invisible break.
+   * If not, returns the first frame on the next line if such a next line exists.
+   *
+   * @return  true if the node is an invisible break.
+   *          aNextLineFrame is returned null in this case.
+   *          false if the node causes a visible break or if the node is no break.
+   *
+   * @param   aNextLineFrame  assigned to first frame on the next line if such a
+   *                          next line exists, null otherwise.
+   */
+  static bool IsInvisibleBreak(nsINode* aNode, nsIFrame** aNextLineFrame = nullptr);
+
 private:
   static uint32_t sFontSizeInflationEmPerLine;
   static uint32_t sFontSizeInflationMinTwips;
@@ -2849,6 +2878,11 @@ private:
   static bool sInterruptibleReflowEnabled;
   static bool sSVGTransformBoxEnabled;
   static bool sTextCombineUprightDigitsEnabled;
+#ifdef MOZ_STYLO
+  static bool sStyloEnabled;
+#endif
+  static uint32_t sIdlePeriodDeadlineLimit;
+  static uint32_t sQuiescentFramesBeforeIdlePeriod;
 
   /**
    * Helper function for LogTestDataForPaint().

@@ -13,18 +13,20 @@ const { connect } = require("devtools/client/shared/vendor/react-redux");
 const {
   updateDeviceDisplayed,
   updateDeviceModalOpen,
+  updatePreferredDevices,
 } = require("./actions/devices");
+const { changeNetworkThrottling } = require("./actions/network-throttling");
+const { takeScreenshot } = require("./actions/screenshot");
+const { updateTouchSimulationEnabled } = require("./actions/touch-simulation");
 const {
   changeDevice,
+  changeViewportPixelRatio,
   resizeViewport,
   rotateViewport
 } = require("./actions/viewports");
-const { takeScreenshot } = require("./actions/screenshot");
-const { updateTouchSimulationEnabled } = require("./actions/touch-simulation");
 const DeviceModal = createFactory(require("./components/device-modal"));
 const GlobalToolbar = createFactory(require("./components/global-toolbar"));
 const Viewports = createFactory(require("./components/viewports"));
-const { updateDeviceList } = require("./devices");
 const Types = require("./types");
 
 let App = createClass({
@@ -32,7 +34,9 @@ let App = createClass({
 
   propTypes: {
     devices: PropTypes.shape(Types.devices).isRequired,
+    displayPixelRatio: PropTypes.number.isRequired,
     location: Types.location.isRequired,
+    networkThrottling: PropTypes.shape(Types.networkThrottling).isRequired,
     screenshot: PropTypes.shape(Types.screenshot).isRequired,
     touchSimulation: PropTypes.shape(Types.touchSimulation).isRequired,
     viewports: PropTypes.arrayOf(PropTypes.shape(Types.viewport)).isRequired,
@@ -42,8 +46,32 @@ let App = createClass({
     window.postMessage({ type: "browser-mounted" }, "*");
   },
 
+  onChangeNetworkThrottling(enabled, profile) {
+    window.postMessage({
+      type: "change-network-throtting",
+      enabled,
+      profile,
+    }, "*");
+    this.props.dispatch(changeNetworkThrottling(enabled, profile));
+  },
+
   onChangeViewportDevice(id, device) {
-    this.props.dispatch(changeDevice(id, device));
+    window.postMessage({
+      type: "change-viewport-device",
+      device,
+    }, "*");
+    this.props.dispatch(changeDevice(id, device.name));
+    this.props.dispatch(updateTouchSimulationEnabled(device.touch));
+    this.props.dispatch(changeViewportPixelRatio(id, device.pixelRatio));
+  },
+
+  onChangeViewportPixelRatio(pixelRatio) {
+    window.postMessage({
+      type: "change-viewport-pixel-ratio",
+      pixelRatio,
+    }, "*");
+
+    this.props.dispatch(changeViewportPixelRatio(0, pixelRatio));
   },
 
   onContentResize({ width, height }) {
@@ -55,7 +83,7 @@ let App = createClass({
   },
 
   onDeviceListUpdate(devices) {
-    updateDeviceList(devices);
+    updatePreferredDevices(devices);
   },
 
   onExit() {
@@ -82,21 +110,21 @@ let App = createClass({
     this.props.dispatch(updateDeviceModalOpen(isOpen));
   },
 
-  onUpdateTouchSimulationEnabled() {
-    let { enabled } = this.props.touchSimulation;
-
+  onUpdateTouchSimulation(isEnabled) {
     window.postMessage({
       type: "update-touch-simulation",
-      enabled,
+      enabled: isEnabled,
     }, "*");
 
-    this.props.dispatch(updateTouchSimulationEnabled(!enabled));
+    this.props.dispatch(updateTouchSimulationEnabled(isEnabled));
   },
 
   render() {
     let {
       devices,
+      displayPixelRatio,
       location,
+      networkThrottling,
       screenshot,
       touchSimulation,
       viewports,
@@ -104,7 +132,9 @@ let App = createClass({
 
     let {
       onBrowserMounted,
+      onChangeNetworkThrottling,
       onChangeViewportDevice,
+      onChangeViewportPixelRatio,
       onContentResize,
       onDeviceListUpdate,
       onExit,
@@ -113,19 +143,34 @@ let App = createClass({
       onScreenshot,
       onUpdateDeviceDisplayed,
       onUpdateDeviceModalOpen,
-      onUpdateTouchSimulationEnabled,
+      onUpdateTouchSimulation,
     } = this;
+
+    let selectedDevice = "";
+    let selectedPixelRatio = 0;
+
+    if (viewports.length) {
+      selectedDevice = viewports[0].device;
+      selectedPixelRatio = viewports[0].pixelRatio;
+    }
 
     return dom.div(
       {
         id: "app",
       },
       GlobalToolbar({
+        devices,
+        displayPixelRatio,
+        networkThrottling,
         screenshot,
+        selectedDevice,
+        selectedPixelRatio,
         touchSimulation,
+        onChangeNetworkThrottling,
+        onChangeViewportPixelRatio,
         onExit,
         onScreenshot,
-        onUpdateTouchSimulationEnabled,
+        onUpdateTouchSimulation,
       }),
       Viewports({
         devices,

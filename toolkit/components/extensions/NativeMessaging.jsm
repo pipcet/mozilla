@@ -5,6 +5,7 @@
 "use strict";
 
 this.EXPORTED_SYMBOLS = ["HostManifestManager", "NativeApp"];
+/* globals NativeApp */
 
 const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
@@ -16,8 +17,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
                                   "resource://gre/modules/AppConstants.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
                                   "resource://gre/modules/AsyncShutdown.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionUtils",
-                                  "resource://gre/modules/ExtensionUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "ExtensionChild",
+                                  "resource://gre/modules/ExtensionChild.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
                                   "resource://gre/modules/osfile.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Schemas",
@@ -84,11 +85,13 @@ this.HostManifestManager = {
   },
 
   _winLookup(application, context) {
-    let path = WindowsRegistry.readRegKey(Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
-                                          REGPATH, application);
+    const REGISTRY = Ci.nsIWindowsRegKey;
+    let regPath = `${REGPATH}\\${application}`;
+    let path = WindowsRegistry.readRegKey(REGISTRY.ROOT_KEY_CURRENT_USER,
+                                          regPath, "", REGISTRY.WOW64_64);
     if (!path) {
       path = WindowsRegistry.readRegKey(Ci.nsIWindowsRegKey.ROOT_KEY_LOCAL_MACHINE,
-                                        REGPATH, application);
+                                        regPath, "", REGISTRY.WOW64_64);
     }
     if (!path) {
       return null;
@@ -160,7 +163,11 @@ this.HostManifestManager = {
 };
 
 this.NativeApp = class extends EventEmitter {
-  constructor(extension, context, application) {
+  /**
+   * @param {BaseContext} context The context that initiated the native app.
+   * @param {string} application The identifier of the native app.
+   */
+  constructor(context, application) {
     super();
 
     this.context = context;
@@ -169,31 +176,33 @@ this.NativeApp = class extends EventEmitter {
     // We want a close() notification when the window is destroyed.
     this.context.callOnClose(this);
 
-    this.encoder = new TextEncoder();
     this.proc = null;
     this.readPromise = null;
     this.sendQueue = [];
     this.writePromise = null;
     this.sentDisconnect = false;
 
-    // Grab these once at startup
-    XPCOMUtils.defineLazyPreferenceGetter(this, "maxRead", PREF_MAX_READ, MAX_READ);
-    XPCOMUtils.defineLazyPreferenceGetter(this, "maxWrite", PREF_MAX_WRITE, MAX_WRITE);
-
     this.startupPromise = HostManifestManager.lookupApplication(application, context)
       .then(hostInfo => {
-        if (!hostInfo) {
-          throw new Error(`No such native application ${application}`);
+        // Put the two errors together to not leak information about whether a native
+        // application is installed to addons that do not have the right permission.
+        if (!hostInfo || !hostInfo.manifest.allowed_extensions.includes(context.extension.id)) {
+          throw new context.cloneScope.Error(`This extension does not have permission to use native application ${application} (or the application is not installed)`);
         }
 
-        if (!hostInfo.manifest.allowed_extensions.includes(extension.id)) {
-          throw new Error(`This extension does not have permission to use native application ${application}`);
+        let command = hostInfo.manifest.path;
+        if (AppConstants.platform == "win") {
+          // OS.Path.join() ignores anything before the last absolute path
+          // it sees, so if command is already absolute, it remains unchanged
+          // here.  If it is relative, we get the proper absolute path here.
+          command = OS.Path.join(OS.Path.dirname(hostInfo.path), command);
         }
 
         let subprocessOpts = {
-          command: hostInfo.manifest.path,
+          command: command,
           arguments: [hostInfo.path],
-          workdir: OS.Path.dirname(hostInfo.manifest.path),
+          workdir: OS.Path.dirname(command),
+          stderr: "pipe",
         };
         return Subprocess.call(subprocessOpts);
       }).then(proc => {
@@ -201,11 +210,50 @@ this.NativeApp = class extends EventEmitter {
         this.proc = proc;
         this._startRead();
         this._startWrite();
+        this._startStderrRead();
       }).catch(err => {
         this.startupPromise = null;
-        Cu.reportError(err.message);
+        Cu.reportError(err instanceof Error ? err : err.message);
         this._cleanup(err);
       });
+  }
+
+  /**
+   * Open a connection to a native messaging host.
+   *
+   * @param {BaseContext} context The context associated with the port.
+   * @param {nsIMessageSender} messageManager The message manager used to send
+   *     and receive messages from the port's creator.
+   * @param {string} portId A unique internal ID that identifies the port.
+   * @param {object} sender The object describing the creator of the connection
+   *     request.
+   * @param {string} application The name of the native messaging host.
+   */
+  static onConnectNative(context, messageManager, portId, sender, application) {
+    let app = new NativeApp(context, application);
+    let port = new ExtensionChild.Port(context, messageManager, [messageManager], "", portId, sender, sender);
+    app.once("disconnect", (what, err) => port.disconnect(err));
+
+    /* eslint-disable mozilla/balanced-listeners */
+    app.on("message", (what, msg) => port.postMessage(msg));
+    /* eslint-enable mozilla/balanced-listeners */
+
+    port.registerOnMessage(msg => app.send(msg));
+    port.registerOnDisconnect(msg => app.close());
+  }
+
+  /**
+   * @param {BaseContext} context The scope from where `message` originates.
+   * @param {*} message A message from the extension, meant for a native app.
+   * @returns {ArrayBuffer} An ArrayBuffer that can be sent to the native app.
+   */
+  static encodeMessage(context, message) {
+    message = context.jsonStringify(message);
+    let buffer = new TextEncoder().encode(message).buffer;
+    if (buffer.byteLength > NativeApp.maxWrite) {
+      throw new context.cloneScope.Error("Write too big");
+    }
+    return buffer;
   }
 
   // A port is definitely "alive" if this.proc is non-null.  But we have
@@ -222,8 +270,8 @@ this.NativeApp = class extends EventEmitter {
     }
     this.readPromise = this.proc.stdout.readUint32()
       .then(len => {
-        if (len > this.maxRead) {
-          throw new Error(`Native application tried to send a message of ${len} bytes, which exceeds the limit of ${this.maxRead} bytes.`);
+        if (len > NativeApp.maxRead) {
+          throw new this.context.cloneScope.Error(`Native application tried to send a message of ${len} bytes, which exceeds the limit of ${NativeApp.maxRead} bytes.`);
         }
         return this.proc.stdout.readJSON(len);
       }).then(msg => {
@@ -231,7 +279,9 @@ this.NativeApp = class extends EventEmitter {
         this.readPromise = null;
         this._startRead();
       }).catch(err => {
-        Cu.reportError(err.message);
+        if (err.errorCode != Subprocess.ERROR_END_OF_FILE) {
+          Cu.reportError(err instanceof Error ? err : err.message);
+        }
         this._cleanup(err);
       });
   }
@@ -260,20 +310,45 @@ this.NativeApp = class extends EventEmitter {
     });
   }
 
+  _startStderrRead() {
+    let proc = this.proc;
+    let app = this.name;
+    Task.spawn(function* () {
+      let partial = "";
+      while (true) {
+        let data = yield proc.stderr.readString();
+        if (data.length == 0) {
+          // We have hit EOF, just stop reading
+          if (partial) {
+            Services.console.logStringMessage(`stderr output from native app ${app}: ${partial}`);
+          }
+          break;
+        }
+
+        let lines = data.split(/\r?\n/);
+        lines[0] = partial + lines[0];
+        partial = lines.pop();
+
+        for (let line of lines) {
+          Services.console.logStringMessage(`stderr output from native app ${app}: ${line}`);
+        }
+      }
+    });
+  }
+
   send(msg) {
     if (this._isDisconnected) {
       throw new this.context.cloneScope.Error("Attempt to postMessage on disconnected port");
     }
-
-    let json;
-    try {
-      json = this.context.jsonStringify(msg);
-    } catch (err) {
-      throw new this.context.cloneScope.Error(err.message);
+    if (Cu.getClassName(msg, true) != "ArrayBuffer") {
+      // This error cannot be triggered by extensions; it indicates an error in
+      // our implementation.
+      throw new Error("The message to the native messaging host is not an ArrayBuffer");
     }
-    let buffer = this.encoder.encode(json).buffer;
 
-    if (buffer.byteLength > this.maxWrite) {
+    let buffer = msg;
+
+    if (buffer.byteLength > NativeApp.maxWrite) {
       throw new this.context.cloneScope.Error("Write too big");
     }
 
@@ -327,6 +402,9 @@ this.NativeApp = class extends EventEmitter {
 
     if (!this.sentDisconnect) {
       this.sentDisconnect = true;
+      if (err && err.errorCode == Subprocess.ERROR_END_OF_FILE) {
+        err = null;
+      }
       this.emit("disconnect", err);
     }
   }
@@ -336,49 +414,10 @@ this.NativeApp = class extends EventEmitter {
     this._cleanup();
   }
 
-  portAPI() {
-    let api = {
-      name: this.name,
-
-      disconnect: () => {
-        if (this._isDisconnected) {
-          throw new this.context.cloneScope.Error("Attempt to disconnect an already disconnected port");
-        }
-        this._cleanup();
-      },
-
-      postMessage: msg => {
-        this.send(msg);
-      },
-
-      onDisconnect: new ExtensionUtils.SingletonEventManager(this.context, "native.onDisconnect", fire => {
-        let listener = what => {
-          this.context.runSafe(fire);
-        };
-        this.on("disconnect", listener);
-        return () => {
-          this.off("disconnect", listener);
-        };
-      }).api(),
-
-      onMessage: new ExtensionUtils.SingletonEventManager(this.context, "native.onMessage", fire => {
-        let listener = (what, msg) => {
-          this.context.runSafe(fire, msg);
-        };
-        this.on("message", listener);
-        return () => {
-          this.off("message", listener);
-        };
-      }).api(),
-    };
-
-    return Cu.cloneInto(api, this.context.cloneScope, {cloneFunctions: true});
-  }
-
   sendMessage(msg) {
     let responsePromise = new Promise((resolve, reject) => {
-      this.on("message", (what, msg) => { resolve(msg); });
-      this.on("disconnect", (what, err) => { reject(err); });
+      this.once("message", (what, msg) => { resolve(msg); });
+      this.once("disconnect", (what, err) => { reject(err); });
     });
 
     let result = this.startupPromise.then(() => {
@@ -389,9 +428,16 @@ this.NativeApp = class extends EventEmitter {
     result.then(() => {
       this._cleanup();
     }, () => {
+      // Prevent the response promise from being reported as an
+      // unchecked rejection if the startup promise fails.
+      responsePromise.catch(() => {});
+
       this._cleanup();
     });
 
     return result;
   }
 };
+
+XPCOMUtils.defineLazyPreferenceGetter(NativeApp, "maxRead", PREF_MAX_READ, MAX_READ);
+XPCOMUtils.defineLazyPreferenceGetter(NativeApp, "maxWrite", PREF_MAX_WRITE, MAX_WRITE);

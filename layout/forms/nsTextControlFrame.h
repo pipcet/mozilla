@@ -48,18 +48,18 @@ public:
   virtual nscoord GetPrefISize(nsRenderingContext* aRenderingContext) override;
 
   virtual mozilla::LogicalSize
-  ComputeAutoSize(nsRenderingContext *aRenderingContext,
-                  mozilla::WritingMode aWritingMode,
+  ComputeAutoSize(nsRenderingContext*         aRenderingContext,
+                  mozilla::WritingMode        aWM,
                   const mozilla::LogicalSize& aCBSize,
-                  nscoord aAvailableISize,
+                  nscoord                     aAvailableISize,
                   const mozilla::LogicalSize& aMargin,
                   const mozilla::LogicalSize& aBorder,
                   const mozilla::LogicalSize& aPadding,
-                  bool aShrinkWrap) override;
+                  ComputeSizeFlags            aFlags) override;
 
   virtual void Reflow(nsPresContext*           aPresContext,
-                      nsHTMLReflowMetrics&     aDesiredSize,
-                      const nsHTMLReflowState& aReflowState,
+                      ReflowOutput&     aDesiredSize,
+                      const ReflowInput& aReflowInput,
                       nsReflowStatus&          aStatus) override;
 
   virtual nsSize GetXULMinSize(nsBoxLayoutState& aBoxLayoutState) override;
@@ -160,9 +160,9 @@ protected:
    */
   void ReflowTextControlChild(nsIFrame*                aFrame,
                               nsPresContext*           aPresContext,
-                              const nsHTMLReflowState& aReflowState,
+                              const ReflowInput& aReflowInput,
                               nsReflowStatus&          aStatus,
-                              nsHTMLReflowMetrics& aParentDesiredSize);
+                              ReflowOutput& aParentDesiredSize);
 
 public: //for methods who access nsTextControlFrame directly
   void SetValueChanged(bool aValueChanged);

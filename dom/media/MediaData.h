@@ -6,10 +6,11 @@
 #if !defined(MediaData_h)
 #define MediaData_h
 
+#include "AudioSampleFormat.h"
+#include "ImageTypes.h"
 #include "nsSize.h"
 #include "mozilla/gfx/Rect.h"
 #include "nsRect.h"
-#include "AudioSampleFormat.h"
 #include "nsIMemoryReporter.h"
 #include "SharedBuffer.h"
 #include "mozilla/RefPtr.h"
@@ -289,7 +290,6 @@ public:
     , mDuration(aDuration)
     , mFrames(aFrames)
     , mKeyframe(false)
-    , mDiscontinuity(false)
   {}
 
   // Type of contained data.
@@ -312,10 +312,6 @@ public:
   const uint32_t mFrames;
 
   bool mKeyframe;
-
-  // True if this is the first sample after a gap or discontinuity in
-  // the stream. This is true for the first sample in a stream after a seek.
-  bool mDiscontinuity;
 
   int64_t GetEndTime() const { return mTime + mDuration; }
 
@@ -348,7 +344,6 @@ protected:
     , mDuration(0)
     , mFrames(aFrames)
     , mKeyframe(false)
-    , mDiscontinuity(false)
   {}
 
   virtual ~MediaData() {}
@@ -449,6 +444,7 @@ public:
     };
 
     Plane mPlanes[3];
+    YUVColorSpace mYUVColorSpace = YUVColorSpace::BT601;
   };
 
   // Constructs a VideoData object. If aImage is nullptr, creates a new Image
@@ -459,51 +455,30 @@ public:
   // Returns nsnull if an error occurs. This may indicate that memory couldn't
   // be allocated to create the VideoData object, or it may indicate some
   // problem with the input data (e.g. negative stride).
-  static already_AddRefed<VideoData> Create(const VideoInfo& aInfo,
-                                            ImageContainer* aContainer,
-                                            Image* aImage,
-                                            int64_t aOffset,
-                                            int64_t aTime,
-                                            int64_t aDuration,
-                                            const YCbCrBuffer &aBuffer,
-                                            bool aKeyframe,
-                                            int64_t aTimecode,
-                                            const IntRect& aPicture);
 
-  // Variant that always makes a copy of aBuffer
-  static already_AddRefed<VideoData> Create(const VideoInfo& aInfo,
-                                            ImageContainer* aContainer,
-                                            int64_t aOffset,
-                                            int64_t aTime,
-                                            int64_t aDuration,
-                                            const YCbCrBuffer &aBuffer,
-                                            bool aKeyframe,
-                                            int64_t aTimecode,
-                                            const IntRect& aPicture);
 
-  // Variant to create a VideoData instance given an existing aImage
-  static already_AddRefed<VideoData> Create(const VideoInfo& aInfo,
-                                            Image* aImage,
-                                            int64_t aOffset,
-                                            int64_t aTime,
-                                            int64_t aDuration,
-                                            const YCbCrBuffer &aBuffer,
-                                            bool aKeyframe,
-                                            int64_t aTimecode,
-                                            const IntRect& aPicture);
+  // Creates a new VideoData containing a deep copy of aBuffer. May use aContainer
+  // to allocate an Image to hold the copied data.
+  static already_AddRefed<VideoData> CreateAndCopyData(const VideoInfo& aInfo,
+                                                       ImageContainer* aContainer,
+                                                       int64_t aOffset,
+                                                       int64_t aTime,
+                                                       int64_t aDuration,
+                                                       const YCbCrBuffer &aBuffer,
+                                                       bool aKeyframe,
+                                                       int64_t aTimecode,
+                                                       const IntRect& aPicture);
 
-  static already_AddRefed<VideoData> Create(const VideoInfo& aInfo,
-                                            ImageContainer* aContainer,
-                                            int64_t aOffset,
-                                            int64_t aTime,
-                                            int64_t aDuration,
-                                            layers::TextureClient* aBuffer,
-                                            bool aKeyframe,
-                                            int64_t aTimecode,
-                                            const IntRect& aPicture);
+  static already_AddRefed<VideoData> CreateAndCopyIntoTextureClient(const VideoInfo& aInfo,
+                                                                    int64_t aOffset,
+                                                                    int64_t aTime,
+                                                                    int64_t aDuration,
+                                                                    layers::TextureClient* aBuffer,
+                                                                    bool aKeyframe,
+                                                                    int64_t aTimecode,
+                                                                    const IntRect& aPicture);
 
   static already_AddRefed<VideoData> CreateFromImage(const VideoInfo& aInfo,
-                                                     ImageContainer* aContainer,
                                                      int64_t aOffset,
                                                      int64_t aTime,
                                                      int64_t aDuration,
@@ -655,6 +630,10 @@ public:
 
   const CryptoSample& mCrypto;
   RefPtr<MediaByteBuffer> mExtraData;
+
+  // Used by the Vorbis decoder and Ogg demuxer.
+  // Indicates that this is the last packet of the stream.
+  bool mEOS = false;
 
   RefPtr<SharedTrackInfo> mTrackInfo;
 

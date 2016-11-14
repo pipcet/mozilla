@@ -18,14 +18,10 @@ config = {
         "branch": "default",
         "dest": "tools",
     }, {
-        "vcs": "hgtool",
+        "vcs": "hg",
         "repo": "https://hg.mozilla.org/projects/date",
-        "revision": "default",
+        "branch": "%(revision)s",
         "dest": "date",
-    }, {
-        "vcs": "hgtool",
-        "repo": "https://hg.mozilla.org/build/compare-locales",
-        "revision": "RELEASE_AUTOMATION"
     }],
     # purge options
     'is_automation': True,

@@ -42,11 +42,16 @@
 #ifdef MOZ_NATIVE_DEVICES
         <!-- This resources comes from Google Play Services. Required for casting support. -->
         <meta-data android:name="com.google.android.gms.version" android:value="@integer/google_play_services_version" />
+        <service android:name="org.mozilla.gecko.RemotePresentationService" android:exported="false"/>
+
 #endif
 
         <!-- This activity handles all incoming Intents and dispatches them to other activities. -->
         <activity android:name="org.mozilla.gecko.LauncherActivity"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:relinquishTaskIdentity="true"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
 
         <!-- Fennec is shipped as the Android package named
              org.mozilla.{fennec,firefox,firefox_beta}.  The internal Java
@@ -114,13 +119,6 @@
 
             <intent-filter>
                 <action android:name="org.mozilla.gecko.GUEST_SESSION_INPROGRESS" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-
-            <!-- Notification API V2 -->
-            <intent-filter>
-                <action android:name="@ANDROID_PACKAGE_NAME@.helperBroadcastAction" />
-                <data android:scheme="moz-notification" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
 
@@ -247,6 +245,19 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name="org.mozilla.gecko.notifications.NotificationReceiver"
+            android:exported="false">
+            <!-- Notification API V2 -->
+            <intent-filter>
+                <action android:name="@ANDROID_PACKAGE_NAME@.helperBroadcastAction" />
+                <action android:name="@ANDROID_PACKAGE_NAME@.NOTIFICATION_CLICK" />
+                <action android:name="@ANDROID_PACKAGE_NAME@.NOTIFICATION_CLOSE" />
+                <data android:scheme="moz-notification" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </receiver>
+
 #include ../services/manifests/FxAccountAndroidManifest_activities.xml.in
 #ifdef MOZ_ANDROID_SEARCH_ACTIVITY
 #include ../search/manifests/SearchAndroidManifest_activities.xml.in
@@ -273,6 +284,10 @@
 
         <provider android:name="org.mozilla.gecko.db.BrowserProvider"
                   android:authorities="@ANDROID_PACKAGE_NAME@.db.browser"
+                  android:exported="false"/>
+
+        <provider android:name="org.mozilla.gecko.distribution.PartnerBookmarksProviderProxy"
+                  android:authorities="@ANDROID_PACKAGE_NAME@.partnerbookmarks"
                   android:exported="false"/>
 
         <!-- Share overlay activity
@@ -349,7 +364,7 @@
 
         <service
             android:exported="false"
-            android:name="org.mozilla.gecko.NotificationService">
+            android:name="org.mozilla.gecko.notifications.NotificationService">
         </service>
 
         <service
@@ -377,6 +392,14 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"></action>
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="org.mozilla.gecko.PackageReplacedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"></action>
             </intent-filter>
         </receiver>
 
@@ -411,6 +434,14 @@
 #ifdef MOZ_ANDROID_GCM
 #include GcmAndroidManifest_services.xml.in
 #endif
+
+        <service
+            android:name="org.mozilla.gecko.media.MediaManager"
+            android:enabled="true"
+            android:exported="false"
+            android:process=":media"
+            android:isolatedProcess="false">
+        </service>
 
     </application>
 </manifest>

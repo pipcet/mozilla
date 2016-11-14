@@ -57,14 +57,14 @@ public:
    * Our auto size is just intrinsic width and intrinsic height.
    */
   virtual mozilla::LogicalSize
-  ComputeAutoSize(nsRenderingContext *aRenderingContext,
-                  mozilla::WritingMode aWritingMode,
+  ComputeAutoSize(nsRenderingContext*         aRenderingContext,
+                  mozilla::WritingMode        aWM,
                   const mozilla::LogicalSize& aCBSize,
-                  nscoord aAvailableISize,
+                  nscoord                     aAvailableISize,
                   const mozilla::LogicalSize& aMargin,
                   const mozilla::LogicalSize& aBorder,
                   const mozilla::LogicalSize& aPadding,
-                  bool aShrinkWrap) override;
+                  ComputeSizeFlags            aFlags) override;
 
   /**
     * Respond to a gui event
@@ -82,8 +82,8 @@ public:
     * @see nsIFrame::Reflow
     */
   virtual void Reflow(nsPresContext*      aCX,
-                      nsHTMLReflowMetrics& aDesiredSize,
-                      const nsHTMLReflowState& aReflowState,
+                      ReflowOutput& aDesiredSize,
+                      const ReflowInput& aReflowInput,
                       nsReflowStatus&      aStatus) override;
 
   virtual void DestroyFrom(nsIFrame* aDestructRoot) override;

@@ -53,6 +53,7 @@ public:
                 const nsNSSShutDownPreventionLock& proofOfLock);
 
   void SetNegotiatedNPN(const char* value, uint32_t length);
+  void SetEarlyDataAccepted(bool aAccepted);
 
   void SetHandshakeCompleted();
   void NoteTimeUntilReady();
@@ -113,14 +114,6 @@ public:
 
   void SetMACAlgorithmUsed(int16_t mac) { mMACAlgorithmUsed = mac; }
 
-  inline bool GetBypassAuthentication()
-  {
-    bool result = false;
-    mozilla::DebugOnly<nsresult> rv = GetBypassAuthentication(&result);
-    MOZ_ASSERT(NS_SUCCEEDED(rv));
-    return result;
-  }
-
 protected:
   virtual ~nsNSSSocketInfo();
 
@@ -140,6 +133,7 @@ private:
 
   nsCString mNegotiatedNPN;
   bool      mNPNCompleted;
+  bool      mEarlyDataAccepted;
   bool      mFalseStartCallbackCalled;
   bool      mFalseStarted;
   bool      mIsFullHandshake;
@@ -217,9 +211,7 @@ public:
                                    PRErrorCode intoleranceReason);
   bool rememberStrongCiphersFailed(const nsACString& hostName, int16_t port,
                                    PRErrorCode intoleranceReason);
-  // returns the known tolerant version
-  // or 0 if there is no known tolerant version
-  uint16_t forgetIntolerance(const nsACString& hostname, int16_t port);
+  void forgetIntolerance(const nsACString& hostname, int16_t port);
   void adjustForTLSIntolerance(const nsACString& hostname, int16_t port,
                                /*in/out*/ SSLVersionRange& range,
                                /*out*/ StrongCipherStatus& strongCipherStatus);
@@ -246,6 +238,7 @@ nsresult nsSSLIOLayerNewSocket(int32_t family,
                                const char* host,
                                int32_t port,
                                nsIProxyInfo *proxy,
+                               const nsACString& firstPartyDomain,
                                PRFileDesc** fd,
                                nsISupports** securityInfo,
                                bool forSTARTTLS,
@@ -255,6 +248,7 @@ nsresult nsSSLIOLayerAddToSocket(int32_t family,
                                  const char* host,
                                  int32_t port,
                                  nsIProxyInfo *proxy,
+                                 const nsACString& firstPartyDomain,
                                  PRFileDesc* fd,
                                  nsISupports** securityInfo,
                                  bool forSTARTTLS,

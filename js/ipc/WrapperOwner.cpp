@@ -7,7 +7,7 @@
 
 #include "WrapperOwner.h"
 #include "JavaScriptLogging.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "jsfriendapi.h"
 #include "js/CharacterEncoding.h"
@@ -50,9 +50,8 @@ struct AuxCPOWData
     {}
 };
 
-WrapperOwner::WrapperOwner(JSRuntime* rt)
-  : JavaScriptShared(rt),
-    inactive_(false)
+WrapperOwner::WrapperOwner()
+  : inactive_(false)
 {
 }
 
@@ -84,17 +83,17 @@ ObjectId
 WrapperOwner::idOf(JSObject* obj)
 {
     ObjectId objId = idOfUnchecked(obj);
-    MOZ_ASSERT(findCPOWById(objId) == obj);
+    MOZ_ASSERT(hasCPOW(objId, obj));
     return objId;
 }
 
 class CPOWProxyHandler : public BaseProxyHandler
 {
   public:
-    MOZ_CONSTEXPR CPOWProxyHandler()
+    constexpr CPOWProxyHandler()
       : BaseProxyHandler(&family) {}
 
-    virtual bool finalizeInBackground(Value priv) const override {
+    virtual bool finalizeInBackground(const Value& priv) const override {
         return false;
     }
 
@@ -126,8 +125,7 @@ class CPOWProxyHandler : public BaseProxyHandler
                                               AutoIdVector& props) const override;
     virtual bool hasInstance(JSContext* cx, HandleObject proxy,
                              MutableHandleValue v, bool* bp) const override;
-    virtual bool getBuiltinClass(JSContext* cx, HandleObject obj,
-                                 js::ESClassValue* classValue) const override;
+    virtual bool getBuiltinClass(JSContext* cx, HandleObject obj, js::ESClass* cls) const override;
     virtual bool isArray(JSContext* cx, HandleObject obj,
                          IsArrayAnswer* answer) const override;
     virtual const char* className(JSContext* cx, HandleObject proxy) const override;
@@ -151,7 +149,7 @@ const CPOWProxyHandler CPOWProxyHandler::singleton;
     PROFILER_LABEL_FUNC(js::ProfileEntry::Category::JS);                \
     WrapperOwner* owner = OwnerOf(proxy);                               \
     if (!owner->active()) {                                             \
-        JS_ReportError(cx, "cannot use a CPOW whose process is gone");  \
+        JS_ReportErrorASCII(cx, "cannot use a CPOW whose process is gone"); \
         return false;                                                   \
     }                                                                   \
     if (!owner->allowMessage(cx)) {                                     \
@@ -361,7 +359,7 @@ CPOWDOMQI(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     if (!args.thisv().isObject() || !IsCPOW(&args.thisv().toObject())) {
-        JS_ReportError(cx, "bad this object passed to special QI");
+        JS_ReportErrorASCII(cx, "bad this object passed to special QI");
         return false;
     }
 
@@ -379,7 +377,7 @@ CPOWToString(JSContext* cx, unsigned argc, Value* vp)
         return false;
 
     if (!cpowValue.isObject() || !IsCPOW(&cpowValue.toObject())) {
-        JS_ReportError(cx, "CPOWToString called on an incompatible object");
+        JS_ReportErrorASCII(cx, "CPOWToString called on an incompatible object");
         return false;
     }
 
@@ -651,7 +649,7 @@ WrapperOwner::callOrConstruct(JSContext* cx, HandleObject proxy, const CallArgs&
                 if (!JS_HasProperty(cx, obj, "value", &found))
                     return false;
                 if (found) {
-                    JS_ReportError(cx, "in-out objects cannot be sent via CPOWs yet");
+                    JS_ReportErrorASCII(cx, "in-out objects cannot be sent via CPOWs yet");
                     return false;
                 }
 
@@ -729,23 +727,21 @@ WrapperOwner::hasInstance(JSContext* cx, HandleObject proxy, MutableHandleValue 
 }
 
 bool
-CPOWProxyHandler::getBuiltinClass(JSContext* cx, HandleObject proxy,
-                                  js::ESClassValue* classValue) const
+CPOWProxyHandler::getBuiltinClass(JSContext* cx, HandleObject proxy, ESClass* cls) const
 {
-    FORWARD(getBuiltinClass, (cx, proxy, classValue));
+    FORWARD(getBuiltinClass, (cx, proxy, cls));
 }
 
 bool
-WrapperOwner::getBuiltinClass(JSContext* cx, HandleObject proxy,
-                              js::ESClassValue* classValue)
+WrapperOwner::getBuiltinClass(JSContext* cx, HandleObject proxy, ESClass* cls)
 {
     ObjectId objId = idOf(proxy);
 
-    uint32_t cls = ESClass_Other;
+    uint32_t classValue = uint32_t(ESClass::Other);
     ReturnStatus status;
-    if (!SendGetBuiltinClass(objId, &status, &cls))
+    if (!SendGetBuiltinClass(objId, &status, &classValue))
         return ipcfail(cx);
-    *classValue = ESClassValue(cls);
+    *cls = ESClass(classValue);
 
     LOG_STACK();
 
@@ -934,7 +930,7 @@ void
 WrapperOwner::updatePointer(JSObject* obj, const JSObject* old)
 {
     ObjectId objId = idOfUnchecked(obj);
-    MOZ_ASSERT(findCPOWById(objId) == old);
+    MOZ_ASSERT(hasCPOW(objId, old));
     cpows_.add(objId, obj);
 }
 
@@ -1066,7 +1062,7 @@ WrapperOwner::ActorDestroy(ActorDestroyReason why)
 bool
 WrapperOwner::ipcfail(JSContext* cx)
 {
-    JS_ReportError(cx, "cross-process JS call failed");
+    JS_ReportErrorASCII(cx, "cross-process JS call failed");
     return false;
 }
 
@@ -1078,6 +1074,11 @@ WrapperOwner::ok(JSContext* cx, const ReturnStatus& status)
 
     if (status.type() == ReturnStatus::TReturnStopIteration)
         return JS_ThrowStopIteration(cx);
+
+    if (status.type() == ReturnStatus::TReturnDeadCPOW) {
+        JS_ReportErrorASCII(cx, "operation not possible on dead CPOW");
+        return false;
+    }
 
     RootedValue exn(cx);
     if (!fromVariant(cx, status.get_ReturnException().exn(), &exn))
@@ -1167,7 +1168,7 @@ WrapperOwner::toObjectVariant(JSContext* cx, JSObject* objArg, ObjectVariant* ob
 }
 
 JSObject*
-WrapperOwner::fromObjectVariant(JSContext* cx, ObjectVariant objVar)
+WrapperOwner::fromObjectVariant(JSContext* cx, const ObjectVariant& objVar)
 {
     if (objVar.type() == ObjectVariant::TRemoteObject) {
         return fromRemoteObjectVariant(cx, objVar.get_RemoteObject());
@@ -1177,7 +1178,7 @@ WrapperOwner::fromObjectVariant(JSContext* cx, ObjectVariant objVar)
 }
 
 JSObject*
-WrapperOwner::fromRemoteObjectVariant(JSContext* cx, RemoteObject objVar)
+WrapperOwner::fromRemoteObjectVariant(JSContext* cx, const RemoteObject& objVar)
 {
     ObjectId objId = ObjectId::deserialize(objVar.serializedId());
     RootedObject obj(cx, findCPOWById(objId));
@@ -1202,6 +1203,8 @@ WrapperOwner::fromRemoteObjectVariant(JSContext* cx, RemoteObject objVar)
         if (!cpows_.add(objId, obj))
             return nullptr;
 
+        nextCPOWNumber_ = objId.serialNumber() + 1;
+
         // Incref once we know the decref will be called.
         incref();
 
@@ -1221,7 +1224,7 @@ WrapperOwner::fromRemoteObjectVariant(JSContext* cx, RemoteObject objVar)
 }
 
 JSObject*
-WrapperOwner::fromLocalObjectVariant(JSContext* cx, LocalObject objVar)
+WrapperOwner::fromLocalObjectVariant(JSContext* cx, const LocalObject& objVar)
 {
     ObjectId id = ObjectId::deserialize(objVar.serializedId());
     Rooted<JSObject*> obj(cx, findObjectById(cx, id));

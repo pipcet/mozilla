@@ -21,6 +21,7 @@
 #include "mozilla/DebugOnly.h"          // for DebugOnly
 #include "mozilla/EventForwards.h"      // for nsPaintEvent
 #include "mozilla/Maybe.h"              // for Maybe
+#include "mozilla/Poison.h"
 #include "mozilla/RefPtr.h"             // for already_AddRefed
 #include "mozilla/StyleAnimationValue.h" // for StyleAnimationValue, etc
 #include "mozilla/TimeStamp.h"          // for TimeStamp, TimeDuration
@@ -35,7 +36,7 @@
 #include "mozilla/mozalloc.h"           // for operator delete, etc
 #include "nsAutoPtr.h"                  // for nsAutoPtr, nsRefPtr, etc
 #include "nsCOMPtr.h"                   // for already_AddRefed
-#include "nsCSSProperty.h"              // for nsCSSProperty
+#include "nsCSSPropertyID.h"              // for nsCSSPropertyID
 #include "nsDebug.h"                    // for NS_ASSERTION
 #include "nsISupportsImpl.h"            // for Layer::Release, etc
 #include "nsRect.h"                     // for mozilla::gfx::IntRect
@@ -46,7 +47,6 @@
 #include "nscore.h"                     // for nsACString, nsAString
 #include "mozilla/Logging.h"                      // for PRLogModuleInfo
 #include "nsIWidget.h"                  // For plugin window configuration information structs
-#include "gfxVR.h"
 #include "ImageContainer.h"
 
 class gfxContext;
@@ -77,6 +77,7 @@ class Animation;
 class AnimationData;
 class AsyncCanvasRenderer;
 class AsyncPanZoomController;
+class BasicLayerManager;
 class ClientLayerManager;
 class Layer;
 class LayerMetricsWrapper;
@@ -196,6 +197,9 @@ public:
   virtual ClientLayerManager* AsClientLayerManager()
   { return nullptr; }
 
+  virtual BasicLayerManager* AsBasicLayerManager()
+  { return nullptr; }
+
   /**
    * Returns true if this LayerManager is owned by an nsIWidget,
    * and is used for drawing into the widget.
@@ -209,7 +213,7 @@ public:
    * This transaction will update the state of the window from which
    * this LayerManager was obtained.
    */
-  virtual void BeginTransaction() = 0;
+  virtual bool BeginTransaction() = 0;
   /**
    * Start a new transaction. Nested transactions are not allowed so
    * there must be no transaction currently in progress.
@@ -217,7 +221,7 @@ public:
    * the given target context. The rendering will be complete when
    * EndTransaction returns.
    */
-  virtual void BeginTransactionWithTarget(gfxContext* aTarget) = 0;
+  virtual bool BeginTransactionWithTarget(gfxContext* aTarget) = 0;
 
   enum EndTransactionFlags {
     END_DEFAULT = 0,
@@ -339,20 +343,10 @@ public:
   FrameMetrics::ViewID GetRootScrollableLayerId();
 
   /**
-   * Does a breadth-first search from the root layer to find the first
-   * scrollable layer, and returns all the layers that have that ViewID
-   * as the first scrollable metrics in their ancestor chain. If no
-   * scrollable layers are found it just returns the root of the tree if
-   * there is one.
+   * Returns a LayerMetricsWrapper containing the Root
+   * Content Documents layer.
    */
-  void GetRootScrollableLayers(nsTArray<Layer*>& aArray);
-
-  /**
-   * Returns a list of all descendant layers for which
-   * GetFrameMetrics().IsScrollable() is true and that
-   * do not already have an ancestor in the return list.
-   */
-  void GetScrollableLayers(nsTArray<Layer*>& aArray);
+  LayerMetricsWrapper GetRootContentLayer();
 
   /**
    * CONSTRUCTION PHASE ONLY
@@ -867,7 +861,9 @@ public:
    */
   virtual void SetVisibleRegion(const LayerIntRegion& aRegion)
   {
-    if (!mVisibleRegion.IsEqual(aRegion)) {
+    // IsEmpty is required otherwise we get invalidation glitches.
+    // See bug 1288464 for investigating why.
+    if (!mVisibleRegion.IsEqual(aRegion) || aRegion.IsEmpty()) {
       MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) VisibleRegion was %s is %s", this,
         mVisibleRegion.ToString().get(), aRegion.ToString().get()));
       mVisibleRegion = aRegion;
@@ -1315,8 +1311,18 @@ public:
   bool IsScrollInfoLayer() const;
   const EventRegions& GetEventRegions() const { return mEventRegions; }
   ContainerLayer* GetParent() { return mParent; }
-  Layer* GetNextSibling() { return mNextSibling; }
-  const Layer* GetNextSibling() const { return mNextSibling; }
+  Layer* GetNextSibling() {
+    if (mNextSibling) {
+      mNextSibling->CheckCanary();
+    }
+    return mNextSibling;
+  }
+  const Layer* GetNextSibling() const {
+    if (mNextSibling) {
+      mNextSibling->CheckCanary();
+    }
+    return mNextSibling;
+  }
   Layer* GetPrevSibling() { return mPrevSibling; }
   const Layer* GetPrevSibling() const { return mPrevSibling; }
   virtual Layer* GetFirstChild() const { return nullptr; }
@@ -1343,6 +1349,7 @@ public:
   float GetScrollbarThumbRatio() { return mScrollbarThumbRatio; }
   bool IsScrollbarContainer() { return mIsScrollbarContainer; }
   Layer* GetMaskLayer() const { return mMaskLayer; }
+  void CheckCanary() const { mCanary.Check(); }
 
   // Ancestor mask layers are associated with FrameMetrics, but for simplicity
   // in maintaining the layer tree structure we attach them to the layer.
@@ -1373,7 +1380,7 @@ public:
    * visible regions of higher siblings of this layer and each ancestor.
    *
    * Note translation values for offsets of visible regions and accumulated
-   * aLayerOffset are integer rounded using Point's RoundedToInt.
+   * aLayerOffset are integer rounded using IntPoint::Round.
    *
    * @param aResult - the resulting visible region of this layer.
    * @param aLayerOffset - this layer's total offset from the root layer.
@@ -1730,7 +1737,7 @@ public:
   // and can be used anytime.
   // A layer has an APZC at index aIndex only-if GetFrameMetrics(aIndex).IsScrollable();
   // attempting to get an APZC for a non-scrollable metrics will return null.
-  // The aIndex for these functions must be less than GetFrameMetricsCount().
+  // The aIndex for these functions must be less than GetScrollMetadataCount().
   void SetAsyncPanZoomController(uint32_t aIndex, AsyncPanZoomController *controller);
   AsyncPanZoomController* GetAsyncPanZoomController(uint32_t aIndex) const;
   // The ScrollMetadataChanged function is used internally to ensure the APZC array length
@@ -1785,20 +1792,6 @@ public:
 #endif
   }
 
-  /**
-   * Replace the current effective transform with the given one,
-   * returning the old one.  This is currently added as a hack for VR
-   * rendering, and might go away if we find a better way to do this.
-   * If you think you have a need for this method, talk with
-   * vlad/mstange/mwoodrow first.
-   */
-  virtual gfx::Matrix4x4 ReplaceEffectiveTransform(const gfx::Matrix4x4& aNewEffectiveTransform) {
-    gfx::Matrix4x4 old = mEffectiveTransform;
-    mEffectiveTransform = aNewEffectiveTransform;
-    ComputeEffectiveTransformForMaskLayers(mEffectiveTransform);
-    return old;
-  }
-
 protected:
   Layer(LayerManager* aManager, void* aImplData);
 
@@ -1832,6 +1825,8 @@ protected:
    */
   gfx::Matrix4x4 SnapTransformTranslation(const gfx::Matrix4x4& aTransform,
                                           gfx::Matrix* aResidualTransform);
+  gfx::Matrix4x4 SnapTransformTranslation3D(const gfx::Matrix4x4& aTransform,
+                                            gfx::Matrix* aResidualTransform);
   /**
    * See comment for SnapTransformTranslation.
    * This function implements type 2 snapping. If aTransform is a translation
@@ -1854,6 +1849,8 @@ protected:
   void* mImplData;
   RefPtr<Layer> mMaskLayer;
   nsTArray<RefPtr<Layer>> mAncestorMaskLayers;
+  // Look for out-of-bound in the middle of the structure
+  mozilla::CorruptionCanary mCanary;
   gfx::UserData mUserData;
   gfx::IntRect mLayerBounds;
   LayerIntRegion mVisibleRegion;
@@ -1971,12 +1968,11 @@ public:
     if (!gfx::ThebesPoint(residual.GetTranslation()).WithinEpsilonOf(mResidualTranslation, 1e-3f)) {
       mResidualTranslation = gfx::ThebesPoint(residual.GetTranslation());
       DebugOnly<mozilla::gfx::Point> transformedOrig =
-        idealTransform * mozilla::gfx::Point();
+        idealTransform.TransformPoint(mozilla::gfx::Point());
 #ifdef DEBUG
-      DebugOnly<mozilla::gfx::Point> transformed =
-        idealTransform * mozilla::gfx::Point(mResidualTranslation.x,
-                                             mResidualTranslation.y) -
-        *&transformedOrig;
+      DebugOnly<mozilla::gfx::Point> transformed = idealTransform.TransformPoint(
+        mozilla::gfx::Point(mResidualTranslation.x, mResidualTranslation.y)
+      ) - *&transformedOrig;
 #endif
       NS_ASSERTION(-0.5 <= (&transformed)->x && (&transformed)->x < 0.5 &&
                    -0.5 <= (&transformed)->y && (&transformed)->y < 0.5,
@@ -2197,39 +2193,6 @@ public:
     return mEventRegionsOverride;
   }
 
-  /**
-   * VR
-   */
-  void SetVRDeviceID(uint32_t aVRDeviceID) {
-    mVRDeviceID = aVRDeviceID;
-    Mutated();
-  }
-  uint32_t GetVRDeviceID() {
-    return mVRDeviceID;
-  }
-  void SetInputFrameID(int32_t aInputFrameID) {
-    mInputFrameID = aInputFrameID;
-    Mutated();
-  }
-  int32_t GetInputFrameID() {
-    return mInputFrameID;
-  }
-
-  /**
-   * Replace the current effective transform with the given one,
-   * returning the old one.  This is currently added as a hack for VR
-   * rendering, and might go away if we find a better way to do this.
-   * If you think you have a need for this method, talk with
-   * vlad/mstange/mwoodrow first.
-   */
-  gfx::Matrix4x4 ReplaceEffectiveTransform(const gfx::Matrix4x4& aNewEffectiveTransform) override {
-    gfx::Matrix4x4 old = mEffectiveTransform;
-    mEffectiveTransform = aNewEffectiveTransform;
-    ComputeEffectiveTransformsForChildren(mEffectiveTransform);
-    ComputeEffectiveTransformForMaskLayers(mEffectiveTransform);
-    return old;
-  }
-
 protected:
   friend class ReadbackProcessor;
 
@@ -2289,8 +2252,6 @@ protected:
   // the intermediate surface.
   bool mChildrenChanged;
   EventRegionsOverride mEventRegionsOverride;
-  uint32_t mVRDeviceID;
-  int32_t mInputFrameID;
 };
 
 /**
@@ -2375,6 +2336,7 @@ public:
       , mSize(0,0)
       , mHasAlpha(false)
       , mIsGLAlphaPremult(true)
+      , mIsMirror(false)
     { }
 
     // One of these three must be specified for Canvas2D, but never more than one
@@ -2393,6 +2355,10 @@ public:
 
     // Whether mGLContext contains data that is alpha-premultiplied.
     bool mIsGLAlphaPremult;
+
+    // Whether the canvas front buffer is already being rendered somewhere else.
+    // When true, do not swap buffers or Morph() to another factory on mGLContext
+    bool mIsMirror;
   };
 
   /**

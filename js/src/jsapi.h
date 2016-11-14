@@ -14,6 +14,7 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Range.h"
 #include "mozilla/RangedPtr.h"
+#include "mozilla/RefCounted.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/Variant.h"
 
@@ -26,11 +27,13 @@
 #include "jspubtd.h"
 
 #include "js/CallArgs.h"
+#include "js/CharacterEncoding.h"
 #include "js/Class.h"
 #include "js/GCVector.h"
 #include "js/HashTable.h"
 #include "js/Id.h"
 #include "js/Principals.h"
+#include "js/Realm.h"
 #include "js/RootingAPI.h"
 #include "js/TracingAPI.h"
 #include "js/Utility.h"
@@ -215,9 +218,31 @@ class MOZ_RAII AutoVectorRooter : public AutoVectorRooterBase<T>
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
-typedef AutoVectorRooter<Value> AutoValueVector;
-typedef AutoVectorRooter<jsid> AutoIdVector;
-typedef AutoVectorRooter<JSObject*> AutoObjectVector;
+class AutoValueVector : public Rooted<GCVector<Value, 8>> {
+    using Vec = GCVector<Value, 8>;
+    using Base = Rooted<Vec>;
+  public:
+    explicit AutoValueVector(JSContext* cx) : Base(cx, Vec(cx)) {}
+    explicit AutoValueVector(js::ContextFriendFields* cx) : Base(cx, Vec(cx)) {}
+};
+
+class AutoIdVector : public Rooted<GCVector<jsid, 8>> {
+    using Vec = GCVector<jsid, 8>;
+    using Base = Rooted<Vec>;
+  public:
+    explicit AutoIdVector(JSContext* cx) : Base(cx, Vec(cx)) {}
+    explicit AutoIdVector(js::ContextFriendFields* cx) : Base(cx, Vec(cx)) {}
+
+    bool appendAll(const AutoIdVector& other) { return this->Base::appendAll(other.get()); }
+};
+
+class AutoObjectVector : public Rooted<GCVector<JSObject*, 8>> {
+    using Vec = GCVector<JSObject*, 8>;
+    using Base = Rooted<Vec>;
+  public:
+    explicit AutoObjectVector(JSContext* cx) : Base(cx, Vec(cx)) {}
+    explicit AutoObjectVector(js::ContextFriendFields* cx) : Base(cx, Vec(cx)) {}
+};
 
 using ValueVector = JS::GCVector<JS::Value>;
 using IdVector = JS::GCVector<jsid>;
@@ -456,7 +481,7 @@ class MOZ_RAII JS_PUBLIC_API(CustomAutoRooter) : private AutoGCRooter
 {
   public:
     template <typename CX>
-    explicit CustomAutoRooter(CX* cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    explicit CustomAutoRooter(const CX& cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : AutoGCRooter(cx, CUSTOM)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
@@ -465,6 +490,8 @@ class MOZ_RAII JS_PUBLIC_API(CustomAutoRooter) : private AutoGCRooter
     friend void AutoGCRooter::trace(JSTracer* trc);
 
   protected:
+    virtual ~CustomAutoRooter() {}
+
     /** Supplied by derived class to trace roots. */
     virtual void trace(JSTracer* trc) = 0;
 
@@ -520,15 +547,15 @@ class HandleValueArray
 /************************************************************************/
 
 struct JSFreeOp {
-  private:
+  protected:
     JSRuntime*  runtime_;
 
-  protected:
     explicit JSFreeOp(JSRuntime* rt)
       : runtime_(rt) { }
 
   public:
     JSRuntime* runtime() const {
+        MOZ_ASSERT(runtime_);
         return runtime_;
     }
 };
@@ -543,22 +570,22 @@ typedef enum JSGCStatus {
 } JSGCStatus;
 
 typedef void
-(* JSGCCallback)(JSRuntime* rt, JSGCStatus status, void* data);
+(* JSGCCallback)(JSContext* cx, JSGCStatus status, void* data);
 
 typedef void
-(* JSObjectsTenuredCallback)(JSRuntime* rt, void* data);
+(* JSObjectsTenuredCallback)(JSContext* cx, void* data);
 
 typedef enum JSFinalizeStatus {
     /**
-     * Called when preparing to sweep a group of compartments, before anything
-     * has been swept.  The collector will not yield to the mutator before
-     * calling the callback with JSFINALIZE_GROUP_END status.
+     * Called when preparing to sweep a group of zones, before anything has been
+     * swept.  The collector will not yield to the mutator before calling the
+     * callback with JSFINALIZE_GROUP_END status.
      */
     JSFINALIZE_GROUP_START,
 
     /**
-     * Called when preparing to sweep a group of compartments. Weak references
-     * to unmarked things have been removed and things that are not swept
+     * Called when preparing to sweep a group of zones. Weak references to
+     * unmarked things have been removed and things that are not swept
      * incrementally have been finalized at this point.  The collector may yield
      * to the mutator after this point.
      */
@@ -571,20 +598,24 @@ typedef enum JSFinalizeStatus {
 } JSFinalizeStatus;
 
 typedef void
-(* JSFinalizeCallback)(JSFreeOp* fop, JSFinalizeStatus status, bool isCompartment, void* data);
+(* JSFinalizeCallback)(JSFreeOp* fop, JSFinalizeStatus status, bool isZoneGC, void* data);
 
 typedef void
-(* JSWeakPointerZoneGroupCallback)(JSRuntime* rt, void* data);
+(* JSWeakPointerZoneGroupCallback)(JSContext* cx, void* data);
 
 typedef void
-(* JSWeakPointerCompartmentCallback)(JSRuntime* rt, JSCompartment* comp, void* data);
+(* JSWeakPointerCompartmentCallback)(JSContext* cx, JSCompartment* comp, void* data);
 
 typedef bool
 (* JSInterruptCallback)(JSContext* cx);
 
+typedef JSObject*
+(* JSGetIncumbentGlobalCallback)(JSContext* cx);
+
 typedef bool
 (* JSEnqueuePromiseJobCallback)(JSContext* cx, JS::HandleObject job,
-                                JS::HandleObject allocationSite, void* data);
+                                JS::HandleObject allocationSite, JS::HandleObject incumbentGlobal,
+                                void* data);
 
 enum class PromiseRejectionHandlingState {
     Unhandled,
@@ -617,6 +648,8 @@ typedef enum JSExnType {
         JSEXN_TYPEERR,
         JSEXN_URIERR,
         JSEXN_DEBUGGEEWOULDRUN,
+        JSEXN_WASMCOMPILEERROR,
+        JSEXN_WASMRUNTIMEERROR,
     JSEXN_WARN,
     JSEXN_LIMIT
 } JSExnType;
@@ -668,9 +701,10 @@ typedef JSObject*
  * for wrapping in a context. This might include unwrapping other wrappers
  * or even finding a more suitable object for the new compartment.
  */
-typedef JSObject*
+typedef void
 (* JSPreWrapCallback)(JSContext* cx, JS::HandleObject scope, JS::HandleObject obj,
-                      JS::HandleObject objectPassedToWrap);
+                      JS::HandleObject objectPassedToWrap,
+                      JS::MutableHandleObject retObj);
 
 struct JSWrapObjectCallbacks
 {
@@ -689,7 +723,7 @@ typedef void
 (* JSZoneCallback)(JS::Zone* zone);
 
 typedef void
-(* JSCompartmentNameCallback)(JSRuntime* rt, JSCompartment* compartment,
+(* JSCompartmentNameCallback)(JSContext* cx, JSCompartment* compartment,
                               char* buf, size_t bufsize);
 
 /************************************************************************/
@@ -834,7 +868,6 @@ class MOZ_STACK_CLASS SourceBufferHolder final
                                            object that delegates to a prototype
                                            containing this property */
 #define JSPROP_INTERNAL_USE_BIT 0x80    /* internal JS engine use only */
-//                             0x100    /* Unused */
 #define JSFUN_STUB_GSOPS       0x200    /* use JS_PropertyStub getter/setter
                                            instead of defaulting to class gsops
                                            for property holding function */
@@ -881,17 +914,6 @@ class MOZ_STACK_CLASS SourceBufferHolder final
                                             specified when passed to Object.defineProperty
                                             from script. */
 
-/**
- * The first call to JS_CallOnce by any thread in a process will call 'func'.
- * Later calls to JS_CallOnce with the same JSCallOnceType object will be
- * suppressed.
- *
- * Equivalently: each distinct JSCallOnceType object will allow one JS_CallOnce
- * to invoke its JSInitCallback.
- */
-extern JS_PUBLIC_API(bool)
-JS_CallOnce(JSCallOnceType* once, JSInitCallback func);
-
 /** Microseconds since the epoch, midnight, January 1, 1970 UTC. */
 extern JS_PUBLIC_API(int64_t)
 JS_Now(void);
@@ -910,7 +932,7 @@ extern JS_PUBLIC_API(JS::Value)
 JS_GetEmptyStringValue(JSContext* cx);
 
 extern JS_PUBLIC_API(JSString*)
-JS_GetEmptyString(JSRuntime* rt);
+JS_GetEmptyString(JSContext* cx);
 
 extern JS_PUBLIC_API(bool)
 JS_ValueToObject(JSContext* cx, JS::HandleValue v, JS::MutableHandleObject objp);
@@ -952,19 +974,19 @@ JS_IsBuiltinFunctionConstructor(JSFunction* fun);
 /*
  * Locking, contexts, and memory allocation.
  *
- * It is important that SpiderMonkey be initialized, and the first runtime and
- * first context be created, in a single-threaded fashion.  Otherwise the
- * behavior of the library is undefined.
+ * It is important that SpiderMonkey be initialized, and the first context
+ * be created, in a single-threaded fashion.  Otherwise the behavior of the
+ * library is undefined.
  * See: http://developer.mozilla.org/en/docs/Category:JSAPI_Reference
  */
 
-extern JS_PUBLIC_API(JSRuntime*)
-JS_NewRuntime(uint32_t maxbytes,
+extern JS_PUBLIC_API(JSContext*)
+JS_NewContext(uint32_t maxbytes,
               uint32_t maxNurseryBytes = JS::DefaultNurseryBytes,
-              JSRuntime* parentRuntime = nullptr);
+              JSContext* parentContext = nullptr);
 
 extern JS_PUBLIC_API(void)
-JS_DestroyRuntime(JSRuntime* rt);
+JS_DestroyContext(JSContext* cx);
 
 typedef double (*JS_CurrentEmbedderTimeFunction)();
 
@@ -986,16 +1008,13 @@ JS_PUBLIC_API(double)
 JS_GetCurrentEmbedderTime();
 
 JS_PUBLIC_API(void*)
-JS_GetRuntimePrivate(JSRuntime* rt);
-
-extern JS_PUBLIC_API(JSRuntime*)
-JS_GetRuntime(JSContext* cx);
-
-extern JS_PUBLIC_API(JSRuntime*)
-JS_GetParentRuntime(JSRuntime* rt);
+JS_GetContextPrivate(JSContext* cx);
 
 JS_PUBLIC_API(void)
-JS_SetRuntimePrivate(JSRuntime* rt, void* data);
+JS_SetContextPrivate(JSContext* cx, void* data);
+
+extern JS_PUBLIC_API(JSContext*)
+JS_GetParentContext(JSContext* cx);
 
 extern JS_PUBLIC_API(void)
 JS_BeginRequest(JSContext* cx);
@@ -1004,15 +1023,12 @@ extern JS_PUBLIC_API(void)
 JS_EndRequest(JSContext* cx);
 
 extern JS_PUBLIC_API(void)
-JS_SetFutexCanWait(JSRuntime* rt);
+JS_SetFutexCanWait(JSContext* cx);
 
 namespace js {
 
 void
 AssertHeapIsIdle(JSRuntime* rt);
-
-void
-AssertHeapIsIdle(JSContext* cx);
 
 } /* namespace js */
 
@@ -1041,33 +1057,6 @@ class MOZ_RAII JSAutoRequest
 #endif
 };
 
-extern JS_PUBLIC_API(JSContext*)
-JS_NewContext(JSRuntime* rt, size_t stackChunkSize);
-
-extern JS_PUBLIC_API(void)
-JS_DestroyContext(JSContext* cx);
-
-extern JS_PUBLIC_API(void)
-JS_DestroyContextNoGC(JSContext* cx);
-
-extern JS_PUBLIC_API(void*)
-JS_GetContextPrivate(JSContext* cx);
-
-extern JS_PUBLIC_API(void)
-JS_SetContextPrivate(JSContext* cx, void* data);
-
-extern JS_PUBLIC_API(void*)
-JS_GetSecondContextPrivate(JSContext* cx);
-
-extern JS_PUBLIC_API(void)
-JS_SetSecondContextPrivate(JSContext* cx, void* data);
-
-extern JS_PUBLIC_API(JSRuntime*)
-JS_GetRuntime(JSContext* cx);
-
-extern JS_PUBLIC_API(JSContext*)
-JS_ContextIterator(JSRuntime* rt, JSContext** iterp);
-
 extern JS_PUBLIC_API(JSVersion)
 JS_GetVersion(JSContext* cx);
 
@@ -1090,9 +1079,9 @@ JS_StringToVersion(const char* string);
 
 namespace JS {
 
-class JS_PUBLIC_API(RuntimeOptions) {
+class JS_PUBLIC_API(ContextOptions) {
   public:
-    RuntimeOptions()
+    ContextOptions()
       : baseline_(true),
         ion_(true),
         asmJS_(true),
@@ -1111,121 +1100,121 @@ class JS_PUBLIC_API(RuntimeOptions) {
     }
 
     bool baseline() const { return baseline_; }
-    RuntimeOptions& setBaseline(bool flag) {
+    ContextOptions& setBaseline(bool flag) {
         baseline_ = flag;
         return *this;
     }
-    RuntimeOptions& toggleBaseline() {
+    ContextOptions& toggleBaseline() {
         baseline_ = !baseline_;
         return *this;
     }
 
     bool ion() const { return ion_; }
-    RuntimeOptions& setIon(bool flag) {
+    ContextOptions& setIon(bool flag) {
         ion_ = flag;
         return *this;
     }
-    RuntimeOptions& toggleIon() {
+    ContextOptions& toggleIon() {
         ion_ = !ion_;
         return *this;
     }
 
     bool asmJS() const { return asmJS_; }
-    RuntimeOptions& setAsmJS(bool flag) {
+    ContextOptions& setAsmJS(bool flag) {
         asmJS_ = flag;
         return *this;
     }
-    RuntimeOptions& toggleAsmJS() {
+    ContextOptions& toggleAsmJS() {
         asmJS_ = !asmJS_;
         return *this;
     }
 
     bool wasm() const { return wasm_; }
-    RuntimeOptions& setWasm(bool flag) {
+    ContextOptions& setWasm(bool flag) {
         wasm_ = flag;
         return *this;
     }
-    RuntimeOptions& toggleWasm() {
+    ContextOptions& toggleWasm() {
         wasm_ = !wasm_;
         return *this;
     }
 
     bool wasmAlwaysBaseline() const { return wasmAlwaysBaseline_; }
-    RuntimeOptions& setWasmAlwaysBaseline(bool flag) {
+    ContextOptions& setWasmAlwaysBaseline(bool flag) {
         wasmAlwaysBaseline_ = flag;
         return *this;
     }
-    RuntimeOptions& toggleWasmAlwaysBaseline() {
+    ContextOptions& toggleWasmAlwaysBaseline() {
         wasmAlwaysBaseline_ = !wasmAlwaysBaseline_;
         return *this;
     }
 
     bool throwOnAsmJSValidationFailure() const { return throwOnAsmJSValidationFailure_; }
-    RuntimeOptions& setThrowOnAsmJSValidationFailure(bool flag) {
+    ContextOptions& setThrowOnAsmJSValidationFailure(bool flag) {
         throwOnAsmJSValidationFailure_ = flag;
         return *this;
     }
-    RuntimeOptions& toggleThrowOnAsmJSValidationFailure() {
+    ContextOptions& toggleThrowOnAsmJSValidationFailure() {
         throwOnAsmJSValidationFailure_ = !throwOnAsmJSValidationFailure_;
         return *this;
     }
 
     bool nativeRegExp() const { return nativeRegExp_; }
-    RuntimeOptions& setNativeRegExp(bool flag) {
+    ContextOptions& setNativeRegExp(bool flag) {
         nativeRegExp_ = flag;
         return *this;
     }
 
     bool unboxedArrays() const { return unboxedArrays_; }
-    RuntimeOptions& setUnboxedArrays(bool flag) {
+    ContextOptions& setUnboxedArrays(bool flag) {
         unboxedArrays_ = flag;
         return *this;
     }
 
     bool asyncStack() const { return asyncStack_; }
-    RuntimeOptions& setAsyncStack(bool flag) {
+    ContextOptions& setAsyncStack(bool flag) {
         asyncStack_ = flag;
         return *this;
     }
 
     bool throwOnDebuggeeWouldRun() const { return throwOnDebuggeeWouldRun_; }
-    RuntimeOptions& setThrowOnDebuggeeWouldRun(bool flag) {
+    ContextOptions& setThrowOnDebuggeeWouldRun(bool flag) {
         throwOnDebuggeeWouldRun_ = flag;
         return *this;
     }
 
     bool dumpStackOnDebuggeeWouldRun() const { return dumpStackOnDebuggeeWouldRun_; }
-    RuntimeOptions& setDumpStackOnDebuggeeWouldRun(bool flag) {
+    ContextOptions& setDumpStackOnDebuggeeWouldRun(bool flag) {
         dumpStackOnDebuggeeWouldRun_ = flag;
         return *this;
     }
 
     bool werror() const { return werror_; }
-    RuntimeOptions& setWerror(bool flag) {
+    ContextOptions& setWerror(bool flag) {
         werror_ = flag;
         return *this;
     }
-    RuntimeOptions& toggleWerror() {
+    ContextOptions& toggleWerror() {
         werror_ = !werror_;
         return *this;
     }
 
     bool strictMode() const { return strictMode_; }
-    RuntimeOptions& setStrictMode(bool flag) {
+    ContextOptions& setStrictMode(bool flag) {
         strictMode_ = flag;
         return *this;
     }
-    RuntimeOptions& toggleStrictMode() {
+    ContextOptions& toggleStrictMode() {
         strictMode_ = !strictMode_;
         return *this;
     }
 
     bool extraWarnings() const { return extraWarnings_; }
-    RuntimeOptions& setExtraWarnings(bool flag) {
+    ContextOptions& setExtraWarnings(bool flag) {
         extraWarnings_ = flag;
         return *this;
     }
-    RuntimeOptions& toggleExtraWarnings() {
+    ContextOptions& toggleExtraWarnings() {
         extraWarnings_ = !extraWarnings_;
         return *this;
     }
@@ -1247,11 +1236,23 @@ class JS_PUBLIC_API(RuntimeOptions) {
     bool extraWarnings_ : 1;
 };
 
-JS_PUBLIC_API(RuntimeOptions&)
-RuntimeOptionsRef(JSRuntime* rt);
+JS_PUBLIC_API(ContextOptions&)
+ContextOptionsRef(JSContext* cx);
 
-JS_PUBLIC_API(RuntimeOptions&)
-RuntimeOptionsRef(JSContext* cx);
+/**
+ * Initialize the runtime's self-hosted code. Embeddings should call this
+ * exactly once per runtime/context, before the first JS_NewGlobalObject
+ * call.
+ */
+JS_PUBLIC_API(bool)
+InitSelfHostedCode(JSContext* cx);
+
+/**
+ * Asserts (in debug and release builds) that `obj` belongs to the current
+ * thread's context.
+ */
+JS_PUBLIC_API(void)
+AssertObjectBelongsToCurrentThread(JSObject* obj);
 
 } /* namespace JS */
 
@@ -1259,23 +1260,23 @@ extern JS_PUBLIC_API(const char*)
 JS_GetImplementationVersion(void);
 
 extern JS_PUBLIC_API(void)
-JS_SetDestroyCompartmentCallback(JSRuntime* rt, JSDestroyCompartmentCallback callback);
+JS_SetDestroyCompartmentCallback(JSContext* cx, JSDestroyCompartmentCallback callback);
 
 extern JS_PUBLIC_API(void)
-JS_SetSizeOfIncludingThisCompartmentCallback(JSRuntime* rt,
+JS_SetSizeOfIncludingThisCompartmentCallback(JSContext* cx,
                                              JSSizeOfIncludingThisCompartmentCallback callback);
 
 extern JS_PUBLIC_API(void)
-JS_SetDestroyZoneCallback(JSRuntime* rt, JSZoneCallback callback);
+JS_SetDestroyZoneCallback(JSContext* cx, JSZoneCallback callback);
 
 extern JS_PUBLIC_API(void)
-JS_SetSweepZoneCallback(JSRuntime* rt, JSZoneCallback callback);
+JS_SetSweepZoneCallback(JSContext* cx, JSZoneCallback callback);
 
 extern JS_PUBLIC_API(void)
-JS_SetCompartmentNameCallback(JSRuntime* rt, JSCompartmentNameCallback callback);
+JS_SetCompartmentNameCallback(JSContext* cx, JSCompartmentNameCallback callback);
 
 extern JS_PUBLIC_API(void)
-JS_SetWrapObjectCallbacks(JSRuntime* rt, const JSWrapObjectCallbacks* callbacks);
+JS_SetWrapObjectCallbacks(JSContext* cx, const JSWrapObjectCallbacks* callbacks);
 
 extern JS_PUBLIC_API(void)
 JS_SetCompartmentPrivate(JSCompartment* compartment, void* data);
@@ -1369,7 +1370,7 @@ JS_EnterCompartment(JSContext* cx, JSObject* target);
 extern JS_PUBLIC_API(void)
 JS_LeaveCompartment(JSContext* cx, JSCompartment* oldCompartment);
 
-typedef void (*JSIterateCompartmentCallback)(JSRuntime* rt, void* data, JSCompartment* compartment);
+typedef void (*JSIterateCompartmentCallback)(JSContext* cx, void* data, JSCompartment* compartment);
 
 /**
  * This function calls |compartmentCallback| on every compartment. Beware that
@@ -1377,7 +1378,7 @@ typedef void (*JSIterateCompartmentCallback)(JSRuntime* rt, void* data, JSCompar
  * returns. Also, barriers are disabled via the TraceSession.
  */
 extern JS_PUBLIC_API(void)
-JS_IterateCompartments(JSRuntime* rt, void* data,
+JS_IterateCompartments(JSContext* cx, void* data,
                        JSIterateCompartmentCallback compartmentCallback);
 
 /**
@@ -1487,13 +1488,13 @@ extern JS_PUBLIC_API(bool)
 JS_IsGlobalObject(JSObject* obj);
 
 extern JS_PUBLIC_API(JSObject*)
-JS_GlobalLexicalScope(JSObject* obj);
+JS_GlobalLexicalEnvironment(JSObject* obj);
 
 extern JS_PUBLIC_API(bool)
-JS_HasExtensibleLexicalScope(JSObject* obj);
+JS_HasExtensibleLexicalEnvironment(JSObject* obj);
 
 extern JS_PUBLIC_API(JSObject*)
-JS_ExtensibleLexicalScope(JSObject* obj);
+JS_ExtensibleLexicalEnvironment(JSObject* obj);
 
 /**
  * May return nullptr, if |c| never had a global (e.g. the atoms compartment),
@@ -1585,54 +1586,47 @@ JS_free(JSContext* cx, void* p);
 extern JS_PUBLIC_API(void)
 JS_freeop(JSFreeOp* fop, void* p);
 
-extern JS_PUBLIC_API(JSFreeOp*)
-JS_GetDefaultFreeOp(JSRuntime* rt);
-
 extern JS_PUBLIC_API(void)
 JS_updateMallocCounter(JSContext* cx, size_t nbytes);
 
 extern JS_PUBLIC_API(char*)
 JS_strdup(JSContext* cx, const char* s);
 
-/** Duplicate a string.  Does not report an error on failure. */
-extern JS_PUBLIC_API(char*)
-JS_strdup(JSRuntime* rt, const char* s);
-
 /**
  * Register externally maintained GC roots.
  *
  * traceOp: the trace operation. For each root the implementation should call
- *          JS_CallTracer whenever the root contains a traceable thing.
+ *          JS::TraceEdge whenever the root contains a traceable thing.
  * data:    the data argument to pass to each invocation of traceOp.
  */
 extern JS_PUBLIC_API(bool)
-JS_AddExtraGCRootsTracer(JSRuntime* rt, JSTraceDataOp traceOp, void* data);
+JS_AddExtraGCRootsTracer(JSContext* cx, JSTraceDataOp traceOp, void* data);
 
 /** Undo a call to JS_AddExtraGCRootsTracer. */
 extern JS_PUBLIC_API(void)
-JS_RemoveExtraGCRootsTracer(JSRuntime* rt, JSTraceDataOp traceOp, void* data);
+JS_RemoveExtraGCRootsTracer(JSContext* cx, JSTraceDataOp traceOp, void* data);
 
 /*
  * Garbage collector API.
  */
 extern JS_PUBLIC_API(void)
-JS_GC(JSRuntime* rt);
+JS_GC(JSContext* cx);
 
 extern JS_PUBLIC_API(void)
 JS_MaybeGC(JSContext* cx);
 
 extern JS_PUBLIC_API(void)
-JS_SetGCCallback(JSRuntime* rt, JSGCCallback cb, void* data);
+JS_SetGCCallback(JSContext* cx, JSGCCallback cb, void* data);
 
 extern JS_PUBLIC_API(void)
-JS_SetObjectsTenuredCallback(JSRuntime* rt, JSObjectsTenuredCallback cb,
+JS_SetObjectsTenuredCallback(JSContext* cx, JSObjectsTenuredCallback cb,
                              void* data);
 
 extern JS_PUBLIC_API(bool)
-JS_AddFinalizeCallback(JSRuntime* rt, JSFinalizeCallback cb, void* data);
+JS_AddFinalizeCallback(JSContext* cx, JSFinalizeCallback cb, void* data);
 
 extern JS_PUBLIC_API(void)
-JS_RemoveFinalizeCallback(JSRuntime* rt, JSFinalizeCallback cb);
+JS_RemoveFinalizeCallback(JSContext* cx, JSFinalizeCallback cb);
 
 /*
  * Weak pointers and garbage collection
@@ -1669,17 +1663,17 @@ JS_RemoveFinalizeCallback(JSRuntime* rt, JSFinalizeCallback cb);
  */
 
 extern JS_PUBLIC_API(bool)
-JS_AddWeakPointerZoneGroupCallback(JSRuntime* rt, JSWeakPointerZoneGroupCallback cb, void* data);
+JS_AddWeakPointerZoneGroupCallback(JSContext* cx, JSWeakPointerZoneGroupCallback cb, void* data);
 
 extern JS_PUBLIC_API(void)
-JS_RemoveWeakPointerZoneGroupCallback(JSRuntime* rt, JSWeakPointerZoneGroupCallback cb);
+JS_RemoveWeakPointerZoneGroupCallback(JSContext* cx, JSWeakPointerZoneGroupCallback cb);
 
 extern JS_PUBLIC_API(bool)
-JS_AddWeakPointerCompartmentCallback(JSRuntime* rt, JSWeakPointerCompartmentCallback cb,
+JS_AddWeakPointerCompartmentCallback(JSContext* cx, JSWeakPointerCompartmentCallback cb,
                                      void* data);
 
 extern JS_PUBLIC_API(void)
-JS_RemoveWeakPointerCompartmentCallback(JSRuntime* rt, JSWeakPointerCompartmentCallback cb);
+JS_RemoveWeakPointerCompartmentCallback(JSContext* cx, JSWeakPointerCompartmentCallback cb);
 
 extern JS_PUBLIC_API(void)
 JS_UpdateWeakPointerAfterGC(JS::Heap<JSObject*>* objp);
@@ -1749,13 +1743,6 @@ typedef enum JSGCParamKey {
     JSGC_ALLOCATION_THRESHOLD = 19,
 
     /**
-     * We decommit memory lazily. If more than this number of megabytes is
-     * available to be decommitted, then JS_MaybeGC will trigger a shrinking GC
-     * to decommit it.
-     */
-    JSGC_DECOMMIT_THRESHOLD = 20,
-
-    /**
      * We try to keep at least this many unused chunks in the free chunk pool at
      * all times, even after a shrinking GC.
      */
@@ -1772,13 +1759,13 @@ typedef enum JSGCParamKey {
 } JSGCParamKey;
 
 extern JS_PUBLIC_API(void)
-JS_SetGCParameter(JSRuntime* rt, JSGCParamKey key, uint32_t value);
+JS_SetGCParameter(JSContext* cx, JSGCParamKey key, uint32_t value);
 
 extern JS_PUBLIC_API(uint32_t)
-JS_GetGCParameter(JSRuntime* rt, JSGCParamKey key);
+JS_GetGCParameter(JSContext* cx, JSGCParamKey key);
 
 extern JS_PUBLIC_API(void)
-JS_SetGCParametersBasedOnAvailableMemory(JSRuntime* rt, uint32_t availMem);
+JS_SetGCParametersBasedOnAvailableMemory(JSContext* cx, uint32_t availMem);
 
 /**
  * Create a new JSString whose chars member refers to external memory, i.e.,
@@ -1820,7 +1807,7 @@ JS_GetExternalStringFinalizer(JSString* str);
  * and before any code is executed and/or interrupts requested.
  */
 extern JS_PUBLIC_API(void)
-JS_SetNativeStackQuota(JSRuntime* cx, size_t systemCodeStackSize,
+JS_SetNativeStackQuota(JSContext* cx, size_t systemCodeStackSize,
                        size_t trustedScriptStackSize = 0,
                        size_t untrustedScriptStackSize = 0);
 
@@ -1903,22 +1890,42 @@ typedef struct JSNativeWrapper {
  */
 struct JSPropertySpec {
     struct SelfHostedWrapper {
-        void*      unused;
+        void*       unused;
         const char* funname;
+    };
+
+    struct ValueWrapper {
+        uintptr_t   type;
+        union {
+            const char* string;
+            int32_t     int32;
+        };
     };
 
     const char*                 name;
     uint8_t                     flags;
     union {
-        JSNativeWrapper     native;
-        SelfHostedWrapper   selfHosted;
-    } getter;
-    union {
-        JSNativeWrapper           native;
-        SelfHostedWrapper         selfHosted;
-    } setter;
+        struct {
+            union {
+                JSNativeWrapper    native;
+                SelfHostedWrapper  selfHosted;
+            } getter;
+            union {
+                JSNativeWrapper    native;
+                SelfHostedWrapper  selfHosted;
+            } setter;
+        } accessors;
+        ValueWrapper            value;
+    };
+
+    bool isAccessor() const {
+        return !(flags & JSPROP_INTERNAL_USE_BIT);
+    }
+    bool getValue(JSContext* cx, JS::MutableHandleValue value) const;
 
     bool isSelfHosted() const {
+        MOZ_ASSERT(isAccessor());
+
 #ifdef DEBUG
         // Verify that our accessors match our JSPROP_GETTER flag.
         if (flags & JSPROP_GETTER)
@@ -1937,17 +1944,17 @@ struct JSPropertySpec {
                   "JSNativeWrapper::info");
 private:
     void checkAccessorsAreNative() const {
-        MOZ_ASSERT(getter.native.op);
+        MOZ_ASSERT(accessors.getter.native.op);
         // We may not have a setter at all.  So all we can assert here, for the
         // native case is that if we have a jitinfo for the setter then we have
         // a setter op too.  This is good enough to make sure we don't have a
         // SelfHostedWrapper for the setter.
-        MOZ_ASSERT_IF(setter.native.info, setter.native.op);
+        MOZ_ASSERT_IF(accessors.setter.native.info, accessors.setter.native.op);
     }
 
     void checkAccessorsAreSelfHosted() const {
-        MOZ_ASSERT(!getter.selfHosted.unused);
-        MOZ_ASSERT(!setter.selfHosted.unused);
+        MOZ_ASSERT(!accessors.getter.selfHosted.unused);
+        MOZ_ASSERT(!accessors.setter.selfHosted.unused);
     }
 };
 
@@ -1962,12 +1969,14 @@ template<size_t N>
 inline int
 CheckIsCharacterLiteral(const char (&arr)[N]);
 
+/* NEVER DEFINED, DON'T USE.  For use by JS_CAST_INT32_TO only. */
+inline int CheckIsInt32(int32_t value);
+
 /* NEVER DEFINED, DON'T USE.  For use by JS_PROPERTYOP_GETTER only. */
 inline int CheckIsGetterOp(JSGetterOp op);
 
 /* NEVER DEFINED, DON'T USE.  For use by JS_PROPERTYOP_SETTER only. */
 inline int CheckIsSetterOp(JSSetterOp op);
-
 
 } // namespace detail
 } // namespace JS
@@ -1978,6 +1987,10 @@ inline int CheckIsSetterOp(JSSetterOp op);
 
 #define JS_CAST_STRING_TO(s, To) \
   (static_cast<void>(sizeof(JS::detail::CheckIsCharacterLiteral(s))), \
+   reinterpret_cast<To>(s))
+
+#define JS_CAST_INT32_TO(s, To) \
+  (static_cast<void>(sizeof(JS::detail::CheckIsInt32(s))), \
    reinterpret_cast<To>(s))
 
 #define JS_CHECK_ACCESSOR_FLAGS(flags) \
@@ -1996,37 +2009,50 @@ inline int CheckIsSetterOp(JSSetterOp op);
 
 #define JS_STUBSETTER JS_PROPERTYOP_SETTER(JS_StrictPropertyStub)
 
+#define JS_PS_ACCESSOR_SPEC(name, getter, setter, flags, extraFlags) \
+    { name, uint8_t(JS_CHECK_ACCESSOR_FLAGS(flags) | extraFlags), \
+      { {  getter, setter  } } }
+#define JS_PS_VALUE_SPEC(name, value, flags) \
+    { name, uint8_t(flags | JSPROP_INTERNAL_USE_BIT), \
+      { { value, JSNATIVE_WRAPPER(nullptr) } } }
+
+#define SELFHOSTED_WRAPPER(name) \
+    { { nullptr, JS_CAST_STRING_TO(name, const JSJitInfo*) } }
+#define STRINGVALUE_WRAPPER(value) \
+    { { reinterpret_cast<JSNative>(JSVAL_TYPE_STRING), JS_CAST_STRING_TO(value, const JSJitInfo*) } }
+#define INT32VALUE_WRAPPER(value) \
+    { { reinterpret_cast<JSNative>(JSVAL_TYPE_INT32), JS_CAST_INT32_TO(value, const JSJitInfo*) } }
+
 /*
  * JSPropertySpec uses JSNativeWrapper.  These macros encapsulate the definition
  * of JSNative-backed JSPropertySpecs, by defining the JSNativeWrappers for
  * them.
  */
 #define JS_PSG(name, getter, flags) \
-    {name, \
-     uint8_t(JS_CHECK_ACCESSOR_FLAGS(flags) | JSPROP_SHARED), \
-     JSNATIVE_WRAPPER(getter), \
-     JSNATIVE_WRAPPER(nullptr)}
+    JS_PS_ACCESSOR_SPEC(name, JSNATIVE_WRAPPER(getter), JSNATIVE_WRAPPER(nullptr), flags, \
+                        JSPROP_SHARED)
 #define JS_PSGS(name, getter, setter, flags) \
-    {name, \
-     uint8_t(JS_CHECK_ACCESSOR_FLAGS(flags) | JSPROP_SHARED), \
-     JSNATIVE_WRAPPER(getter), \
-     JSNATIVE_WRAPPER(setter)}
+    JS_PS_ACCESSOR_SPEC(name, JSNATIVE_WRAPPER(getter), JSNATIVE_WRAPPER(setter), flags, \
+                         JSPROP_SHARED)
 #define JS_SELF_HOSTED_GET(name, getterName, flags) \
-    {name, \
-     uint8_t(JS_CHECK_ACCESSOR_FLAGS(flags) | JSPROP_SHARED | JSPROP_GETTER), \
-     { { nullptr, JS_CAST_STRING_TO(getterName, const JSJitInfo*) } }, \
-     JSNATIVE_WRAPPER(nullptr) }
+    JS_PS_ACCESSOR_SPEC(name, SELFHOSTED_WRAPPER(getterName), JSNATIVE_WRAPPER(nullptr), flags, \
+                         JSPROP_SHARED | JSPROP_GETTER)
 #define JS_SELF_HOSTED_GETSET(name, getterName, setterName, flags) \
-    {name, \
-     uint8_t(JS_CHECK_ACCESSOR_FLAGS(flags) | JSPROP_SHARED | JSPROP_GETTER | JSPROP_SETTER), \
-     { nullptr, JS_CAST_STRING_TO(getterName, const JSJitInfo*) },  \
-     { nullptr, JS_CAST_STRING_TO(setterName, const JSJitInfo*) } }
-#define JS_PS_END { nullptr, 0, JSNATIVE_WRAPPER(nullptr), JSNATIVE_WRAPPER(nullptr) }
+    JS_PS_ACCESSOR_SPEC(name, SELFHOSTED_WRAPPER(getterName), SELFHOSTED_WRAPPER(setterName), \
+                         flags, JSPROP_SHARED | JSPROP_GETTER | JSPROP_SETTER)
 #define JS_SELF_HOSTED_SYM_GET(symbol, getterName, flags) \
-    {reinterpret_cast<const char*>(uint32_t(::JS::SymbolCode::symbol) + 1), \
-     uint8_t(JS_CHECK_ACCESSOR_FLAGS(flags) | JSPROP_SHARED | JSPROP_GETTER), \
-     { { nullptr, JS_CAST_STRING_TO(getterName, const JSJitInfo*) } }, \
-     JSNATIVE_WRAPPER(nullptr) }
+    JS_PS_ACCESSOR_SPEC(reinterpret_cast<const char*>(uint32_t(::JS::SymbolCode::symbol) + 1), \
+                         SELFHOSTED_WRAPPER(getterName), JSNATIVE_WRAPPER(nullptr), flags, \
+                         JSPROP_SHARED | JSPROP_GETTER)
+#define JS_STRING_PS(name, string, flags) \
+    JS_PS_VALUE_SPEC(name, STRINGVALUE_WRAPPER(string), flags)
+#define JS_STRING_SYM_PS(symbol, string, flags) \
+    JS_PS_VALUE_SPEC(reinterpret_cast<const char*>(uint32_t(::JS::SymbolCode::symbol) + 1), \
+                     STRINGVALUE_WRAPPER(string), flags)
+#define JS_INT32_PS(name, value, flags) \
+    JS_PS_VALUE_SPEC(name, INT32VALUE_WRAPPER(value), flags)
+#define JS_PS_END \
+    JS_PS_ACCESSOR_SPEC(nullptr, JSNATIVE_WRAPPER(nullptr), JSNATIVE_WRAPPER(nullptr), 0, 0)
 
 /**
  * To define a native function, set call to a JSNativeWrapper. To define a
@@ -2104,6 +2130,17 @@ JS_InstanceOf(JSContext* cx, JS::Handle<JSObject*> obj, const JSClass* clasp, JS
 extern JS_PUBLIC_API(bool)
 JS_HasInstance(JSContext* cx, JS::Handle<JSObject*> obj, JS::Handle<JS::Value> v, bool* bp);
 
+namespace JS {
+
+// Implementation of
+// http://www.ecma-international.org/ecma-262/6.0/#sec-ordinaryhasinstance.  If
+// you're looking for the equivalent of "instanceof", you want JS_HasInstance,
+// not this function.
+extern JS_PUBLIC_API(bool)
+OrdinaryHasInstance(JSContext* cx, HandleObject objArg, HandleValue v, bool* bp);
+
+} // namespace JS
+
 extern JS_PUBLIC_API(void*)
 JS_GetPrivate(JSObject* obj);
 
@@ -2142,7 +2179,6 @@ class JS_PUBLIC_API(CompartmentCreationOptions)
         mergeable_(false),
         preserveJitCode_(false),
         cloneSingletons_(false),
-        experimentalDateTimeFormatFormatToPartsEnabled_(false),
         sharedMemoryAndAtomics_(false),
         secureContext_(false)
     {
@@ -2207,23 +2243,6 @@ class JS_PUBLIC_API(CompartmentCreationOptions)
         return *this;
     }
 
-    // ECMA-402 is considering adding a "formatToParts" DateTimeFormat method,
-    // that exposes not just a formatted string but its ordered subcomponents.
-    // The method, its semantics, and its name are all well short of being
-    // finalized, so for now it's exposed *only* if requested.
-    //
-    // Until "formatToParts" is included in a final specification edition, it's
-    // subject to change or removal at any time.  Do *not* rely on it in
-    // mission-critical code that can't be changed if ECMA-402 decides not to
-    // accept the method in its current form.
-    bool experimentalDateTimeFormatFormatToPartsEnabled() const {
-        return experimentalDateTimeFormatFormatToPartsEnabled_;
-    }
-    CompartmentCreationOptions& setExperimentalDateTimeFormatFormatToPartsEnabled(bool flag) {
-        experimentalDateTimeFormatFormatToPartsEnabled_ = flag;
-        return *this;
-    }
-
     bool getSharedMemoryAndAtomicsEnabled() const;
     CompartmentCreationOptions& setSharedMemoryAndAtomicsEnabled(bool flag);
 
@@ -2248,7 +2267,6 @@ class JS_PUBLIC_API(CompartmentCreationOptions)
     bool mergeable_;
     bool preserveJitCode_;
     bool cloneSingletons_;
-    bool experimentalDateTimeFormatFormatToPartsEnabled_;
     bool sharedMemoryAndAtomics_;
     bool secureContext_;
 };
@@ -2317,7 +2335,6 @@ class JS_PUBLIC_API(CompartmentBehaviors)
         return *this;
     }
 
-    bool extraWarnings(JSRuntime* rt) const;
     bool extraWarnings(JSContext* cx) const;
     Override& extraWarningsOverride() { return extraWarningsOverride_; }
 
@@ -2456,9 +2473,6 @@ JS_NewObject(JSContext* cx, const JSClass* clasp);
 
 extern JS_PUBLIC_API(bool)
 JS_IsNative(JSObject* obj);
-
-extern JS_PUBLIC_API(JSRuntime*)
-JS_GetObjectRuntime(JSObject* obj);
 
 /**
  * Unlike JS_NewObject, JS_NewObjectWithGivenProto does not compute a default
@@ -3209,8 +3223,8 @@ JS_DeleteElement(JSContext* cx, JS::HandleObject obj, uint32_t index);
  * This is the closest thing we currently have to the ES6 [[Enumerate]]
  * internal method.
  *
- * The JSIdArray returned by JS_Enumerate must be rooted to protect its
- * contents from garbage collection. Use JS::AutoIdArray.
+ * The array of ids returned by JS_Enumerate must be rooted to protect its
+ * contents from garbage collection. Use JS::Rooted<JS::IdVector>.
  */
 extern JS_PUBLIC_API(bool)
 JS_Enumerate(JSContext* cx, JS::HandleObject obj, JS::MutableHandle<JS::IdVector> props);
@@ -3443,6 +3457,25 @@ extern JS_PUBLIC_API(void*)
 JS_StealArrayBufferContents(JSContext* cx, JS::HandleObject obj);
 
 /**
+ * Returns a pointer to the ArrayBuffer |obj|'s data.  |obj| and its views will store and expose
+ * the data in the returned pointer: assigning into the returned pointer will affect values exposed
+ * by views of |obj| and vice versa.
+ *
+ * The caller must ultimately deallocate the returned pointer to avoid leaking.  The memory is
+ * *not* garbage-collected with |obj|.  These steps must be followed to deallocate:
+ *
+ * 1. The ArrayBuffer |obj| must be detached using JS_DetachArrayBuffer.
+ * 2. The returned pointer must be freed using JS_free.
+ *
+ * To perform step 1, callers *must* hold a reference to |obj| until they finish using the returned
+ * pointer.  They *must not* attempt to let |obj| be GC'd, then JS_free the pointer.
+ *
+ * If |obj| isn't an ArrayBuffer, this function returns null and reports an error.
+ */
+extern JS_PUBLIC_API(void*)
+JS_ExternalizeArrayBufferContents(JSContext* cx, JS::HandleObject obj);
+
+/**
  * Create a new mapped array buffer with the given memory mapped contents. It
  * must be legal to free the contents pointer by unmapping it. On success,
  * ownership is transferred to the new mapped array buffer.
@@ -3471,7 +3504,7 @@ extern JS_PUBLIC_API(JS::Value)
 JS_GetReservedSlot(JSObject* obj, uint32_t index);
 
 extern JS_PUBLIC_API(void)
-JS_SetReservedSlot(JSObject* obj, uint32_t index, JS::Value v);
+JS_SetReservedSlot(JSObject* obj, uint32_t index, const JS::Value& v);
 
 
 /************************************************************************/
@@ -3561,6 +3594,12 @@ JS_DefineUCFunction(JSContext* cx, JS::Handle<JSObject*> obj,
 extern JS_PUBLIC_API(JSFunction*)
 JS_DefineFunctionById(JSContext* cx, JS::Handle<JSObject*> obj, JS::Handle<jsid> id, JSNative call,
                       unsigned nargs, unsigned attrs);
+
+extern JS_PUBLIC_API(bool)
+JS_IsFunctionBound(JSFunction* fun);
+
+extern JS_PUBLIC_API(JSObject*)
+JS_GetBoundFunctionTarget(JSFunction* fun);
 
 namespace JS {
 
@@ -3782,7 +3821,6 @@ class JS_FRIEND_API(ReadOnlyCompileOptions) : public TransitiveCompileOptions
         lineno(1),
         column(0),
         isRunOnce(false),
-        forEval(false),
         noScriptRval(false)
     { }
 
@@ -3806,7 +3844,6 @@ class JS_FRIEND_API(ReadOnlyCompileOptions) : public TransitiveCompileOptions
     unsigned column;
     // isRunOnce only applies to non-function scripts.
     bool isRunOnce;
-    bool forEval;
     bool noScriptRval;
 
   private:
@@ -3828,7 +3865,6 @@ class JS_FRIEND_API(ReadOnlyCompileOptions) : public TransitiveCompileOptions
  */
 class JS_FRIEND_API(OwningCompileOptions) : public ReadOnlyCompileOptions
 {
-    JSRuntime* runtime;
     PersistentRootedObject elementRoot;
     PersistentRootedString elementAttributeNameRoot;
     PersistentRootedScript introductionScriptRoot;
@@ -3880,7 +3916,6 @@ class JS_FRIEND_API(OwningCompileOptions) : public ReadOnlyCompileOptions
     OwningCompileOptions& setUTF8(bool u) { utf8 = u; return *this; }
     OwningCompileOptions& setColumn(unsigned c) { column = c; return *this; }
     OwningCompileOptions& setIsRunOnce(bool once) { isRunOnce = once; return *this; }
-    OwningCompileOptions& setForEval(bool eval) { forEval = eval; return *this; }
     OwningCompileOptions& setNoScriptRval(bool nsr) { noScriptRval = nsr; return *this; }
     OwningCompileOptions& setSelfHostingMode(bool shm) { selfHostingMode = shm; return *this; }
     OwningCompileOptions& setCanLazilyParse(bool clp) { canLazilyParse = clp; return *this; }
@@ -3910,7 +3945,7 @@ class JS_FRIEND_API(OwningCompileOptions) : public ReadOnlyCompileOptions
  * create an instance of this type, it's up to you to guarantee that
  * everything you store in it will outlive it.
  */
-class MOZ_STACK_CLASS JS_FRIEND_API(CompileOptions) : public ReadOnlyCompileOptions
+class MOZ_STACK_CLASS JS_FRIEND_API(CompileOptions) final : public ReadOnlyCompileOptions
 {
     RootedObject elementRoot;
     RootedString elementAttributeNameRoot;
@@ -3977,7 +4012,6 @@ class MOZ_STACK_CLASS JS_FRIEND_API(CompileOptions) : public ReadOnlyCompileOpti
     CompileOptions& setUTF8(bool u) { utf8 = u; return *this; }
     CompileOptions& setColumn(unsigned c) { column = c; return *this; }
     CompileOptions& setIsRunOnce(bool once) { isRunOnce = once; return *this; }
-    CompileOptions& setForEval(bool eval) { forEval = eval; return *this; }
     CompileOptions& setNoScriptRval(bool nsr) { noScriptRval = nsr; return *this; }
     CompileOptions& setSelfHostingMode(bool shm) { selfHostingMode = shm; return *this; }
     CompileOptions& setCanLazilyParse(bool clp) { canLazilyParse = clp; return *this; }
@@ -4055,10 +4089,11 @@ CanCompileOffThread(JSContext* cx, const ReadOnlyCompileOptions& options, size_t
  * After successfully triggering an off thread compile of a script, the
  * callback will eventually be invoked with the specified data and a token
  * for the compilation. The callback will be invoked while off the main thread,
- * so must ensure that its operations are thread safe. Afterwards,
- * FinishOffThreadScript must be invoked on the main thread to get the result
- * script or nullptr. If maybecx is not specified, the resources will be freed,
- * but no script will be returned.
+ * so must ensure that its operations are thread safe. Afterwards, one of the
+ * following functions must be invoked on the main thread:
+ *
+ * - FinishOffThreadScript, to get the result script (or nullptr on failure).
+ * - CancelOffThreadScript, to free the resources without creating a script.
  *
  * The characters passed in to CompileOffThread must remain live until the
  * callback is invoked, and the resulting script will be rooted until the call
@@ -4071,7 +4106,10 @@ CompileOffThread(JSContext* cx, const ReadOnlyCompileOptions& options,
                  OffThreadCompileCallback callback, void* callbackData);
 
 extern JS_PUBLIC_API(JSScript*)
-FinishOffThreadScript(JSContext* maybecx, JSRuntime* rt, void* token);
+FinishOffThreadScript(JSContext* cx, void* token);
+
+extern JS_PUBLIC_API(void)
+CancelOffThreadScript(JSContext* cx, void* token);
 
 extern JS_PUBLIC_API(bool)
 CompileOffThreadModule(JSContext* cx, const ReadOnlyCompileOptions& options,
@@ -4079,17 +4117,20 @@ CompileOffThreadModule(JSContext* cx, const ReadOnlyCompileOptions& options,
                        OffThreadCompileCallback callback, void* callbackData);
 
 extern JS_PUBLIC_API(JSObject*)
-FinishOffThreadModule(JSContext* maybecx, JSRuntime* rt, void* token);
+FinishOffThreadModule(JSContext* cx, void* token);
+
+extern JS_PUBLIC_API(void)
+CancelOffThreadModule(JSContext* cx, void* token);
 
 /**
- * Compile a function with scopeChain plus the global as its scope chain.
- * scopeChain must contain objects in the current compartment of cx.  The actual
+ * Compile a function with envChain plus the global as its scope chain.
+ * envChain must contain objects in the current compartment of cx.  The actual
  * scope chain used for the function will consist of With wrappers for those
  * objects, followed by the current global of the compartment cx is in.  This
  * global must not be explicitly included in the scope chain.
  */
 extern JS_PUBLIC_API(bool)
-CompileFunction(JSContext* cx, AutoObjectVector& scopeChain,
+CompileFunction(JSContext* cx, AutoObjectVector& envChain,
                 const ReadOnlyCompileOptions& options,
                 const char* name, unsigned nargs, const char* const* argnames,
                 const char16_t* chars, size_t length, JS::MutableHandleFunction fun);
@@ -4098,7 +4139,7 @@ CompileFunction(JSContext* cx, AutoObjectVector& scopeChain,
  * Same as above, but taking a SourceBufferHolder for the function body.
  */
 extern JS_PUBLIC_API(bool)
-CompileFunction(JSContext* cx, AutoObjectVector& scopeChain,
+CompileFunction(JSContext* cx, AutoObjectVector& envChain,
                 const ReadOnlyCompileOptions& options,
                 const char* name, unsigned nargs, const char* const* argnames,
                 SourceBufferHolder& srcBuf, JS::MutableHandleFunction fun);
@@ -4107,7 +4148,7 @@ CompileFunction(JSContext* cx, AutoObjectVector& scopeChain,
  * Same as above, but taking a const char * for the function body.
  */
 extern JS_PUBLIC_API(bool)
-CompileFunction(JSContext* cx, AutoObjectVector& scopeChain,
+CompileFunction(JSContext* cx, AutoObjectVector& envChain,
                 const ReadOnlyCompileOptions& options,
                 const char* name, unsigned nargs, const char* const* argnames,
                 const char* bytes, size_t length, JS::MutableHandleFunction fun);
@@ -4139,7 +4180,7 @@ JS_DecompileFunction(JSContext* cx, JS::Handle<JSFunction*> fun, unsigned indent
  * Why a runtime option?  The alternative is to add APIs duplicating those
  * for the other value of flags, and that doesn't seem worth the code bloat
  * cost.  Such new entry points would probably have less obvious names, too, so
- * would not tend to be used.  The RuntimeOptionsRef adjustment, OTOH, can be
+ * would not tend to be used.  The ContextOptionsRef adjustment, OTOH, can be
  * more easily hacked into existing code that does not depend on the bug; such
  * code can continue to use the familiar JS::Evaluate, etc., entry points.
  */
@@ -4154,16 +4195,16 @@ extern JS_PUBLIC_API(bool)
 JS_ExecuteScript(JSContext* cx, JS::HandleScript script);
 
 /**
- * As above, but providing an explicit scope chain.  scopeChain must not include
+ * As above, but providing an explicit scope chain.  envChain must not include
  * the global object on it; that's implicit.  It needs to contain the other
  * objects that should end up on the script's scope chain.
  */
 extern JS_PUBLIC_API(bool)
-JS_ExecuteScript(JSContext* cx, JS::AutoObjectVector& scopeChain,
+JS_ExecuteScript(JSContext* cx, JS::AutoObjectVector& envChain,
                  JS::HandleScript script, JS::MutableHandleValue rval);
 
 extern JS_PUBLIC_API(bool)
-JS_ExecuteScript(JSContext* cx, JS::AutoObjectVector& scopeChain, JS::HandleScript script);
+JS_ExecuteScript(JSContext* cx, JS::AutoObjectVector& envChain, JS::HandleScript script);
 
 namespace JS {
 
@@ -4172,7 +4213,8 @@ namespace JS {
  * cross-compartment, it is cloned into the current compartment before executing.
  */
 extern JS_PUBLIC_API(bool)
-CloneAndExecuteScript(JSContext* cx, JS::Handle<JSScript*> script);
+CloneAndExecuteScript(JSContext* cx, JS::Handle<JSScript*> script,
+                      JS::MutableHandleValue rval);
 
 } /* namespace JS */
 
@@ -4186,12 +4228,12 @@ Evaluate(JSContext* cx, const ReadOnlyCompileOptions& options,
          SourceBufferHolder& srcBuf, JS::MutableHandleValue rval);
 
 /**
- * As above, but providing an explicit scope chain.  scopeChain must not include
+ * As above, but providing an explicit scope chain.  envChain must not include
  * the global object on it; that's implicit.  It needs to contain the other
  * objects that should end up on the script's scope chain.
  */
 extern JS_PUBLIC_API(bool)
-Evaluate(JSContext* cx, AutoObjectVector& scopeChain, const ReadOnlyCompileOptions& options,
+Evaluate(JSContext* cx, AutoObjectVector& envChain, const ReadOnlyCompileOptions& options,
          SourceBufferHolder& srcBuf, JS::MutableHandleValue rval);
 
 /**
@@ -4202,12 +4244,12 @@ Evaluate(JSContext* cx, const ReadOnlyCompileOptions& options,
          const char16_t* chars, size_t length, JS::MutableHandleValue rval);
 
 /**
- * As above, but providing an explicit scope chain.  scopeChain must not include
+ * As above, but providing an explicit scope chain.  envChain must not include
  * the global object on it; that's implicit.  It needs to contain the other
  * objects that should end up on the script's scope chain.
  */
 extern JS_PUBLIC_API(bool)
-Evaluate(JSContext* cx, AutoObjectVector& scopeChain, const ReadOnlyCompileOptions& options,
+Evaluate(JSContext* cx, AutoObjectVector& envChain, const ReadOnlyCompileOptions& options,
          const char16_t* chars, size_t length, JS::MutableHandleValue rval);
 
 /**
@@ -4249,7 +4291,7 @@ CompileModule(JSContext* cx, const ReadOnlyCompileOptions& options,
  * value.
  */
 extern JS_PUBLIC_API(void)
-SetModuleHostDefinedField(JSObject* module, JS::Value value);
+SetModuleHostDefinedField(JSObject* module, const JS::Value& value);
 
 /**
  * Get the [[HostDefined]] field of a source text module record.
@@ -4285,8 +4327,9 @@ ModuleEvaluation(JSContext* cx, JS::HandleObject moduleRecord);
  * Get a list of the module specifiers used by a source text module
  * record to request importation of modules.
  *
- * The result is a JavaScript array of string values.  ForOfIterator can be used
- * to extract the individual strings.
+ * The result is a JavaScript array of string values.  To extract the individual
+ * values use only JS_GetArrayLength and JS_GetElement with indices 0 to
+ * length - 1.
  */
 extern JS_PUBLIC_API(JSObject*)
 GetRequestedModules(JSContext* cx, JS::HandleObject moduleRecord);
@@ -4305,7 +4348,7 @@ JS_CheckForInterrupt(JSContext* cx);
 /*
  * These functions allow setting an interrupt callback that will be called
  * from the JS thread some time after any thread triggered the callback using
- * JS_RequestInterruptCallback(rt).
+ * JS_RequestInterruptCallback(cx).
  *
  * To schedule the GC and for other activities the engine internally triggers
  * interrupt callbacks. The embedding should thus not rely on callbacks being
@@ -4315,16 +4358,29 @@ JS_CheckForInterrupt(JSContext* cx);
  * if it re-enters the JS engine. The embedding must ensure that the callback
  * is disconnected before attempting such re-entry.
  */
-extern JS_PUBLIC_API(JSInterruptCallback)
-JS_SetInterruptCallback(JSRuntime* rt, JSInterruptCallback callback);
+extern JS_PUBLIC_API(bool)
+JS_AddInterruptCallback(JSContext* cx, JSInterruptCallback callback);
 
-extern JS_PUBLIC_API(JSInterruptCallback)
-JS_GetInterruptCallback(JSRuntime* rt);
+extern JS_PUBLIC_API(bool)
+JS_DisableInterruptCallback(JSContext* cx);
 
 extern JS_PUBLIC_API(void)
-JS_RequestInterruptCallback(JSRuntime* rt);
+JS_ResetInterruptCallback(JSContext* cx, bool enable);
+
+extern JS_PUBLIC_API(void)
+JS_RequestInterruptCallback(JSContext* cx);
 
 namespace JS {
+
+/**
+ * Sets the callback that's invoked whenever an incumbent global is required.
+ *
+ * SpiderMonkey doesn't itself have a notion of incumbent globals as defined
+ * by the html spec, so we need the embedding to provide this.
+ * See dom/base/ScriptSettings.h for details.
+ */
+extern JS_PUBLIC_API(void)
+SetGetIncumbentGlobalCallback(JSContext* cx, JSGetIncumbentGlobalCallback callback);
 
 /**
  * Sets the callback that's invoked whenever a Promise job should be enqeued.
@@ -4336,7 +4392,7 @@ namespace JS {
  * passed here as arguments.
  */
 extern JS_PUBLIC_API(void)
-SetEnqueuePromiseJobCallback(JSRuntime* rt, JSEnqueuePromiseJobCallback callback,
+SetEnqueuePromiseJobCallback(JSContext* cx, JSEnqueuePromiseJobCallback callback,
                              void* data = nullptr);
 
 /**
@@ -4345,7 +4401,7 @@ SetEnqueuePromiseJobCallback(JSRuntime* rt, JSEnqueuePromiseJobCallback callback
  * without a handler gets a handler attached.
  */
 extern JS_PUBLIC_API(void)
-SetPromiseRejectionTrackerCallback(JSRuntime* rt, JSPromiseRejectionTrackerCallback callback,
+SetPromiseRejectionTrackerCallback(JSContext* cx, JSPromiseRejectionTrackerCallback callback,
                                    void* data = nullptr);
 
 /**
@@ -4411,6 +4467,14 @@ GetPromiseAllocationSite(JS::HandleObject promise);
 
 extern JS_PUBLIC_API(JSObject*)
 GetPromiseResolutionSite(JS::HandleObject promise);
+
+#ifdef DEBUG
+extern JS_PUBLIC_API(void)
+DumpPromiseAllocationSite(JSContext* cx, JS::HandleObject promise);
+
+extern JS_PUBLIC_API(void)
+DumpPromiseResolutionSite(JSContext* cx, JS::HandleObject promise);
+#endif
 
 /**
  * Calls the current compartment's original Promise.resolve on the original
@@ -4484,6 +4548,59 @@ AddPromiseReactions(JSContext* cx, JS::HandleObject promise,
  */
 extern JS_PUBLIC_API(JSObject*)
 GetWaitForAllPromise(JSContext* cx, const JS::AutoObjectVector& promises);
+
+/**
+ * An AsyncTask represents a SpiderMonkey-internal operation that starts on a
+ * JSContext's owner thread, possibly executes on other threads, completes, and
+ * then needs to be scheduled to run again on the JSContext's owner thread. The
+ * embedding provides for this final dispatch back to the JSContext's owner
+ * thread by calling methods on this interface when requested.
+ */
+struct JS_PUBLIC_API(AsyncTask)
+{
+    AsyncTask() : user(nullptr) {}
+    virtual ~AsyncTask() {}
+
+    /**
+     * After the FinishAsyncTaskCallback is called and succeeds, one of these
+     * two functions will be called on the original JSContext's owner thread.
+     */
+    virtual void finish(JSContext* cx) = 0;
+    virtual void cancel(JSContext* cx) = 0;
+
+    /* The embedding may use this field to attach arbitrary data to a task. */
+    void* user;
+};
+
+/**
+ * A new AsyncTask object, created inside SpiderMonkey on the JSContext's owner
+ * thread, will be passed to the StartAsyncTaskCallback before it is dispatched
+ * to another thread. The embedding may use the AsyncTask::user field to attach
+ * additional task state.
+ *
+ * If this function succeeds, SpiderMonkey will call the FinishAsyncTaskCallback
+ * at some point in the future. Otherwise, FinishAsyncTaskCallback will *not*
+ * be called. SpiderMonkey assumes that, if StartAsyncTaskCallback fails, it is
+ * because the JSContext is being shut down.
+ */
+typedef bool
+(*StartAsyncTaskCallback)(JSContext* cx, AsyncTask* task);
+
+/**
+ * The FinishAsyncTaskCallback may be called from any thread and will only be
+ * passed AsyncTasks that have already been started via StartAsyncTaskCallback.
+ * If the embedding returns 'true', indicating success, the embedding must call
+ * either task->finish() or task->cancel() on the JSContext's owner thread at
+ * some point in the future.
+ */
+typedef bool
+(*FinishAsyncTaskCallback)(AsyncTask* task);
+
+/**
+ * Set the above callbacks for the given context.
+ */
+extern JS_PUBLIC_API(void)
+SetAsyncTaskCallbacks(JSContext* cx, StartAsyncTaskCallback start, FinishAsyncTaskCallback finish);
 
 } // namespace JS
 
@@ -4559,6 +4676,12 @@ JS_NewStringCopyN(JSContext* cx, const char* s, size_t n);
 
 extern JS_PUBLIC_API(JSString*)
 JS_NewStringCopyZ(JSContext* cx, const char* s);
+
+extern JS_PUBLIC_API(JSString*)
+JS_NewStringCopyUTF8Z(JSContext* cx, const JS::ConstUTF8CharsZ s);
+
+extern JS_PUBLIC_API(JSString*)
+JS_NewStringCopyUTF8N(JSContext* cx, const JS::UTF8Chars s);
 
 extern JS_PUBLIC_API(JSString*)
 JS_AtomizeAndPinJSString(JSContext* cx, JS::HandleString str);
@@ -4912,6 +5035,7 @@ GetSymbolDescription(HandleSymbol symbol);
     macro(hasInstance) \
     macro(split) \
     macro(toPrimitive) \
+    macro(toStringTag) \
     macro(unscopables)
 
 enum class SymbolCode : uint32_t {
@@ -5036,13 +5160,19 @@ JS_ParseJSONWithReviver(JSContext* cx, JS::HandleString str, JS::HandleValue rev
  * The locale string remains owned by the caller.
  */
 extern JS_PUBLIC_API(bool)
-JS_SetDefaultLocale(JSRuntime* rt, const char* locale);
+JS_SetDefaultLocale(JSContext* cx, const char* locale);
+
+/**
+ * Look up the default locale for the ECMAScript Internationalization API.
+ */
+extern JS_PUBLIC_API(JS::UniqueChars)
+JS_GetDefaultLocale(JSContext* cx);
 
 /**
  * Reset the default locale to OS defaults.
  */
 extern JS_PUBLIC_API(void)
-JS_ResetDefaultLocale(JSRuntime* rt);
+JS_ResetDefaultLocale(JSContext* cx);
 
 /**
  * Locale specific string conversion and error message callbacks.
@@ -5056,17 +5186,17 @@ struct JSLocaleCallbacks {
 
 /**
  * Establish locale callbacks. The pointer must persist as long as the
- * JSRuntime.  Passing nullptr restores the default behaviour.
+ * JSContext.  Passing nullptr restores the default behaviour.
  */
 extern JS_PUBLIC_API(void)
-JS_SetLocaleCallbacks(JSRuntime* rt, const JSLocaleCallbacks* callbacks);
+JS_SetLocaleCallbacks(JSContext* cx, const JSLocaleCallbacks* callbacks);
 
 /**
  * Return the address of the current locale callbacks struct, which may
  * be nullptr.
  */
 extern JS_PUBLIC_API(const JSLocaleCallbacks*)
-JS_GetLocaleCallbacks(JSRuntime* rt);
+JS_GetLocaleCallbacks(JSContext* cx);
 
 /************************************************************************/
 
@@ -5083,19 +5213,46 @@ const uint16_t MaxNumErrorArguments = 10;
  * and its arguments.
  */
 extern JS_PUBLIC_API(void)
-JS_ReportError(JSContext* cx, const char* format, ...);
+JS_ReportErrorASCII(JSContext* cx, const char* format, ...)
+    MOZ_FORMAT_PRINTF(2, 3);
+
+extern JS_PUBLIC_API(void)
+JS_ReportErrorLatin1(JSContext* cx, const char* format, ...)
+    MOZ_FORMAT_PRINTF(2, 3);
+
+extern JS_PUBLIC_API(void)
+JS_ReportErrorUTF8(JSContext* cx, const char* format, ...)
+    MOZ_FORMAT_PRINTF(2, 3);
 
 /*
  * Use an errorNumber to retrieve the format string, args are char*
  */
 extern JS_PUBLIC_API(void)
-JS_ReportErrorNumber(JSContext* cx, JSErrorCallback errorCallback,
-                     void* userRef, const unsigned errorNumber, ...);
+JS_ReportErrorNumberASCII(JSContext* cx, JSErrorCallback errorCallback,
+                          void* userRef, const unsigned errorNumber, ...);
+
+extern JS_PUBLIC_API(void)
+JS_ReportErrorNumberASCIIVA(JSContext* cx, JSErrorCallback errorCallback,
+                            void* userRef, const unsigned errorNumber, va_list ap);
+
+extern JS_PUBLIC_API(void)
+JS_ReportErrorNumberLatin1(JSContext* cx, JSErrorCallback errorCallback,
+                           void* userRef, const unsigned errorNumber, ...);
 
 #ifdef va_start
 extern JS_PUBLIC_API(void)
-JS_ReportErrorNumberVA(JSContext* cx, JSErrorCallback errorCallback,
-                       void* userRef, const unsigned errorNumber, va_list ap);
+JS_ReportErrorNumberLatin1VA(JSContext* cx, JSErrorCallback errorCallback,
+                             void* userRef, const unsigned errorNumber, va_list ap);
+#endif
+
+extern JS_PUBLIC_API(void)
+JS_ReportErrorNumberUTF8(JSContext* cx, JSErrorCallback errorCallback,
+                           void* userRef, const unsigned errorNumber, ...);
+
+#ifdef va_start
+extern JS_PUBLIC_API(void)
+JS_ReportErrorNumberUTF8VA(JSContext* cx, JSErrorCallback errorCallback,
+                           void* userRef, const unsigned errorNumber, va_list ap);
 #endif
 
 /*
@@ -5117,12 +5274,31 @@ JS_ReportErrorNumberUCArray(JSContext* cx, JSErrorCallback errorCallback,
  * being set, false otherwise.
  */
 extern JS_PUBLIC_API(bool)
-JS_ReportWarning(JSContext* cx, const char* format, ...);
+JS_ReportWarningASCII(JSContext* cx, const char* format, ...)
+    MOZ_FORMAT_PRINTF(2, 3);
 
 extern JS_PUBLIC_API(bool)
-JS_ReportErrorFlagsAndNumber(JSContext* cx, unsigned flags,
-                             JSErrorCallback errorCallback, void* userRef,
-                             const unsigned errorNumber, ...);
+JS_ReportWarningLatin1(JSContext* cx, const char* format, ...)
+    MOZ_FORMAT_PRINTF(2, 3);
+
+extern JS_PUBLIC_API(bool)
+JS_ReportWarningUTF8(JSContext* cx, const char* format, ...)
+    MOZ_FORMAT_PRINTF(2, 3);
+
+extern JS_PUBLIC_API(bool)
+JS_ReportErrorFlagsAndNumberASCII(JSContext* cx, unsigned flags,
+                                  JSErrorCallback errorCallback, void* userRef,
+                                  const unsigned errorNumber, ...);
+
+extern JS_PUBLIC_API(bool)
+JS_ReportErrorFlagsAndNumberLatin1(JSContext* cx, unsigned flags,
+                                   JSErrorCallback errorCallback, void* userRef,
+                                   const unsigned errorNumber, ...);
+
+extern JS_PUBLIC_API(bool)
+JS_ReportErrorFlagsAndNumberUTF8(JSContext* cx, unsigned flags,
+                                 JSErrorCallback errorCallback, void* userRef,
+                                 const unsigned errorNumber, ...);
 
 extern JS_PUBLIC_API(bool)
 JS_ReportErrorFlagsAndNumberUC(JSContext* cx, unsigned flags,
@@ -5143,7 +5319,12 @@ JS_ReportAllocationOverflow(JSContext* cx);
 
 class JSErrorReport
 {
+    // The (default) error message.
+    // If ownsMessage_ is true, the it is freed in destructor.
+    JS::ConstUTF8CharsZ message_;
+
     // Offending source line without final '\n'.
+    // If ownsLinebuf__ is true, the buffer is freed in destructor.
     const char16_t* linebuf_;
 
     // Number of chars in linebuf_. Does not include trailing '\0'.
@@ -5155,21 +5336,30 @@ class JSErrorReport
   public:
     JSErrorReport()
       : linebuf_(nullptr), linebufLength_(0), tokenOffset_(0),
-        filename(nullptr), lineno(0), column(0), isMuted(false),
-        flags(0), errorNumber(0), ucmessage(nullptr),
-        messageArgs(nullptr), exnType(0)
+        filename(nullptr), lineno(0), column(0),
+        flags(0), errorNumber(0),
+        exnType(0), isMuted(false),
+        ownsLinebuf_(false), ownsMessage_(false)
     {}
+
+    ~JSErrorReport() {
+        freeLinebuf();
+        freeMessage();
+    }
 
     const char*     filename;      /* source file name, URL, etc., or null */
     unsigned        lineno;         /* source line number */
     unsigned        column;         /* zero-based column index in line */
-    bool            isMuted;        /* See the comment in ReadOnlyCompileOptions. */
     unsigned        flags;          /* error/warning, etc. */
     unsigned        errorNumber;    /* the error number, e.g. see js.msg */
-    const char16_t* ucmessage;     /* the (default) error message */
-    const char16_t** messageArgs;  /* arguments for the error message */
     int16_t         exnType;        /* One of the JSExnType constants */
+    bool            isMuted : 1;    /* See the comment in ReadOnlyCompileOptions. */
 
+  private:
+    bool ownsLinebuf_ : 1;
+    bool ownsMessage_ : 1;
+
+  public:
     const char16_t* linebuf() const {
         return linebuf_;
     }
@@ -5179,7 +5369,29 @@ class JSErrorReport
     size_t tokenOffset() const {
         return tokenOffset_;
     }
-    void initLinebuf(const char16_t* linebuf, size_t linebufLength, size_t tokenOffset);
+    void initOwnedLinebuf(const char16_t* linebufArg, size_t linebufLengthArg, size_t tokenOffsetArg) {
+        initBorrowedLinebuf(linebufArg, linebufLengthArg, tokenOffsetArg);
+        ownsLinebuf_ = true;
+    }
+    void initBorrowedLinebuf(const char16_t* linebufArg, size_t linebufLengthArg, size_t tokenOffsetArg);
+    void freeLinebuf();
+
+    const JS::ConstUTF8CharsZ message() const {
+        return message_;
+    }
+
+    void initOwnedMessage(const char* messageArg) {
+        initBorrowedMessage(messageArg);
+        ownsMessage_ = true;
+    }
+    void initBorrowedMessage(const char* messageArg) {
+        MOZ_ASSERT(!message_);
+        message_ = JS::ConstUTF8CharsZ(messageArg, strlen(messageArg));
+    }
+
+    JSString* newMessageString(JSContext* cx);
+
+    void freeMessage();
 };
 
 /*
@@ -5190,14 +5402,7 @@ class JSErrorReport
 #define JSREPORT_EXCEPTION  0x2     /* exception was thrown */
 #define JSREPORT_STRICT     0x4     /* error or warning due to strict option */
 
-/*
- * This condition is an error in strict mode code, a warning if
- * JS_HAS_STRICT_OPTION(cx), and otherwise should not be reported at
- * all.  We check the strictness of the context's top frame's script;
- * where that isn't appropriate, the caller should do the right checks
- * itself instead of using this flag.
- */
-#define JSREPORT_STRICT_MODE_ERROR 0x8
+#define JSREPORT_USER_1     0x8     /* user-defined flag */
 
 /*
  * If JSREPORT_EXCEPTION is set, then a JavaScript-catchable exception
@@ -5209,18 +5414,16 @@ class JSErrorReport
 #define JSREPORT_IS_WARNING(flags)      (((flags) & JSREPORT_WARNING) != 0)
 #define JSREPORT_IS_EXCEPTION(flags)    (((flags) & JSREPORT_EXCEPTION) != 0)
 #define JSREPORT_IS_STRICT(flags)       (((flags) & JSREPORT_STRICT) != 0)
-#define JSREPORT_IS_STRICT_MODE_ERROR(flags) (((flags) &                      \
-                                              JSREPORT_STRICT_MODE_ERROR) != 0)
+
 namespace JS {
 
-typedef void
-(* WarningReporter)(JSContext* cx, const char* message, JSErrorReport* report);
+using WarningReporter = void (*)(JSContext* cx, JSErrorReport* report);
 
 extern JS_PUBLIC_API(WarningReporter)
-SetWarningReporter(JSRuntime* rt, WarningReporter reporter);
+SetWarningReporter(JSContext* cx, WarningReporter reporter);
 
 extern JS_PUBLIC_API(WarningReporter)
-GetWarningReporter(JSRuntime* rt);
+GetWarningReporter(JSContext* cx);
 
 extern JS_PUBLIC_API(bool)
 CreateError(JSContext* cx, JSExnType type, HandleObject stack,
@@ -5494,23 +5697,20 @@ extern JS_PUBLIC_API(bool)
 JS_ThrowStopIteration(JSContext* cx);
 
 extern JS_PUBLIC_API(bool)
-JS_IsStopIteration(JS::Value v);
-
-extern JS_PUBLIC_API(intptr_t)
-JS_GetCurrentThread();
+JS_IsStopIteration(const JS::Value& v);
 
 /**
- * A JS runtime always has an "owner thread". The owner thread is set when the
- * runtime is created (to the current thread) and practically all entry points
- * into the JS engine check that a runtime (or anything contained in the
- * runtime: context, compartment, object, etc) is only touched by its owner
+ * A JS context always has an "owner thread". The owner thread is set when the
+ * context is created (to the current thread) and practically all entry points
+ * into the JS engine check that a context (or anything contained in the
+ * context: runtime, compartment, object, etc) is only touched by its owner
  * thread. Embeddings may check this invariant outside the JS engine by calling
  * JS_AbortIfWrongThread (which will abort if not on the owner thread, even for
  * non-debug builds).
  */
 
 extern JS_PUBLIC_API(void)
-JS_AbortIfWrongThread(JSRuntime* rt);
+JS_AbortIfWrongThread(JSContext* cx);
 
 /************************************************************************/
 
@@ -5531,17 +5731,17 @@ extern JS_PUBLIC_API(void)
 JS_GetGCZealBits(JSContext* cx, uint32_t* zealBits, uint32_t* frequency, uint32_t* nextScheduled);
 
 extern JS_PUBLIC_API(void)
-JS_SetGCZeal(JSRuntime* rt, uint8_t zeal, uint32_t frequency);
+JS_SetGCZeal(JSContext* cx, uint8_t zeal, uint32_t frequency);
 
 extern JS_PUBLIC_API(void)
 JS_ScheduleGC(JSContext* cx, uint32_t count);
 #endif
 
 extern JS_PUBLIC_API(void)
-JS_SetParallelParsingEnabled(JSRuntime* rt, bool enabled);
+JS_SetParallelParsingEnabled(JSContext* cx, bool enabled);
 
 extern JS_PUBLIC_API(void)
-JS_SetOffthreadIonCompilationEnabled(JSRuntime* rt, bool enabled);
+JS_SetOffthreadIonCompilationEnabled(JSContext* cx, bool enabled);
 
 #define JIT_COMPILER_OPTIONS(Register)                                     \
     Register(BASELINE_WARMUP_TRIGGER, "baseline.warmup.trigger")           \
@@ -5549,11 +5749,14 @@ JS_SetOffthreadIonCompilationEnabled(JSRuntime* rt, bool enabled);
     Register(ION_GVN_ENABLE, "ion.gvn.enable")                             \
     Register(ION_FORCE_IC, "ion.forceinlineCaches")                        \
     Register(ION_ENABLE, "ion.enable")                                     \
+    Register(ION_INTERRUPT_WITHOUT_SIGNAL, "ion.interrupt-without-signals") \
+    Register(ION_CHECK_RANGE_ANALYSIS, "ion.check-range-analysis")         \
     Register(BASELINE_ENABLE, "baseline.enable")                           \
     Register(OFFTHREAD_COMPILATION_ENABLE, "offthread-compilation.enable") \
-    Register(SIGNALS_ENABLE, "signals.enable")                             \
     Register(JUMP_THRESHOLD, "jump-threshold")                             \
-    Register(WASM_TEST_MODE, "wasm.test-mode")
+    Register(ASMJS_ATOMICS_ENABLE, "asmjs.atomics.enable")                 \
+    Register(WASM_TEST_MODE, "wasm.test-mode")                             \
+    Register(WASM_FOLD_OFFSETS, "wasm.fold-offsets")
 
 typedef enum JSJitCompilerOption {
 #define JIT_COMPILER_DECLARE(key, str) \
@@ -5566,9 +5769,9 @@ typedef enum JSJitCompilerOption {
 } JSJitCompilerOption;
 
 extern JS_PUBLIC_API(void)
-JS_SetGlobalJitCompilerOption(JSRuntime* rt, JSJitCompilerOption opt, uint32_t value);
-extern JS_PUBLIC_API(int)
-JS_GetGlobalJitCompilerOption(JSRuntime* rt, JSJitCompilerOption opt);
+JS_SetGlobalJitCompilerOption(JSContext* cx, JSJitCompilerOption opt, uint32_t value);
+extern JS_PUBLIC_API(bool)
+JS_GetGlobalJitCompilerOption(JSContext* cx, JSJitCompilerOption opt, uint32_t* valueOut);
 
 /**
  * Convert a uint32_t index into a jsid.
@@ -5684,23 +5887,62 @@ class MOZ_RAII AutoHideScriptedCaller
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
-} /* namespace JS */
-
 /*
  * Encode/Decode interpreted scripts and functions to/from memory.
  */
 
-extern JS_PUBLIC_API(void*)
-JS_EncodeScript(JSContext* cx, JS::HandleScript script, uint32_t* lengthp);
+typedef mozilla::Vector<uint8_t> TranscodeBuffer;
 
-extern JS_PUBLIC_API(void*)
-JS_EncodeInterpretedFunction(JSContext* cx, JS::HandleObject funobj, uint32_t* lengthp);
+enum TranscodeResult
+{
+    // Successful encoding / decoding.
+    TranscodeResult_Ok = 0,
 
-extern JS_PUBLIC_API(JSScript*)
-JS_DecodeScript(JSContext* cx, const void* data, uint32_t length);
+    // A warning message, is set to the message out-param.
+    TranscodeResult_Failure = 0x100,
+    TranscodeResult_Failure_BadBuildId =          TranscodeResult_Failure | 0x1,
+    TranscodeResult_Failure_RunOnceNotSupported = TranscodeResult_Failure | 0x2,
+    TranscodeResult_Failure_AsmJSNotSupported =   TranscodeResult_Failure | 0x3,
+    TranscodeResult_Failure_UnknownClassKind =    TranscodeResult_Failure | 0x4,
 
-extern JS_PUBLIC_API(JSObject*)
-JS_DecodeInterpretedFunction(JSContext* cx, const void* data, uint32_t length);
+    // A error, the JSContext has a pending exception.
+    TranscodeResult_Throw = 0x200
+};
+
+extern JS_PUBLIC_API(TranscodeResult)
+EncodeScript(JSContext* cx, TranscodeBuffer& buffer, JS::HandleScript script);
+
+extern JS_PUBLIC_API(TranscodeResult)
+EncodeInterpretedFunction(JSContext* cx, TranscodeBuffer& buffer, JS::HandleObject funobj);
+
+extern JS_PUBLIC_API(TranscodeResult)
+DecodeScript(JSContext* cx, TranscodeBuffer& buffer, JS::MutableHandleScript scriptp,
+             size_t cursorIndex = 0);
+
+extern JS_PUBLIC_API(TranscodeResult)
+DecodeInterpretedFunction(JSContext* cx, TranscodeBuffer& buffer, JS::MutableHandleFunction funp,
+                          size_t cursorIndex = 0);
+
+} /* namespace JS */
+
+namespace js {
+
+enum class StackFormat { SpiderMonkey, V8, Default };
+
+/*
+ * Sets the format used for stringifying Error stacks.
+ *
+ * The default format is StackFormat::SpiderMonkey.  Use StackFormat::V8
+ * in order to emulate V8's stack formatting.  StackFormat::Default can't be
+ * used here.
+ */
+extern JS_PUBLIC_API(void)
+SetStackFormat(JSContext* cx, StackFormat format);
+
+extern JS_PUBLIC_API(StackFormat)
+GetStackFormat(JSContext* cx);
+
+}
 
 namespace JS {
 
@@ -5732,6 +5974,7 @@ enum AsmJSCacheResult
     AsmJSCache_Disabled_ShellFlags,
     AsmJSCache_Disabled_JitInspector,
     AsmJSCache_InternalError,
+    AsmJSCache_Disabled_PrivateBrowsing,
     AsmJSCache_LIMIT
 };
 
@@ -5757,18 +6000,6 @@ typedef AsmJSCacheResult
 typedef void
 (* CloseAsmJSCacheEntryForWriteOp)(size_t size, uint8_t* memory, intptr_t handle);
 
-typedef js::Vector<char, 0, js::SystemAllocPolicy> BuildIdCharVector;
-
-/**
- * Return the buildId (represented as a sequence of characters) associated with
- * the currently-executing build. If the JS engine is embedded such that a
- * single cache entry can be observed by different compiled versions of the JS
- * engine, it is critical that the buildId shall change for each new build of
- * the JS engine.
- */
-typedef bool
-(* BuildIdOp)(BuildIdCharVector* buildId);
-
 struct AsmJSCacheOps
 {
     OpenAsmJSCacheEntryForReadOp openEntryForRead;
@@ -5778,10 +6009,73 @@ struct AsmJSCacheOps
 };
 
 extern JS_PUBLIC_API(void)
-SetAsmJSCacheOps(JSRuntime* rt, const AsmJSCacheOps* callbacks);
+SetAsmJSCacheOps(JSContext* cx, const AsmJSCacheOps* callbacks);
+
+/**
+ * Return the buildId (represented as a sequence of characters) associated with
+ * the currently-executing build. If the JS engine is embedded such that a
+ * single cache entry can be observed by different compiled versions of the JS
+ * engine, it is critical that the buildId shall change for each new build of
+ * the JS engine.
+ */
+typedef js::Vector<char, 0, js::SystemAllocPolicy> BuildIdCharVector;
+
+typedef bool
+(* BuildIdOp)(BuildIdCharVector* buildId);
 
 extern JS_PUBLIC_API(void)
-SetBuildIdOp(JSRuntime* rt, BuildIdOp buildIdOp);
+SetBuildIdOp(JSContext* cx, BuildIdOp buildIdOp);
+
+/**
+ * The WasmModule interface allows the embedding to hold a reference to the
+ * underying C++ implementation of a JS WebAssembly.Module object for purposes
+ * of (de)serialization off the object's JSRuntime's thread.
+ *
+ * - Serialization starts when WebAssembly.Module is passed to the
+ * structured-clone algorithm. JS::GetWasmModule is called on the JSRuntime
+ * thread that initiated the structured clone to get the JS::WasmModule.
+ * This interface is then taken to a background thread where serializedSize()
+ * and serialize() are called to write the object to two files: a bytecode file
+ * that always allows successful deserialization and a compiled-code file keyed
+ * on cpu- and build-id that may become invalid if either of these change between
+ * serialization and deserialization. After serialization, the reference is
+ * dropped from the background thread.
+ *
+ * - Deserialization starts when the structured clone algorithm encounters a
+ * serialized WebAssembly.Module. On a background thread, the compiled-code file
+ * is opened and CompiledWasmModuleAssumptionsMatch is called to see if it is
+ * still valid (as described above). DeserializeWasmModule is then called to
+ * construct a JS::WasmModule (also on the background thread), passing the
+ * bytecode file descriptor and, if valid, the compiled-code file descriptor.
+ * The JS::WasmObject is then transported to the JSRuntime thread (which
+ * originated the request) and the wrapping WebAssembly.Module object is created
+ * by calling createObject().
+ */
+
+struct WasmModule : mozilla::external::AtomicRefCounted<WasmModule>
+{
+    MOZ_DECLARE_REFCOUNTED_TYPENAME(WasmModule)
+    virtual ~WasmModule() {}
+
+    virtual void serializedSize(size_t* bytecodeSize, size_t* compiledSize) const = 0;
+    virtual void serialize(uint8_t* bytecodeBegin, size_t bytecodeSize,
+                           uint8_t* compiledBegin, size_t compiledSize) const = 0;
+
+    virtual JSObject* createObject(JSContext* cx) = 0;
+};
+
+extern JS_PUBLIC_API(bool)
+IsWasmModuleObject(HandleObject obj);
+
+extern JS_PUBLIC_API(RefPtr<WasmModule>)
+GetWasmModule(HandleObject obj);
+
+extern JS_PUBLIC_API(bool)
+CompiledWasmModuleAssumptionsMatch(PRFileDesc* compiled, BuildIdCharVector&& buildId);
+
+extern JS_PUBLIC_API(RefPtr<WasmModule>)
+DeserializeWasmModule(PRFileDesc* bytecode, PRFileDesc* maybeCompiled, BuildIdCharVector&& buildId,
+                      JS::UniqueChars filename, unsigned line, unsigned column);
 
 /**
  * Convenience class for imitating a JS level for-of loop. Typical usage:
@@ -5873,7 +6167,7 @@ typedef void
 (* LargeAllocationFailureCallback)(void* data);
 
 extern JS_PUBLIC_API(void)
-SetLargeAllocationFailureCallback(JSRuntime* rt, LargeAllocationFailureCallback afc, void* data);
+SetLargeAllocationFailureCallback(JSContext* cx, LargeAllocationFailureCallback afc, void* data);
 
 /**
  * Unlike the error reporter, which is only called if the exception for an OOM
@@ -5890,17 +6184,99 @@ typedef void
 (* OutOfMemoryCallback)(JSContext* cx, void* data);
 
 extern JS_PUBLIC_API(void)
-SetOutOfMemoryCallback(JSRuntime* rt, OutOfMemoryCallback cb, void* data);
+SetOutOfMemoryCallback(JSContext* cx, OutOfMemoryCallback cb, void* data);
 
+/**
+ * Capture all frames.
+ */
+struct AllFrames { };
+
+/**
+ * Capture at most this many frames.
+ */
+struct MaxFrames
+{
+    uint32_t maxFrames;
+
+    explicit MaxFrames(uint32_t max)
+      : maxFrames(max)
+    {
+        MOZ_ASSERT(max > 0);
+    }
+};
+
+/**
+ * Capture the first frame with the given principals. By default, do not
+ * consider self-hosted frames with the given principals as satisfying the stack
+ * capture.
+ */
+struct FirstSubsumedFrame
+{
+    JSContext* cx;
+    JSPrincipals* principals;
+    bool ignoreSelfHosted;
+
+    /**
+     * Use the cx's current compartment's principals.
+     */
+    explicit FirstSubsumedFrame(JSContext* cx, bool ignoreSelfHostedFrames = true);
+
+    explicit FirstSubsumedFrame(JSContext* ctx, JSPrincipals* p, bool ignoreSelfHostedFrames = true)
+      : cx(ctx)
+      , principals(p)
+      , ignoreSelfHosted(ignoreSelfHostedFrames)
+    {
+        if (principals)
+            JS_HoldPrincipals(principals);
+    }
+
+    // No copying because we want to avoid holding and dropping principals
+    // unnecessarily.
+    FirstSubsumedFrame(const FirstSubsumedFrame&) = delete;
+    FirstSubsumedFrame& operator=(const FirstSubsumedFrame&) = delete;
+
+    FirstSubsumedFrame(FirstSubsumedFrame&& rhs)
+      : principals(rhs.principals)
+      , ignoreSelfHosted(rhs.ignoreSelfHosted)
+    {
+        MOZ_ASSERT(this != &rhs, "self move disallowed");
+        rhs.principals = nullptr;
+    }
+
+    FirstSubsumedFrame& operator=(FirstSubsumedFrame&& rhs) {
+        new (this) FirstSubsumedFrame(mozilla::Move(rhs));
+        return *this;
+    }
+
+    ~FirstSubsumedFrame() {
+        if (principals)
+            JS_DropPrincipals(cx, principals);
+    }
+};
+
+using StackCapture = mozilla::Variant<AllFrames, MaxFrames, FirstSubsumedFrame>;
 
 /**
  * Capture the current call stack as a chain of SavedFrame JSObjects, and set
  * |stackp| to the SavedFrame for the youngest stack frame, or nullptr if there
- * are no JS frames on the stack. If |maxFrameCount| is non-zero, capture at
- * most the youngest |maxFrameCount| frames.
+ * are no JS frames on the stack.
+ *
+ * The |capture| parameter describes the portion of the JS stack to capture:
+ *
+ *   * |JS::AllFrames|: Capture all frames on the stack.
+ *
+ *   * |JS::MaxFrames|: Capture no more than |JS::MaxFrames::maxFrames| from the
+ *      stack.
+ *
+ *   * |JS::FirstSubsumedFrame|: Capture the first frame whose principals are
+ *     subsumed by |JS::FirstSubsumedFrame::principals|. By default, do not
+ *     consider self-hosted frames; this can be controlled via the
+ *     |JS::FirstSubsumedFrame::ignoreSelfHosted| flag. Do not capture any async
+ *     stack.
  */
 extern JS_PUBLIC_API(bool)
-CaptureCurrentStack(JSContext* cx, MutableHandleObject stackp, unsigned maxFrameCount = 0);
+CaptureCurrentStack(JSContext* cx, MutableHandleObject stackp,
+                    StackCapture&& capture = StackCapture(AllFrames()));
 
 /*
  * This is a utility function for preparing an async stack to be used
@@ -6030,7 +6406,8 @@ GetSavedFrameParent(JSContext* cx, HandleObject savedFrame, MutableHandleObject 
  * each line.
  */
 extern JS_PUBLIC_API(bool)
-BuildStackString(JSContext* cx, HandleObject stack, MutableHandleString stringp, size_t indent = 0);
+BuildStackString(JSContext* cx, HandleObject stack, MutableHandleString stringp,
+                 size_t indent = 0, js::StackFormat stackFormat = js::StackFormat::Default);
 
 /**
  * Return true iff the given object is either a SavedFrame object or wrapper
@@ -6159,19 +6536,19 @@ using PerformanceGroupVector = mozilla::Vector<RefPtr<js::PerformanceGroup>, 0, 
  * to the outside world and can cancelled with a call to `ResetMonitoring`.
  */
 extern JS_PUBLIC_API(bool)
-FlushPerformanceMonitoring(JSRuntime*);
+FlushPerformanceMonitoring(JSContext*);
 
 /**
  * Cancel any measurement that hasn't been committed.
  */
 extern JS_PUBLIC_API(void)
-ResetPerformanceMonitoring(JSRuntime*);
+ResetPerformanceMonitoring(JSContext*);
 
 /**
  * Cleanup any memory used by performance monitoring.
  */
 extern JS_PUBLIC_API(void)
-DisposePerformanceMonitoring(JSRuntime*);
+DisposePerformanceMonitoring(JSContext*);
 
 /**
  * Turn on/off stopwatch-based CPU monitoring.
@@ -6181,20 +6558,17 @@ DisposePerformanceMonitoring(JSRuntime*);
  * happen if we are out of memory.
  */
 extern JS_PUBLIC_API(bool)
-SetStopwatchIsMonitoringCPOW(JSRuntime*, bool);
+SetStopwatchIsMonitoringCPOW(JSContext*, bool);
 extern JS_PUBLIC_API(bool)
-GetStopwatchIsMonitoringCPOW(JSRuntime*);
+GetStopwatchIsMonitoringCPOW(JSContext*);
 extern JS_PUBLIC_API(bool)
-SetStopwatchIsMonitoringJank(JSRuntime*, bool);
+SetStopwatchIsMonitoringJank(JSContext*, bool);
 extern JS_PUBLIC_API(bool)
-GetStopwatchIsMonitoringJank(JSRuntime*);
-
-extern JS_PUBLIC_API(bool)
-IsStopwatchActive(JSRuntime*);
+GetStopwatchIsMonitoringJank(JSContext*);
 
 // Extract the CPU rescheduling data.
 extern JS_PUBLIC_API(void)
-GetPerfMonitoringTestCpuRescheduling(JSRuntime*, uint64_t* stayed, uint64_t* moved);
+GetPerfMonitoringTestCpuRescheduling(JSContext*, uint64_t* stayed, uint64_t* moved);
 
 
 /**
@@ -6202,22 +6576,22 @@ GetPerfMonitoringTestCpuRescheduling(JSRuntime*, uint64_t* stayed, uint64_t* mov
  * since process start.
  */
 extern JS_PUBLIC_API(void)
-AddCPOWPerformanceDelta(JSRuntime*, uint64_t delta);
+AddCPOWPerformanceDelta(JSContext*, uint64_t delta);
 
 typedef bool
 (*StopwatchStartCallback)(uint64_t, void*);
 extern JS_PUBLIC_API(bool)
-SetStopwatchStartCallback(JSRuntime*, StopwatchStartCallback, void*);
+SetStopwatchStartCallback(JSContext*, StopwatchStartCallback, void*);
 
 typedef bool
 (*StopwatchCommitCallback)(uint64_t, PerformanceGroupVector&, void*);
 extern JS_PUBLIC_API(bool)
-SetStopwatchCommitCallback(JSRuntime*, StopwatchCommitCallback, void*);
+SetStopwatchCommitCallback(JSContext*, StopwatchCommitCallback, void*);
 
 typedef bool
 (*GetGroupsCallback)(JSContext*, PerformanceGroupVector&, void*);
 extern JS_PUBLIC_API(bool)
-SetGetPerformanceGroupsCallback(JSRuntime*, GetGroupsCallback, void*);
+SetGetPerformanceGroupsCallback(JSContext*, GetGroupsCallback, void*);
 
 } /* namespace js */
 

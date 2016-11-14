@@ -11,8 +11,10 @@
 #include "mozilla/a11y/Role.h"
 #include "mozilla/a11y/States.h"
 
-#include "nsAutoPtr.h"
+#include "mozilla/UniquePtr.h"
+
 #include "nsIContent.h"
+#include "nsIContentInlines.h"
 #include "nsString.h"
 #include "nsTArray.h"
 #include "nsRefPtrHashtable.h"
@@ -53,7 +55,7 @@ class XULTreeAccessible;
 #ifdef A11Y_LOG
 namespace logging {
   typedef const char* (*GetTreePrefix)(void* aData, Accessible*);
-  void Tree(const char* aTitle, const char* aMsgText, DocAccessible* aDoc,
+  void Tree(const char* aTitle, const char* aMsgText, Accessible* aRoot,
             GetTreePrefix aPrefixFunc, void* GetTreePrefixData);
 };
 #endif
@@ -229,14 +231,14 @@ public:
   /**
    * Return true if ARIA role is specified on the element.
    */
-  bool HasARIARole() const { return mRoleMapEntry; }
+  bool HasARIARole() const;
   bool IsARIARole(nsIAtom* aARIARole) const;
   bool HasStrongARIARole() const;
 
   /**
    * Retrun ARIA role map if any.
    */
-  const nsRoleMapEntry* ARIARoleMap() const { return mRoleMapEntry; }
+  const nsRoleMapEntry* ARIARoleMap() const;
 
   /**
    * Return accessible role specified by ARIA (see constants in
@@ -382,8 +384,7 @@ public:
   /**
    * Set the ARIA role map entry for a new accessible.
    */
-  void SetRoleMapEntry(const nsRoleMapEntry* aRoleMapEntry)
-    { mRoleMapEntry = aRoleMapEntry; }
+  void SetRoleMapEntry(const nsRoleMapEntry* aRoleMapEntry);
 
   /**
    * Append/insert/remove a child. Return true if operation was successful.
@@ -392,12 +393,12 @@ public:
     { return InsertChildAt(mChildren.Length(), aChild); }
   virtual bool InsertChildAt(uint32_t aIndex, Accessible* aChild);
 
-  bool InsertAfter(Accessible* aNewChild, Accessible* aRefChild)
-  {
-    MOZ_ASSERT(aNewChild, "No new child to insert");
-    return InsertChildAt(aRefChild ? aRefChild->IndexInParent() + 1 : 0,
-                         aNewChild);
-  }
+  /**
+   * Inserts a child after given sibling. If the child cannot be inserted,
+   * then the child is unbound from the document, and false is returned. Make
+   * sure to null out any references on the child object as it may be destroyed.
+   */
+  bool InsertAfter(Accessible* aNewChild, Accessible* aRefChild);
 
   virtual bool RemoveChild(Accessible* aChild);
 
@@ -1119,6 +1120,12 @@ protected:
   static const uint8_t kGenericTypesBits = 16;
 
   /**
+   * Non-NO_ROLE_MAP_ENTRY_INDEX indicates author-supplied role;
+   * possibly state & value as well
+   */
+  uint8_t mRoleMapEntryIndex;
+
+  /**
    * Keep in sync with StateFlags, ContextFlags, and AccTypes.
    */
   uint32_t mStateFlags : kStateFlagsBits;
@@ -1130,7 +1137,7 @@ protected:
 
 #ifdef A11Y_LOG
   friend void logging::Tree(const char* aTitle, const char* aMsgText,
-                            DocAccessible* aDoc,
+                            Accessible* aRoot,
                             logging::GetTreePrefix aPrefixFunc,
                             void* aGetTreePrefixData);
 #endif
@@ -1138,7 +1145,7 @@ protected:
   friend class xpcAccessible;
   friend class TreeMutation;
 
-  nsAutoPtr<mozilla::a11y::EmbeddedObjCollector> mEmbeddedObjCollector;
+  UniquePtr<mozilla::a11y::EmbeddedObjCollector> mEmbeddedObjCollector;
   union {
     int32_t mIndexOfEmbeddedChild;
     uint32_t mProxyInterfaces;
@@ -1152,11 +1159,6 @@ protected:
     ProxyAccessible* proxy;
   } mBits;
   friend class AccGroupInfo;
-
-  /**
-   * Non-null indicates author-supplied role; possibly state & value as well
-   */
-  const nsRoleMapEntry* mRoleMapEntry;
 
 private:
   Accessible() = delete;

@@ -11,7 +11,6 @@
 #include "nsSHEntryShared.h"
 #include "nsILayoutHistoryState.h"
 #include "nsIContentViewer.h"
-#include "nsISupportsArray.h"
 #include "nsIStructuredCloneContainer.h"
 #include "nsIInputStream.h"
 #include "nsIURI.h"
@@ -24,6 +23,7 @@ static uint32_t gEntryID = 0;
 
 nsSHEntry::nsSHEntry()
   : mShared(new nsSHEntryShared())
+  , mLoadReplace(false)
   , mReferrerPolicy(mozilla::net::RP_Default)
   , mLoadType(0)
   , mID(gEntryID++)
@@ -40,6 +40,7 @@ nsSHEntry::nsSHEntry(const nsSHEntry& aOther)
   : mShared(aOther.mShared)
   , mURI(aOther.mURI)
   , mOriginalURI(aOther.mOriginalURI)
+  , mLoadReplace(aOther.mLoadReplace)
   , mReferrerURI(aOther.mReferrerURI)
   , mReferrerPolicy(aOther.mReferrerPolicy)
   , mTitle(aOther.mTitle)
@@ -132,6 +133,20 @@ NS_IMETHODIMP
 nsSHEntry::SetOriginalURI(nsIURI* aOriginalURI)
 {
   mOriginalURI = aOriginalURI;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSHEntry::GetLoadReplace(bool* aLoadReplace)
+{
+  *aLoadReplace = mLoadReplace;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSHEntry::SetLoadReplace(bool aLoadReplace)
+{
+  mLoadReplace = aLoadReplace;
   return NS_OK;
 }
 
@@ -396,7 +411,9 @@ nsSHEntry::Create(nsIURI* aURI, const nsAString& aTitle,
                   nsIInputStream* aInputStream,
                   nsILayoutHistoryState* aLayoutHistoryState,
                   nsISupports* aCacheKey, const nsACString& aContentType,
-                  nsISupports* aOwner, uint64_t aDocShellID,
+                  nsIPrincipal* aTriggeringPrincipal,
+                  nsIPrincipal* aPrincipalToInherit,
+                  uint64_t aDocShellID,
                   bool aDynamicCreation)
 {
   mURI = aURI;
@@ -408,7 +425,8 @@ nsSHEntry::Create(nsIURI* aURI, const nsAString& aTitle,
 
   mShared->mCacheKey = aCacheKey;
   mShared->mContentType = aContentType;
-  mShared->mOwner = aOwner;
+  mShared->mTriggeringPrincipal = aTriggeringPrincipal;
+  mShared->mPrincipalToInherit = aPrincipalToInherit;
   mShared->mDocShellID = aDocShellID;
   mShared->mDynamicallyCreated = aDynamicCreation;
 
@@ -488,16 +506,30 @@ nsSHEntry::GetViewerBounds(nsIntRect& aBounds)
 }
 
 NS_IMETHODIMP
-nsSHEntry::GetOwner(nsISupports** aOwner)
+nsSHEntry::GetTriggeringPrincipal(nsIPrincipal** aTriggeringPrincipal)
 {
-  NS_IF_ADDREF(*aOwner = mShared->mOwner);
+  NS_IF_ADDREF(*aTriggeringPrincipal = mShared->mTriggeringPrincipal);
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsSHEntry::SetOwner(nsISupports* aOwner)
+nsSHEntry::SetTriggeringPrincipal(nsIPrincipal* aTriggeringPrincipal)
 {
-  mShared->mOwner = aOwner;
+  mShared->mTriggeringPrincipal = aTriggeringPrincipal;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSHEntry::GetPrincipalToInherit(nsIPrincipal** aPrincipalToInherit)
+{
+  NS_IF_ADDREF(*aPrincipalToInherit = mShared->mPrincipalToInherit);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSHEntry::SetPrincipalToInherit(nsIPrincipal* aPrincipalToInherit)
+{
+  mShared->mPrincipalToInherit = aPrincipalToInherit;
   return NS_OK;
 }
 
@@ -699,11 +731,7 @@ nsSHEntry::AddChild(nsISHEntry* aChild, int32_t aOffset)
       }
     }
 
-    if (!mChildren.ReplaceObjectAt(aChild, aOffset)) {
-      NS_WARNING("Adding a child failed!");
-      aChild->SetParent(nullptr);
-      return NS_ERROR_FAILURE;
-    }
+    mChildren.ReplaceObjectAt(aChild, aOffset);
   }
 
   return NS_OK;
@@ -721,7 +749,8 @@ nsSHEntry::RemoveChild(nsISHEntry* aChild)
   } else {
     int32_t index = mChildren.IndexOfObject(aChild);
     if (index >= 0) {
-      childRemoved = mChildren.ReplaceObjectAt(nullptr, index);
+      mChildren.ReplaceObjectAt(nullptr, index);
+      childRemoved = true;
     }
   }
   if (childRemoved) {
@@ -764,9 +793,8 @@ nsSHEntry::ReplaceChild(nsISHEntry* aNewEntry)
     if (mChildren[i] && NS_SUCCEEDED(mChildren[i]->GetDocshellID(&otherID)) &&
         docshellID == otherID) {
       mChildren[i]->SetParent(nullptr);
-      if (mChildren.ReplaceObjectAt(aNewEntry, i)) {
-        return aNewEntry->SetParent(this);
-      }
+      mChildren.ReplaceObjectAt(aNewEntry, i);
+      return aNewEntry->SetParent(this);
     }
   }
   return NS_ERROR_FAILURE;
@@ -795,14 +823,14 @@ nsSHEntry::ClearChildShells()
 }
 
 NS_IMETHODIMP
-nsSHEntry::GetRefreshURIList(nsISupportsArray** aList)
+nsSHEntry::GetRefreshURIList(nsIMutableArray** aList)
 {
   NS_IF_ADDREF(*aList = mShared->mRefreshURIList);
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsSHEntry::SetRefreshURIList(nsISupportsArray* aList)
+nsSHEntry::SetRefreshURIList(nsIMutableArray* aList)
 {
   mShared->mRefreshURIList = aList;
   return NS_OK;

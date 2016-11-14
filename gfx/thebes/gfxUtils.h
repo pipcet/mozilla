@@ -7,6 +7,7 @@
 #define GFX_UTILS_H
 
 #include "gfxTypes.h"
+#include "ImageTypes.h"
 #include "imgIContainer.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/RefPtr.h"
@@ -41,6 +42,7 @@ public:
     typedef mozilla::gfx::SourceSurface SourceSurface;
     typedef mozilla::gfx::SurfaceFormat SurfaceFormat;
     typedef mozilla::image::ImageRegion ImageRegion;
+    typedef mozilla::YUVColorSpace YUVColorSpace;
 
     /*
      * Premultiply or Unpremultiply aSourceSurface, writing the result
@@ -133,6 +135,13 @@ public:
      * Clears surface to aColor (which defaults to transparent black).
      */
     static void ClearThebesSurface(gfxASurface* aSurface);
+
+    /**
+     * Get array of yuv to rgb conversion matrix.
+     */
+    static float* Get4x3YuvColorMatrix(YUVColorSpace aYUVColorSpace);
+
+    static float* Get3x3YuvColorMatrix(YUVColorSpace aYUVColorSpace);
 
     /**
      * Creates a copy of aSurface, but having the SurfaceFormat aFormat.
@@ -268,6 +277,11 @@ public:
                                                nsACString& failureId,
                                                int32_t* status);
 
+    // Can pass `nullptr` for gfxInfo.
+    // If FAILED(ThreadSafeGetFeatureStatus), out_blacklistId will be empty.
+    static bool IsFeatureBlacklisted(nsCOMPtr<nsIGfxInfo> gfxInfo, int32_t feature,
+                                     nsACString* const out_blacklistId);
+
     /**
      * Copy to the clipboard as a PNG encoded Data URL.
      */
@@ -291,39 +305,6 @@ namespace gfx {
  */
 Color ToDeviceColor(Color aColor);
 Color ToDeviceColor(nscolor aColor);
-
-/* These techniques are suggested by "Bit Twiddling Hacks"
- */
-
-/**
- * Returns true if |aNumber| is a power of two
- * 0 is incorreclty considered a power of two
- */
-static inline bool
-IsPowerOfTwo(int aNumber)
-{
-    return (aNumber & (aNumber - 1)) == 0;
-}
-
-/**
- * Returns the first integer greater than or equal to |aNumber| which is a
- * power of two. Undefined for |aNumber| < 0.
- */
-static inline int
-NextPowerOfTwo(int aNumber)
-{
-#if defined(__arm__)
-    return 1 << (32 - __builtin_clz(aNumber - 1));
-#else
-    --aNumber;
-    aNumber |= aNumber >> 1;
-    aNumber |= aNumber >> 2;
-    aNumber |= aNumber >> 4;
-    aNumber |= aNumber >> 8;
-    aNumber |= aNumber >> 16;
-    return ++aNumber;
-#endif
-}
 
 /**
  * Performs a checked multiply of the given width, height, and bytes-per-pixel

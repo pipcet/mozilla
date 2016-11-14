@@ -20,11 +20,13 @@ import org.json.simple.JSONObject;
 import org.mozilla.gecko.GeckoProfile;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.annotation.RobocopTarget;
+import org.mozilla.gecko.db.BrowserContract.ActivityStreamBlocklist;
 import org.mozilla.gecko.db.BrowserContract.Bookmarks;
 import org.mozilla.gecko.db.BrowserContract.Combined;
 import org.mozilla.gecko.db.BrowserContract.Favicons;
 import org.mozilla.gecko.db.BrowserContract.History;
 import org.mozilla.gecko.db.BrowserContract.Visits;
+import org.mozilla.gecko.db.BrowserContract.PageMetadata;
 import org.mozilla.gecko.db.BrowserContract.Numbers;
 import org.mozilla.gecko.db.BrowserContract.ReadingListItems;
 import org.mozilla.gecko.db.BrowserContract.SearchHistory;
@@ -58,7 +60,7 @@ public final class BrowserDatabaseHelper extends SQLiteOpenHelper {
 
     // Replace the Bug number below with your Bug that is conducting a DB upgrade, as to force a merge conflict with any
     // other patches that require a DB upgrade.
-    public static final int DATABASE_VERSION = 34; // Bug 1274029
+    public static final int DATABASE_VERSION = 36; // Bug 1301717
     public static final String DATABASE_NAME = "browser.db";
 
     final protected Context mContext;
@@ -66,6 +68,7 @@ public final class BrowserDatabaseHelper extends SQLiteOpenHelper {
     static final String TABLE_BOOKMARKS = Bookmarks.TABLE_NAME;
     static final String TABLE_HISTORY = History.TABLE_NAME;
     static final String TABLE_VISITS = Visits.TABLE_NAME;
+    static final String TABLE_PAGE_METADATA = PageMetadata.TABLE_NAME;
     static final String TABLE_FAVICONS = Favicons.TABLE_NAME;
     static final String TABLE_THUMBNAILS = Thumbnails.TABLE_NAME;
     static final String TABLE_READING_LIST = ReadingListItems.TABLE_NAME;
@@ -210,6 +213,27 @@ public final class BrowserDatabaseHelper extends SQLiteOpenHelper {
                 Thumbnails.URL + " TEXT UNIQUE," +
                 Thumbnails.DATA + " BLOB" +
                 ");");
+    }
+
+    private void createPageMetadataTable(SQLiteDatabase db) {
+        debug("Creating " + TABLE_PAGE_METADATA + " table");
+        db.execSQL("CREATE TABLE " + TABLE_PAGE_METADATA + "(" +
+                PageMetadata._ID + " INTEGER PRIMARY KEY AUTOINCREMENT," +
+                PageMetadata.HISTORY_GUID + " TEXT NOT NULL," +
+                PageMetadata.DATE_CREATED + " INTEGER NOT NULL, " +
+                PageMetadata.HAS_IMAGE + " TINYINT NOT NULL DEFAULT 0, " +
+                PageMetadata.JSON + " TEXT NOT NULL, " +
+
+                "FOREIGN KEY (" + Visits.HISTORY_GUID + ") REFERENCES " +
+                TABLE_HISTORY + "(" + History.GUID + ") ON DELETE CASCADE ON UPDATE CASCADE" +
+                ");");
+
+        // Establish a 1-to-1 relationship with History table.
+        db.execSQL("CREATE UNIQUE INDEX page_metadata_history_guid ON " + TABLE_PAGE_METADATA + "("
+                + PageMetadata.HISTORY_GUID + ")");
+        // Improve performance of commonly occurring selections.
+        db.execSQL("CREATE INDEX page_metadata_history_guid_and_has_image ON " + TABLE_PAGE_METADATA + "("
+                + PageMetadata.HISTORY_GUID + ", " + PageMetadata.HAS_IMAGE + ")");
     }
 
     private void createBookmarksWithFaviconsView(SQLiteDatabase db) {
@@ -723,6 +747,10 @@ public final class BrowserDatabaseHelper extends SQLiteOpenHelper {
 
         createVisitsTable(db);
         createCombinedViewOn34(db);
+
+        createActivityStreamBlocklistTable(db);
+
+        createPageMetadataTable(db);
     }
 
     /**
@@ -760,6 +788,9 @@ public final class BrowserDatabaseHelper extends SQLiteOpenHelper {
      * We used to have a separate history extensions database which was used by Sync to store arrays
      * of visits for individual History GUIDs. It was only used by Sync.
      * This function migrates contents of that database over to the Visits table.
+     *
+     * Warning to callers: this method might throw IllegalStateException if we fail to allocate a
+     * cursor to read HistoryExtensionsDB data for whatever reason. See Bug 1280409.
      *
      * @param historyExtensionDb Source History Extensions database
      * @param db Destination database
@@ -894,6 +925,15 @@ public final class BrowserDatabaseHelper extends SQLiteOpenHelper {
 
         db.execSQL("CREATE INDEX idx_search_history_last_visited ON " +
                 SearchHistory.TABLE_NAME + "(" + SearchHistory.DATE_LAST_VISITED + ")");
+    }
+
+    private void createActivityStreamBlocklistTable(final SQLiteDatabase db) {
+        debug("Creating " + ActivityStreamBlocklist.TABLE_NAME + " table");
+
+        db.execSQL("CREATE TABLE " + ActivityStreamBlocklist.TABLE_NAME + "(" +
+                   ActivityStreamBlocklist._ID + " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                   ActivityStreamBlocklist.URL + " TEXT UNIQUE NOT NULL, " +
+                   ActivityStreamBlocklist.CREATED + " INTEGER NOT NULL)");
     }
 
     private void createReadingListTable(final SQLiteDatabase db, final String tableName) {
@@ -1772,14 +1812,20 @@ public final class BrowserDatabaseHelper extends SQLiteOpenHelper {
                     historyExtensionDb = SQLiteDatabase.openDatabase(historyExtensionsDatabase.getPath(), null,
                             SQLiteDatabase.OPEN_READONLY);
 
+                    if (historyExtensionDb != null) {
+                        copyHistoryExtensionDataToVisitsTable(historyExtensionDb, db);
+                    }
+
                 // If we fail to open HistoryExtensionDatabase, then synthesize visits marking them as remote
                 } catch (SQLiteException e) {
                     Log.w(LOGTAG, "Couldn't open history extension database; synthesizing visits instead", e);
                     synthesizeAndInsertVisits(db, false);
-                }
 
-                if (historyExtensionDb != null) {
-                    copyHistoryExtensionDataToVisitsTable(historyExtensionDb, db);
+                // It's possible that we might fail to copy over visit data from the HistoryExtensionsDB,
+                // so let's synthesize visits marking them as remote. See Bug 1280409.
+                } catch (IllegalStateException e) {
+                    Log.w(LOGTAG, "Couldn't copy over history extension data; synthesizing visits instead", e);
+                    synthesizeAndInsertVisits(db, false);
                 }
 
             // FxAccount doesn't exist, but there's evidence Sync was enabled at some point.
@@ -1926,6 +1972,14 @@ public final class BrowserDatabaseHelper extends SQLiteOpenHelper {
         createV34CombinedView(db);
     }
 
+    private void upgradeDatabaseFrom34to35(final SQLiteDatabase db) {
+        createActivityStreamBlocklistTable(db);
+    }
+
+    private void upgradeDatabaseFrom35to36(final SQLiteDatabase db) {
+        createPageMetadataTable(db);
+    }
+
     private void createV33CombinedView(final SQLiteDatabase db) {
         db.execSQL("DROP VIEW IF EXISTS " + VIEW_COMBINED);
         db.execSQL("DROP VIEW IF EXISTS " + VIEW_COMBINED_WITH_FAVICONS);
@@ -2052,6 +2106,14 @@ public final class BrowserDatabaseHelper extends SQLiteOpenHelper {
 
                 case 34:
                     upgradeDatabaseFrom33to34(db);
+                    break;
+
+                case 35:
+                    upgradeDatabaseFrom34to35(db);
+                    break;
+
+                case 36:
+                    upgradeDatabaseFrom35to36(db);
                     break;
             }
         }

@@ -15,22 +15,19 @@ Cu.import("resource://gre/modules/PlacesUtils.jsm");
 
 this.EXPORTED_SYMBOLS = [ "PlacesDBUtils" ];
 
-////////////////////////////////////////////////////////////////////////////////
-//// Constants
+// Constants
 
 const FINISHED_MAINTENANCE_TOPIC = "places-maintenance-finished";
 
 const BYTES_PER_MEBIBYTE = 1048576;
 
-////////////////////////////////////////////////////////////////////////////////
-//// Smart getters
+// Smart getters
 
 XPCOMUtils.defineLazyGetter(this, "DBConn", function() {
   return PlacesUtils.history.QueryInterface(Ci.nsPIPlacesDatabase).DBConnection;
 });
 
-////////////////////////////////////////////////////////////////////////////////
-//// PlacesDBUtils
+// PlacesDBUtils
 
 this.PlacesDBUtils = {
   /**
@@ -718,8 +715,14 @@ this.PlacesDBUtils = {
     // L.4 recalculate foreign_count.
     let fixForeignCount = DBConn.createAsyncStatement(
       `UPDATE moz_places SET foreign_count =
-       (SELECT count(*) FROM moz_bookmarks WHERE fk = moz_places.id )`);
+         (SELECT count(*) FROM moz_bookmarks WHERE fk = moz_places.id ) +
+         (SELECT count(*) FROM moz_keywords WHERE place_id = moz_places.id )`);
     cleanupStatements.push(fixForeignCount);
+
+    // L.5 recalculate missing hashes.
+    let fixMissingHashes = DBConn.createAsyncStatement(
+      `UPDATE moz_places SET url_hash = hash(url) WHERE url_hash = 0`);
+    cleanupStatements.push(fixMissingHashes);
 
     // MAINTENANCE STATEMENTS SHOULD GO ABOVE THIS POINT!
 
@@ -823,7 +826,7 @@ this.PlacesDBUtils = {
       let limitURIs = Services.prefs.getIntPref(
         "places.history.expiration.transient_current_max_pages");
       tasks.log("History can store a maximum of " + limitURIs + " unique pages");
-    } catch(ex) {}
+    } catch (ex) {}
 
     let stmt = DBConn.createStatement(
       "SELECT name FROM sqlite_master WHERE type = :type");
@@ -998,7 +1001,7 @@ this.PlacesDBUtils = {
             },
             handleCompletion: function () {}
           });
-        } finally{
+        } finally {
           stmt.finalize();
         }
       });

@@ -21,7 +21,7 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/TabParent.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "nsComponentManagerUtils.h"
 #include "nsArrayUtils.h"
 #include "nsIMutableArray.h"
@@ -685,22 +685,6 @@ nsContentPermissionRequestProxy::Allow(JS::HandleValue aChoices)
   if (mParent->IsBeingDestroyed()) {
     return NS_ERROR_FAILURE;
   }
-
-#ifdef MOZ_WIDGET_GONK
-  uint32_t len = mPermissionRequests.Length();
-  for (uint32_t i = 0; i < len; i++) {
-    if (mPermissionRequests[i].type().EqualsLiteral("audio-capture")) {
-      GonkPermissionService::GetInstance()->addGrantInfo(
-        "android.permission.RECORD_AUDIO",
-        static_cast<ContentParent*>(mParent->Manager())->Pid());
-    }
-    if (mPermissionRequests[i].type().EqualsLiteral("video-capture")) {
-      GonkPermissionService::GetInstance()->addGrantInfo(
-        "android.permission.CAMERA",
-        static_cast<ContentParent*>(mParent->Manager())->Pid());
-    }
-  }
-#endif
 
   nsTArray<PermissionChoice> choices;
   if (aChoices.isNullOrUndefined()) {

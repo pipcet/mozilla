@@ -16,6 +16,7 @@
 #include "prinrval.h"
 
 #include <math.h>
+#include <stdbool.h> // for MOZ_ASSERT_UNREACHABLE
 
 #define XTHICKNESS(style) (style->xthickness)
 #define YTHICKNESS(style) (style->ythickness)
@@ -1158,7 +1159,6 @@ calculate_button_inner_rect(GtkWidget* button, GdkRectangle* rect,
     return MOZ_GTK_SUCCESS;
 }
 
-
 static gint
 calculate_arrow_rect(GtkWidget* arrow, GdkRectangle* rect,
                      GdkRectangle* arrow_rect, GtkTextDirection direction)
@@ -2281,7 +2281,7 @@ moz_gtk_progress_chunk_paint(GdkDrawable* drawable, GdkRectangle* rect,
 }
 
 gint
-moz_gtk_get_tab_thickness(void)
+moz_gtk_get_tab_thickness(WidgetNodeType aNodeType)
 {
     ensure_tab_widget();
     if (YTHICKNESS(gTabWidget->style) < 2)
@@ -2293,7 +2293,8 @@ moz_gtk_get_tab_thickness(void)
 static gint
 moz_gtk_tab_paint(GdkDrawable* drawable, GdkRectangle* rect,
                   GdkRectangle* cliprect, GtkWidgetState* state,
-                  GtkTabFlags flags, GtkTextDirection direction)
+                  GtkTabFlags flags, GtkTextDirection direction,
+                  WidgetNodeType widget)
 {
     /* When the tab isn't selected, we just draw a notebook extension.
      * When it is selected, we overwrite the adjacent border of the tabpanel
@@ -2302,6 +2303,7 @@ moz_gtk_tab_paint(GdkDrawable* drawable, GdkRectangle* rect,
 
     GtkStyle* style;
     GdkRectangle focusRect;
+    gboolean isBottomTab = (widget == MOZ_GTK_TAB_BOTTOM);
 
     ensure_tab_widget();
     gtk_widget_set_direction(gTabWidget, direction);
@@ -2315,8 +2317,7 @@ moz_gtk_tab_paint(GdkDrawable* drawable, GdkRectangle* rect,
         gtk_paint_extension(style, drawable, GTK_STATE_ACTIVE, GTK_SHADOW_OUT,
                             cliprect, gTabWidget, "tab",
                             rect->x, rect->y, rect->width, rect->height,
-                            (flags & MOZ_GTK_TAB_BOTTOM) ?
-                                GTK_POS_TOP : GTK_POS_BOTTOM );
+                            isBottomTab ? GTK_POS_TOP : GTK_POS_BOTTOM );
     } else {
         /* Draw the tab and the gap
          * We want the gap to be positioned exactly on the tabpanel top
@@ -2357,7 +2358,7 @@ moz_gtk_tab_paint(GdkDrawable* drawable, GdkRectangle* rect,
         gint gap_loffset, gap_roffset, gap_voffset, gap_height;
 
         /* Get height needed by the gap */
-        gap_height = moz_gtk_get_tab_thickness();
+        gap_height = moz_gtk_get_tab_thickness(widget);
 
         /* Extract gap_voffset from the first bits of flags */
         gap_voffset = flags & MOZ_GTK_TAB_MARGIN_MASK;
@@ -2373,7 +2374,7 @@ moz_gtk_tab_paint(GdkDrawable* drawable, GdkRectangle* rect,
                 gap_loffset = 0;
         }
 
-        if (flags & MOZ_GTK_TAB_BOTTOM) {
+        if (isBottomTab) {
             /* Draw the tab */
             focusRect.y += gap_voffset;
             focusRect.height -= gap_voffset;
@@ -2971,10 +2972,15 @@ moz_gtk_get_widget_border(WidgetNodeType widget, gint* left, gint* top,
         ensure_check_menu_item_widget();
         w = gCheckMenuItemWidget;
         break;
-    case MOZ_GTK_TAB:
+    case MOZ_GTK_TAB_TOP:
+    case MOZ_GTK_TAB_BOTTOM:
         ensure_tab_widget();
         w = gTabWidget;
         break;
+    case MOZ_GTK_TOOLTIP:
+        // In GTK 2 the spacing between box is set to 4.
+        *left = *top = *right = *bottom = 4;
+        return MOZ_GTK_SUCCESS;
     /* These widgets have no borders, since they are not containers. */
     case MOZ_GTK_SPLITTER_HORIZONTAL:
     case MOZ_GTK_SPLITTER_VERTICAL:
@@ -2996,7 +3002,6 @@ moz_gtk_get_widget_border(WidgetNodeType widget, gint* left, gint* top,
     case MOZ_GTK_MENUSEPARATOR:
     /* These widgets have no borders.*/
     case MOZ_GTK_SPINBUTTON:
-    case MOZ_GTK_TOOLTIP:
     case MOZ_GTK_WINDOW:
     case MOZ_GTK_RESIZER:
     case MOZ_GTK_MENUARROW:
@@ -3019,14 +3024,15 @@ moz_gtk_get_widget_border(WidgetNodeType widget, gint* left, gint* top,
 
 gint
 moz_gtk_get_tab_border(gint* left, gint* top, gint* right, gint* bottom, 
-                       GtkTextDirection direction, GtkTabFlags flags)
+                       GtkTextDirection direction, GtkTabFlags flags,
+                       WidgetNodeType widget)
 {
-    moz_gtk_get_widget_border(MOZ_GTK_TAB, left, top,
+    moz_gtk_get_widget_border(widget, left, top,
                               right, bottom, direction,
                               FALSE);
 
     // Top tabs have no bottom border, bottom tabs have no top border
-    if (flags & MOZ_GTK_TAB_BOTTOM) {
+    if (widget == MOZ_GTK_TAB_BOTTOM) {
       *top = 0;
     } else {
       *bottom = 0;
@@ -3196,31 +3202,9 @@ moz_gtk_get_scrollbar_metrics(MozGtkScrollbarMetrics *metrics)
 
     return MOZ_GTK_SUCCESS;
 }
-
-gboolean
-moz_gtk_images_in_menus()
-{
-    gboolean result;
-    GtkSettings* settings;
-
-    ensure_image_menu_item_widget();
-    settings = gtk_widget_get_settings(gImageMenuItemWidget);
-
-    g_object_get(settings, "gtk-menu-images", &result, NULL);
-    return result;
-}
-
-gboolean
-moz_gtk_images_in_buttons()
-{
-    gboolean result;
-    GtkSettings* settings;
-
-    ensure_button_widget();
-    settings = gtk_widget_get_settings(gButtonWidget);
-
-    g_object_get(settings, "gtk-button-images", &result, NULL);
-    return result;
+void
+moz_gtk_get_widget_min_size(WidgetNodeType aGtkWidgetType, int* width, int* height) {
+  MOZ_ASSERT_UNREACHABLE("get_widget_min_size not available for GTK2");
 }
 
 gint
@@ -3368,9 +3352,10 @@ moz_gtk_widget_paint(WidgetNodeType widget, GdkDrawable* drawable,
         return moz_gtk_progress_chunk_paint(drawable, rect, cliprect,
                                             direction, widget);
         break;
-    case MOZ_GTK_TAB:
+    case MOZ_GTK_TAB_TOP:
+    case MOZ_GTK_TAB_BOTTOM:
         return moz_gtk_tab_paint(drawable, rect, cliprect, state,
-                                 (GtkTabFlags) flags, direction);
+                                 (GtkTabFlags) flags, direction, widget);
         break;
     case MOZ_GTK_TABPANELS:
         return moz_gtk_tabpanels_paint(drawable, rect, cliprect, direction);

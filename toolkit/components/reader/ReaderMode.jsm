@@ -76,7 +76,7 @@ this.ReaderMode = {
   },
 
   observe: function(aMessage, aTopic, aData) {
-    switch(aTopic) {
+    switch (aTopic) {
       case "nsPref:changed":
         if (aData.startsWith("reader.parse-on-load.")) {
           this.isEnabledForParseOnLoad = this._getStateForParseOnLoad();
@@ -141,17 +141,26 @@ this.ReaderMode = {
       return null;
     }
 
+    let outerHash = "";
+    try {
+      let uriObj = Services.io.newURI(url, null, null);
+      url = uriObj.specIgnoringRef;
+      outerHash = uriObj.ref;
+    } catch (ex) { /* ignore, use the raw string */ }
+
     let searchParams = new URLSearchParams(url.substring("about:reader?".length));
     if (!searchParams.has("url")) {
       return null;
     }
-    let encodedURL = searchParams.get("url");
-    try {
-      return decodeURIComponent(encodedURL);
-    } catch (e) {
-      Cu.reportError("Error decoding original URL: " + e);
-      return encodedURL;
+    let originalUrl = searchParams.get("url");
+    if (outerHash) {
+      try {
+        let uriObj = Services.io.newURI(originalUrl, null, null);
+        uriObj = Services.io.newURI('#' + outerHash, null, uriObj);
+        originalUrl = uriObj.spec;
+      } catch (ex) {}
     }
+    return originalUrl;
   },
 
   /**
@@ -196,13 +205,14 @@ this.ReaderMode = {
    * @resolves JS object representing the article, or null if no article is found.
    */
   parseDocument: Task.async(function* (doc) {
-    let uri = Services.io.newURI(doc.documentURI, null, null);
-    if (!this._shouldCheckUri(uri)) {
+    let documentURI = Services.io.newURI(doc.documentURI, null, null);
+    let baseURI = Services.io.newURI(doc.baseURI, null, null);
+    if (!this._shouldCheckUri(documentURI) || !this._shouldCheckUri(baseURI, true)) {
       this.log("Reader mode disabled for URI");
       return null;
     }
 
-    return yield this._readerParse(uri, doc);
+    return yield this._readerParse(baseURI, doc);
   }),
 
   /**
@@ -213,13 +223,13 @@ this.ReaderMode = {
    * @resolves JS object representing the article, or null if no article is found.
    */
   downloadAndParseDocument: Task.async(function* (url) {
-    let uri = Services.io.newURI(url, null, null);
-    TelemetryStopwatch.start("READER_MODE_DOWNLOAD_MS");
-    let doc = yield this._downloadDocument(url).catch(e => {
-      TelemetryStopwatch.finish("READER_MODE_DOWNLOAD_MS");
-      throw e;
-    });
-    TelemetryStopwatch.finish("READER_MODE_DOWNLOAD_MS");
+    let doc = yield this._downloadDocument(url);
+    let uri = Services.io.newURI(doc.baseURI, null, null);
+    if (!this._shouldCheckUri(uri, true)) {
+      this.log("Reader mode disabled for URI");
+      return null;
+    }
+
     return yield this._readerParse(uri, doc);
   }),
 
@@ -294,7 +304,7 @@ this.ReaderMode = {
         }
         resolve(doc);
         histogram.add(DOWNLOAD_SUCCESS);
-      }
+      };
       xhr.send();
     });
   },
@@ -372,7 +382,7 @@ this.ReaderMode = {
     "youtube.com",
   ],
 
-  _shouldCheckUri: function (uri) {
+  _shouldCheckUri: function (uri, isBaseUri = false) {
     if (!(uri.schemeIs("http") || uri.schemeIs("https"))) {
       this.log("Not parsing URI scheme: " + uri.scheme);
       return false;
@@ -386,11 +396,11 @@ this.ReaderMode = {
     }
     // Sadly, some high-profile pages have false positives, so bail early for those:
     let asciiHost = uri.asciiHost;
-    if (this._blockedHosts.some(blockedHost => asciiHost.endsWith(blockedHost))) {
+    if (!isBaseUri && this._blockedHosts.some(blockedHost => asciiHost.endsWith(blockedHost))) {
       return false;
     }
 
-    if (!uri.filePath || uri.filePath == "/") {
+    if (!isBaseUri && (!uri.filePath || uri.filePath == "/")) {
       this.log("Not parsing home page: " + uri.spec);
       return false;
     }
@@ -402,7 +412,7 @@ this.ReaderMode = {
    * Attempts to parse a document into an article. Heavy lifting happens
    * in readerWorker.js.
    *
-   * @param uri The article URI.
+   * @param uri The base URI of the article.
    * @param doc The document to parse.
    * @return {Promise}
    * @resolves JS object representing the article, or null if no article is found.
@@ -426,13 +436,10 @@ this.ReaderMode = {
       pathBase: Services.io.newURI(".", null, uri).spec
     };
 
-    TelemetryStopwatch.start("READER_MODE_SERIALIZE_DOM_MS");
     let serializer = Cc["@mozilla.org/xmlextras/xmlserializer;1"].
                      createInstance(Ci.nsIDOMSerializer);
     let serializedDoc = serializer.serializeToString(doc);
-    TelemetryStopwatch.finish("READER_MODE_SERIALIZE_DOM_MS");
 
-    TelemetryStopwatch.start("READER_MODE_WORKER_PARSE_MS");
     let article = null;
     try {
       article = yield ReaderWorker.post("parseDocument", [uriParam, serializedDoc]);
@@ -440,7 +447,6 @@ this.ReaderMode = {
       Cu.reportError("Error in ReaderWorker: " + e);
       histogram.add(PARSE_ERROR_WORKER);
     }
-    TelemetryStopwatch.finish("READER_MODE_WORKER_PARSE_MS");
 
     if (!article) {
       this.log("Worker did not return an article");

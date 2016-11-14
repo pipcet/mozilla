@@ -71,6 +71,8 @@ included_inclnames_to_ignore = set([
     'prcvar.h',                 # NSPR
     'prerror.h',                # NSPR
     'prinit.h',                 # NSPR
+    'prio.h',                   # NSPR
+    'private/pprio.h',          # NSPR
     'prlink.h',                 # NSPR
     'prlock.h',                 # NSPR
     'prprf.h',                  # NSPR
@@ -78,8 +80,6 @@ included_inclnames_to_ignore = set([
     'prtypes.h',                # NSPR
     'selfhosted.out.h',         # generated in $OBJDIR
     'shellmoduleloader.out.h',  # generated in $OBJDIR
-    'unicode/locid.h',          # ICU
-    'unicode/numsys.h',         # ICU
     'unicode/timezone.h',       # ICU
     'unicode/ucal.h',           # ICU
     'unicode/uclean.h',         # ICU
@@ -89,6 +89,7 @@ included_inclnames_to_ignore = set([
     'unicode/uenum.h',          # ICU
     'unicode/unorm.h',          # ICU
     'unicode/unum.h',           # ICU
+    'unicode/unumsys.h',        # ICU
     'unicode/ustring.h',        # ICU
     'unicode/utypes.h',         # ICU
     'vtune/VTuneWrapper.h'      # VTune

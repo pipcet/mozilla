@@ -17,10 +17,10 @@ import org.mozilla.gecko.animation.PropertyAnimator;
 import org.mozilla.gecko.animation.ViewHelper;
 import org.mozilla.gecko.home.HomeAdapter.OnAddPanelListener;
 import org.mozilla.gecko.home.HomeConfig.PanelConfig;
-import org.mozilla.gecko.util.Experiments;
 import org.mozilla.gecko.util.ThreadUtils;
 
 import android.content.Context;
+import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.support.v4.app.FragmentManager;
@@ -33,7 +33,13 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 
-public class HomePager extends ViewPager {
+public class HomePager extends ViewPager implements HomeScreen {
+
+    @Override
+    public boolean requestFocus(int direction, Rect previouslyFocusedRect) {
+        return super.requestFocus(direction, previouslyFocusedRect);
+    }
+
     private static final int LOADER_ID_CONFIG = 0;
 
     private final Context mContext;
@@ -78,7 +84,12 @@ public class HomePager extends ViewPager {
     public interface OnUrlOpenListener {
         public enum Flags {
             ALLOW_SWITCH_TO_TAB,
-            OPEN_WITH_INTENT
+            OPEN_WITH_INTENT,
+            /**
+             * Ensure that the raw URL is opened. If not set, then the reader view version of the page
+             * might be opened if the URL is stored as an offline reader-view bookmark.
+             */
+            NO_READER_VIEW
         }
 
         public void onUrlOpen(String url, EnumSet<Flags> flags);
@@ -103,18 +114,6 @@ public class HomePager extends ViewPager {
          * @param flags to open new tab with.
          */
         public void onUrlOpenInBackground(String url, EnumSet<Flags> flags);
-    }
-
-    /**
-     * Interface for listening into ViewPager panel changes
-     */
-    public interface OnPanelChangeListener {
-        /**
-         * Called when a new panel is selected.
-         *
-         * @param panelId of the newly selected panel
-         */
-        public void onPanelSelected(String panelId);
     }
 
     /**
@@ -200,6 +199,7 @@ public class HomePager extends ViewPager {
      *
      * @param fm FragmentManager for the adapter
      */
+     @Override
     public void load(LoaderManager lm, FragmentManager fm, String panelId, Bundle restoreData, PropertyAnimator animator) {
         mLoadState = LoadState.LOADING;
 
@@ -213,7 +213,7 @@ public class HomePager extends ViewPager {
         }
 
         // Only animate on post-HC devices, when a non-null animator is given
-        final boolean shouldAnimate = Versions.feature11Plus && animator != null;
+        final boolean shouldAnimate = animator != null;
 
         final HomeAdapter adapter = new HomeAdapter(mContext, fm);
         adapter.setOnAddPanelListener(mAddPanelListener);
@@ -252,6 +252,7 @@ public class HomePager extends ViewPager {
     /**
      * Removes all child fragments to free memory.
      */
+     @Override
     public void unload() {
         mVisible = false;
         setAdapter(null);
@@ -301,6 +302,7 @@ public class HomePager extends ViewPager {
      *
      * @param panelId of the home panel to be shown.
      */
+     @Override
     public void showPanel(String panelId, Bundle restoreData) {
         if (!mVisible) {
             return;
@@ -354,6 +356,7 @@ public class HomePager extends ViewPager {
         return super.dispatchTouchEvent(event);
     }
 
+    @Override
     public void onToolbarFocusChange(boolean hasFocus) {
         if (mHomeBanner == null) {
             return;
@@ -454,10 +457,12 @@ public class HomePager extends ViewPager {
         });
     }
 
+    @Override
     public void setOnPanelChangeListener(OnPanelChangeListener listener) {
        mPanelChangedListener = listener;
     }
 
+    @Override
     public void setPanelStateChangeListener(HomeFragment.PanelStateChangeListener listener) {
         mPanelStateChangeListener = listener;
 

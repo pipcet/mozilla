@@ -11,6 +11,7 @@
 #include "jit/BaselineCacheIR.h"
 #include "jit/BaselineIC.h"
 
+#include "vm/EnvironmentObject-inl.h"
 #include "vm/ObjectGroup-inl.h"
 
 using namespace js;
@@ -112,7 +113,7 @@ GetCacheIRReceiverForNativeReadSlot(ICCacheIR_Monitored* stub, ReceiverGuard* re
     //
     //   GuardIsObject 0
     //   GuardShape 0
-    //   LoadFixedSlotResult or LoadDynamicSlotResult
+    //   LoadFixedSlotResult 0 or LoadDynamicSlotResult 0
     //
     // or
     //
@@ -120,8 +121,7 @@ GetCacheIRReceiverForNativeReadSlot(ICCacheIR_Monitored* stub, ReceiverGuard* re
     //   GuardGroup 0
     //   1: GuardAndLoadUnboxedExpando 0
     //   GuardShape 1
-    //   LoadUnboxedExpando 0
-    //   LoadFixedSlotResult or LoadDynamicSlotResult
+    //   LoadFixedSlotResult 1 or LoadDynamicSlotResult 1
 
     *receiver = ReceiverGuard();
     CacheIRReader reader(stub->stubInfo());
@@ -140,13 +140,6 @@ GetCacheIRReceiverForNativeReadSlot(ICCacheIR_Monitored* stub, ReceiverGuard* re
 
     if (reader.matchOp(CacheOp::GuardShape, objId)) {
         receiver->shape = stub->stubInfo()->getStubField<Shape*>(stub, reader.stubOffset());
-
-        // Skip LoadUnboxedExpando. Note that this op is redundant with the
-        // previous GuardAndLoadUnboxedExpando op, but for now we match the
-        // Ion IC codegen.
-        if (reader.matchOp(CacheOp::LoadUnboxedExpando, ObjOperandId(0)))
-            objId = reader.objOperandId();
-
         return reader.matchOpEither(CacheOp::LoadFixedSlotResult, CacheOp::LoadDynamicSlotResult);
     }
 
@@ -651,16 +644,18 @@ BaselineInspector::getTemplateObjectForSimdCtor(jsbytecode* pc, SimdType simdTyp
     return nullptr;
 }
 
-DeclEnvObject*
-BaselineInspector::templateDeclEnvObject()
+LexicalEnvironmentObject*
+BaselineInspector::templateNamedLambdaObject()
 {
     if (!hasBaselineScript())
         return nullptr;
 
-    JSObject* res = &templateCallObject()->as<ScopeObject>().enclosingScope();
+    JSObject* res = baselineScript()->templateEnvironment();
+    if (script->bodyScope()->hasEnvironment())
+        res = res->enclosingEnvironment();
     MOZ_ASSERT(res);
 
-    return &res->as<DeclEnvObject>();
+    return &res->as<LexicalEnvironmentObject>();
 }
 
 CallObject*
@@ -669,7 +664,7 @@ BaselineInspector::templateCallObject()
     if (!hasBaselineScript())
         return nullptr;
 
-    JSObject* res = baselineScript()->templateScope();
+    JSObject* res = baselineScript()->templateEnvironment();
     MOZ_ASSERT(res);
 
     return &res->as<CallObject>();
@@ -811,9 +806,13 @@ GetCacheIRExpectedInputType(ICCacheIR_Monitored* stub)
 {
     CacheIRReader reader(stub->stubInfo());
 
-    // For now, all CacheIR stubs expect an object.
-    MOZ_ALWAYS_TRUE(reader.matchOp(CacheOp::GuardIsObject, ObjOperandId(0)));
-    return MIRType::Object;
+    if (reader.matchOp(CacheOp::GuardIsObject, ValOperandId(0)))
+        return MIRType::Object;
+    if (reader.matchOp(CacheOp::GuardType, ValOperandId(0))) {
+        JSValueType type = reader.valueType();
+        return MIRTypeFromValueType(type);
+    }
+    MOZ_CRASH("Unexpected instruction");
 }
 
 MIRType
@@ -865,10 +864,6 @@ BaselineInspector::expectedPropertyAccessInputType(jsbytecode* pc)
           case ICStub::GetElem_TypedArray:
           case ICStub::GetElem_UnboxedArray:
             stubType = MIRType::Object;
-            break;
-
-          case ICStub::GetProp_Primitive:
-            stubType = MIRTypeFromValueType(stub->toGetProp_Primitive()->primitiveType());
             break;
 
           case ICStub::GetProp_StringLength:

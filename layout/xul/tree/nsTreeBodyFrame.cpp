@@ -10,9 +10,10 @@
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PathHelpers.h"
+#include "mozilla/Likely.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/MouseEvents.h"
-#include "mozilla/Likely.h"
+#include "mozilla/TextEditRules.h"
 
 #include "gfxUtils.h"
 #include "nsAlgorithm.h"
@@ -52,6 +53,7 @@
 #include "nsBoxLayoutState.h"
 #include "nsTreeContentView.h"
 #include "nsTreeUtils.h"
+#include "nsThemeConstants.h"
 #include "nsITheme.h"
 #include "imgIRequest.h"
 #include "imgIContainer.h"
@@ -66,7 +68,6 @@
 #include "nsIScriptableRegion.h"
 #include <algorithm>
 #include "ScrollbarActivity.h"
-#include "../../editor/libeditor/nsTextEditRules.h"
 
 #ifdef ACCESSIBILITY
 #include "nsAccessibilityService.h"
@@ -361,8 +362,7 @@ nsTreeBodyFrame::EnsureView()
       mTreeBoxObject->GetView(getter_AddRefs(treeView));
       if (treeView && weakFrame.IsAlive()) {
         nsXPIDLString rowStr;
-        box->GetProperty(MOZ_UTF16("topRow"),
-                         getter_Copies(rowStr));
+        box->GetProperty(u"topRow", getter_Copies(rowStr));
         nsAutoString rowStr2(rowStr);
         nsresult error;
         int32_t rowIndex = rowStr2.ToInteger(&error);
@@ -378,7 +378,7 @@ nsTreeBodyFrame::EnsureView()
 
         // Clear out the property info for the top row, but we always keep the
         // view current.
-        box->RemoveProperty(MOZ_UTF16("topRow"));
+        box->RemoveProperty(u"topRow");
       }
     }
   }
@@ -2120,7 +2120,8 @@ nsTreeBodyFrame::GetImage(int32_t aRowIndex, nsTreeColumn* aCol, bool aUseContex
     nsCOMPtr<nsIURI> uri;
     styleRequest->GetURI(getter_AddRefs(uri));
     nsAutoCString spec;
-    uri->GetSpec(spec);
+    nsresult rv = uri->GetSpec(spec);
+    NS_ENSURE_SUCCESS(rv, rv);
     CopyUTF8toUTF16(spec, imageSrc);
   }
 
@@ -2838,6 +2839,53 @@ nsTreeBodyFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   if (!mView || !GetContent ()->GetComposedDoc()->GetWindow())
     return;
 
+#ifdef XP_MACOSX
+  nsIContent* baseElement = GetBaseElement();
+  nsIFrame* treeFrame =
+    baseElement ? baseElement->GetPrimaryFrame() : nullptr;
+  nsCOMPtr<nsITreeSelection> selection;
+  mView->GetSelection(getter_AddRefs(selection));
+  nsITheme* theme = PresContext()->GetTheme();
+  // On Mac, we support native theming of selected rows. On 10.10 and higher,
+  // this means applying vibrancy which require us to register the theme
+  // geometrics for the row. In order to make the vibrancy effect to work
+  // properly, we also need the tree to be themed as a source list.
+  if (selection && treeFrame && theme &&
+      treeFrame->StyleDisplay()->mAppearance == NS_THEME_MAC_SOURCE_LIST) {
+    // Loop through our onscreen rows. If the row is selected and a
+    // -moz-appearance is provided, RegisterThemeGeometry might be necessary.
+    const auto end = std::min(mRowCount, LastVisibleRow() + 1);
+    for (auto i = FirstVisibleRow(); i < end; i++) {
+      bool isSelected;
+      selection->IsSelected(i, &isSelected);
+      if (isSelected) {
+        PrefillPropertyArray(i, nullptr);
+        nsAutoString properties;
+        mView->GetRowProperties(i, properties);
+        nsTreeUtils::TokenizeProperties(properties, mScratchArray);
+        nsStyleContext* rowContext =
+          GetPseudoStyleContext(nsCSSAnonBoxes::moztreerow);
+        auto appearance = rowContext->StyleDisplay()->mAppearance;
+        if (appearance) {
+          if (theme->ThemeSupportsWidget(PresContext(), this, appearance)) {
+            nsITheme::ThemeGeometryType type =
+              theme->ThemeGeometryTypeForWidget(this, appearance);
+            if (type != nsITheme::eThemeGeometryTypeUnknown) {
+              nsRect rowRect(mInnerBox.x, mInnerBox.y + mRowHeight *
+                             (i - FirstVisibleRow()), mInnerBox.width,
+                             mRowHeight);
+              aBuilder->RegisterThemeGeometry(type,
+                LayoutDeviceIntRect::FromUnknownRect(
+                  (rowRect + aBuilder->ToReferenceFrame(this)).ToNearestPixels(
+                    PresContext()->AppUnitsPerDevPixel())));
+            }
+          }
+        }
+      }
+    }
+  }
+#endif
+
   aLists.Content()->AppendNewToTop(new (aBuilder)
     nsDisplayTreeBody(aBuilder, this));
 }
@@ -2868,7 +2916,7 @@ nsTreeBodyFrame::PaintTreeBody(nsRenderingContext& aRenderingContext,
 #ifdef DEBUG
   int32_t rowCount = mRowCount;
   mView->GetRowCount(&rowCount);
-  NS_WARN_IF_FALSE(mRowCount == rowCount, "row count changed unexpectedly");
+  NS_WARNING_ASSERTION(mRowCount == rowCount, "row count changed unexpectedly");
 #endif
 
   DrawResult result = DrawResult::SUCCESS;
@@ -2996,26 +3044,25 @@ nsTreeBodyFrame::PaintRow(int32_t              aRowIndex,
   DrawResult result = DrawResult::SUCCESS;
 
   // Paint our borders and background for our row rect.
-  // If a -moz-appearance is provided, use theme drawing only if the current row
-  // is not selected (since we draw the selection as part of drawing the background).
-  bool useTheme = false;
-  nsITheme *theme = nullptr;
-  const nsStyleDisplay* displayData = rowContext->StyleDisplay();
-  if (displayData->mAppearance) {
+  nsITheme* theme = nullptr;
+  auto appearance = rowContext->StyleDisplay()->mAppearance;
+  if (appearance) {
     theme = aPresContext->GetTheme();
-    if (theme && theme->ThemeSupportsWidget(aPresContext, nullptr, displayData->mAppearance))
-      useTheme = true;
   }
-  bool isSelected = false;
-  nsCOMPtr<nsITreeSelection> selection;
-  mView->GetSelection(getter_AddRefs(selection));
-  if (selection) 
-    selection->IsSelected(aRowIndex, &isSelected);
-  if (useTheme && !isSelected) {
+  gfxContext* ctx = aRenderingContext.ThebesContext();
+  // Save the current font smoothing background color in case we change it.
+  Color originalColor(ctx->GetFontSmoothingBackgroundColor());
+  if (theme && theme->ThemeSupportsWidget(aPresContext, nullptr, appearance)) {
+    nscolor color;
+    if (theme->WidgetProvidesFontSmoothingBackgroundColor(this, appearance,
+                                                          &color)) {
+      // Set the font smoothing background color provided by the widget.
+      ctx->SetFontSmoothingBackgroundColor(ToDeviceColor(color));
+    }
     nsRect dirty;
     dirty.IntersectRect(rowRect, aDirtyRect);
-    theme->DrawWidgetBackground(&aRenderingContext, this, 
-                                displayData->mAppearance, rowRect, dirty);
+    theme->DrawWidgetBackground(&aRenderingContext, this, appearance, rowRect,
+                                dirty);
   } else {
     result &= PaintBackgroundLayer(rowContext, aPresContext, aRenderingContext,
                                    rowRect, aDirtyRect);
@@ -3117,6 +3164,11 @@ nsTreeBodyFrame::PaintRow(int32_t              aRowIndex,
                               aRenderingContext, aDirtyRect, dummy, aPt);
       }
     }
+  }
+  // If we've changed the font smoothing background color for this row, restore
+  // the color to the original one.
+  if (originalColor != ctx->GetFontSmoothingBackgroundColor()) {
+    ctx->SetFontSmoothingBackgroundColor(originalColor);
   }
 
   return result;
@@ -3262,17 +3314,12 @@ nsTreeBodyFrame::PaintCell(int32_t              aRowIndex,
       aRenderingContext.ThebesContext()->Save();
 
       const nsStyleBorder* borderStyle = lineContext->StyleBorder();
-      nscolor color;
-      bool useForegroundColor;
-      borderStyle->GetBorderColor(NS_SIDE_LEFT, color, useForegroundColor);
-      if (useForegroundColor) {
-        // GetBorderColor didn't touch color, thus grab it from the treeline context
-        color = lineContext->StyleColor()->mColor;
-      }
+      // Resolve currentcolor values against the treeline context
+      nscolor color = lineContext->StyleColor()->
+        CalcComplexColor(borderStyle->mBorderLeftColor);
       ColorPattern colorPatt(ToDeviceColor(color));
 
-      uint8_t style;
-      style = borderStyle->GetBorderStyle(NS_SIDE_LEFT);
+      uint8_t style = borderStyle->GetBorderStyle(NS_SIDE_LEFT);
       StrokeOptions strokeOptions;
       nsLayoutUtils::InitDashPattern(strokeOptions, style);
 
@@ -3694,7 +3741,7 @@ nsTreeBodyFrame::PaintText(int32_t              aRowIndex,
   mView->GetCellText(aRowIndex, aColumn, text);
 
   if (aColumn->Type() == nsITreeColumn::TYPE_PASSWORD) {
-    nsTextEditRules::FillBufWithPWChars(&text, text.Length());
+    TextEditRules::FillBufWithPWChars(&text, text.Length());
   }
 
   // We're going to paint this text so we need to ensure bidi is enabled if

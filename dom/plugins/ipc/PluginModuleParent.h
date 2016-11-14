@@ -198,6 +198,11 @@ protected:
     static BrowserStreamParent* StreamCast(NPP instance, NPStream* s,
                                            PluginAsyncSurrogate** aSurrogate = nullptr);
 
+    virtual bool
+    AnswerNPN_SetValue_NPPVpluginRequiresAudioDeviceChanges(
+                                        const bool& shouldRegister,
+                                        NPError* result) override;
+
 protected:
     void SetChildTimeout(const int32_t aChildTimeout);
     static void TimeoutChanged(const char* aPref, void* aModule);
@@ -207,6 +212,8 @@ protected:
     virtual bool RecvNotifyContentModuleDestroyed() override { return true; }
 
     virtual bool RecvProfile(const nsCString& aProfile) override { return true; }
+
+    virtual bool AnswerGetKeyState(const int32_t& aVirtKey, int16_t* aRet) override;
 
     virtual bool RecvReturnClearSiteData(const NPError& aRv,
                                          const uint64_t& aCallbackId) override;
@@ -263,7 +270,6 @@ protected:
 
 #if defined(XP_WIN)
     virtual nsresult GetScrollCaptureContainer(NPP aInstance, mozilla::layers::ImageContainer** aContainer) override;
-    virtual nsresult UpdateScrollState(NPP aInstance, bool aIsScrolling);
 #endif
 
     virtual nsresult HandledWindowedPluginKeyEvent(
@@ -304,6 +310,8 @@ public:
 
 #if defined(XP_MACOSX)
     virtual nsresult IsRemoteDrawingCoreAnimation(NPP instance, bool *aDrawing) override;
+#endif
+#if defined(XP_MACOSX) || defined(XP_WIN)
     virtual nsresult ContentsScaleFactorChanged(NPP instance, double aContentsScaleFactor) override;
 #endif
 
@@ -419,9 +427,28 @@ class PluginModuleChromeParent
     virtual ~PluginModuleChromeParent();
 
     /*
+     * Takes a full multi-process dump including the plugin process and the
+     * content process. If aBrowserDumpId is not empty then the browser dump
+     * associated with it will be paired to the resulting minidump.
+     * Takes ownership of the file associated with aBrowserDumpId.
+     *
+     * @param aContentPid PID of the e10s content process from which a hang was
+     *   reported. May be kInvalidProcessId if not applicable.
+     * @param aBrowserDumpId (optional) previously taken browser dump id. If
+     *   provided TakeFullMinidump will use this dump file instead of
+     *   generating a new one. If not provided a browser dump will be taken at
+     *   the time of this call.
+     * @param aDumpId Returns the ID of the newly generated crash dump. Left
+     *   untouched upon failure.
+     */
+    void TakeFullMinidump(base::ProcessId aContentPid,
+                          const nsAString& aBrowserDumpId,
+                          nsString& aDumpId);
+
+    /*
      * Terminates the plugin process associated with this plugin module. Also
-     * generates appropriate crash reports. Takes ownership of the file
-     * associated with aBrowserDumpId on success.
+     * generates appropriate crash reports unless an existing one is provided.
+     * Takes ownership of the file associated with aDumpId on success.
      *
      * @param aMsgLoop the main message pump associated with the module
      *   protocol.
@@ -430,15 +457,15 @@ class PluginModuleChromeParent
      * @param aMonitorDescription a string describing the hang monitor that
      *   is making this call. This string is added to the crash reporter
      *   annotations for the plugin process.
-     * @param aBrowserDumpId (optional) previously taken browser dump id. If
-     *   provided TerminateChildProcess will use this browser dump file in
-     *   generating a multi-process crash report. If not provided a browser
-     *   dump will be taken at the time of this call.
+     * @param aDumpId (optional) previously taken dump id. If provided
+     *   TerminateChildProcess will use this dump file instead of generating a
+     *   multi-process crash report. If not provided a multi-process dump will
+     *   be taken at the time of this call.
      */
     void TerminateChildProcess(MessageLoop* aMsgLoop,
                                base::ProcessId aContentPid,
                                const nsCString& aMonitorDescription,
-                               const nsAString& aBrowserDumpId);
+                               const nsAString& aDumpId);
 
 #ifdef XP_WIN
     /**
@@ -465,11 +492,6 @@ class PluginModuleChromeParent
 
     void CachedSettingChanged();
 
-    void OnEnteredCall() override;
-    void OnExitedCall() override;
-    void OnEnteredSyncSend() override;
-    void OnExitedSyncSend() override;
-
 #ifdef  MOZ_ENABLE_PROFILER_SPS
     void GatherAsyncProfile();
     void GatheredAsyncProfile(nsIProfileSaveEvent* aSaveEvent);
@@ -479,6 +501,9 @@ class PluginModuleChromeParent
 
     virtual bool
     RecvProfile(const nsCString& aProfile) override;
+
+    virtual bool
+    AnswerGetKeyState(const int32_t& aVirtKey, int16_t* aRet) override;
 
 private:
     virtual void
@@ -544,6 +569,11 @@ private:
 
     static void CachedSettingChanged(const char* aPref, void* aModule);
 
+    virtual bool
+    AnswerNPN_SetValue_NPPVpluginRequiresAudioDeviceChanges(
+                                        const bool& shouldRegister,
+                                        NPError* result) override;
+
     PluginProcessParent* mSubprocess;
     uint32_t mPluginId;
 
@@ -557,8 +587,6 @@ private:
         kHangUIDontShow = (1u << 3)
     };
     Atomic<uint32_t> mHangAnnotationFlags;
-    mozilla::Mutex mProtocolCallStackMutex;
-    InfallibleTArray<mozilla::ipc::IProtocol*> mProtocolCallStack;
 #ifdef XP_WIN
     InfallibleTArray<float> mPluginCpuUsageOnHang;
     PluginHangUIParent *mHangUIParent;

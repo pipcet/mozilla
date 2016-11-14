@@ -17,7 +17,7 @@ using namespace js::gc;
 static void
 ReportDead(JSContext *cx)
 {
-    JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
 }
 
 bool
@@ -115,8 +115,7 @@ DeadObjectProxy::hasInstance(JSContext* cx, HandleObject proxy, MutableHandleVal
 }
 
 bool
-DeadObjectProxy::getBuiltinClass(JSContext* cx, HandleObject proxy,
-                                 ESClassValue* classValue) const
+DeadObjectProxy::getBuiltinClass(JSContext* cx, HandleObject proxy, ESClass* cls) const
 {
     ReportDead(cx);
     return false;

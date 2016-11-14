@@ -6,7 +6,7 @@
 
 #include "mozilla/dom/cache/CacheOpParent.h"
 
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/dom/cache/AutoUtils.h"
 #include "mozilla/dom/cache/ReadStream.h"
 #include "mozilla/dom/cache/SavedTypes.h"
@@ -54,10 +54,12 @@ CacheOpParent::Execute(ManagerId* aManagerId)
   MOZ_ASSERT(!mManager);
   MOZ_ASSERT(!mVerifier);
 
-  RefPtr<Manager> manager;
-  nsresult rv = Manager::GetOrCreate(aManagerId, getter_AddRefs(manager));
+  RefPtr<cache::Manager> manager;
+  nsresult rv = cache::Manager::GetOrCreate(aManagerId, getter_AddRefs(manager));
   if (NS_WARN_IF(NS_FAILED(rv))) {
-    Unused << Send__delete__(this, ErrorResult(rv), void_t());
+    ErrorResult result(rv);
+    Unused << Send__delete__(this, result, void_t());
+    result.SuppressException();
     return;
   }
 
@@ -65,7 +67,7 @@ CacheOpParent::Execute(ManagerId* aManagerId)
 }
 
 void
-CacheOpParent::Execute(Manager* aManager)
+CacheOpParent::Execute(cache::Manager* aManager)
 {
   NS_ASSERT_OWNINGTHREAD(CacheOpParent);
   MOZ_ASSERT(!mManager);
@@ -145,7 +147,9 @@ CacheOpParent::OnPrincipalVerified(nsresult aRv, ManagerId* aManagerId)
   mVerifier = nullptr;
 
   if (NS_WARN_IF(NS_FAILED(aRv))) {
-    Unused << Send__delete__(this, ErrorResult(aRv), void_t());
+    ErrorResult result(aRv);
+    Unused << Send__delete__(this, result, void_t());
+    result.SuppressException();
     return;
   }
 

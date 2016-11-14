@@ -471,6 +471,11 @@ policies and contribution forms [3].
             self instanceof ServiceWorkerGlobalScope) {
             return new ServiceWorkerTestEnvironment();
         }
+        if ('WorkerGlobalScope' in self &&
+            self instanceof WorkerGlobalScope) {
+            return new DedicatedWorkerTestEnvironment();
+        }
+
         throw new Error("Unsupported test environment");
     }
 
@@ -518,11 +523,9 @@ policies and contribution forms [3].
     function promise_test(func, name, properties) {
         var test = async_test(name, properties);
         // If there is no promise tests queue make one.
-        test.step(function() {
-            if (!tests.promise_tests) {
-                tests.promise_tests = Promise.resolve();
-            }
-        });
+        if (!tests.promise_tests) {
+            tests.promise_tests = Promise.resolve();
+        }
         tests.promise_tests = tests.promise_tests.then(function() {
             return Promise.resolve(test.step(func, test, test))
                 .then(
@@ -830,7 +833,7 @@ policies and contribution forms [3].
         /* falls through */
         default:
             try {
-                return typeof val + ' "' + truncate(String(val), 60) + '"';
+                return typeof val + ' "' + truncate(String(val), 1000) + '"';
             } catch(e) {
                 return ("[stringifying object threw " + String(e) +
                         " with type " + String(typeof e) + "]");
@@ -2464,7 +2467,11 @@ policies and contribution forms [3].
 
         // Create a pattern to match stack frames originating within testharness.js.  These include the
         // script URL, followed by the line/col (e.g., '/resources/testharness.js:120:21').
-        var re = new RegExp((get_script_url() || "\\btestharness.js") + ":\\d+:\\d+");
+        // Escape the URL per http://stackoverflow.com/questions/3561493/is-there-a-regexp-escape-function-in-javascript
+        // in case it contains RegExp characters.
+        var script_url = get_script_url();
+        var re_text = script_url ? script_url.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') : "\\btestharness.js";
+        var re = new RegExp(re_text + ":\\d+:\\d+");
 
         // Some browsers include a preamble that specifies the type of the error object.  Skip this by
         // advancing until we find the first stack frame originating from testharness.js.

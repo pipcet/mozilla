@@ -27,11 +27,11 @@
 
 #ifdef XP_DARWIN
 #include "ScaledFontMac.h"
+#include "NativeFontResourceMac.h"
 #endif
 
-
-#ifdef XP_DARWIN
-#include "DrawTargetCG.h"
+#ifdef MOZ_WIDGET_GTK
+#include "ScaledFontFontconfig.h"
 #endif
 
 #ifdef WIN32
@@ -50,7 +50,6 @@
 
 #include "DrawEventRecorder.h"
 
-#include "Preferences.h"
 #include "Logging.h"
 
 #include "mozilla/CheckedInt.h"
@@ -154,9 +153,8 @@ HasCPUIDBit(unsigned int level, CPUIDRegister reg, unsigned int bit)
 namespace mozilla {
 namespace gfx {
 
-int32_t LoggingPrefs::sGfxLogLevel =
-  PreferenceAccess::RegisterLivePref("gfx.logging.level", &sGfxLogLevel,
-                                     LOG_DEFAULT);
+// In Gecko, this value is managed by gfx.logging.level in gfxPrefs.
+int32_t LoggingPrefs::sGfxLogLevel = LOG_DEFAULT;
 
 #ifdef WIN32
 ID3D11Device *Factory::mD3D11Device;
@@ -189,6 +187,7 @@ void
 Factory::ShutDown()
 {
   if (sConfig) {
+    delete sConfig->mLogForwarder;
     delete sConfig;
     sConfig = nullptr;
   }
@@ -276,12 +275,8 @@ Factory::CheckSurfaceSize(const IntSize &sz,
 
   // assuming 4 bytes per pixel, make sure the allocation size
   // doesn't overflow a int32_t either
-  CheckedInt<int32_t> stride = sz.width;
-  stride *= 4;
-  if (stride.isValid()) {
-    stride = GetAlignedStride<16>(stride.value());
-  }
-  if (!stride.isValid()) {
+  CheckedInt<int32_t> stride = GetAlignedStride<16>(sz.width, 4);
+  if (!stride.isValid() || stride.value() == 0) {
     gfxDebug() << "Surface size too large (stride overflows int32_t)!";
     return false;
   }
@@ -316,17 +311,6 @@ Factory::CreateDrawTarget(BackendType aBackend, const IntSize &aSize, SurfaceFor
       RefPtr<DrawTargetD2D1> newTarget;
       newTarget = new DrawTargetD2D1();
       if (newTarget->Init(aSize, aFormat)) {
-        retVal = newTarget;
-      }
-      break;
-    }
-#elif defined XP_DARWIN
-  case BackendType::COREGRAPHICS:
-  case BackendType::COREGRAPHICS_ACCELERATED:
-    {
-      RefPtr<DrawTargetCG> newTarget;
-      newTarget = new DrawTargetCG();
-      if (newTarget->Init(aBackend, aSize, aFormat)) {
         retVal = newTarget;
       }
       break;
@@ -398,17 +382,9 @@ Factory::CreateDrawTargetForData(BackendType aBackend,
     {
       RefPtr<DrawTargetSkia> newTarget;
       newTarget = new DrawTargetSkia();
-      newTarget->Init(aData, aSize, aStride, aFormat, aUninitialized);
-      retVal = newTarget;
-      break;
-    }
-#endif
-#ifdef XP_DARWIN
-  case BackendType::COREGRAPHICS:
-    {
-      RefPtr<DrawTargetCG> newTarget = new DrawTargetCG();
-      if (newTarget->Init(aBackend, aData, aSize, aStride, aFormat))
-        return newTarget.forget();
+      if (newTarget->Init(aData, aSize, aStride, aFormat, aUninitialized)) {
+        retVal = newTarget;
+      }
       break;
     }
 #endif
@@ -459,10 +435,9 @@ Factory::DoesBackendSupportDataDrawtarget(BackendType aType)
   case BackendType::DIRECT2D1_1:
   case BackendType::RECORDING:
   case BackendType::NONE:
-  case BackendType::COREGRAPHICS_ACCELERATED:
+  case BackendType::BACKEND_LAST:
     return false;
   case BackendType::CAIRO:
-  case BackendType::COREGRAPHICS:
   case BackendType::SKIA:
     return true;
   }
@@ -475,12 +450,7 @@ Factory::GetMaxSurfaceSize(BackendType aType)
 {
   switch (aType) {
   case BackendType::CAIRO:
-  case BackendType::COREGRAPHICS:
     return DrawTargetCairo::GetMaxSurfaceSize();
-#ifdef XP_MACOSX
-  case BackendType::COREGRAPHICS_ACCELERATED:
-    return DrawTargetCG::GetMaxSurfaceSize();
-#endif
 #ifdef USE_SKIA
   case BackendType::SKIA:
     return DrawTargetSkia::GetMaxSurfaceSize();
@@ -541,6 +511,9 @@ Factory::CreateNativeFontResource(uint8_t *aData, uint32_t aSize,
     }
 #endif
   case FontType::CAIRO:
+#ifdef USE_SKIA
+  case FontType::SKIA:
+#endif
     {
 #ifdef WIN32
       if (GetDirect3D11Device()) {
@@ -550,6 +523,8 @@ Factory::CreateNativeFontResource(uint8_t *aData, uint32_t aSize,
         return NativeFontResourceGDI::Create(aData, aSize,
                                              /* aNeedsCairo = */ true);
       }
+#elif XP_DARWIN
+      return NativeFontResourceMac::Create(aData, aSize);
 #else
       gfxWarning() << "Unable to create cairo scaled font from truetype data";
       return nullptr;
@@ -576,6 +551,14 @@ Factory::CreateScaledFontWithCairo(const NativeFont& aNativeFont, Float aSize, c
   return nullptr;
 #endif
 }
+
+#ifdef MOZ_WIDGET_GTK
+already_AddRefed<ScaledFont>
+Factory::CreateScaledFontForFontconfigFont(cairo_scaled_font_t* aScaledFont, FcPattern* aPattern, Float aSize)
+{
+  return MakeAndAddRef<ScaledFontFontconfig>(aScaledFont, aPattern, aSize);
+}
+#endif
 
 already_AddRefed<DrawTarget>
 Factory::CreateDualDrawTarget(DrawTarget *targetA, DrawTarget *targetB)
@@ -696,12 +679,15 @@ Factory::D2DCleanup()
 }
 
 already_AddRefed<ScaledFont>
-Factory::CreateScaledFontForDWriteFont(IDWriteFont* aFont,
-                                       IDWriteFontFamily* aFontFamily,
-                                       IDWriteFontFace* aFontFace,
-                                       float aSize)
+Factory::CreateScaledFontForDWriteFont(IDWriteFontFace* aFontFace,
+                                       const gfxFontStyle* aStyle,
+                                       float aSize,
+                                       bool aUseEmbeddedBitmap,
+                                       bool aForceGDIMode)
 {
-  return MakeAndAddRef<ScaledFontDWrite>(aFont, aFontFamily, aFontFace, aSize);
+  return MakeAndAddRef<ScaledFontDWrite>(aFontFace, aSize,
+                                         aUseEmbeddedBitmap, aForceGDIMode,
+                                         aStyle);
 }
 
 #endif // XP_WIN
@@ -721,28 +707,30 @@ Factory::CreateDrawTargetSkiaWithGrContext(GrContext* aGrContext,
 
 #endif // USE_SKIA_GPU
 
+#ifdef USE_SKIA
+already_AddRefed<DrawTarget>
+Factory::CreateDrawTargetWithSkCanvas(SkCanvas* aCanvas)
+{
+  RefPtr<DrawTargetSkia> newTarget = new DrawTargetSkia();
+  if (!newTarget->Init(aCanvas)) {
+    return nullptr;
+  }
+  return newTarget.forget();
+}
+#endif
+
 void
 Factory::PurgeAllCaches()
 {
 }
 
-#ifdef USE_SKIA_FREETYPE
-already_AddRefed<GlyphRenderingOptions>
-Factory::CreateCairoGlyphRenderingOptions(FontHinting aHinting, bool aAutoHinting, AntialiasMode aAntialiasMode)
-{
-  RefPtr<GlyphRenderingOptionsCairo> options =
-    new GlyphRenderingOptionsCairo();
-
-  options->SetHinting(aHinting);
-  options->SetAutoHinting(aAutoHinting);
-  options->SetAntialiasMode(aAntialiasMode);
-  return options.forget();
-}
-#endif
-
 already_AddRefed<DrawTarget>
 Factory::CreateDrawTargetForCairoSurface(cairo_surface_t* aSurface, const IntSize& aSize, SurfaceFormat* aFormat)
 {
+  if (!AllowedSurfaceSize(aSize)) {
+    gfxWarning() << "Allowing surface with invalid size (Cairo) " << aSize;
+  }
+
   RefPtr<DrawTarget> retVal;
 
 #ifdef USE_CAIRO
@@ -774,31 +762,6 @@ Factory::CreateSourceSurfaceForCairoSurface(cairo_surface_t* aSurface, const Int
 #endif
 }
 
-#ifdef XP_DARWIN
-already_AddRefed<DrawTarget>
-Factory::CreateDrawTargetForCairoCGContext(CGContextRef cg, const IntSize& aSize)
-{
-  RefPtr<DrawTarget> retVal;
-
-  RefPtr<DrawTargetCG> newTarget = new DrawTargetCG();
-
-  if (newTarget->Init(cg, aSize)) {
-    retVal = newTarget;
-  }
-
-  if (mRecorder && retVal) {
-    return MakeAndAddRef<DrawTargetRecording>(mRecorder, retVal);
-  }
-  return retVal.forget();
-}
-
-already_AddRefed<GlyphRenderingOptions>
-Factory::CreateCGGlyphRenderingOptions(const Color &aFontSmoothingBackgroundColor)
-{
-  return MakeAndAddRef<GlyphRenderingOptionsCG>(aFontSmoothingBackgroundColor);
-}
-#endif
-
 already_AddRefed<DataSourceSurface>
 Factory::CreateWrappingDataSourceSurface(uint8_t *aData,
                                          int32_t aStride,
@@ -807,7 +770,7 @@ Factory::CreateWrappingDataSourceSurface(uint8_t *aData,
                                          SourceSurfaceDeallocator aDeallocator /* = nullptr */,
                                          void* aClosure /* = nullptr */)
 {
-  if (aSize.width <= 0 || aSize.height <= 0) {
+  if (!AllowedSurfaceSize(aSize)) {
     return nullptr;
   }
   if (!aDeallocator && aClosure) {
@@ -822,6 +785,14 @@ Factory::CreateWrappingDataSourceSurface(uint8_t *aData,
   return newSurf.forget();
 }
 
+#ifdef XP_DARWIN
+already_AddRefed<GlyphRenderingOptions>
+Factory::CreateCGGlyphRenderingOptions(const Color &aFontSmoothingBackgroundColor)
+{
+  return MakeAndAddRef<GlyphRenderingOptionsCG>(aFontSmoothingBackgroundColor);
+}
+#endif
+
 already_AddRefed<DataSourceSurface>
 Factory::CreateDataSourceSurface(const IntSize &aSize,
                                  SurfaceFormat aFormat,
@@ -832,8 +803,12 @@ Factory::CreateDataSourceSurface(const IntSize &aSize,
     return nullptr;
   }
 
+  // Skia doesn't support RGBX, so memset RGBX to 0xFF
+  bool clearSurface = aZero || aFormat == SurfaceFormat::B8G8R8X8;
+  uint8_t clearValue = aFormat == SurfaceFormat::B8G8R8X8 ? 0xFF : 0;
+
   RefPtr<SourceSurfaceAlignedRawData> newSurf = new SourceSurfaceAlignedRawData();
-  if (newSurf->Init(aSize, aFormat, aZero)) {
+  if (newSurf->Init(aSize, aFormat, clearSurface, clearValue)) {
     return newSurf.forget();
   }
 
@@ -847,13 +822,18 @@ Factory::CreateDataSourceSurfaceWithStride(const IntSize &aSize,
                                            int32_t aStride,
                                            bool aZero)
 {
-  if (aStride < aSize.width * BytesPerPixel(aFormat)) {
+  if (!AllowedSurfaceSize(aSize) ||
+      aStride < aSize.width * BytesPerPixel(aFormat)) {
     gfxCriticalError(LoggerOptionsBasedOnSize(aSize)) << "CreateDataSourceSurfaceWithStride failed with bad stride " << aStride << ", " << aSize << ", " << aFormat;
     return nullptr;
   }
 
+  // Skia doesn't support RGBX, so memset RGBX to 0xFF
+  bool clearSurface = aZero || aFormat == SurfaceFormat::B8G8R8X8;
+  uint8_t clearValue = aFormat == SurfaceFormat::B8G8R8X8 ? 0xFF : 0;
+
   RefPtr<SourceSurfaceAlignedRawData> newSurf = new SourceSurfaceAlignedRawData();
-  if (newSurf->InitWithStride(aSize, aFormat, aStride, aZero)) {
+  if (newSurf->Init(aSize, aFormat, clearSurface, clearValue, aStride)) {
     return newSurf.forget();
   }
 
@@ -963,13 +943,6 @@ Factory::SetGlobalEventRecorder(DrawEventRecorder *aRecorder)
 {
   mRecorder = aRecorder;
 }
-
-// static
-void
-Factory::SetLogForwarder(LogForwarder* aLogFwd) {
-  sConfig->mLogForwarder = aLogFwd;
-}
-
 
 // static
 void

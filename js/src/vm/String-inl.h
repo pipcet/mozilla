@@ -57,7 +57,7 @@ NewInlineString(ExclusiveContext* cx, mozilla::Range<const CharT> chars)
     if (!str)
         return nullptr;
 
-    mozilla::PodCopy(storage, chars.start().get(), len);
+    mozilla::PodCopy(storage, chars.begin().get(), len);
     storage[len] = 0;
     return str;
 }
@@ -320,7 +320,7 @@ JSExternalString::new_(JSContext* cx, const char16_t* chars, size_t length,
     if (!str)
         return nullptr;
     str->init(chars, length, fin);
-    cx->runtime()->updateMallocCounter(cx->zone(), (length + 1) * sizeof(char16_t));
+    cx->updateMallocCounter((length + 1) * sizeof(char16_t));
     return str;
 }
 

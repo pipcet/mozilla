@@ -74,17 +74,10 @@ typedef bool
                            JS::Handle<JSObject*> obj,
                            JS::AutoIdVector& props);
 
-// Returns true if aObj's global has any of the permissions named in
-// aPermissions set to nsIPermissionManager::ALLOW_ACTION. aPermissions must be
-// null-terminated.
-bool
-CheckAnyPermissions(JSContext* aCx, JSObject* aObj, const char* const aPermissions[]);
-
-// Returns true if aObj's global has all of the permissions named in
-// aPermissions set to nsIPermissionManager::ALLOW_ACTION. aPermissions must be
-// null-terminated.
-bool
-CheckAllPermissions(JSContext* aCx, JSObject* aObj, const char* const aPermissions[]);
+typedef bool
+(* DeleteNamedProperty)(JSContext* cx, JS::Handle<JSObject*> wrapper,
+                        JS::Handle<JSObject*> obj, JS::Handle<jsid> id,
+                        JS::ObjectOpResult& opresult);
 
 // Returns true if the given global is of a type whose bit is set in
 // aNonExposedGlobals.
@@ -110,6 +103,7 @@ static const uint32_t DedicatedWorkerGlobalScope = 1u << 2;
 static const uint32_t SharedWorkerGlobalScope = 1u << 3;
 static const uint32_t ServiceWorkerGlobalScope = 1u << 4;
 static const uint32_t WorkerDebuggerGlobalScope = 1u << 5;
+static const uint32_t WorkletGlobalScope = 1u << 6;
 } // namespace GlobalNames
 
 struct PrefableDisablers {
@@ -138,20 +132,6 @@ struct PrefableDisablers {
         !enabledFunc(cx, js::GetGlobalForObjectCrossCompartment(obj))) {
       return false;
     }
-    if (availableFunc &&
-        !availableFunc(cx, js::GetGlobalForObjectCrossCompartment(obj))) {
-      return false;
-    }
-    if (checkAnyPermissions &&
-        !CheckAnyPermissions(cx, js::GetGlobalForObjectCrossCompartment(obj),
-                             checkAnyPermissions)) {
-      return false;
-    }
-    if (checkAllPermissions &&
-        !CheckAllPermissions(cx, js::GetGlobalForObjectCrossCompartment(obj),
-                             checkAllPermissions)) {
-      return false;
-    }
     return true;
   }
 
@@ -167,16 +147,8 @@ struct PrefableDisablers {
 
   // A function pointer to a function that can say the property is disabled
   // even if "enabled" is set to true.  If the pointer is null the value of
-  // "enabled" is used as-is unless availableFunc overrides.
+  // "enabled" is used as-is.
   const PropertyEnabled enabledFunc;
-
-  // A function pointer to a function that can be used to disable a
-  // property even if "enabled" is true and enabledFunc allowed.  This
-  // is basically a hack to avoid having to codegen PropertyEnabled
-  // implementations in case when we need to do two separate checks.
-  const PropertyEnabled availableFunc;
-  const char* const* const checkAnyPermissions;
-  const char* const* const checkAllPermissions;
 };
 
 template<typename T>
@@ -238,7 +210,7 @@ struct NativePropertiesN {
 
   const int32_t iteratorAliasMethodIndex;
 
-  MOZ_CONSTEXPR const NativePropertiesN<7>* Upcast() const {
+  constexpr const NativePropertiesN<7>* Upcast() const {
     return reinterpret_cast<const NativePropertiesN<7>*>(this);
   }
 
@@ -310,6 +282,15 @@ struct NativePropertyHooks
   // The hook to call for enumerating indexed or named properties. May be null
   // if there can't be any.
   EnumerateOwnProperties mEnumerateOwnProperties;
+  // The hook to call to delete a named property.  May be null if there are no
+  // named properties or no named property deleter.  On success (true return)
+  // the "found" argument will be set to true if there was in fact such a named
+  // property and false otherwise.  If it's set to false, the caller is expected
+  // to proceed with whatever deletion behavior it would have if there were no
+  // named properties involved at all (i.e. if the hook were null).  If it's set
+  // to true, it will indicate via opresult whether the delete actually
+  // succeeded.
+  DeleteNamedProperty mDeleteNamedProperty;
 
   // The property arrays for this interface.
   NativePropertiesHolder mNativeProperties;
@@ -327,6 +308,10 @@ struct NativePropertyHooks
   // The NativePropertyHooks instance for the parent interface (for
   // ShimInterfaceInfo).
   const NativePropertyHooks* mProtoHooks;
+
+  // The JSClass to use for expandos on our Xrays.  Can be null, in which case
+  // Xrays will use a default class of their choice.
+  const JSClass* mXrayExpandoClass;
 };
 
 enum DOMObjectType : uint8_t {
@@ -352,18 +337,19 @@ IsInterfacePrototype(DOMObjectType type)
   return type == eInterfacePrototype || type == eGlobalInterfacePrototype;
 }
 
-typedef JSObject* (*ParentGetter)(JSContext* aCx, JS::Handle<JSObject*> aObj);
+typedef JSObject* (*AssociatedGlobalGetter)(JSContext* aCx,
+                                            JS::Handle<JSObject*> aObj);
 
-typedef JSObject* (*ProtoGetter)(JSContext* aCx,
-                                 JS::Handle<JSObject*> aGlobal);
+typedef JSObject* (*ProtoGetter)(JSContext* aCx);
+
 /**
- * Returns a handle to the relevent WebIDL prototype object for the given global
- * (which may be a handle to null on out of memory).  Once allocated, the
- * prototype object is guaranteed to exist as long as the global does, since the
- * global traces its array of WebIDL prototypes and constructors.
+ * Returns a handle to the relevant WebIDL prototype object for the current
+ * compartment global (which may be a handle to null on out of memory).  Once
+ * allocated, the prototype object is guaranteed to exist as long as the global
+ * does, since the global traces its array of WebIDL prototypes and
+ * constructors.
  */
-typedef JS::Handle<JSObject*> (*ProtoHandleGetter)(JSContext* aCx,
-                                                   JS::Handle<JSObject*> aGlobal);
+typedef JS::Handle<JSObject*> (*ProtoHandleGetter)(JSContext* aCx);
 
 // Special JSClass for reflected DOM objects.
 struct DOMJSClass
@@ -385,7 +371,10 @@ struct DOMJSClass
 
   const NativePropertyHooks* mNativeHooks;
 
-  ParentGetter mGetParent;
+  // A callback to find the associated global for our C++ object.  Note that
+  // this is used in cases when that global is _changing_, so it will not match
+  // the global of the JSObject* passed in to this function!
+  AssociatedGlobalGetter mGetAssociatedGlobal;
   ProtoHandleGetter mGetProto;
 
   // This stores the CC participant for the native, null if this class does not
@@ -416,9 +405,14 @@ struct DOMIfaceAndProtoJSClass
 
   // Either eInterface, eInterfacePrototype, eGlobalInterfacePrototype or
   // eNamedPropertiesObject.
-  DOMObjectType mType;
+  DOMObjectType mType; // uint8_t
 
-  const prototypes::ID mPrototypeID;
+  // Boolean indicating whether this object wants a @@hasInstance property
+  // pointing to InterfaceHasInstance defined on it.  Only ever true for the
+  // eInterface case.
+  bool wantsInterfaceHasInstance;
+
+  const prototypes::ID mPrototypeID; // uint16_t
   const uint32_t mDepth;
 
   const NativePropertyHooks* mNativeHooks;

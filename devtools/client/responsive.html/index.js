@@ -11,7 +11,7 @@ const { BrowserLoader } =
   Cu.import("resource://devtools/client/shared/browser-loader.js", {});
 const { require } = BrowserLoader({
   baseURI: "resource://devtools/client/responsive.html/",
-  window: this
+  window
 });
 const { Task } = require("devtools/shared/task");
 const Telemetry = require("devtools/client/shared/telemetry");
@@ -23,11 +23,12 @@ const ReactDOM = require("devtools/client/shared/vendor/react-dom");
 const { Provider } = require("devtools/client/shared/vendor/react-redux");
 
 const message = require("./utils/message");
-const { initDevices } = require("./devices");
 const App = createFactory(require("./app"));
 const Store = require("./store");
 const { changeLocation } = require("./actions/location");
+const { changeDisplayPixelRatio } = require("./actions/display-pixel-ratio");
 const { addViewport, resizeViewport } = require("./actions/viewports");
+const { loadDevices } = require("./actions/devices");
 
 let bootstrap = {
 
@@ -43,7 +44,7 @@ let bootstrap = {
               "agent");
     this.telemetry.toolOpened("responsive");
     let store = this.store = Store();
-    yield initDevices(this.dispatch.bind(this));
+    this.dispatch(loadDevices());
     let provider = createElement(Provider, { store }, App());
     ReactDOM.render(provider, document.querySelector("#root"));
     message.post(window, "init:done");
@@ -89,12 +90,30 @@ Object.defineProperty(window, "store", {
   enumerable: true,
 });
 
+// Dispatch a `changeDisplayPixelRatio` action when the browser's pixel ratio is changing.
+// This is usually triggered when the user changes the monitor resolution, or when the
+// browser's window is dragged to a different display with a different pixel ratio.
+function onDPRChange() {
+  let dpr = window.devicePixelRatio;
+  let mql = window.matchMedia(`(resolution: ${dpr}dppx)`);
+
+  function listener() {
+    bootstrap.dispatch(changeDisplayPixelRatio(window.devicePixelRatio));
+    mql.removeListener(listener);
+    onDPRChange();
+  }
+
+  mql.addListener(listener);
+}
+
 /**
  * Called by manager.js to add the initial viewport based on the original page.
  */
 window.addInitialViewport = contentURI => {
   try {
+    onDPRChange();
     bootstrap.dispatch(changeLocation(contentURI));
+    bootstrap.dispatch(changeDisplayPixelRatio(window.devicePixelRatio));
     bootstrap.dispatch(addViewport());
   } catch (e) {
     console.error(e);
@@ -110,9 +129,9 @@ window.getViewportSize = () => {
 };
 
 /**
- * Called by manager.js to set viewport size from GCLI.
+ * Called by manager.js to set viewport size from tests, GCLI, etc.
  */
-window.setViewportSize = (width, height) => {
+window.setViewportSize = ({ width, height }) => {
   try {
     bootstrap.dispatch(resizeViewport(0, width, height));
   } catch (e) {
@@ -121,12 +140,21 @@ window.setViewportSize = (width, height) => {
 };
 
 /**
- * Called by manager.js when tests want to use the viewport's browser to access
- * the content inside.  We mock the format of a <xul:browser> to make this
- * easily usable with ContentTask.spawn(), which expects an object with a
- * `messageManager` property.
+ * Called by manager.js to access the viewport's browser, either for testing
+ * purposes or to reload it when touch simulation is enabled.
+ * A messageManager getter is added on the object to provide an easy access
+ * to the message manager without pulling the frame loader.
  */
 window.getViewportBrowser = () => {
-  let { messageManager } = document.querySelector("iframe.browser").frameLoader;
-  return { messageManager };
+  let browser = document.querySelector("iframe.browser");
+  if (!browser.messageManager) {
+    Object.defineProperty(browser, "messageManager", {
+      get() {
+        return this.frameLoader.messageManager;
+      },
+      configurable: true,
+      enumerable: true,
+    });
+  }
+  return browser;
 };

@@ -161,9 +161,9 @@ OpaqueCrossCompartmentWrapper::getOwnEnumerablePropertyKeys(JSContext* cx, Handl
 
 bool
 OpaqueCrossCompartmentWrapper::getBuiltinClass(JSContext* cx, HandleObject wrapper,
-                                               ESClassValue* classValue) const
+                                    ESClass* cls) const
 {
-    *classValue = ESClass_Other;
+    *cls = ESClass::Other;
     return true;
 }
 
@@ -186,8 +186,8 @@ JSString*
 OpaqueCrossCompartmentWrapper::fun_toString(JSContext* cx, HandleObject proxy,
                                             unsigned indent) const
 {
-    JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_INCOMPATIBLE_PROTO, js_Function_str,
-                         js_toString_str, "object");
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_INCOMPATIBLE_PROTO,
+                              js_Function_str, js_toString_str, "object");
     return nullptr;
 }
 

@@ -52,18 +52,13 @@ XPCOMUtils.defineLazyModuleGetter(this, "pktApi",
 var pktUI = (function() {
 
     // -- Initialization (on startup and new windows) -- //
-    var inited = false;
     var _currentPanelDidShow;
     var _currentPanelDidHide;
-    var _isHidden = false;
-    var _notificationTimeout;
 
     // Init panel id at 0. The first actual panel id will have the number 1 so
     // in case at some point any panel has the id 0 we know there is something
     // wrong
     var _panelId = 0;
-
-    var prefBranch = Services.prefs.getBranch("extensions.pocket.settings.");
 
     var overflowMenuWidth = 230;
     var overflowMenuHeight = 475;
@@ -93,13 +88,6 @@ var pktUI = (function() {
     }
 
 
-    /**
-     * Event handler when Pocket bookmark bar entry is pressed
-     */
-     function pocketBookmarkBarOpenPocketCommand(event) {
-        openTabWithUrl('https://getpocket.com/a/', true);
-     }
-
     // -- Communication to API -- //
 
     /**
@@ -128,17 +116,31 @@ var pktUI = (function() {
      * Show the sign-up panel
      */
     function showSignUp() {
+        // AB test: Direct logged-out users to tab vs panel
+        if (pktApi.getSignupPanelTabTestVariant() == 'v2')
+        {
+            let site = Services.prefs.getCharPref("extensions.pocket.site");
+            openTabWithUrl('https://' + site + '/firefox_learnmore?s=ffi&t=autoredirect&tv=page_learnmore&src=ff_ext', true);
+
+            // force the panel closed before it opens
+            getPanel().hidePopup();
+
+            return;
+        }
+
+        // Control: Show panel as normal
         getFirefoxAccountSignedInUser(function(userdata)
         {
             var fxasignedin = (typeof userdata == 'object' && userdata !== null) ? '1' : '0';
             var startheight = 490;
             var inOverflowMenu = isInOverflowMenu();
+            var controlvariant = pktApi.getSignupPanelTabTestVariant() == 'control';
 
             if (inOverflowMenu)
             {
                 startheight = overflowMenuHeight;
             }
-            else if (pktApi.getSignupAB().indexOf('storyboard') > -1)
+            else
             {
                 startheight = 460;
                 if (fxasignedin == '1')
@@ -146,12 +148,8 @@ var pktUI = (function() {
                     startheight = 406;
                 }
             }
-            else
-            {
-                if (fxasignedin == '1')
-                {
-                    startheight = 436;
-                }
+            if (!controlvariant) {
+                startheight = 427;
             }
             var variant;
             if (inOverflowMenu)
@@ -160,16 +158,28 @@ var pktUI = (function() {
             }
             else
             {
-                variant = pktApi.getSignupAB();
+                variant = 'storyboard_lm';
             }
-            var panelId = showPanel("about:pocket-signup?pockethost=" + Services.prefs.getCharPref("extensions.pocket.site") + "&fxasignedin=" + fxasignedin + "&variant=" + variant + '&inoverflowmenu=' + inOverflowMenu + "&locale=" + getUILocale(), {
+
+            showPanel("about:pocket-signup?pockethost="
+                + Services.prefs.getCharPref("extensions.pocket.site")
+                + "&fxasignedin="
+                + fxasignedin
+                + "&variant="
+                + variant
+                + '&controlvariant='
+                + controlvariant
+                + '&inoverflowmenu='
+                + inOverflowMenu
+                + "&locale="
+                + getUILocale(), {
                     onShow: function() {
                     },
                     onHide: panelDidHide,
                     width: inOverflowMenu ? overflowMenuWidth : 300,
                     height: startheight
-                });
             });
+        });
     }
 
     /**
@@ -320,7 +330,9 @@ var pktUI = (function() {
      * Called when the signup and saved panel was hidden
      */
     function panelDidHide() {
-
+        // clear the onShow and onHide values
+        _currentPanelDidShow = null;
+        _currentPanelDidHide = null;
     }
 
     /**
@@ -458,9 +470,13 @@ var pktUI = (function() {
             var strings = {};
             var bundle = Services.strings.createBundle("chrome://pocket/locale/pocket.properties");
             var e = bundle.getSimpleEnumeration();
-            while(e.hasMoreElements()) {
+            while (e.hasMoreElements()) {
                 var str = e.getNext().QueryInterface(Components.interfaces.nsIPropertyElement);
-                strings[str.key] = str.value;
+                if (str.key in data) {
+                    strings[str.key] = bundle.formatStringFromName(str.key, data[str.key], data[str.key].length);
+                } else {
+                    strings[str.key] = str.value;
+                }
             }
             pktUIMessaging.sendResponseMessageToPanel(panelId, _initL10NMessageId, { strings: strings });
         });
@@ -544,14 +560,6 @@ var pktUI = (function() {
     function isInOverflowMenu() {
         var subview = getSubview();
         return !!subview;
-    }
-
-    function hasLegacyExtension() {
-        return !!document.getElementById('RIL_urlbar_add');
-    }
-
-    function isHidden() {
-        return _isHidden;
     }
 
     function getFirefoxAccountSignedInUser(callback) {

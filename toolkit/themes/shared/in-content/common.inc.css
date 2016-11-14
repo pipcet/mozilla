@@ -297,6 +297,26 @@ xul|*.help-button > xul|*.button-box > xul|*.button-text {
   display: none;
 }
 
+html|*.help-button {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  padding: 0;
+  display: inline-block;
+  background-image: url("chrome://global/skin/in-content/help-glyph.svg#help");
+  background-repeat: no-repeat;
+  background-position: center center;
+  background-size: contain;
+}
+
+html|*.help-button:hover {
+  background-image: url("chrome://global/skin/in-content/help-glyph.svg#help-hover");
+}
+
+html|*.help-button:hover:active {
+  background-image: url("chrome://global/skin/in-content/help-glyph.svg#help-pressed");
+}
+
 xul|*.spinbuttons-button {
   min-height: initial;
   margin-inline-start: 10px !important;
@@ -429,6 +449,14 @@ xul|textbox {
   padding-left: 10px;
 }
 
+/* Create a separate rule to unset these styles on .tree-input instead of
+   using :not(.tree-input) so the selector specifity doesn't change. */
+xul|textbox.tree-input {
+  min-height: unset;
+  padding-right: unset;
+  padding-left: unset;
+}
+
 html|input[type="text"],
 html|textarea {
   font-family: inherit;
@@ -451,15 +479,13 @@ xul|textbox[disabled="true"] {
 /* Links */
 
 html|a,
-.text-link,
-.inline-link {
+.text-link {
   color: var(--in-content-link-color);
   text-decoration: none;
 }
 
 html|a:hover,
-.text-link:hover,
-.inline-link:hover {
+.text-link:hover {
   color: var(--in-content-link-color-hover);
   text-decoration: underline;
 }
@@ -469,8 +495,7 @@ html|a:visited {
 }
 
 html|a:hover:active,
-.text-link:hover:active,
-.inline-link:hover:active {
+.text-link:hover:active {
   color: var(--in-content-link-color-active);
   text-decoration: none;
 }

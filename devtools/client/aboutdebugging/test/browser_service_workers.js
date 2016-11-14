@@ -1,16 +1,12 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-/* eslint-disable mozilla/no-cpows-in-tests */
-
 "use strict";
 
 // Service workers can't be loaded from chrome://,
 // but http:// is ok with dom.serviceWorkers.testing.enabled turned on.
-const HTTP_ROOT = CHROME_ROOT.replace("chrome://mochitests/content/",
-                                      "http://mochi.test:8888/");
-const SERVICE_WORKER = HTTP_ROOT + "service-workers/empty-sw.js";
-const TAB_URL = HTTP_ROOT + "service-workers/empty-sw.html";
+const SERVICE_WORKER = URL_ROOT + "service-workers/empty-sw.js";
+const TAB_URL = URL_ROOT + "service-workers/empty-sw.html";
 
 add_task(function* () {
   yield new Promise(done => {
@@ -35,18 +31,12 @@ add_task(function* () {
   ok(names.includes(SERVICE_WORKER),
     "The service worker url appears in the list: " + names);
 
-  // Finally, unregister the service worker itself
-  let aboutDebuggingUpdate = waitForMutation(serviceWorkersElement,
-    { childList: true });
-
   try {
-    yield unregisterServiceWorker(swTab);
+    yield unregisterServiceWorker(swTab, serviceWorkersElement);
     ok(true, "Service worker registration unregistered");
   } catch (e) {
     ok(false, "SW not unregistered; " + e);
   }
-
-  yield aboutDebuggingUpdate;
 
   // Check that the service worker disappeared from the UI
   names = [...document.querySelectorAll("#service-workers .target-name")];

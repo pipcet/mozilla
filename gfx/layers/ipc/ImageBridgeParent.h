@@ -28,7 +28,6 @@ class Thread;
 namespace mozilla {
 namespace ipc {
 class Shmem;
-class GeckoChildProcessHost;
 } // namespace ipc
 
 namespace layers {
@@ -47,15 +46,19 @@ public:
   typedef InfallibleTArray<OpDestroy> OpDestroyArray;
   typedef InfallibleTArray<EditReply> EditReplyArray;
 
-  ImageBridgeParent(MessageLoop* aLoop, Transport* aTransport, ProcessId aChildProcessId);
+protected:
+  ImageBridgeParent(MessageLoop* aLoop, ProcessId aChildProcessId);
+
+public:
   ~ImageBridgeParent();
+
+  static ImageBridgeParent* CreateSameProcess();
+  static bool CreateForGPUProcess(Endpoint<PImageBridgeParent>&& aEndpoint);
+  static bool CreateForContent(Endpoint<PImageBridgeParent>&& aEndpoint);
 
   virtual ShmemAllocator* AsShmemAllocator() override { return this; }
 
   virtual void ActorDestroy(ActorDestroyReason aWhy) override;
-
-  static PImageBridgeParent*
-  Create(Transport* aTransport, ProcessId aChildProcessId, ipc::GeckoChildProcessHost* aProcessHost);
 
   // CompositableParentManager
   virtual void SendAsyncMessage(const InfallibleTArray<AsyncParentMessageData>& aMessage) override;
@@ -110,17 +113,6 @@ public:
 
   virtual bool IsSameProcess() const override;
 
-  virtual void ReplyRemoveTexture(const OpReplyRemoveTexture& aReply) override;
-
-  void SendFenceHandleToNonRecycle(PTextureParent* aTexture);
-
-  void NotifyNotUsedToNonRecycle(PTextureParent* aTexture,
-                                 uint64_t aTransactionId);
-
-  static void NotifyNotUsedToNonRecycle(base::ProcessId aChildProcessId,
-                                        PTextureParent* aTexture,
-                                        uint64_t aTransactionId);
-
   using CompositableParentManager::SetAboutToSendAsyncMessages;
   static void SetAboutToSendAsyncMessages(base::ProcessId aChildProcessId);
 
@@ -131,12 +123,6 @@ public:
 
   static bool NotifyImageComposites(nsTArray<ImageCompositeNotification>& aNotifications);
 
-  // Overriden from IToplevelProtocol
-  IToplevelProtocol*
-  CloneToplevel(const InfallibleTArray<ProtocolFdMapping>& aFds,
-                base::ProcessHandle aPeerProcess,
-                mozilla::ipc::ProtocolCloneContext* aCtx) override;
-
   virtual bool UsesImageBridge() const override { return true; }
 
   virtual bool IPCOpen() const override { return !mClosed; }
@@ -144,18 +130,17 @@ public:
 protected:
   void OnChannelConnected(int32_t pid) override;
 
+  void Bind(Endpoint<PImageBridgeParent>&& aEndpoint);
+
 private:
   void DeferredDestroy();
   MessageLoop* mMessageLoop;
-  Transport* mTransport;
   // This keeps us alive until ActorDestroy(), at which point we do a
   // deferred destruction of ourselves.
   RefPtr<ImageBridgeParent> mSelfRef;
 
   bool mSetChildThreadPriority;
   bool mClosed;
-
-  ipc::GeckoChildProcessHost* mSubprocess;
 
   /**
    * Map of all living ImageBridgeParent instances

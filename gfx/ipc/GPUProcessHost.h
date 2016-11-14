@@ -43,6 +43,9 @@ public:
     // Shutdown().
     virtual void OnProcessUnexpectedShutdown(GPUProcessHost* aHost)
     {}
+
+    virtual void OnProcessDeviceReset(GPUProcessHost* aHost)
+    {}
   };
 
 public:
@@ -74,8 +77,20 @@ public:
     return mGPUChild.get();
   }
 
+  // Return a unique id for this process, guaranteed not to be shared with any
+  // past or future instance of GPUProcessHost.
+  uint64_t GetProcessToken() const;
+
   bool IsConnected() const {
     return !!mGPUChild;
+  }
+
+  // Return the time stamp for when we tried to launch the GPU process. This is
+  // currently used for Telemetry so that we can determine how long GPU processes
+  // take to spin up. Note this doesn't denote a successful launch, just when we
+  // attempted launch.
+  TimeStamp GetLaunchTime() const {
+    return mLaunchTime;
   }
 
   // Called on the IO thread.
@@ -83,6 +98,9 @@ public:
   void OnChannelError() override;
 
   void SetListener(Listener* aListener);
+
+  // Used for tests and diagnostics
+  void KillProcess();
 
 private:
   // Called on the main thread.
@@ -114,9 +132,12 @@ private:
   LaunchPhase mLaunchPhase;
 
   UniquePtr<GPUChild> mGPUChild;
-  Listener* listener_;
+  uint64_t mProcessToken;
 
   bool mShutdownRequested;
+  bool mChannelClosed;
+
+  TimeStamp mLaunchTime;
 };
 
 } // namespace gfx

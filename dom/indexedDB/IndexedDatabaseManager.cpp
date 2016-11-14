@@ -6,6 +6,7 @@
 
 #include "IndexedDatabaseManager.h"
 
+#include "chrome/common/ipc_channel.h" // for IPC::Channel::kMaximumMessageSize
 #include "nsIConsoleService.h"
 #include "nsIDiskSpaceWatcher.h"
 #include "nsIDOMWindow.h"
@@ -133,11 +134,21 @@ NS_DEFINE_IID(kIDBRequestIID, PRIVATE_IDBREQUEST_IID);
 
 const uint32_t kDeleteTimeoutMs = 1000;
 
+// The threshold we use for structured clone data storing.
+// Anything smaller than the threshold is compressed and stored in the database.
+// Anything larger is compressed and stored outside the database.
+const int32_t kDefaultDataThresholdBytes = 1024 * 1024; // 1MB
+
+// The maximal size of a serialized object to be transfered through IPC.
+const int32_t kDefaultMaxSerializedMsgSize = IPC::Channel::kMaximumMessageSize;
+
 #define IDB_PREF_BRANCH_ROOT "dom.indexedDB."
 
 const char kTestingPref[] = IDB_PREF_BRANCH_ROOT "testing";
 const char kPrefExperimental[] = IDB_PREF_BRANCH_ROOT "experimental";
 const char kPrefFileHandle[] = "dom.fileHandle.enabled";
+const char kDataThresholdPref[] = IDB_PREF_BRANCH_ROOT "dataThreshold";
+const char kPrefMaxSerilizedMsgSize[] = IDB_PREF_BRANCH_ROOT "maxSerializedMsgSize";
 
 #define IDB_PREF_LOGGING_BRANCH_ROOT IDB_PREF_BRANCH_ROOT "logging."
 
@@ -159,6 +170,8 @@ Atomic<bool> gClosed(false);
 Atomic<bool> gTestingMode(false);
 Atomic<bool> gExperimentalFeaturesEnabled(false);
 Atomic<bool> gFileHandleEnabled(false);
+Atomic<int32_t> gDataThresholdBytes(0);
+Atomic<int32_t> gMaxSerializedMsgSize(0);
 
 class DeleteFilesRunnable final
   : public nsIRunnable
@@ -242,6 +255,36 @@ AtomicBoolPrefChangedCallback(const char* aPrefName, void* aClosure)
   MOZ_ASSERT(aClosure);
 
   *static_cast<Atomic<bool>*>(aClosure) = Preferences::GetBool(aPrefName);
+}
+
+void
+DataThresholdPrefChangedCallback(const char* aPrefName, void* aClosure)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!strcmp(aPrefName, kDataThresholdPref));
+  MOZ_ASSERT(!aClosure);
+
+  int32_t dataThresholdBytes =
+    Preferences::GetInt(aPrefName, kDefaultDataThresholdBytes);
+
+  // The magic -1 is for use only by tests that depend on stable blob file id's.
+  if (dataThresholdBytes == -1) {
+    dataThresholdBytes = INT32_MAX;
+  }
+
+  gDataThresholdBytes = dataThresholdBytes;
+}
+
+void
+MaxSerializedMsgSizePrefChangeCallback(const char* aPrefName, void* aClosure)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!strcmp(aPrefName, kPrefMaxSerilizedMsgSize));
+  MOZ_ASSERT(!aClosure);
+
+  gMaxSerializedMsgSize =
+    Preferences::GetInt(aPrefName, kDefaultMaxSerializedMsgSize);
+  MOZ_ASSERT(gMaxSerializedMsgSize > 0);
 }
 
 } // namespace
@@ -348,6 +391,10 @@ IndexedDatabaseManager::Init()
 
     mDeleteTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
     NS_ENSURE_STATE(mDeleteTimer);
+
+    if (QuotaManager* quotaManager = QuotaManager::Get()) {
+      NoteLiveQuotaManager(quotaManager);
+    }
   }
 
   Preferences::RegisterCallbackAndCall(AtomicBoolPrefChangedCallback,
@@ -376,6 +423,12 @@ IndexedDatabaseManager::Init()
 #endif
   Preferences::RegisterCallbackAndCall(LoggingModePrefChangedCallback,
                                        kPrefLoggingEnabled);
+
+  Preferences::RegisterCallbackAndCall(DataThresholdPrefChangedCallback,
+                                       kDataThresholdPref);
+
+  Preferences::RegisterCallbackAndCall(MaxSerializedMsgSizePrefChangeCallback,
+                                       kPrefMaxSerilizedMsgSize);
 
 #ifdef ENABLE_INTL_API
   const nsAdoptingCString& acceptLang =
@@ -437,6 +490,12 @@ IndexedDatabaseManager::Destroy()
   Preferences::UnregisterCallback(LoggingModePrefChangedCallback,
                                   kPrefLoggingEnabled);
 
+  Preferences::UnregisterCallback(DataThresholdPrefChangedCallback,
+                                  kDataThresholdPref);
+
+  Preferences::UnregisterCallback(MaxSerializedMsgSizePrefChangeCallback,
+                                  kPrefMaxSerilizedMsgSize);
+
   delete this;
 }
 
@@ -485,7 +544,7 @@ IndexedDatabaseManager::CommonPostHandleEvent(EventChainPostVisitor& aVisitor,
     error->GetName(errorName);
   }
 
-  RootedDictionary<ErrorEventInit> init(nsContentUtils::RootingCxForThread());
+  RootedDictionary<ErrorEventInit> init(RootingCx());
   request->GetCallerLocation(init.mFilename, &init.mLineno, &init.mColno);
 
   init.mMessage = errorName;
@@ -553,11 +612,11 @@ IndexedDatabaseManager::CommonPostHandleEvent(EventChainPostVisitor& aVisitor,
 
 // static
 bool
-IndexedDatabaseManager::ResolveSandboxBinding(JSContext* aCx,
-                                              JS::Handle<JSObject*> aGlobal)
+IndexedDatabaseManager::ResolveSandboxBinding(JSContext* aCx)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(js::GetObjectClass(aGlobal)->flags & JSCLASS_DOM_GLOBAL,
+  MOZ_ASSERT(js::GetObjectClass(JS::CurrentGlobalOrNull(aCx))->flags &
+             JSCLASS_DOM_GLOBAL,
              "Passed object is not a global object!");
 
   // We need to ensure that the manager has been created already here so that we
@@ -566,19 +625,19 @@ IndexedDatabaseManager::ResolveSandboxBinding(JSContext* aCx,
     return false;
   }
 
-  if (!IDBCursorBinding::GetConstructorObject(aCx, aGlobal) ||
-      !IDBCursorWithValueBinding::GetConstructorObject(aCx, aGlobal) ||
-      !IDBDatabaseBinding::GetConstructorObject(aCx, aGlobal) ||
-      !IDBFactoryBinding::GetConstructorObject(aCx, aGlobal) ||
-      !IDBIndexBinding::GetConstructorObject(aCx, aGlobal) ||
-      !IDBKeyRangeBinding::GetConstructorObject(aCx, aGlobal) ||
-      !IDBLocaleAwareKeyRangeBinding::GetConstructorObject(aCx, aGlobal) ||
-      !IDBMutableFileBinding::GetConstructorObject(aCx, aGlobal) ||
-      !IDBObjectStoreBinding::GetConstructorObject(aCx, aGlobal) ||
-      !IDBOpenDBRequestBinding::GetConstructorObject(aCx, aGlobal) ||
-      !IDBRequestBinding::GetConstructorObject(aCx, aGlobal) ||
-      !IDBTransactionBinding::GetConstructorObject(aCx, aGlobal) ||
-      !IDBVersionChangeEventBinding::GetConstructorObject(aCx, aGlobal))
+  if (!IDBCursorBinding::GetConstructorObject(aCx) ||
+      !IDBCursorWithValueBinding::GetConstructorObject(aCx) ||
+      !IDBDatabaseBinding::GetConstructorObject(aCx) ||
+      !IDBFactoryBinding::GetConstructorObject(aCx) ||
+      !IDBIndexBinding::GetConstructorObject(aCx) ||
+      !IDBKeyRangeBinding::GetConstructorObject(aCx) ||
+      !IDBLocaleAwareKeyRangeBinding::GetConstructorObject(aCx) ||
+      !IDBMutableFileBinding::GetConstructorObject(aCx) ||
+      !IDBObjectStoreBinding::GetConstructorObject(aCx) ||
+      !IDBOpenDBRequestBinding::GetConstructorObject(aCx) ||
+      !IDBRequestBinding::GetConstructorObject(aCx) ||
+      !IDBTransactionBinding::GetConstructorObject(aCx) ||
+      !IDBVersionChangeEventBinding::GetConstructorObject(aCx))
   {
     return false;
   }
@@ -738,6 +797,27 @@ IndexedDatabaseManager::IsFileHandleEnabled()
   return gFileHandleEnabled;
 }
 
+// static
+uint32_t
+IndexedDatabaseManager::DataThreshold()
+{
+  MOZ_ASSERT(gDBManager,
+             "DataThreshold() called before indexedDB has been initialized!");
+
+  return gDataThresholdBytes;
+}
+
+// static
+uint32_t
+IndexedDatabaseManager::MaxSerializedMsgSize()
+{
+  MOZ_ASSERT(gDBManager,
+             "MaxSerializedMsgSize() called before indexedDB has been initialized!");
+  MOZ_ASSERT(gMaxSerializedMsgSize > 0);
+
+  return gMaxSerializedMsgSize;
+}
+
 void
 IndexedDatabaseManager::ClearBackgroundActor()
 {
@@ -747,13 +827,24 @@ IndexedDatabaseManager::ClearBackgroundActor()
 }
 
 void
-IndexedDatabaseManager::NoteBackgroundThread(nsIEventTarget* aBackgroundThread)
+IndexedDatabaseManager::NoteLiveQuotaManager(QuotaManager* aQuotaManager)
 {
   MOZ_ASSERT(IsMainProcess());
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(aBackgroundThread);
+  MOZ_ASSERT(aQuotaManager);
 
-  mBackgroundThread = aBackgroundThread;
+  mBackgroundThread = aQuotaManager->OwningThread();
+}
+
+void
+IndexedDatabaseManager::NoteShuttingDownQuotaManager()
+{
+  MOZ_ASSERT(IsMainProcess());
+  MOZ_ASSERT(NS_IsMainThread());
+
+  MOZ_ALWAYS_SUCCEEDS(mDeleteTimer->Cancel());
+
+  mBackgroundThread = nullptr;
 }
 
 already_AddRefed<FileManager>
@@ -851,6 +942,10 @@ IndexedDatabaseManager::AsyncDeleteFile(FileManager* aFileManager,
   MOZ_ASSERT(aFileManager);
   MOZ_ASSERT(aFileId > 0);
   MOZ_ASSERT(mDeleteTimer);
+
+  if (!mBackgroundThread) {
+    return NS_OK;
+  }
 
   nsresult rv = mDeleteTimer->Cancel();
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -1043,6 +1138,7 @@ IndexedDatabaseManager::Notify(nsITimer* aTimer)
 {
   MOZ_ASSERT(IsMainProcess());
   MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(mBackgroundThread);
 
   for (auto iter = mPendingDeleteInfos.ConstIter(); !iter.Done(); iter.Next()) {
     auto key = iter.Key();

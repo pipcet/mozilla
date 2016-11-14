@@ -17,6 +17,7 @@ interface nsIWebBrowserChrome;
 interface nsIDocShellTreeItem;
 interface nsIArray;
 interface nsITabParent;
+interface nsIDocShellLoadInfo;
 
 [uuid(d162f9c4-19d5-4723-931f-f1e51bfa9f68)]
 
@@ -54,13 +55,19 @@ interface nsPIWindowWatcher : nsISupports
       @param aDialog use dialog defaults (see nsIDOMWindow::openDialog)
       @param aNavigate true if we should navigate the new window to the
              specified URL.
-      @param aOpeningTab the nsITabParent that is opening the new window. The
-                         nsITabParent is a remote tab belonging to aParent. Can
-                         be nullptr if this window is not being opened from a tab.
       @param aArgs Window argument
-      @param aOpenerFullZoom the full zoom multiplier for the opener window.
-                             this can be null in the single process case where
-                             the opener full zoom is obtained from aParent.
+      @param aIsPopupSpam true if the window is a popup spam window; used for
+                          popup blocker internals.
+      @param aForceNoOpener If true, force noopener behavior.  This means not
+                            looking for existing windows with the given name,
+                            not setting an opener on the newly opened window,
+                            and returning null from this method.
+      @param aLoadInfo if aNavigate is true, this allows the caller to pass in
+                       an nsIDocShellLoadInfo to use for the navigation.
+                       Callers can pass in null if they want the windowwatcher
+                       to just construct a loadinfo itself.  If aNavigate is
+                       false, this argument is ignored.
+
       @return the new window
 
       @note This method may examine the JS context stack for purposes of
@@ -71,15 +78,47 @@ interface nsPIWindowWatcher : nsISupports
             (which is determined based on the JS stack and the value of
             aParent).  This is not guaranteed, however.
   */
-  [optional_argc]
   mozIDOMWindowProxy openWindow2(in mozIDOMWindowProxy aParent, in string aUrl,
                                  in string aName, in string aFeatures,
                                  in boolean aCalledFromScript,
                                  in boolean aDialog,
                                  in boolean aNavigate,
-                                 in nsITabParent aOpeningTab,
                                  in nsISupports aArgs,
-                                 [optional] in float aOpenerFullZoom);
+                                 in boolean aIsPopupSpam,
+                                 in boolean aForceNoOpener,
+                                 in nsIDocShellLoadInfo aLoadInfo);
+
+  /**
+   * Opens a new window using the most recent non-private browser
+   * window as its parent.
+   *
+   * @return the nsITabParent of the initial browser for the newly opened
+   *         window.
+   */
+  nsITabParent openWindowWithoutParent();
+
+  /**
+   * Opens a new window so that the window that aOpeningTab belongs to
+   * is set as the parent window. The newly opened window will also
+   * inherit load context information from aOpeningTab.
+   *
+   * @param aOpeningTab
+   *        The nsITabParent that is requesting the new window be opened.
+   * @param aFeatures
+   *        Window features if called with window.open or similar.
+   * @param aCalledFromJS
+   *        True if called via window.open or similar.
+   * @param aOpenerFullZoom
+   *        The current zoom multiplier for the opener tab. This is then
+   *        applied to the newly opened window.
+   *
+   * @return the nsITabParent of the initial browser for the newly opened
+   *         window.
+   */
+  nsITabParent openWindowWithTabParent(in nsITabParent aOpeningTab,
+                                       in ACString aFeatures,
+                                       in boolean aCalledFromJS,
+                                       in float aOpenerFullZoom);
 
   /**
    * Find a named docshell tree item amongst all windows registered
@@ -100,7 +139,7 @@ interface nsPIWindowWatcher : nsISupports
    * @see findItemWithName methods on nsIDocShellTreeItem and
    *      nsIDocShellTreeOwner
    */
-  nsIDocShellTreeItem findItemWithName(in wstring aName,
+  nsIDocShellTreeItem findItemWithName(in AString aName,
                                        in nsIDocShellTreeItem aRequestor,
                                        in nsIDocShellTreeItem aOriginalRequestor);
 };

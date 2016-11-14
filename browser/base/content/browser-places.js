@@ -2,9 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-////////////////////////////////////////////////////////////////////////////////
-//// StarUI
-
 var StarUI = {
   _itemId: -1,
   uri: null,
@@ -25,7 +22,7 @@ var StarUI = {
     element.hidden = false;
     element.addEventListener("keypress", this, false);
     element.addEventListener("mouseout", this, false);
-    element.addEventListener("mouseover", this, false);
+    element.addEventListener("mousemove", this, false);
     element.addEventListener("popuphidden", this, false);
     element.addEventListener("popupshown", this, false);
     return this.panel = element;
@@ -63,7 +60,7 @@ var StarUI = {
   // nsIDOMEventListener
   handleEvent(aEvent) {
     switch (aEvent.type) {
-      case "mouseover":
+      case "mousemove":
         clearTimeout(this._autoCloseTimer);
         break;
       case "popuphidden":
@@ -122,22 +119,28 @@ var StarUI = {
             if (aEvent.target.classList.contains("expander-up") ||
                 aEvent.target.classList.contains("expander-down") ||
                 aEvent.target.id == "editBMPanel_newFolderButton")  {
-              //XXX Why is this necessary? The defaultPrevented check should
+              // XXX Why is this necessary? The defaultPrevented check should
               //    be enough.
               break;
             }
             this.panel.hidePopup();
             break;
+          // This case is for catching character-generating keypresses
+          case 0:
+            let accessKey = document.getElementById("key_close");
+            if (eventMatchesKey(aEvent, accessKey)) {
+                this.panel.hidePopup();
+            }
+            break;
         }
         break;
-      case "mouseout": {
+      case "mouseout":
+        // Explicit fall-through
+      case "popupshown":
         // Don't handle events for descendent elements.
         if (aEvent.target != aEvent.currentTarget) {
           break;
         }
-        // Explicit fall-through
-      }
-      case "popupshown":
         // auto-close if new and not interacted with
         if (this._isNewBookmark) {
           // 3500ms matches the timeout that Pocket uses in
@@ -146,7 +149,9 @@ var StarUI = {
           if (this._closePanelQuickForTesting) {
             delay /= 10;
           }
-          this._autoCloseTimer = setTimeout(() => this.panel.hidePopup(), delay, this);
+          this._autoCloseTimer = setTimeout(() => {
+            this.panel.hidePopup();
+          }, delay);
         }
         break;
     }
@@ -252,12 +257,26 @@ var StarUI = {
         parent.setAttribute("open", "true");
       }
     }
-    this.panel.openPopup(aAnchorElement, aPosition);
+    let panel = this.panel;
+    let target = panel;
+    if (target.parentNode) {
+      // By targeting the panel's parent and using a capturing listener, we
+      // can have our listener called before others waiting for the panel to
+      // be shown (which probably expect the panel to be fully initialized)
+      target = target.parentNode;
+    }
+    target.addEventListener("popupshown", function shownListener(event) {
+      if (event.target == panel) {
+        target.removeEventListener("popupshown", shownListener, true);
 
-    gEditItemOverlay.initPanel({ node: aNode
-                               , hiddenRows: ["description", "location",
-                                              "loadInSidebar", "keyword"]
-                               , focusedElement: "preferred" });
+        gEditItemOverlay.initPanel({ node: aNode
+                                   , hiddenRows: ["description", "location",
+                                                  "loadInSidebar", "keyword"]
+                                   , focusedElement: "preferred"});
+      }
+    }, true);
+
+    this.panel.openPopup(aAnchorElement, aPosition);
   }),
 
   panelShown:
@@ -322,9 +341,6 @@ var StarUI = {
     this._batching = false;
   }
 };
-
-////////////////////////////////////////////////////////////////////////////////
-//// PlacesCommandHook
 
 var PlacesCommandHook = {
   /**
@@ -650,9 +666,6 @@ var PlacesCommandHook = {
   }
 };
 
-////////////////////////////////////////////////////////////////////////////////
-//// HistoryMenu
-
 XPCOMUtils.defineLazyModuleGetter(this, "RecentlyClosedTabsAndWindowsMenuUtils",
   "resource:///modules/sessionstore/RecentlyClosedTabsAndWindowsMenuUtils.jsm");
 
@@ -730,9 +743,6 @@ HistoryMenu.prototype = {
   populateUndoWindowSubmenu: function PHM_populateUndoWindowSubmenu() {
     let undoMenu = this._rootElt.getElementsByClassName("recentlyClosedWindowsMenu")[0];
     let undoPopup = undoMenu.firstChild;
-    let menuLabelString = gNavigatorBundle.getString("menuUndoCloseWindowLabel");
-    let menuLabelStringSingleTab =
-      gNavigatorBundle.getString("menuUndoCloseWindowSingleTabLabel");
 
     // remove existing menu items
     while (undoPopup.hasChildNodes())
@@ -789,9 +799,6 @@ HistoryMenu.prototype = {
   }
 };
 
-////////////////////////////////////////////////////////////////////////////////
-//// BookmarksEventHandler
-
 /**
  * Functions for handling events in the Bookmarks Toolbar and menu.
  */
@@ -823,7 +830,7 @@ var BookmarksEventHandler = {
     // If this event bubbled up from a menu or menuitem, close the menus.
     // Do this before opening tabs, to avoid hiding the open tabs confirm-dialog.
     if (target.localName == "menu" || target.localName == "menuitem") {
-      for (node = target.parentNode; node; node = node.parentNode) {
+      for (let node = target.parentNode; node; node = node.parentNode) {
         if (node.localName == "menupopup")
           node.hidePopup();
         else if (node.localName != "menu" &&
@@ -917,9 +924,6 @@ var BookmarksEventHandler = {
     return true;
   }
 };
-
-////////////////////////////////////////////////////////////////////////////////
-//// PlacesMenuDNDHandler
 
 // Handles special drag and drop functionality for Places menus that are not
 // part of a Places view (e.g. the bookmarks menu in the menubar).
@@ -1049,9 +1053,6 @@ var PlacesMenuDNDHandler = {
   }
 };
 
-////////////////////////////////////////////////////////////////////////////////
-//// PlacesToolbarHelper
-
 /**
  * This object handles the initialization and uninitialization of the bookmarks
  * toolbar.
@@ -1165,7 +1166,7 @@ var PlacesToolbarHelper = {
   onWidgetUnderflow: function(aNode, aContainer) {
     // The view gets broken by being removed and reinserted by the overflowable
     // toolbar, so we have to force an uninit and reinit.
-    let win = aNode.ownerDocument.defaultView;
+    let win = aNode.ownerGlobal;
     if (aNode.id == "personal-bookmarks" && win == window) {
       this._resetView();
     }
@@ -1195,9 +1196,6 @@ var PlacesToolbarHelper = {
     }
   },
 };
-
-////////////////////////////////////////////////////////////////////////////////
-//// BookmarkingUI
 
 /**
  * Handles the bookmarks menu-button in the toolbar.
@@ -1395,9 +1393,18 @@ var BookmarkingUI = {
 
     let updatePlacesContextMenu = (shouldHidePrefUI = false) => {
       let prefEnabled = !shouldHidePrefUI && Services.prefs.getBoolPref(this.RECENTLY_BOOKMARKED_PREF);
-      document.getElementById("placesContext_showRecentlyBookmarked").hidden = shouldHidePrefUI || prefEnabled;
-      document.getElementById("placesContext_hideRecentlyBookmarked").hidden = shouldHidePrefUI || !prefEnabled;
-      document.getElementById("placesContext_recentlyBookmarkedSeparator").hidden = shouldHidePrefUI;
+      let showItem = document.getElementById("placesContext_showRecentlyBookmarked");
+      let hideItem = document.getElementById("placesContext_hideRecentlyBookmarked");
+      let separator = document.getElementById("placesContext_recentlyBookmarkedSeparator");
+      showItem.hidden = shouldHidePrefUI || prefEnabled;
+      hideItem.hidden = shouldHidePrefUI || !prefEnabled;
+      separator.hidden = shouldHidePrefUI;
+      if (!shouldHidePrefUI) {
+        // Move to the bottom of the menu.
+        separator.parentNode.appendChild(separator);
+        showItem.parentNode.appendChild(showItem);
+        hideItem.parentNode.appendChild(hideItem);
+      }
     };
 
     let onPlacesContextMenuShowing = event => {
@@ -1418,14 +1425,21 @@ var BookmarkingUI = {
         Services.prefs.removeObserver(this.RECENTLY_BOOKMARKED_PREF, prefObserver, false);
         PlacesUtils.bookmarks.removeObserver(this._recentlyBookmarkedObserver);
         this._recentlyBookmarkedObserver = null;
-        placesContextMenu.removeEventListener("popupshowing", onPlacesContextMenuShowing);
+        if (placesContextMenu) {
+          placesContextMenu.removeEventListener("popupshowing", onPlacesContextMenuShowing);
+        }
         bookmarksMenu.removeEventListener("popuphidden", onBookmarksMenuHidden);
       }
     };
 
     Services.prefs.addObserver(this.RECENTLY_BOOKMARKED_PREF, prefObserver, false);
     PlacesUtils.bookmarks.addObserver(this._recentlyBookmarkedObserver, true);
-    placesContextMenu.addEventListener("popupshowing", onPlacesContextMenuShowing);
+
+    // The context menu doesn't exist in non-browser windows on Mac
+    if (placesContextMenu) {
+      placesContextMenu.addEventListener("popupshowing", onPlacesContextMenuShowing);
+    }
+
     bookmarksMenu.addEventListener("popuphidden", onBookmarksMenuHidden);
   },
 
@@ -1625,7 +1639,7 @@ var BookmarkingUI = {
         try {
           PlacesUtils.addLazyBookmarkObserver(this);
           this._hasBookmarksObserver = true;
-        } catch(ex) {
+        } catch (ex) {
           Components.utils.reportError("BookmarkingUI failed adding a bookmarks observer: " + ex);
         }
       }
@@ -1908,7 +1922,7 @@ var BookmarkingUI = {
       gNavigatorBundle.getString("starButtonOverflowedStarred.label");
   },
   onWidgetOverflow: function(aNode, aContainer) {
-    let win = aNode.ownerDocument.defaultView;
+    let win = aNode.ownerGlobal;
     if (aNode.id != this.BOOKMARK_BUTTON_ID || win != window)
       return;
 
@@ -1924,7 +1938,7 @@ var BookmarkingUI = {
   },
 
   onWidgetUnderflow: function(aNode, aContainer) {
-    let win = aNode.ownerDocument.defaultView;
+    let win = aNode.ownerGlobal;
     if (aNode.id != this.BOOKMARK_BUTTON_ID || win != window)
       return;
 
@@ -1963,4 +1977,3 @@ var AutoShowBookmarksToolbar = {
     setToolbarVisibility(toolbar, true);
   }
 };
-

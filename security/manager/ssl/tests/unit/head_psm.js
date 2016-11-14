@@ -28,6 +28,7 @@ const isDebugBuild = Cc["@mozilla.org/xpcom/debug;1"]
 const gEVExpected = isDebugBuild && !("@mozilla.org/b2g-process-global;1" in Cc);
 
 const SSS_STATE_FILE_NAME = "SiteSecurityServiceState.txt";
+const PRELOAD_STATE_FILE_NAME = "SecurityPreloadState.txt";
 
 const SEC_ERROR_BASE = Ci.nsINSSErrorsService.NSS_SEC_ERROR_BASE;
 const SSL_ERROR_BASE = Ci.nsINSSErrorsService.NSS_SSL_ERROR_BASE;
@@ -81,6 +82,7 @@ const MOZILLA_PKIX_ERROR_NOT_YET_VALID_CERTIFICATE      = MOZILLA_PKIX_ERROR_BAS
 const MOZILLA_PKIX_ERROR_NOT_YET_VALID_ISSUER_CERTIFICATE = MOZILLA_PKIX_ERROR_BASE + 6;
 const MOZILLA_PKIX_ERROR_OCSP_RESPONSE_FOR_CERT_MISSING = MOZILLA_PKIX_ERROR_BASE + 8;
 const MOZILLA_PKIX_ERROR_REQUIRED_TLS_FEATURE_MISSING   = MOZILLA_PKIX_ERROR_BASE + 10;
+const MOZILLA_PKIX_ERROR_EMPTY_ISSUER_NAME              = MOZILLA_PKIX_ERROR_BASE + 12;
 
 // Supported Certificate Usages
 const certificateUsageSSLClient              = 0x0001;
@@ -91,6 +93,20 @@ const certificateUsageEmailRecipient         = 0x0020;
 const certificateUsageObjectSigner           = 0x0040;
 const certificateUsageVerifyCA               = 0x0100;
 const certificateUsageStatusResponder        = 0x0400;
+
+// A map from the name of a certificate usage to the value of the usage.
+// Useful for printing debugging information and for enumerating all supported
+// usages.
+const allCertificateUsages = {
+  certificateUsageSSLClient,
+  certificateUsageSSLServer,
+  certificateUsageSSLCA,
+  certificateUsageEmailSigner,
+  certificateUsageEmailRecipient,
+  certificateUsageObjectSigner,
+  certificateUsageVerifyCA,
+  certificateUsageStatusResponder
+};
 
 const NO_FLAGS = 0;
 
@@ -308,25 +324,30 @@ function add_tls_server_setup(serverBinName, certsPath) {
  * @param {Function} aAfterStreamOpen
  *   A callback function that is called with the nsISocketTransport once the
  *   output stream is ready.
+ * @param {String} aFirstPartyDomain
+ *   The first party domain which will be used to double-key the OCSP cache.
  */
 function add_connection_test(aHost, aExpectedResult,
                              aBeforeConnect, aWithSecurityInfo,
-                             aAfterStreamOpen) {
+                             aAfterStreamOpen, aFirstPartyDomain) {
   const REMOTE_PORT = 8443;
 
-  function Connection(aHost) {
-    this.host = aHost;
+  function Connection(host) {
+    this.host = host;
     let threadManager = Cc["@mozilla.org/thread-manager;1"]
                           .getService(Ci.nsIThreadManager);
     this.thread = threadManager.currentThread;
     this.defer = Promise.defer();
     let sts = Cc["@mozilla.org/network/socket-transport-service;1"]
                 .getService(Ci.nsISocketTransportService);
-    this.transport = sts.createTransport(["ssl"], 1, aHost, REMOTE_PORT, null);
+    this.transport = sts.createTransport(["ssl"], 1, host, REMOTE_PORT, null);
     // See bug 1129771 - attempting to connect to [::1] when the server is
     // listening on 127.0.0.1 causes frequent failures on OS X 10.10.
     this.transport.connectionFlags |= Ci.nsISocketTransport.DISABLE_IPV6;
     this.transport.setEventSink(this, this.thread);
+    if (aFirstPartyDomain) {
+      this.transport.firstPartyDomain = aFirstPartyDomain;
+    }
     this.inputStream = null;
     this.outputStream = null;
     this.connected = false;
@@ -379,11 +400,11 @@ function add_connection_test(aHost, aExpectedResult,
     }
   };
 
-  /* Returns a promise to connect to aHost that resolves to the result of that
+  /* Returns a promise to connect to host that resolves to the result of that
    * connection */
-  function connectTo(aHost) {
-    Services.prefs.setCharPref("network.dns.localDomains", aHost);
-    let connection = new Connection(aHost);
+  function connectTo(host) {
+    Services.prefs.setCharPref("network.dns.localDomains", host);
+    let connection = new Connection(host);
     return connection.go();
   }
 
@@ -543,17 +564,18 @@ function getFailingHttpServer(serverPort, serverIdentities) {
 //
 // serverPort is the port of the http OCSP responder
 // identity is the http hostname that will answer the OCSP requests
-// invalidIdentities is an array of identities that if used an
-//   will cause a test failure
 // nssDBLocation is the location of the NSS database from where the OCSP
 //   responses will be generated (assumes appropiate keys are present)
 // expectedCertNames is an array of nicks of the certs to be responsed
 // expectedBasePaths is an optional array that is used to indicate
 //   what is the expected base path of the OCSP request.
-function startOCSPResponder(serverPort, identity, invalidIdentities,
-                            nssDBLocation, expectedCertNames,
-                            expectedBasePaths, expectedMethods,
-                            expectedResponseTypes) {
+// expectedMethods is an optional array of methods ("GET" or "POST") indicating
+//   by which HTTP method the server is expected to be queried.
+// expectedResponseTypes is an optional array of OCSP response types to use (see
+//   GenerateOCSPResponse.cpp).
+function startOCSPResponder(serverPort, identity, nssDBLocation,
+                            expectedCertNames, expectedBasePaths,
+                            expectedMethods, expectedResponseTypes) {
   let ocspResponseGenerationArgs = expectedCertNames.map(
     function(expectedNick) {
       let responseType = "good";
@@ -568,10 +590,6 @@ function startOCSPResponder(serverPort, identity, invalidIdentities,
   let httpServer = new HttpServer();
   httpServer.registerPrefixHandler("/",
     function handleServerCallback(aRequest, aResponse) {
-      invalidIdentities.forEach(function(identity) {
-        Assert.notEqual(aRequest.host, identity,
-                        "Request host and invalid identity should not match");
-      });
       do_print("got request for: " + aRequest.path);
       let basePath = aRequest.path.slice(1).split("/")[0];
       if (expectedBasePaths.length >= 1) {
@@ -589,9 +607,6 @@ function startOCSPResponder(serverPort, identity, invalidIdentities,
       aResponse.write(ocspResponses.shift());
     });
   httpServer.identity.setPrimary("http", identity, serverPort);
-  invalidIdentities.forEach(function(identity) {
-    httpServer.identity.add("http", identity, serverPort);
-  });
   httpServer.start(serverPort);
   return {
     stop: function(callback) {
@@ -723,4 +738,88 @@ function loginToDBWithDefaultPassword() {
   let token = tokenDB.getInternalKeyToken();
   token.initPassword("");
   token.login(/*force*/ false);
+}
+
+// Helper for asyncTestCertificateUsages.
+class CertVerificationResult {
+  constructor(certName, usageString, successExpected, resolve) {
+    this.certName = certName;
+    this.usageString = usageString;
+    this.successExpected = successExpected;
+    this.resolve = resolve;
+  }
+
+  verifyCertFinished(aPRErrorCode, aVerifiedChain, aHasEVPolicy) {
+    if (this.successExpected) {
+      equal(aPRErrorCode, PRErrorCodeSuccess,
+            `verifying ${this.certName} for ${this.usageString} should succeed`);
+    } else {
+      notEqual(aPRErrorCode, PRErrorCodeSuccess,
+               `verifying ${this.certName} for ${this.usageString} should fail`);
+    }
+    this.resolve();
+  }
+}
+
+/**
+ * Asynchronously attempts to verify the given certificate for all supported
+ * usages (see allCertificateUsages). Verifies that the results match the
+ * expected successful usages. Returns a promise that will resolve when all
+ * verifications have been performed.
+ * Verification happens "now" with no specified flags or hostname.
+ *
+ * @param {nsIX509CertDB} certdb
+ *   The certificate database to use to verify the certificate.
+ * @param {nsIX509Cert} cert
+ *   The certificate to be verified.
+ * @param {Number[]} expectedUsages
+ *   A list of usages (as their integer values) that are expected to verify
+ *   successfully.
+ * @return {Promise}
+ *   A promise that will resolve with no value when all asynchronous operations
+ *   have completed.
+ */
+function asyncTestCertificateUsages(certdb, cert, expectedUsages) {
+  let now = (new Date()).getTime() / 1000;
+  let promises = [];
+  Object.keys(allCertificateUsages).forEach(usageString => {
+    let promise = new Promise((resolve, reject) => {
+      let usage = allCertificateUsages[usageString];
+      let successExpected = expectedUsages.includes(usage);
+      let result = new CertVerificationResult(cert.commonName, usageString,
+                                              successExpected, resolve);
+      certdb.asyncVerifyCertAtTime(cert, usage, 0, null, now, result);
+    });
+    promises.push(promise);
+  });
+  return Promise.all(promises);
+}
+
+/**
+ * Loads the pkcs11testmodule.cpp test PKCS #11 module, and registers a cleanup
+ * function that unloads it once the calling test completes.
+ *
+ * @param {Boolean} expectModuleUnloadToFail
+ *                  Should be set to true for tests that manually unload the
+ *                  test module, so the attempt to auto unload the test module
+ *                  doesn't cause a test failure. Should be set to false
+ *                  otherwise, so failure to automatically unload the test
+ *                  module gets reported.
+ */
+function loadPKCS11TestModule(expectModuleUnloadToFail) {
+  let libraryFile = Services.dirsvc.get("CurWorkD", Ci.nsILocalFile);
+  libraryFile.append("pkcs11testmodule");
+  libraryFile.append(ctypes.libraryName("pkcs11testmodule"));
+  ok(libraryFile.exists(), "The pkcs11testmodule file should exist");
+
+  let pkcs11 = Cc["@mozilla.org/security/pkcs11;1"].getService(Ci.nsIPKCS11);
+  do_register_cleanup(() => {
+    try {
+      pkcs11.deleteModule("PKCS11 Test Module");
+    } catch (e) {
+      Assert.ok(expectModuleUnloadToFail,
+                `Module unload should suceed only when expected: ${e}`);
+    }
+  });
+  pkcs11.addModule("PKCS11 Test Module", libraryFile.path, 0, 0);
 }

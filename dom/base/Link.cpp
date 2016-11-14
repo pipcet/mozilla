@@ -45,10 +45,9 @@ Link::~Link()
 bool
 Link::ElementHasHref() const
 {
-  return ((!mElement->IsSVGElement() &&
-           mElement->HasAttr(kNameSpaceID_None, nsGkAtoms::href))
-        || (!mElement->IsHTMLElement() &&
-            mElement->HasAttr(kNameSpaceID_XLink, nsGkAtoms::href)));
+  return mElement->HasAttr(kNameSpaceID_None, nsGkAtoms::href) ||
+         (!mElement->IsHTMLElement() &&
+          mElement->HasAttr(kNameSpaceID_XLink, nsGkAtoms::href));
 }
 
 void
@@ -105,7 +104,7 @@ Link::TryDNSPrefetchPreconnectOrPrefetch()
         nsCOMPtr<nsIDOMNode> domNode = GetAsDOMNode(mElement);
         prefetchService->PrefetchURI(uri,
                                      mElement->OwnerDoc()->GetDocumentURI(),
-                                     domNode, true);
+                                     domNode, linkTypes & nsStyleLinkElement::ePREFETCH);
         return;
       }
     }

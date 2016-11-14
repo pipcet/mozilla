@@ -355,11 +355,11 @@ nsListControlFrame::GetMinISize(nsRenderingContext *aRenderingContext)
 
 void
 nsListControlFrame::Reflow(nsPresContext*           aPresContext,
-                           nsHTMLReflowMetrics&     aDesiredSize,
-                           const nsHTMLReflowState& aReflowState,
+                           ReflowOutput&     aDesiredSize,
+                           const ReflowInput& aReflowInput,
                            nsReflowStatus&          aStatus)
 {
-  NS_PRECONDITION(aReflowState.ComputedISize() != NS_UNCONSTRAINEDSIZE,
+  NS_PRECONDITION(aReflowInput.ComputedISize() != NS_UNCONSTRAINEDSIZE,
                   "Must have a computed inline size");
 
   SchedulePaint();
@@ -382,7 +382,7 @@ nsListControlFrame::Reflow(nsPresContext*           aPresContext,
   }
 
   if (IsInDropDownMode()) {
-    ReflowAsDropdown(aPresContext, aDesiredSize, aReflowState, aStatus);
+    ReflowAsDropdown(aPresContext, aDesiredSize, aReflowInput, aStatus);
     return;
   }
 
@@ -409,12 +409,12 @@ nsListControlFrame::Reflow(nsPresContext*           aPresContext,
    *   the old one.
    */
 
-  bool autoBSize = (aReflowState.ComputedBSize() == NS_UNCONSTRAINEDSIZE);
+  bool autoBSize = (aReflowInput.ComputedBSize() == NS_UNCONSTRAINEDSIZE);
 
   mMightNeedSecondPass = autoBSize &&
-    (NS_SUBTREE_DIRTY(this) || aReflowState.ShouldReflowAllKids());
+    (NS_SUBTREE_DIRTY(this) || aReflowInput.ShouldReflowAllKids());
 
-  nsHTMLReflowState state(aReflowState);
+  ReflowInput state(aReflowInput);
   int32_t length = GetNumberOfRows();
 
   nscoord oldBSizeOfARow = BSizeOfARow();
@@ -493,24 +493,24 @@ nsListControlFrame::Reflow(nsPresContext*           aPresContext,
 
 void
 nsListControlFrame::ReflowAsDropdown(nsPresContext*           aPresContext,
-                                     nsHTMLReflowMetrics&     aDesiredSize,
-                                     const nsHTMLReflowState& aReflowState,
+                                     ReflowOutput&     aDesiredSize,
+                                     const ReflowInput& aReflowInput,
                                      nsReflowStatus&          aStatus)
 {
-  NS_PRECONDITION(aReflowState.ComputedBSize() == NS_UNCONSTRAINEDSIZE,
+  NS_PRECONDITION(aReflowInput.ComputedBSize() == NS_UNCONSTRAINEDSIZE,
                   "We should not have a computed block size here!");
 
   mMightNeedSecondPass = NS_SUBTREE_DIRTY(this) ||
-    aReflowState.ShouldReflowAllKids();
+    aReflowInput.ShouldReflowAllKids();
 
-  WritingMode wm = aReflowState.GetWritingMode();
+  WritingMode wm = aReflowInput.GetWritingMode();
 #ifdef DEBUG
   nscoord oldBSizeOfARow = BSizeOfARow();
   nscoord oldVisibleBSize = (GetStateBits() & NS_FRAME_FIRST_REFLOW) ?
     NS_UNCONSTRAINEDSIZE : GetScrolledFrame()->BSize(wm);
 #endif
 
-  nsHTMLReflowState state(aReflowState);
+  ReflowInput state(aReflowInput);
 
   if (!(GetStateBits() & NS_FRAME_FIRST_REFLOW)) {
     // When not doing an initial reflow, and when the block size is
@@ -583,7 +583,7 @@ nsListControlFrame::ReflowAsDropdown(nsPresContext*           aPresContext,
       mNumDisplayRows = 1;
       mDropdownCanGrow = GetNumberOfRows() > 1;
     } else {
-      nscoord bp = aReflowState.ComputedLogicalBorderPadding().BStartEnd(wm);
+      nscoord bp = aReflowInput.ComputedLogicalBorderPadding().BStartEnd(wm);
       nscoord availableBSize = std::max(before, after) - bp;
       nscoord newBSize;
       uint32_t rows;
@@ -923,9 +923,10 @@ nsListControlFrame::HandleEvent(nsPresContext* aPresContext,
   // do we have style that affects how we are selected?
   // do we have user-input style?
   const nsStyleUserInterface* uiStyle = StyleUserInterface();
-  if (uiStyle->mUserInput == NS_STYLE_USER_INPUT_NONE || uiStyle->mUserInput == NS_STYLE_USER_INPUT_DISABLED)
+  if (uiStyle->mUserInput == StyleUserInput::None ||
+      uiStyle->mUserInput == StyleUserInput::Disabled) {
     return nsFrame::HandleEvent(aPresContext, aEvent, aEventStatus);
-
+  }
   EventStates eventStates = mContent->AsElement()->State();
   if (eventStates.HasState(NS_EVENT_STATE_DISABLED))
     return NS_OK;
@@ -1494,13 +1495,13 @@ nsListControlFrame::AboutToRollup()
 
 void
 nsListControlFrame::DidReflow(nsPresContext*           aPresContext,
-                              const nsHTMLReflowState* aReflowState,
+                              const ReflowInput* aReflowInput,
                               nsDidReflowStatus        aStatus)
 {
   bool wasInterrupted = !mHasPendingInterruptAtStartOfReflow &&
                           aPresContext->HasPendingInterrupt();
 
-  nsHTMLScrollFrame::DidReflow(aPresContext, aReflowState, aStatus);
+  nsHTMLScrollFrame::DidReflow(aPresContext, aReflowInput, aStatus);
 
   if (mNeedToReset && !wasInterrupted) {
     mNeedToReset = false;
@@ -1777,13 +1778,19 @@ nsListControlFrame::GetIndexFromDOMEvent(nsIDOMEvent* aMouseEvent,
 }
 
 static bool
-FireShowDropDownEvent(nsIContent* aContent)
+FireShowDropDownEvent(nsIContent* aContent, bool aShow, bool aIsSourceTouchEvent)
 {
   if (XRE_IsContentProcess() &&
       Preferences::GetBool("browser.tabs.remote.desktopbehavior", false)) {
+    nsString eventName;
+    if (aShow) {
+      eventName = aIsSourceTouchEvent ? NS_LITERAL_STRING("mozshowdropdown-sourcetouch") :
+                                        NS_LITERAL_STRING("mozshowdropdown");
+    } else {
+      eventName = NS_LITERAL_STRING("mozhidedropdown");
+    }
     nsContentUtils::DispatchChromeEvent(aContent->OwnerDoc(), aContent,
-                                        NS_LITERAL_STRING("mozshowdropdown"), true,
-                                        false);
+                                        eventName, true, false);
     return true;
   }
 
@@ -1837,7 +1844,24 @@ nsListControlFrame::MouseDown(nsIDOMEvent* aMouseEvent)
   } else {
     // NOTE: the combo box is responsible for dropping it down
     if (mComboboxFrame) {
-      if (FireShowDropDownEvent(mContent)) {
+      // Ignore the click that occurs on the option element when one is
+      // selected from the parent process popup.
+      if (mComboboxFrame->IsOpenInParentProcess()) {
+        nsCOMPtr<nsIDOMEventTarget> etarget;
+        aMouseEvent->GetTarget(getter_AddRefs(etarget));
+        nsCOMPtr<nsIDOMHTMLOptionElement> option = do_QueryInterface(etarget);
+        if (option) {
+          return NS_OK;
+        }
+      }
+
+      uint16_t inputSource = nsIDOMMouseEvent::MOZ_SOURCE_UNKNOWN;
+      if (NS_FAILED(mouseEvent->GetMozInputSource(&inputSource))) {
+        return NS_ERROR_FAILURE;
+      }
+      bool isSourceTouchEvent = inputSource == nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
+      if (FireShowDropDownEvent(mContent, !mComboboxFrame->IsDroppedDownOrHasParentPopup(),
+                                isSourceTouchEvent)) {
         return NS_OK;
       }
 
@@ -2080,7 +2104,7 @@ nsListControlFrame::DropDownToggleKey(nsIDOMEvent* aKeyEvent)
   if (IsInDropDownMode() && !nsComboboxControlFrame::ToolkitHasNativePopup()) {
     aKeyEvent->PreventDefault();
     if (!mComboboxFrame->IsDroppedDown()) {
-      if (!FireShowDropDownEvent(mContent)) {
+      if (!FireShowDropDownEvent(mContent, true, false)) {
         mComboboxFrame->ShowDropDown(true);
       }
     } else {
@@ -2127,9 +2151,12 @@ nsListControlFrame::KeyDown(nsIDOMEvent* aKeyEvent)
   dropDownMenuOnUpDown = keyEvent->IsAlt();
   dropDownMenuOnSpace = IsInDropDownMode() && !mComboboxFrame->IsDroppedDown();
 #endif
+  bool withinIncrementalSearchTime =
+    keyEvent->mTime - gLastKeyTime <= INCREMENTAL_SEARCH_KEYPRESS_TIME;
   if ((dropDownMenuOnUpDown &&
        (keyEvent->mKeyCode == NS_VK_UP || keyEvent->mKeyCode == NS_VK_DOWN)) ||
-      (dropDownMenuOnSpace && keyEvent->mKeyCode == NS_VK_SPACE)) {
+      (dropDownMenuOnSpace && keyEvent->mKeyCode == NS_VK_SPACE &&
+       !withinIncrementalSearchTime)) {
     DropDownToggleKey(aKeyEvent);
     if (keyEvent->DefaultPrevented()) {
       return NS_OK;

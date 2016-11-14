@@ -17,6 +17,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "DOMUtils",
 XPCOMUtils.defineLazyModuleGetter(this, "DeferredTask",
                                   "resource://gre/modules/DeferredTask.jsm");
 
+const kStateActive = 0x00000001; // NS_EVENT_STATE_ACTIVE
 const kStateHover = 0x00000004; // NS_EVENT_STATE_HOVER
 
 // A process global state for whether or not content thinks
@@ -29,10 +30,12 @@ this.EXPORTED_SYMBOLS = [
   "SelectContentHelper"
 ];
 
-this.SelectContentHelper = function (aElement, aGlobal) {
+this.SelectContentHelper = function (aElement, aOptions, aGlobal) {
   this.element = aElement;
   this.initialSelection = aElement[aElement.selectedIndex] || null;
   this.global = aGlobal;
+  this.closedWithEnter = false;
+  this.isOpenedViaTouch = aOptions.isOpenedViaTouch;
   this.init();
   this.showDropDown();
   this._updateTimer = new DeferredTask(this._update.bind(this), 0);
@@ -63,6 +66,7 @@ this.SelectContentHelper.prototype = {
   },
 
   uninit: function() {
+    this.element.openInParentProcess = false;
     this.global.removeMessageListener("Forms:SelectDropDownItem", this);
     this.global.removeMessageListener("Forms:DismissedDropDown", this);
     this.global.removeMessageListener("Forms:MouseOver", this);
@@ -78,12 +82,14 @@ this.SelectContentHelper.prototype = {
   },
 
   showDropDown: function() {
+    this.element.openInParentProcess = true;
     let rect = this._getBoundingContentRect();
     this.global.sendAsyncMessage("Forms:ShowDropDown", {
       rect: rect,
       options: this._buildOptionList(),
       selectedIndex: this.element.selectedIndex,
-      direction: getComputedDirection(this.element)
+      direction: getComputedStyles(this.element).direction,
+      isOpenedViaTouch: this.isOpenedViaTouch
     });
     gOpen = true;
   },
@@ -109,11 +115,32 @@ this.SelectContentHelper.prototype = {
     switch (message.name) {
       case "Forms:SelectDropDownItem":
         this.element.selectedIndex = message.data.value;
+        this.closedWithEnter = message.data.closedWithEnter;
         break;
 
       case "Forms:DismissedDropDown":
-        if (this.initialSelection != this.element.item(this.element.selectedIndex)) {
+        let selectedOption = this.element.item(this.element.selectedIndex);
+        if (this.initialSelection != selectedOption) {
           let win = this.element.ownerDocument.defaultView;
+          // For ordering of events, we're using non-e10s as our guide here,
+          // since the spec isn't exactly clear. In non-e10s, we fire:
+          // mousedown, mouseup, input, change, click if the user clicks
+          // on an element in the dropdown. If the user uses the keyboard
+          // to select an element in the dropdown, we only fire input and
+          // change events.
+          if (!this.closedWithEnter) {
+            const MOUSE_EVENTS = ["mousedown", "mouseup"];
+            for (let eventName of MOUSE_EVENTS) {
+              let mouseEvent = new win.MouseEvent(eventName, {
+                view: win,
+                bubbles: true,
+                cancelable: true,
+              });
+              selectedOption.dispatchEvent(mouseEvent);
+            }
+            DOMUtils.removeContentState(this.element, kStateActive);
+          }
+
           let inputEvent = new win.UIEvent("input", {
             bubbles: true,
           });
@@ -124,19 +151,13 @@ this.SelectContentHelper.prototype = {
           });
           this.element.dispatchEvent(changeEvent);
 
-          // Going for mostly-Blink parity here, which (at least on Windows)
-          // fires a mouseup and click event after each selection -
-          // even by keyboard. We're firing a mousedown too, since that
-          // seems to make more sense. Unfortunately, the spec on form
-          // control behaviours for these events is really not clear.
-          const MOUSE_EVENTS = ["mousedown", "mouseup", "click"];
-          for (let eventName of MOUSE_EVENTS) {
-            let mouseEvent = new win.MouseEvent(eventName, {
+          if (!this.closedWithEnter) {
+            let mouseEvent = new win.MouseEvent("click", {
               view: win,
               bubbles: true,
               cancelable: true,
             });
-            this.element.dispatchEvent(mouseEvent);
+            selectedOption.dispatchEvent(mouseEvent);
           }
         }
 
@@ -173,12 +194,14 @@ this.SelectContentHelper.prototype = {
 
 }
 
-function getComputedDirection(element) {
-  return element.ownerDocument.defaultView.getComputedStyle(element).getPropertyValue("direction");
+function getComputedStyles(element) {
+  return element.ownerDocument.defaultView.getComputedStyle(element);
 }
 
 function buildOptionListForChildren(node) {
   let result = [];
+
+  let win = node.ownerDocument.defaultView;
 
   for (let child of node.children) {
     let tagName = child.tagName.toUpperCase();
@@ -195,15 +218,17 @@ function buildOptionListForChildren(node) {
         textContent = "";
       }
 
+      let cs = getComputedStyles(child);
+
       let info = {
         index: child.index,
         tagName: tagName,
         textContent: textContent,
         disabled: child.disabled,
-        display: child.style.display,
+        display: cs.display,
         // We need to do this for every option element as each one can have
         // an individual style set for direction
-        textDirection: getComputedDirection(child),
+        textDirection: cs.direction,
         tooltip: child.title,
         // XXX this uses a highlight color when this is the selected element.
         // We need to suppress such highlighting in the content process to get

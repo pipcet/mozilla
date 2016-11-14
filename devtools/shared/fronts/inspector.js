@@ -5,6 +5,7 @@
 
 require("devtools/shared/fronts/styles");
 require("devtools/shared/fronts/highlighters");
+require("devtools/shared/fronts/layout");
 const { SimpleStringFront } = require("devtools/shared/fronts/string");
 const {
   Front,
@@ -20,11 +21,14 @@ const {
   walkerSpec
 } = require("devtools/shared/specs/inspector");
 const promise = require("promise");
+const defer = require("devtools/shared/defer");
 const { Task } = require("devtools/shared/task");
 const { Class } = require("sdk/core/heritage");
 const events = require("sdk/event/core");
 const object = require("sdk/util/object");
 const nodeConstants = require("devtools/shared/dom-node-constants.js");
+loader.lazyRequireGetter(this, "CommandUtils",
+  "devtools/client/shared/developer-toolbar", true);
 
 const HIDDEN_CLASS = "__fx-devtools-hide-shortcut__";
 
@@ -423,11 +427,12 @@ const NodeFront = FrontClassWithSpec(nodeSpec, {
    * protocol.  If you depend on this you're likely to break soon.
    */
   rawNode: function (rawNode) {
-    if (!this.conn._transport._serverConnection) {
+    if (!this.isLocalToBeDeprecated()) {
       console.warn("Tried to use rawNode on a remote connection.");
       return null;
     }
-    let actor = this.conn._transport._serverConnection.getActor(this.actorID);
+    const { DebuggerServer } = require("devtools/server/main");
+    let actor = DebuggerServer._searchAllConnectionsForActor(this.actorID);
     if (!actor) {
       // Can happen if we try to get the raw node for an already-expired
       // actor.
@@ -531,7 +536,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
    * on resolution.
    */
   _createRootNodePromise: function () {
-    this._rootNodeDeferred = promise.defer();
+    this._rootNodeDeferred = defer();
     this._rootNodeDeferred.promise.then(() => {
       events.emit(this, "new-root");
     });
@@ -747,6 +752,11 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
         let targetFront;
 
         if (change.type === "newRoot") {
+          // We may receive a new root without receiving any documentUnload
+          // beforehand. Like when opening tools in middle of a document load.
+          if (this.rootNode) {
+            this._createRootNodePromise();
+          }
           this.rootNode = types.getType("domnode").read(change.target, this);
           this._rootNodeDeferred.resolve(this.rootNode);
           targetID = this.rootNode.actorID;
@@ -894,8 +904,8 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
       console.warn("Tried to use frontForRawNode on a remote connection.");
       return null;
     }
-    let walkerActor = this.conn._transport._serverConnection
-      .getActor(this.actorID);
+    const { DebuggerServer } = require("devtools/server/main");
+    let walkerActor = DebuggerServer._searchAllConnectionsForActor(this.actorID);
     if (!walkerActor) {
       throw Error("Could not find client side for actor " + this.actorID);
     }
@@ -915,7 +925,7 @@ const WalkerFront = FrontClassWithSpec(walkerSpec, {
       // Imported an already-orphaned node.
       this._orphaned.add(top);
       walkerActor._orphaned
-        .add(this.conn._transport._serverConnection.getActor(top.actorID));
+        .add(DebuggerServer._searchAllConnectionsForActor(top.actorID));
     }
     return returnNode;
   },
@@ -975,6 +985,22 @@ var InspectorFront = FrontClassWithSpec(inspectorSpec, {
     });
   }, {
     impl: "_getPageStyle"
+  }),
+
+  pickColorFromPage: custom(Task.async(function* (toolbox, options) {
+    if (toolbox) {
+      // If the eyedropper was already started using the gcli command, hide it so we don't
+      // end up with 2 instances of the eyedropper on the page.
+      let {target} = toolbox;
+      let requisition = yield CommandUtils.createRequisition(target, {
+        environment: CommandUtils.createEnvironment({target})
+      });
+      yield requisition.updateExec("eyedropper --hide");
+    }
+
+    yield this._pickColorFromPage(options);
+  }), {
+    impl: "_pickColorFromPage"
   })
 });
 

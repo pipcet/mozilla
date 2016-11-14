@@ -21,14 +21,17 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/AppProcessChecker.h"
 #include "mozilla/AutoRestore.h"
+#include "mozilla/Casting.h"
 #include "mozilla/EndianUtils.h"
 #include "mozilla/LazyIdleThread.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
+#include "mozilla/SnappyCompressOutputStream.h"
+#include "mozilla/SnappyUncompressInputStream.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/storage.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/UniquePtrExtensions.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/File.h"
@@ -57,6 +60,7 @@
 #include "mozilla/ipc/InputStreamParams.h"
 #include "mozilla/ipc/InputStreamUtils.h"
 #include "mozilla/ipc/PBackground.h"
+#include "mozilla/Scoped.h"
 #include "mozilla/storage/Variant.h"
 #include "nsAutoPtr.h"
 #include "nsCharSeparatedTokenizer.h"
@@ -71,6 +75,7 @@
 #include "nsIEventTarget.h"
 #include "nsIFile.h"
 #include "nsIFileURL.h"
+#include "nsIFileProtocolHandler.h"
 #include "nsIInputStream.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsInterfaceHashtable.h"
@@ -87,6 +92,7 @@
 #include "nsPrintfCString.h"
 #include "nsQueryObject.h"
 #include "nsRefPtrHashtable.h"
+#include "nsStreamUtils.h"
 #include "nsString.h"
 #include "nsThreadPool.h"
 #include "nsThreadUtils.h"
@@ -119,6 +125,11 @@
   {0x6b505c84, 0x2c60, 0x4ffb, {0x8b, 0x91, 0xfe, 0x22, 0xb1, 0xec, 0x75, 0xe2}}
 
 namespace mozilla {
+
+MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedPRFileDesc,
+                                          PRFileDesc,
+                                          PR_Close);
+
 namespace dom {
 namespace indexedDB {
 
@@ -148,11 +159,11 @@ class VersionChangeTransaction;
 
 // If JS_STRUCTURED_CLONE_VERSION changes then we need to update our major
 // schema version.
-static_assert(JS_STRUCTURED_CLONE_VERSION == 6,
+static_assert(JS_STRUCTURED_CLONE_VERSION == 8,
               "Need to update the major schema version.");
 
 // Major schema version. Bump for almost everything.
-const uint32_t kMajorSchemaVersion = 23;
+const uint32_t kMajorSchemaVersion = 25;
 
 // Minor schema version. Should almost always be 0 (maybe bump on release
 // branches if we have to).
@@ -256,7 +267,7 @@ const uint32_t kDEBUGTransactionThreadSleepMS = 0;
 #endif
 
 template <size_t N>
-MOZ_CONSTEXPR size_t
+constexpr size_t
 LiteralStringLength(const char (&aArr)[N])
 {
   static_assert(N, "Zero-length string literal?!");
@@ -2888,11 +2899,11 @@ UpgradeKeyFunction::CopyAndUpgradeKeyBufferInternal(const uint8_t*& aSource,
   MOZ_ASSERT(aDestination);
   MOZ_ASSERT(aTagOffset <=  Key::kMaxArrayCollapse);
 
-  static MOZ_CONSTEXPR_VAR uint8_t kOldNumberTag = 0x1;
-  static MOZ_CONSTEXPR_VAR uint8_t kOldDateTag = 0x2;
-  static MOZ_CONSTEXPR_VAR uint8_t kOldStringTag = 0x3;
-  static MOZ_CONSTEXPR_VAR uint8_t kOldArrayTag = 0x4;
-  static MOZ_CONSTEXPR_VAR uint8_t kOldMaxType = kOldArrayTag;
+  static constexpr uint8_t kOldNumberTag = 0x1;
+  static constexpr uint8_t kOldDateTag = 0x2;
+  static constexpr uint8_t kOldStringTag = 0x3;
+  static constexpr uint8_t kOldArrayTag = 0x4;
+  static constexpr uint8_t kOldMaxType = kOldArrayTag;
 
   if (NS_WARN_IF(aRecursionDepth > Key::kMaxRecursionDepth)) {
     IDB_REPORT_INTERNAL_ERR();
@@ -3674,13 +3685,13 @@ UpgradeSchemaFrom18_0To19_0(mozIStorageConnection* aConnection)
 
 #if !defined(MOZ_B2G)
 
-class NormalJSRuntime;
+class NormalJSContext;
 
 class UpgradeFileIdsFunction final
   : public mozIStorageFunction
 {
   RefPtr<FileManager> mFileManager;
-  nsAutoPtr<NormalJSRuntime> mRuntime;
+  nsAutoPtr<NormalJSContext> mContext;
 
 public:
   UpgradeFileIdsFunction()
@@ -4101,6 +4112,33 @@ UpgradeSchemaFrom22_0To23_0(mozIStorageConnection* aConnection,
 }
 
 nsresult
+UpgradeSchemaFrom23_0To24_0(mozIStorageConnection* aConnection)
+{
+  // The only change between 23 and 24 was a different structured clone format,
+  // but it's backwards-compatible.
+  nsresult rv = aConnection->SetSchemaVersion(MakeSchemaVersion(24, 0));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  return NS_OK;
+}
+
+nsresult
+UpgradeSchemaFrom24_0To25_0(mozIStorageConnection* aConnection)
+{
+  // The changes between 24 and 25 were an upgraded snappy library, a different
+  // structured clone format and a different file_ds format. But everything is
+  // backwards-compatible.
+  nsresult rv = aConnection->SetSchemaVersion(MakeSchemaVersion(25, 0));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  return NS_OK;
+}
+
+nsresult
 GetDatabaseFileURL(nsIFile* aDatabaseFile,
                    PersistenceType aPersistenceType,
                    const nsACString& aGroup,
@@ -4111,8 +4149,22 @@ GetDatabaseFileURL(nsIFile* aDatabaseFile,
   MOZ_ASSERT(aDatabaseFile);
   MOZ_ASSERT(aResult);
 
+  nsresult rv;
+
+  nsCOMPtr<nsIProtocolHandler> protocolHandler(
+    do_GetService(NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "file", &rv));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  nsCOMPtr<nsIFileProtocolHandler> fileHandler(
+    do_QueryInterface(protocolHandler, &rv));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
   nsCOMPtr<nsIURI> uri;
-  nsresult rv = NS_NewFileURI(getter_AddRefs(uri), aDatabaseFile);
+  rv = fileHandler->NewFileURI(aDatabaseFile, getter_AddRefs(uri));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
@@ -4592,7 +4644,7 @@ CreateStorageConnection(nsIFile* aDBFile,
       }
     } else  {
       // This logic needs to change next time we change the schema!
-      static_assert(kSQLiteSchemaVersion == int32_t((23 << 4) + 0),
+      static_assert(kSQLiteSchemaVersion == int32_t((25 << 4) + 0),
                     "Upgrade function needed due to schema version increase.");
 
       while (schemaVersion != kSQLiteSchemaVersion) {
@@ -4636,6 +4688,10 @@ CreateStorageConnection(nsIFile* aDBFile,
           rv = UpgradeSchemaFrom21_0To22_0(connection);
         } else if (schemaVersion == MakeSchemaVersion(22, 0)) {
           rv = UpgradeSchemaFrom22_0To23_0(connection, aOrigin);
+        } else if (schemaVersion == MakeSchemaVersion(23, 0)) {
+          rv = UpgradeSchemaFrom23_0To24_0(connection);
+        } else if (schemaVersion == MakeSchemaVersion(24, 0)) {
+          rv = UpgradeSchemaFrom24_0To25_0(connection);
         } else {
           IDB_WARNING("Unable to open IndexedDB database, no upgrade path is "
                       "available!");
@@ -5284,7 +5340,7 @@ private:
   struct IdleThreadInfo;
   struct ThreadInfo;
   class ThreadRunnable;
-  struct TransactionInfo;
+  class TransactionInfo;
   struct TransactionInfoPair;
 
   // This mutex guards mDatabases, see below.
@@ -5591,7 +5647,7 @@ protected:
   IdleResource(const TimeStamp& aIdleTime);
 
   explicit
-  IdleResource(const IdleResource& aOther);
+  IdleResource(const IdleResource& aOther) = delete;
 
   ~IdleResource();
 };
@@ -5606,7 +5662,7 @@ public:
   IdleDatabaseInfo(DatabaseInfo* aDatabaseInfo);
 
   explicit
-  IdleDatabaseInfo(const IdleDatabaseInfo& aOther);
+  IdleDatabaseInfo(const IdleDatabaseInfo& aOther) = delete;
 
   ~IdleDatabaseInfo();
 
@@ -5635,7 +5691,7 @@ public:
   IdleThreadInfo(const ThreadInfo& aThreadInfo);
 
   explicit
-  IdleThreadInfo(const IdleThreadInfo& aOther);
+  IdleThreadInfo(const IdleThreadInfo& aOther) = delete;
 
   ~IdleThreadInfo();
 
@@ -5683,10 +5739,14 @@ private:
   NS_DECL_NSIRUNNABLE
 };
 
-struct ConnectionPool::TransactionInfo final
+class ConnectionPool::TransactionInfo final
 {
   friend class nsAutoPtr<TransactionInfo>;
 
+  nsTHashtable<nsPtrHashKey<TransactionInfo>> mBlocking;
+  nsTArray<TransactionInfo*> mBlockingOrdered;
+
+public:
   DatabaseInfo* mDatabaseInfo;
   const nsID mBackgroundChildLoggingId;
   const nsCString mDatabaseId;
@@ -5694,7 +5754,6 @@ struct ConnectionPool::TransactionInfo final
   const int64_t mLoggingSerialNumber;
   const nsTArray<nsString> mObjectStoreNames;
   nsTHashtable<nsPtrHashKey<TransactionInfo>> mBlockedOn;
-  nsTHashtable<nsPtrHashKey<TransactionInfo>> mBlocking;
   nsTArray<nsCOMPtr<nsIRunnable>> mQueuedRunnables;
   const bool mIsWriteTransaction;
   bool mRunning;
@@ -5713,10 +5772,16 @@ struct ConnectionPool::TransactionInfo final
                   TransactionDatabaseOperationBase* aTransactionOp);
 
   void
-  Schedule();
+  AddBlockingTransaction(TransactionInfo* aTransactionInfo);
+
+  void
+  RemoveBlockingTransactions();
 
 private:
   ~TransactionInfo();
+
+  void
+  MaybeUnblock(TransactionInfo* aTransactionInfo);
 };
 
 struct ConnectionPool::TransactionInfoPair final
@@ -5950,9 +6015,15 @@ private:
   static nsresult
   GetStructuredCloneReadInfoFromBlob(const uint8_t* aBlobData,
                                      uint32_t aBlobDataLength,
-                                     const nsAString& aFileIds,
                                      FileManager* aFileManager,
+                                     const nsAString& aFileIds,
                                      StructuredCloneReadInfo* aInfo);
+
+  static nsresult
+  GetStructuredCloneReadInfoFromExternalBlob(uint64_t aIntData,
+                                             FileManager* aFileManager,
+                                             const nsAString& aFileIds,
+                                             StructuredCloneReadInfo* aInfo);
 
   // Not to be overridden by subclasses.
   NS_DECL_MOZISTORAGEPROGRESSHANDLER
@@ -5978,8 +6049,19 @@ public:
 class TransactionDatabaseOperationBase
   : public DatabaseOperationBase
 {
+  enum class InternalState
+  {
+    Initial,
+    DatabaseWork,
+    SendingPreprocess,
+    WaitingForContinue,
+    SendingResults,
+    Completed
+  };
+
   RefPtr<TransactionBase> mTransaction;
   const int64_t mTransactionLoggingSerialNumber;
+  InternalState mInternalState;
   const bool mTransactionIsAborted;
 
 public:
@@ -5991,6 +6073,13 @@ public:
   { }
 #endif
 
+  uint64_t
+  StartOnConnectionPool(const nsID& aBackgroundChildLoggingId,
+                        const nsACString& aDatabaseId,
+                        int64_t aLoggingSerialNumber,
+                        const nsTArray<nsString>& aObjectStoreNames,
+                        bool aIsWriteTransaction);
+
   void
   DispatchToConnectionPool();
 
@@ -6001,6 +6090,9 @@ public:
 
     return mTransaction;
   }
+
+  void
+  NoteContinueReceived();
 
   // May be overridden by subclasses if they need to perform work on the
   // background thread before being dispatched. Returning false will kill the
@@ -6034,6 +6126,19 @@ protected:
   virtual nsresult
   DoDatabaseWork(DatabaseConnection* aConnection) = 0;
 
+  // May be overriden in subclasses. Called on the background thread to decide
+  // if the subclass needs to send any preprocess info to the child actor.
+  virtual bool
+  HasPreprocessInfo();
+
+  // May be overriden in subclasses. Called on the background thread to allow
+  // the subclass to serialize its preprocess info and send it to the child
+  // actor. A successful return value will trigger a wait for a
+  // NoteContinueReceived callback on the background thread while a failure
+  // value will trigger a SendFailureResult callback.
+  virtual nsresult
+  SendPreprocessInfo();
+
   // Must be overridden in subclasses. Called on the background thread to allow
   // the subclass to serialize its results and send them to the child actor. A
   // failed return value will trigger a SendFailureResult callback.
@@ -6049,7 +6154,16 @@ protected:
 
 private:
   void
-  RunOnOwningThread();
+  SendToConnectionPool();
+
+  void
+  SendPreprocess();
+
+  void
+  SendResults();
+
+  void
+  SendPreprocessInfoOrResults(bool aSendPreprocessInfo);
 
   // Not to be overridden by subclasses.
   NS_DECL_NSIRUNNABLE
@@ -6127,7 +6241,6 @@ private:
 class WaitForTransactionsHelper final
   : public Runnable
 {
-  nsCOMPtr<nsIEventTarget> mOwningThread;
   const nsCString mDatabaseId;
   nsCOMPtr<nsIRunnable> mCallback;
 
@@ -6142,8 +6255,7 @@ class WaitForTransactionsHelper final
 public:
   WaitForTransactionsHelper(const nsCString& aDatabaseId,
                             nsIRunnable* aCallback)
-    : mOwningThread(NS_GetCurrentThread())
-    , mDatabaseId(aDatabaseId)
+    : mDatabaseId(aDatabaseId)
     , mCallback(aCallback)
     , mState(State::Initial)
   {
@@ -6192,7 +6304,7 @@ private:
   nsTHashtable<nsPtrHashKey<MutableFile>> mMutableFiles;
   RefPtr<DatabaseConnection> mConnection;
   const PrincipalInfo mPrincipalInfo;
-  const OptionalContentId mOptionalContentParentId;
+  const Maybe<ContentParentId> mOptionalContentParentId;
   const nsCString mGroup;
   const nsCString mOrigin;
   const nsCString mId;
@@ -6212,7 +6324,7 @@ public:
   // Created by OpenDatabaseOp.
   Database(Factory* aFactory,
            const PrincipalInfo& aPrincipalInfo,
-           const OptionalContentId& aOptionalContentParentId,
+           const Maybe<ContentParentId>& aOptionalContentParentId,
            const nsACString& aGroup,
            const nsACString& aOrigin,
            uint32_t aTelemetryId,
@@ -6251,11 +6363,9 @@ public:
   bool
   IsOwnedByProcess(ContentParentId aContentParentId) const
   {
-    MOZ_ASSERT(mOptionalContentParentId.type() != OptionalContentId::T__None);
-
     return
-      mOptionalContentParentId.type() == OptionalContentId::TContentParentId &&
-      mOptionalContentParentId.get_ContentParentId() == aContentParentId;
+      mOptionalContentParentId &&
+      mOptionalContentParentId.value() == aContentParentId;
   }
 
   const nsCString&
@@ -7421,7 +7531,7 @@ class OpenDatabaseOp final
 
   class VersionChangeOp;
 
-  OptionalContentId mOptionalContentParentId;
+  Maybe<ContentParentId> mOptionalContentParentId;
 
   RefPtr<FullDatabaseMetadata> mMetadata;
 
@@ -7446,10 +7556,7 @@ public:
   bool
   IsOtherProcessActor() const
   {
-    MOZ_ASSERT(mOptionalContentParentId.type() != OptionalContentId::T__None);
-
-    return mOptionalContentParentId.type() ==
-             OptionalContentId::TContentParentId;
+    return mOptionalContentParentId.isSome();
   }
 
 private:
@@ -7808,16 +7915,18 @@ class RenameObjectStoreOp final
 {
   friend class VersionChangeTransaction;
 
-  const RefPtr<FullObjectStoreMetadata> mMetadata;
+  const int64_t mId;
+  const nsString mNewName;
 
 private:
   // Only created by VersionChangeTransaction.
   RenameObjectStoreOp(VersionChangeTransaction* aTransaction,
                       FullObjectStoreMetadata* const aMetadata)
     : VersionChangeTransactionOp(aTransaction)
-    , mMetadata(aMetadata)
+    , mId(aMetadata->mCommonMetadata.id())
+    , mNewName(aMetadata->mCommonMetadata.name())
   {
-    MOZ_ASSERT(aMetadata->mCommonMetadata.id());
+    MOZ_ASSERT(mId);
   }
 
   ~RenameObjectStoreOp()
@@ -7832,7 +7941,7 @@ class CreateIndexOp final
 {
   friend class VersionChangeTransaction;
 
-  class ThreadLocalJSRuntime;
+  class ThreadLocalJSContext;
   class UpdateIndexDataValuesFunction;
 
   static const unsigned int kBadThreadLocalIndex =
@@ -7868,19 +7977,18 @@ private:
   DoDatabaseWork(DatabaseConnection* aConnection) override;
 };
 
-class NormalJSRuntime
+class NormalJSContext
 {
-  friend class nsAutoPtr<NormalJSRuntime>;
+  friend class nsAutoPtr<NormalJSContext>;
 
   static const JSClass sGlobalClass;
-  static const uint32_t kRuntimeHeapSize = 768 * 1024;
+  static const uint32_t kContextHeapSize = 768 * 1024;
 
-  JSRuntime* mRuntime;
   JSContext* mContext;
   JSObject* mGlobal;
 
 public:
-  static NormalJSRuntime*
+  static NormalJSContext*
   Create();
 
   JSContext*
@@ -7896,24 +8004,19 @@ public:
   }
 
 protected:
-  NormalJSRuntime()
-    : mRuntime(nullptr)
-    , mContext(nullptr)
+  NormalJSContext()
+    : mContext(nullptr)
     , mGlobal(nullptr)
   {
-    MOZ_COUNT_CTOR(NormalJSRuntime);
+    MOZ_COUNT_CTOR(NormalJSContext);
   }
 
-  ~NormalJSRuntime()
+  ~NormalJSContext()
   {
-    MOZ_COUNT_DTOR(NormalJSRuntime);
+    MOZ_COUNT_DTOR(NormalJSContext);
 
     if (mContext) {
       JS_DestroyContext(mContext);
-    }
-
-    if (mRuntime) {
-      JS_DestroyRuntime(mRuntime);
     }
   }
 
@@ -7921,25 +8024,25 @@ protected:
   Init();
 };
 
-class CreateIndexOp::ThreadLocalJSRuntime final
-  : public NormalJSRuntime
+class CreateIndexOp::ThreadLocalJSContext final
+  : public NormalJSContext
 {
   friend class CreateIndexOp;
-  friend class nsAutoPtr<ThreadLocalJSRuntime>;
+  friend class nsAutoPtr<ThreadLocalJSContext>;
 
 public:
-  static ThreadLocalJSRuntime*
+  static ThreadLocalJSContext*
   GetOrCreate();
 
 private:
-  ThreadLocalJSRuntime()
+  ThreadLocalJSContext()
   {
-    MOZ_COUNT_CTOR(CreateIndexOp::ThreadLocalJSRuntime);
+    MOZ_COUNT_CTOR(CreateIndexOp::ThreadLocalJSContext);
   }
 
-  ~ThreadLocalJSRuntime()
+  ~ThreadLocalJSContext()
   {
-    MOZ_COUNT_DTOR(CreateIndexOp::ThreadLocalJSRuntime);
+    MOZ_COUNT_DTOR(CreateIndexOp::ThreadLocalJSContext);
   }
 };
 
@@ -8008,8 +8111,9 @@ class RenameIndexOp final
 {
   friend class VersionChangeTransaction;
 
-  const RefPtr<FullIndexMetadata> mMetadata;
   const int64_t mObjectStoreId;
+  const int64_t mIndexId;
+  const nsString mNewName;
 
 private:
   // Only created by VersionChangeTransaction.
@@ -8017,10 +8121,11 @@ private:
                 FullIndexMetadata* const aMetadata,
                 int64_t aObjectStoreId)
     : VersionChangeTransactionOp(aTransaction)
-    , mMetadata(aMetadata)
     , mObjectStoreId(aObjectStoreId)
+    , mIndexId(aMetadata->mCommonMetadata.id())
+    , mNewName(aMetadata->mCommonMetadata.name())
   {
-    MOZ_ASSERT(aMetadata->mCommonMetadata.id());
+    MOZ_ASSERT(mIndexId);
   }
 
   ~RenameIndexOp()
@@ -8063,11 +8168,18 @@ protected:
                         const bool aMayHaveIndexes,
                         bool* aHasIndexes);
 
+  virtual nsresult
+  GetPreprocessParams(PreprocessParams& aParams);
+
+
   // Subclasses use this override to set the IPDL response value.
   virtual void
   GetResponse(RequestResponse& aResponse) = 0;
 
 private:
+  virtual nsresult
+  SendPreprocessInfo() override;
+
   virtual nsresult
   SendSuccessResult() override;
 
@@ -8077,6 +8189,9 @@ private:
   // IPDL methods.
   virtual void
   ActorDestroy(ActorDestroyReason aWhy) override;
+
+  virtual bool
+  RecvContinue(const PreprocessResponse& aResponse) override;
 };
 
 class ObjectStoreAddOrPutRequestOp final
@@ -8087,6 +8202,7 @@ class ObjectStoreAddOrPutRequestOp final
   typedef mozilla::dom::quota::PersistenceType PersistenceType;
 
   struct StoredFileInfo;
+  class SCInputStream;
 
   const ObjectStoreAddPutParams mParams;
   Maybe<UniqueIndexTable> mUniqueIndexTable;
@@ -8105,6 +8221,7 @@ class ObjectStoreAddOrPutRequestOp final
   const PersistenceType mPersistenceType;
   const bool mOverwrite;
   bool mObjectStoreMayHaveIndexes;
+  bool mDataOverThreshold;
 
 private:
   // Only created by TransactionBase.
@@ -8118,7 +8235,10 @@ private:
   RemoveOldIndexDataValues(DatabaseConnection* aConnection);
 
   nsresult
-  CopyFileData(nsIInputStream* aInputStream, nsIOutputStream* aOutputStream);
+  CopyFileData(nsIInputStream* aInputStream,
+               nsIOutputStream* aOutputStream,
+               char* aBuffer,
+               uint32_t aBufferSize);
 
   virtual bool
   Init(TransactionBase* aTransaction) override;
@@ -8138,11 +8258,11 @@ struct ObjectStoreAddOrPutRequestOp::StoredFileInfo final
   RefPtr<DatabaseFile> mFileActor;
   RefPtr<FileInfo> mFileInfo;
   nsCOMPtr<nsIInputStream> mInputStream;
-  bool mMutable;
+  StructuredCloneFile::FileType mType;
   bool mCopiedSuccessfully;
 
   StoredFileInfo()
-    : mMutable(false)
+    : mType(StructuredCloneFile::eBlob)
     , mCopiedSuccessfully(false)
   {
     AssertIsOnBackgroundThread();
@@ -8156,6 +8276,62 @@ struct ObjectStoreAddOrPutRequestOp::StoredFileInfo final
 
     MOZ_COUNT_DTOR(ObjectStoreAddOrPutRequestOp::StoredFileInfo);
   }
+
+  void
+  Serialize(nsString& aText)
+  {
+    MOZ_ASSERT(mFileInfo);
+
+    const int64_t id = mFileInfo->Id();
+
+    switch (mType) {
+      case StructuredCloneFile::eBlob:
+        aText.AppendInt(id);
+        break;
+
+      case StructuredCloneFile::eMutableFile:
+        aText.AppendInt(-id);
+        break;
+
+      case StructuredCloneFile::eStructuredClone:
+        aText.Append('.');
+        aText.AppendInt(id);
+        break;
+
+      case StructuredCloneFile::eWasmBytecode:
+        aText.Append('/');
+        aText.AppendInt(id);
+        break;
+
+      case StructuredCloneFile::eWasmCompiled:
+        aText.Append('\\');
+        aText.AppendInt(id);
+        break;
+
+      default:
+        MOZ_CRASH("Should never get here!");
+    }
+  }
+};
+
+class ObjectStoreAddOrPutRequestOp::SCInputStream final
+  : public nsIInputStream
+{
+  const JSStructuredCloneData& mData;
+  JSStructuredCloneData::IterImpl mIter;
+
+public:
+  explicit SCInputStream(const JSStructuredCloneData& aData)
+    : mData(aData)
+    , mIter(aData.Iter())
+  { }
+
+private:
+  virtual ~SCInputStream()
+  { }
+
+  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_NSIINPUTSTREAM
 };
 
 class ObjectStoreGetRequestOp final
@@ -8168,6 +8344,7 @@ class ObjectStoreGetRequestOp final
   const OptionalKeyRange mOptionalKeyRange;
   AutoTArray<StructuredCloneReadInfo, 1> mResponse;
   PBackgroundParent* mBackgroundParent;
+  uint32_t mPreprocessInfoCount;
   const uint32_t mLimit;
   const bool mGetAll;
 
@@ -8180,34 +8357,41 @@ private:
   ~ObjectStoreGetRequestOp()
   { }
 
+  template <bool aForPreprocess, typename T>
   nsresult
-  ConvertResponse(uint32_t aIndex,
-                  SerializedStructuredCloneReadInfo& aSerializedInfo);
+  ConvertResponse(StructuredCloneReadInfo& aInfo, T& aResult);
 
   virtual nsresult
   DoDatabaseWork(DatabaseConnection* aConnection) override;
+
+  virtual bool
+  HasPreprocessInfo() override;
+
+  virtual nsresult
+  GetPreprocessParams(PreprocessParams& aParams) override;
 
   virtual void
   GetResponse(RequestResponse& aResponse) override;
 };
 
-class ObjectStoreGetAllKeysRequestOp final
+class ObjectStoreGetKeyRequestOp final
   : public NormalTransactionOp
 {
   friend class TransactionBase;
 
-  const ObjectStoreGetAllKeysParams mParams;
+  const uint32_t mObjectStoreId;
+  const OptionalKeyRange mOptionalKeyRange;
+  const uint32_t mLimit;
+  const bool mGetAll;
   FallibleTArray<Key> mResponse;
 
 private:
   // Only created by TransactionBase.
-  ObjectStoreGetAllKeysRequestOp(TransactionBase* aTransaction,
-                                 const ObjectStoreGetAllKeysParams& aParams)
-    : NormalTransactionOp(aTransaction)
-    , mParams(aParams)
-  { }
+  ObjectStoreGetKeyRequestOp(TransactionBase* aTransaction,
+                             const RequestParams& aParams,
+                             bool aGetAll);
 
-  ~ObjectStoreGetAllKeysRequestOp()
+  ~ObjectStoreGetKeyRequestOp()
   { }
 
   virtual nsresult
@@ -8432,6 +8616,7 @@ private:
 
   nsCString mContinueQuery;
   nsCString mContinueToQuery;
+  nsCString mContinuePrimaryKeyQuery;
   nsCString mLocale;
 
   Key mKey;
@@ -8489,7 +8674,7 @@ private:
   RecvDeleteMe() override;
 
   virtual bool
-  RecvContinue(const CursorRequestParams& aParams, const Key& key) override;
+  RecvContinue(const CursorRequestParams& aParams) override;
 
   bool
   IsLocaleAware() const {
@@ -8584,16 +8769,13 @@ class Cursor::ContinueOp final
   friend class Cursor;
 
   const CursorRequestParams mParams;
-  const Key mKey;
 
 private:
   // Only created by Cursor.
   ContinueOp(Cursor* aCursor,
-             const CursorRequestParams& aParams,
-             const Key& aKey)
+             const CursorRequestParams& aParams)
     : CursorOpBase(aCursor)
     , mParams(aParams)
-    , mKey(aKey)
   {
     MOZ_ASSERT(aParams.type() != CursorRequestParams::T__None);
   }
@@ -8950,7 +9132,7 @@ public:
   {
     AssertIsOnBackgroundThread();
     MOZ_ASSERT(aMaintenance);
-    MOZ_ASSERT(mCurrentMaintenance = aMaintenance);
+    MOZ_ASSERT(mCurrentMaintenance == aMaintenance);
 
     mCurrentMaintenance = nullptr;
     ProcessMaintenanceQueue();
@@ -8998,6 +9180,12 @@ public:
 
   virtual void
   ShutdownWorkThreads() override;
+
+  virtual void
+  DidInitialize(QuotaManager* aQuotaManager) override;
+
+  virtual void
+  WillShutdown() override;
 
 private:
   ~QuotaClient();
@@ -9465,25 +9653,125 @@ TokenizerIgnoreNothing(char16_t /* aChar */)
 }
 
 nsresult
-ConvertFileIdsToArray(const nsAString& aFileIds,
-                      nsTArray<int64_t>& aResult)
+DeserializeStructuredCloneFile(FileManager* aFileManager,
+                               const nsString& aText,
+                               StructuredCloneFile* aFile)
 {
+  MOZ_ASSERT(!aText.IsEmpty());
+  MOZ_ASSERT(aFile);
+
+  StructuredCloneFile::FileType type;
+
+  switch (aText.First()) {
+    case char16_t('-'):
+      type = StructuredCloneFile::eMutableFile;
+      break;
+
+    case char16_t('.'):
+      type = StructuredCloneFile::eStructuredClone;
+      break;
+
+    case char16_t('/'):
+      type = StructuredCloneFile::eWasmBytecode;
+      break;
+
+    case char16_t('\\'):
+      type = StructuredCloneFile::eWasmCompiled;
+      break;
+
+    default:
+      type = StructuredCloneFile::eBlob;
+  }
+
+  nsresult rv;
+  int32_t id;
+
+  if (type == StructuredCloneFile::eBlob) {
+    id = aText.ToInteger(&rv);
+  } else {
+    nsString text(Substring(aText, 1));
+
+    id = text.ToInteger(&rv);
+  }
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  RefPtr<FileInfo> fileInfo = aFileManager->GetFileInfo(id);
+  MOZ_ASSERT(fileInfo);
+
+  aFile->mFileInfo.swap(fileInfo);
+  aFile->mType = type;
+
+  return NS_OK;
+}
+
+nsresult
+DeserializeStructuredCloneFiles(FileManager* aFileManager,
+                                const nsAString& aText,
+                                nsTArray<StructuredCloneFile>& aResult,
+                                bool* aHasPreprocessInfo)
+{
+  MOZ_ASSERT(!IsOnBackgroundThread());
+  MOZ_ASSERT(aHasPreprocessInfo);
+
   nsCharSeparatedTokenizerTemplate<TokenizerIgnoreNothing>
-    tokenizer(aFileIds, ' ');
+    tokenizer(aText, ' ');
 
   nsAutoString token;
   nsresult rv;
+  nsCOMPtr<nsIFile> directory;
 
   while (tokenizer.hasMoreTokens()) {
     token = tokenizer.nextToken();
     MOZ_ASSERT(!token.IsEmpty());
 
-    int32_t id = token.ToInteger(&rv);
+    StructuredCloneFile* file = aResult.AppendElement();
+    rv = DeserializeStructuredCloneFile(aFileManager, token, file);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
 
-    aResult.AppendElement(id);
+    if (file->mType == StructuredCloneFile::eWasmBytecode) {
+      MOZ_ASSERT(file->mValid);
+
+      *aHasPreprocessInfo = true;
+    }
+    else if (file->mType == StructuredCloneFile::eWasmCompiled) {
+      if (!directory) {
+        directory = aFileManager->GetCheckedDirectory();
+        if (NS_WARN_IF(!directory)) {
+          return NS_ERROR_FAILURE;
+        }
+      }
+
+      const int64_t fileId = file->mFileInfo->Id();
+      MOZ_ASSERT(fileId > 0);
+
+      nsCOMPtr<nsIFile> nativeFile =
+        aFileManager->GetCheckedFileForId(directory, fileId);
+      if (NS_WARN_IF(!nativeFile)) {
+        return NS_ERROR_FAILURE;
+      }
+
+      ScopedPRFileDesc fileDesc;
+      rv = nativeFile->OpenNSPRFileDesc(PR_RDONLY, 0644, &fileDesc.rwget());
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        return rv;
+      }
+
+      JS::BuildIdCharVector buildId;
+      bool ok = GetBuildId(&buildId);
+      if (NS_WARN_IF(!ok)) {
+        return NS_ERROR_FAILURE;
+      }
+
+      MOZ_ASSERT(file->mValid);
+      file->mValid = JS::CompiledWasmModuleAssumptionsMatch(fileDesc,
+                                                            Move(buildId));
+
+      *aHasPreprocessInfo = true;
+    }
   }
 
   return NS_OK;
@@ -9512,15 +9800,17 @@ GetDatabaseBaseFilename(const nsAString& aFilename,
 }
 
 nsresult
-ConvertBlobsToActors(PBackgroundParent* aBackgroundActor,
-                     Database* aDatabase,
-                     const nsTArray<StructuredCloneFile>& aFiles,
-                     FallibleTArray<BlobOrMutableFile>& aActors)
+SerializeStructuredCloneFiles(
+                         PBackgroundParent* aBackgroundActor,
+                         Database* aDatabase,
+                         const nsTArray<StructuredCloneFile>& aFiles,
+                         bool aForPreprocess,
+                         FallibleTArray<SerializedStructuredCloneFile>& aResult)
 {
   AssertIsOnBackgroundThread();
   MOZ_ASSERT(aBackgroundActor);
   MOZ_ASSERT(aDatabase);
-  MOZ_ASSERT(aActors.IsEmpty());
+  MOZ_ASSERT(aResult.IsEmpty());
 
   if (aFiles.IsEmpty()) {
     return NS_OK;
@@ -9528,86 +9818,142 @@ ConvertBlobsToActors(PBackgroundParent* aBackgroundActor,
 
   FileManager* fileManager = aDatabase->GetFileManager();
 
-  nsCOMPtr<nsIFile> directory = fileManager->GetDirectory();
+  nsCOMPtr<nsIFile> directory = fileManager->GetCheckedDirectory();
   if (NS_WARN_IF(!directory)) {
     IDB_REPORT_INTERNAL_ERR();
     return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
   }
 
-  DebugOnly<bool> exists;
-  MOZ_ASSERT(NS_SUCCEEDED(directory->Exists(&exists)));
-  MOZ_ASSERT(exists);
-
-  DebugOnly<bool> isDirectory;
-  MOZ_ASSERT(NS_SUCCEEDED(directory->IsDirectory(&isDirectory)));
-  MOZ_ASSERT(isDirectory);
-
   const uint32_t count = aFiles.Length();
 
-  if (NS_WARN_IF(!aActors.SetCapacity(count, fallible))) {
+  if (NS_WARN_IF(!aResult.SetCapacity(count, fallible))) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
   for (uint32_t index = 0; index < count; index++) {
     const StructuredCloneFile& file = aFiles[index];
 
+    if (aForPreprocess &&
+        file.mType != StructuredCloneFile::eWasmBytecode &&
+        file.mType != StructuredCloneFile::eWasmCompiled) {
+      continue;
+    }
+
     const int64_t fileId = file.mFileInfo->Id();
     MOZ_ASSERT(fileId > 0);
 
     nsCOMPtr<nsIFile> nativeFile =
-      fileManager->GetFileForId(directory, fileId);
+      fileManager->GetCheckedFileForId(directory, fileId);
     if (NS_WARN_IF(!nativeFile)) {
       IDB_REPORT_INTERNAL_ERR();
       return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
     }
 
-    MOZ_ASSERT(NS_SUCCEEDED(nativeFile->Exists(&exists)));
-    MOZ_ASSERT(exists);
+    switch (file.mType) {
+      case StructuredCloneFile::eBlob: {
+        RefPtr<BlobImpl> impl = new BlobImplStoredFile(nativeFile,
+                                                       file.mFileInfo,
+                                                       /* aSnapshot */ false);
 
-    DebugOnly<bool> isFile;
-    MOZ_ASSERT(NS_SUCCEEDED(nativeFile->IsFile(&isFile)));
-    MOZ_ASSERT(isFile);
-
-    if (file.mMutable) {
-      if (aDatabase->IsFileHandleDisabled()) {
-        MOZ_ALWAYS_TRUE(aActors.AppendElement(NullableMutableFile(null_t()),
-                                              fallible));
-      } else {
-        RefPtr<MutableFile> actor =
-          MutableFile::Create(nativeFile, aDatabase, file.mFileInfo);
+        PBlobParent* actor =
+          BackgroundParent::GetOrCreateActorForBlobImpl(aBackgroundActor, impl);
         if (!actor) {
-          IDB_REPORT_INTERNAL_ERR();
-          return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
-        }
-
-        // Transfer ownership to IPDL.
-        actor->SetActorAlive();
-
-        if (!aDatabase->SendPBackgroundMutableFileConstructor(actor,
-                                                              EmptyString(),
-                                                              EmptyString())) {
           // This can only fail if the child has crashed.
           IDB_REPORT_INTERNAL_ERR();
           return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
         }
 
-        MOZ_ALWAYS_TRUE(aActors.AppendElement(NullableMutableFile(actor),
-                                              fallible));
-      }
-    } else {
-      RefPtr<BlobImpl> impl = new BlobImplStoredFile(nativeFile,
-                                                       file.mFileInfo,
-                                                       /* aSnapshot */ false);
+        SerializedStructuredCloneFile* file = aResult.AppendElement(fallible);
+        MOZ_ASSERT(file);
 
-      PBlobParent* actor =
-        BackgroundParent::GetOrCreateActorForBlobImpl(aBackgroundActor, impl);
-      if (!actor) {
-        // This can only fail if the child has crashed.
-        IDB_REPORT_INTERNAL_ERR();
-        return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+        file->file() = actor;
+        file->type() = StructuredCloneFile::eBlob;
+
+        break;
       }
 
-      MOZ_ALWAYS_TRUE(aActors.AppendElement(actor, fallible));
+      case StructuredCloneFile::eMutableFile: {
+        if (aDatabase->IsFileHandleDisabled()) {
+          SerializedStructuredCloneFile* file = aResult.AppendElement(fallible);
+          MOZ_ASSERT(file);
+
+          file->file() = null_t();
+          file->type() = StructuredCloneFile::eMutableFile;
+        } else {
+          RefPtr<MutableFile> actor =
+            MutableFile::Create(nativeFile, aDatabase, file.mFileInfo);
+          if (!actor) {
+            IDB_REPORT_INTERNAL_ERR();
+            return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+          }
+
+          // Transfer ownership to IPDL.
+          actor->SetActorAlive();
+
+          if (!aDatabase->SendPBackgroundMutableFileConstructor(actor,
+                                                                EmptyString(),
+                                                                EmptyString())) {
+            // This can only fail if the child has crashed.
+            IDB_REPORT_INTERNAL_ERR();
+            return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+          }
+
+          SerializedStructuredCloneFile* file = aResult.AppendElement(fallible);
+          MOZ_ASSERT(file);
+
+          file->file() = actor;
+          file->type() = StructuredCloneFile::eMutableFile;
+        }
+
+        break;
+      }
+
+      case StructuredCloneFile::eStructuredClone: {
+        SerializedStructuredCloneFile* file = aResult.AppendElement(fallible);
+        MOZ_ASSERT(file);
+
+        file->file() = null_t();
+        file->type() = StructuredCloneFile::eStructuredClone;
+
+        break;
+      }
+
+      case StructuredCloneFile::eWasmBytecode:
+      case StructuredCloneFile::eWasmCompiled: {
+        if (!aForPreprocess || !file.mValid) {
+          SerializedStructuredCloneFile* serializedFile =
+            aResult.AppendElement(fallible);
+          MOZ_ASSERT(serializedFile);
+
+          serializedFile->file() = null_t();
+          serializedFile->type() = file.mType;
+        } else {
+          RefPtr<BlobImpl> impl = new BlobImplStoredFile(nativeFile,
+                                                         file.mFileInfo,
+                                                         /* aSnapshot */ false);
+
+          PBlobParent* actor =
+            BackgroundParent::GetOrCreateActorForBlobImpl(aBackgroundActor,
+                                                          impl);
+          if (!actor) {
+            // This can only fail if the child has crashed.
+            IDB_REPORT_INTERNAL_ERR();
+            return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+          }
+
+          SerializedStructuredCloneFile* serializedFile =
+            aResult.AppendElement(fallible);
+          MOZ_ASSERT(serializedFile);
+
+          serializedFile->file() = actor;
+          serializedFile->type() = file.mType;
+        }
+
+        break;
+      }
+
+      default:
+        MOZ_CRASH("Should never get here!");
     }
   }
 
@@ -9919,7 +10265,7 @@ RecvFlushPendingFileDeletions()
   RefPtr<FlushPendingFileDeletionsRunnable> runnable =
     new FlushPendingFileDeletionsRunnable();
 
-  MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(runnable));
+  MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(runnable.forget()));
 
   return true;
 }
@@ -11188,22 +11534,22 @@ UpdateRefcountFunction::ProcessValue(mozIStorageValueArray* aValues,
     return rv;
   }
 
-  nsTArray<int64_t> fileIds;
-  rv = ConvertFileIdsToArray(ids, fileIds);
+  nsTArray<StructuredCloneFile> files;
+  bool dummy;
+  rv = DeserializeStructuredCloneFiles(mFileManager, ids, files, &dummy);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
 
-  for (uint32_t i = 0; i < fileIds.Length(); i++) {
-    MOZ_ASSERT(fileIds[i] != 0);
-    int64_t id = Abs(fileIds[i]);
+  for (uint32_t i = 0; i < files.Length(); i++) {
+    const StructuredCloneFile& file = files[i];
+
+    const int64_t id = file.mFileInfo->Id();
+    MOZ_ASSERT(id > 0);
 
     FileInfoEntry* entry;
     if (!mFileInfoEntries.Get(id, &entry)) {
-      RefPtr<FileInfo> fileInfo = mFileManager->GetFileInfo(id);
-      MOZ_ASSERT(fileInfo);
-
-      entry = new FileInfoEntry(fileInfo);
+      entry = new FileInfoEntry(file.mFileInfo);
       mFileInfoEntries.Put(id, entry);
     }
 
@@ -11721,7 +12067,7 @@ ConnectionPool::Start(const nsID& aBackgroundChildLoggingId,
     // Mark what we are blocking on.
     if (TransactionInfo* blockingRead = blockInfo->mLastBlockingReads) {
       transactionInfo->mBlockedOn.PutEntry(blockingRead);
-      blockingRead->mBlocking.PutEntry(transactionInfo);
+      blockingRead->AddBlockingTransaction(transactionInfo);
     }
 
     if (aIsWriteTransaction) {
@@ -11732,7 +12078,7 @@ ConnectionPool::Start(const nsID& aBackgroundChildLoggingId,
           MOZ_ASSERT(blockingWrite);
 
           transactionInfo->mBlockedOn.PutEntry(blockingWrite);
-          blockingWrite->mBlocking.PutEntry(transactionInfo);
+          blockingWrite->AddBlockingTransaction(transactionInfo);
         }
       }
 
@@ -12018,11 +12364,11 @@ ConnectionPool::ShutdownThread(ThreadInfo& aThreadInfo)
                  runnable->SerialNumber()));
 
   // This should clean up the thread with the profiler.
-  MOZ_ALWAYS_SUCCEEDS(thread->Dispatch(runnable, NS_DISPATCH_NORMAL));
+  MOZ_ALWAYS_SUCCEEDS(thread->Dispatch(runnable.forget(),
+                                       NS_DISPATCH_NORMAL));
 
-  nsCOMPtr<nsIRunnable> shutdownRunnable =
-    NewRunnableMethod(thread, &nsIThread::Shutdown);
-  MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(shutdownRunnable));
+  MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(
+                        NewRunnableMethod(thread, &nsIThread::Shutdown)));
 
   mTotalThreadCount--;
 }
@@ -12137,7 +12483,7 @@ ConnectionPool::ScheduleTransaction(TransactionInfo* aTransactionInfo,
           MOZ_ASSERT(dbInfo->mThreadInfo.mThread);
 
           MOZ_ALWAYS_SUCCEEDS(
-            dbInfo->mThreadInfo.mThread->Dispatch(runnable,
+            dbInfo->mThreadInfo.mThread->Dispatch(runnable.forget(),
                                                   NS_DISPATCH_NORMAL));
         }
       }
@@ -12195,7 +12541,8 @@ ConnectionPool::ScheduleTransaction(TransactionInfo* aTransactionInfo,
       queuedRunnables[index].swap(runnable);
 
       MOZ_ALWAYS_SUCCEEDS(
-        dbInfo->mThreadInfo.mThread->Dispatch(runnable, NS_DISPATCH_NORMAL));
+        dbInfo->mThreadInfo.mThread->Dispatch(runnable.forget(),
+                                              NS_DISPATCH_NORMAL));
     }
 
     queuedRunnables.Clear();
@@ -12263,18 +12610,7 @@ ConnectionPool::NoteFinishedTransaction(uint64_t aTransactionId)
     blockInfo->mLastBlockingWrites.RemoveElement(transactionInfo);
   }
 
-  for (auto iter = transactionInfo->mBlocking.Iter();
-       !iter.Done();
-       iter.Next()) {
-    TransactionInfo* blockedInfo = iter.Get()->GetKey();
-    MOZ_ASSERT(blockedInfo);
-    MOZ_ASSERT(blockedInfo->mBlockedOn.Contains(transactionInfo));
-
-    blockedInfo->mBlockedOn.RemoveEntry(transactionInfo);
-    if (!blockedInfo->mBlockedOn.Count()) {
-      blockedInfo->Schedule();
-    }
-  }
+  transactionInfo->RemoveBlockingTransactions();
 
   if (transactionInfo->mIsWriteTransaction) {
     MOZ_ASSERT(dbInfo->mWriteTransactionCount);
@@ -12529,7 +12865,7 @@ ConnectionPool::PerformIdleDatabaseMaintenance(DatabaseInfo* aDatabaseInfo)
   mDatabasesPerformingIdleMaintenance.AppendElement(aDatabaseInfo);
 
   MOZ_ALWAYS_SUCCEEDS(
-    aDatabaseInfo->mThreadInfo.mThread->Dispatch(runnable,
+    aDatabaseInfo->mThreadInfo.mThread->Dispatch(runnable.forget(),
                                                  NS_DISPATCH_NORMAL));
 }
 
@@ -12550,7 +12886,7 @@ ConnectionPool::CloseDatabase(DatabaseInfo* aDatabaseInfo)
   nsCOMPtr<nsIRunnable> runnable = new CloseConnectionRunnable(aDatabaseInfo);
 
   MOZ_ALWAYS_SUCCEEDS(
-    aDatabaseInfo->mThreadInfo.mThread->Dispatch(runnable,
+    aDatabaseInfo->mThreadInfo.mThread->Dispatch(runnable.forget(),
                                                  NS_DISPATCH_NORMAL));
 }
 
@@ -12606,12 +12942,16 @@ IdleConnectionRunnable::Run()
 
   if (owningThread) {
     mDatabaseInfo->AssertIsOnConnectionThread();
-    MOZ_ASSERT(mDatabaseInfo->mConnection);
-    mDatabaseInfo->mConnection->DoIdleProcessing(mNeedsCheckpoint);
 
-    MOZ_ALWAYS_SUCCEEDS(
-      owningThread->Dispatch(this, NS_DISPATCH_NORMAL));
-    return NS_OK;
+    // The connection could be null if EnsureConnection() didn't run or was not
+    // successful in TransactionDatabaseOperationBase::RunOnConnectionThread().
+    if (mDatabaseInfo->mConnection) {
+      mDatabaseInfo->mConnection->DoIdleProcessing(mNeedsCheckpoint);
+
+      MOZ_ALWAYS_SUCCEEDS(
+        owningThread->Dispatch(this, NS_DISPATCH_NORMAL));
+      return NS_OK;
+    }
   }
 
   RefPtr<ConnectionPool> connectionPool = mDatabaseInfo->mConnectionPool;
@@ -12650,6 +12990,8 @@ CloseConnectionRunnable::Run()
     nsCOMPtr<nsIEventTarget> owningThread;
     mOwningThread.swap(owningThread);
 
+    // The connection could be null if EnsureConnection() didn't run or was not
+    // successful in TransactionDatabaseOperationBase::RunOnConnectionThread().
     if (mDatabaseInfo->mConnection) {
       mDatabaseInfo->AssertIsOnConnectionThread();
 
@@ -12939,16 +13281,6 @@ IdleResource::IdleResource(const TimeStamp& aIdleTime)
 }
 
 ConnectionPool::
-IdleResource::IdleResource(const IdleResource& aOther)
-  : mIdleTime(aOther.mIdleTime)
-{
-  AssertIsOnBackgroundThread();
-  MOZ_ASSERT(!aOther.mIdleTime.IsNull());
-
-  MOZ_COUNT_CTOR(ConnectionPool::IdleResource);
-}
-
-ConnectionPool::
 IdleResource::~IdleResource()
 {
   AssertIsOnBackgroundThread();
@@ -12971,17 +13303,6 @@ IdleDatabaseInfo::IdleDatabaseInfo(DatabaseInfo* aDatabaseInfo)
 }
 
 ConnectionPool::
-IdleDatabaseInfo::IdleDatabaseInfo(const IdleDatabaseInfo& aOther)
-  : IdleResource(aOther)
-  , mDatabaseInfo(aOther.mDatabaseInfo)
-{
-  AssertIsOnBackgroundThread();
-  MOZ_ASSERT(mDatabaseInfo);
-
-  MOZ_COUNT_CTOR(ConnectionPool::IdleDatabaseInfo);
-}
-
-ConnectionPool::
 IdleDatabaseInfo::~IdleDatabaseInfo()
 {
   AssertIsOnBackgroundThread();
@@ -12999,18 +13320,6 @@ IdleThreadInfo::IdleThreadInfo(const ThreadInfo& aThreadInfo)
   AssertIsOnBackgroundThread();
   MOZ_ASSERT(aThreadInfo.mRunnable);
   MOZ_ASSERT(aThreadInfo.mThread);
-
-  MOZ_COUNT_CTOR(ConnectionPool::IdleThreadInfo);
-}
-
-ConnectionPool::
-IdleThreadInfo::IdleThreadInfo(const IdleThreadInfo& aOther)
-  : IdleResource(aOther)
-  , mThreadInfo(aOther.mThreadInfo)
-{
-  AssertIsOnBackgroundThread();
-  MOZ_ASSERT(mThreadInfo.mRunnable);
-  MOZ_ASSERT(mThreadInfo.mThread);
 
   MOZ_COUNT_CTOR(ConnectionPool::IdleThreadInfo);
 }
@@ -13070,18 +13379,55 @@ TransactionInfo::~TransactionInfo()
 
 void
 ConnectionPool::
-TransactionInfo::Schedule()
+TransactionInfo::AddBlockingTransaction(TransactionInfo* aTransactionInfo)
 {
   AssertIsOnBackgroundThread();
-  MOZ_ASSERT(mDatabaseInfo);
+  MOZ_ASSERT(aTransactionInfo);
 
-  ConnectionPool* connectionPool = mDatabaseInfo->mConnectionPool;
-  MOZ_ASSERT(connectionPool);
-  connectionPool->AssertIsOnOwningThread();
+  if (!mBlocking.Contains(aTransactionInfo)) {
+    mBlocking.PutEntry(aTransactionInfo);
+    mBlockingOrdered.AppendElement(aTransactionInfo);
+  }
+}
 
-  Unused <<
-    connectionPool->ScheduleTransaction(this,
-                                        /* aFromQueuedTransactions */ false);
+void
+ConnectionPool::
+TransactionInfo::RemoveBlockingTransactions()
+{
+  AssertIsOnBackgroundThread();
+
+  for (uint32_t index = 0, count = mBlockingOrdered.Length();
+       index < count;
+       index++) {
+    TransactionInfo* blockedInfo = mBlockingOrdered[index];
+    MOZ_ASSERT(blockedInfo);
+
+    blockedInfo->MaybeUnblock(this);
+  }
+
+  mBlocking.Clear();
+  mBlockingOrdered.Clear();
+}
+
+void
+ConnectionPool::
+TransactionInfo::MaybeUnblock(TransactionInfo* aTransactionInfo)
+{
+  AssertIsOnBackgroundThread();
+  MOZ_ASSERT(mBlockedOn.Contains(aTransactionInfo));
+
+  mBlockedOn.RemoveEntry(aTransactionInfo);
+  if (!mBlockedOn.Count()) {
+    MOZ_ASSERT(mDatabaseInfo);
+
+    ConnectionPool* connectionPool = mDatabaseInfo->mConnectionPool;
+    MOZ_ASSERT(connectionPool);
+    connectionPool->AssertIsOnOwningThread();
+
+    Unused <<
+      connectionPool->ScheduleTransaction(this,
+                                          /* aFromQueuedTransactions */ false);
+  }
 }
 
 ConnectionPool::
@@ -13221,16 +13567,19 @@ Factory::Create(const LoggingInfo& aLoggingInfo)
   if (loggingInfo) {
     MOZ_ASSERT(aLoggingInfo.backgroundChildLoggingId() == loggingInfo->Id());
 #if !DISABLE_ASSERTS_FOR_FUZZING
-    NS_WARN_IF_FALSE(aLoggingInfo.nextTransactionSerialNumber() ==
-                       loggingInfo->mLoggingInfo.nextTransactionSerialNumber(),
-                     "NextTransactionSerialNumber doesn't match!");
-    NS_WARN_IF_FALSE(aLoggingInfo.nextVersionChangeTransactionSerialNumber() ==
-                       loggingInfo->mLoggingInfo.
-                         nextVersionChangeTransactionSerialNumber(),
-                     "NextVersionChangeTransactionSerialNumber doesn't match!");
-    NS_WARN_IF_FALSE(aLoggingInfo.nextRequestSerialNumber() ==
-                       loggingInfo->mLoggingInfo.nextRequestSerialNumber(),
-                     "NextRequestSerialNumber doesn't match!");
+    NS_WARNING_ASSERTION(
+      aLoggingInfo.nextTransactionSerialNumber() ==
+        loggingInfo->mLoggingInfo.nextTransactionSerialNumber(),
+      "NextTransactionSerialNumber doesn't match!");
+    NS_WARNING_ASSERTION(
+      aLoggingInfo.nextVersionChangeTransactionSerialNumber() ==
+        loggingInfo->mLoggingInfo.
+      nextVersionChangeTransactionSerialNumber(),
+      "NextVersionChangeTransactionSerialNumber doesn't match!");
+    NS_WARNING_ASSERTION(
+      aLoggingInfo.nextRequestSerialNumber() ==
+        loggingInfo->mLoggingInfo.nextRequestSerialNumber(),
+      "NextRequestSerialNumber doesn't match!");
 #endif // !DISABLE_ASSERTS_FOR_FUZZING
   } else {
     loggingInfo = new DatabaseLoggingInfo(aLoggingInfo);
@@ -13497,7 +13846,7 @@ WaitForTransactionsHelper::Run()
 
 Database::Database(Factory* aFactory,
                    const PrincipalInfo& aPrincipalInfo,
-                   const OptionalContentId& aOptionalContentParentId,
+                   const Maybe<ContentParentId>& aOptionalContentParentId,
                    const nsACString& aGroup,
                    const nsACString& aOrigin,
                    uint32_t aTelemetryId,
@@ -13815,6 +14164,14 @@ Database::ConnectionClosedCallback()
   mDirectoryLock = nullptr;
 
   CleanupMetadata();
+
+  if (IsInvalidated() && IsActorAlive()) {
+    // Step 3 and 4 of "5.2 Closing a Database":
+    // 1. Wait for all transactions to complete.
+    // 2. Fire a close event if forced flag is set, i.e., IsInvalidated() in our
+    //    implementation.
+    Unused << SendCloseAfterInvalidationComplete();
+  }
 }
 
 void
@@ -14112,12 +14469,11 @@ Database::RecvPBackgroundIDBTransactionConstructor(
   RefPtr<StartTransactionOp> startOp = new StartTransactionOp(transaction);
 
   uint64_t transactionId =
-    gConnectionPool->Start(GetLoggingInfo()->Id(),
-                           mMetadata->mDatabaseId,
-                           transaction->LoggingSerialNumber(),
-                           aObjectStoreNames,
-                           aMode != IDBTransaction::READ_ONLY,
-                           startOp);
+    startOp->StartOnConnectionPool(GetLoggingInfo()->Id(),
+                                   mMetadata->mDatabaseId,
+                                   transaction->LoggingSerialNumber(),
+                                   aObjectStoreNames,
+                                   aMode != IDBTransaction::READ_ONLY);
 
   transaction->SetActive(transactionId);
 
@@ -14522,6 +14878,22 @@ TransactionBase::VerifyRequestParams(const RequestParams& aParams) const
       break;
     }
 
+    case RequestParams::TObjectStoreGetKeyParams: {
+      const ObjectStoreGetKeyParams& params =
+        aParams.get_ObjectStoreGetKeyParams();
+      const RefPtr<FullObjectStoreMetadata> objectStoreMetadata =
+        GetMetadataForObjectStoreId(params.objectStoreId());
+      if (NS_WARN_IF(!objectStoreMetadata)) {
+        ASSERT_UNLESS_FUZZING();
+        return false;
+      }
+      if (NS_WARN_IF(!VerifyRequestParams(params.keyRange()))) {
+        ASSERT_UNLESS_FUZZING();
+        return false;
+      }
+      break;
+    }
+
     case RequestParams::TObjectStoreGetAllParams: {
       const ObjectStoreGetAllParams& params =
         aParams.get_ObjectStoreGetAllParams();
@@ -14780,7 +15152,7 @@ TransactionBase::VerifyRequestParams(const ObjectStoreAddPutParams& aParams)
     return false;
   }
 
-  if (NS_WARN_IF(aParams.cloneInfo().data().IsEmpty())) {
+  if (NS_WARN_IF(!aParams.cloneInfo().data().data.Size())) {
     ASSERT_UNLESS_FUZZING();
     return false;
   }
@@ -14795,13 +15167,13 @@ TransactionBase::VerifyRequestParams(const ObjectStoreAddPutParams& aParams)
       return false;
     }
 
-    if (NS_WARN_IF(cloneInfo.data().Length() < sizeof(uint64_t))) {
+    if (NS_WARN_IF(cloneInfo.data().data.Size() < sizeof(uint64_t))) {
       ASSERT_UNLESS_FUZZING();
       return false;
     }
 
     if (NS_WARN_IF(cloneInfo.offsetToKeyProp() >
-                   (cloneInfo.data().Length() - sizeof(uint64_t)))) {
+                   (cloneInfo.data().data.Size() - sizeof(uint64_t)))) {
       ASSERT_UNLESS_FUZZING();
       return false;
     }
@@ -14828,30 +15200,34 @@ TransactionBase::VerifyRequestParams(const ObjectStoreAddPutParams& aParams)
     MOZ_ASSERT(!updates[index].value().GetBuffer().IsEmpty());
   }
 
-  const nsTArray<DatabaseOrMutableFile>& files = aParams.files();
+  const nsTArray<FileAddInfo>& fileAddInfos = aParams.fileAddInfos();
 
-  for (uint32_t index = 0; index < files.Length(); index++) {
-    const DatabaseOrMutableFile& file = files[index];
+  for (uint32_t index = 0; index < fileAddInfos.Length(); index++) {
+    const FileAddInfo& fileAddInfo = fileAddInfos[index];
 
+    const DatabaseOrMutableFile& file = fileAddInfo.file();
     MOZ_ASSERT(file.type() != DatabaseOrMutableFile::T__None);
 
-    switch (file.type()) {
-      case DatabaseOrMutableFile::TPBackgroundIDBDatabaseFileChild:
-        ASSERT_UNLESS_FUZZING();
-        return false;
-
-      case DatabaseOrMutableFile::TPBackgroundIDBDatabaseFileParent:
+    switch (fileAddInfo.type()) {
+      case StructuredCloneFile::eBlob:
+        if (NS_WARN_IF(file.type() !=
+                         DatabaseOrMutableFile::TPBackgroundIDBDatabaseFileParent)) {
+          ASSERT_UNLESS_FUZZING();
+          return false;
+        }
         if (NS_WARN_IF(!file.get_PBackgroundIDBDatabaseFileParent())) {
           ASSERT_UNLESS_FUZZING();
           return false;
         }
         break;
 
-      case DatabaseOrMutableFile::TPBackgroundMutableFileChild:
-        ASSERT_UNLESS_FUZZING();
-        return false;
+      case StructuredCloneFile::eMutableFile: {
+        if (NS_WARN_IF(file.type() !=
+                         DatabaseOrMutableFile::TPBackgroundMutableFileParent)) {
+          ASSERT_UNLESS_FUZZING();
+          return false;
+        }
 
-      case DatabaseOrMutableFile::TPBackgroundMutableFileParent: {
         if (NS_WARN_IF(mDatabase->IsFileHandleDisabled())) {
           ASSERT_UNLESS_FUZZING();
           return false;
@@ -14878,6 +15254,27 @@ TransactionBase::VerifyRequestParams(const ObjectStoreAddPutParams& aParams)
 
         break;
       }
+
+      case StructuredCloneFile::eStructuredClone:
+        ASSERT_UNLESS_FUZZING();
+        return false;
+
+      case StructuredCloneFile::eWasmBytecode:
+      case StructuredCloneFile::eWasmCompiled:
+        if (NS_WARN_IF(file.type() !=
+                         DatabaseOrMutableFile::TPBackgroundIDBDatabaseFileParent)) {
+          ASSERT_UNLESS_FUZZING();
+          return false;
+        }
+        if (NS_WARN_IF(!file.get_PBackgroundIDBDatabaseFileParent())) {
+          ASSERT_UNLESS_FUZZING();
+          return false;
+        }
+        break;
+
+      case StructuredCloneFile::eEndGuard:
+        ASSERT_UNLESS_FUZZING();
+        return false;
 
       default:
         MOZ_CRASH("Should never get here!");
@@ -14941,7 +15338,7 @@ TransactionBase::Invalidate()
     mInvalidated = true;
     mInvalidatedOnAnyThread = true;
 
-    Abort(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR, /* aForce */ true);
+    Abort(NS_ERROR_DOM_INDEXEDDB_ABORT_ERR, /* aForce */ false);
   }
 }
 
@@ -14984,10 +15381,14 @@ TransactionBase::AllocRequest(const RequestParams& aParams, bool aTrustParams)
         new ObjectStoreGetRequestOp(this, aParams, /* aGetAll */ true);
       break;
 
+    case RequestParams::TObjectStoreGetKeyParams:
+      actor =
+        new ObjectStoreGetKeyRequestOp(this, aParams, /* aGetAll */ false);
+      break;
+
     case RequestParams::TObjectStoreGetAllKeysParams:
       actor =
-        new ObjectStoreGetAllKeysRequestOp(this,
-                                     aParams.get_ObjectStoreGetAllKeysParams());
+        new ObjectStoreGetKeyRequestOp(this, aParams, /* aGetAll */ true);
       break;
 
     case RequestParams::TObjectStoreDeleteParams:
@@ -15519,7 +15920,11 @@ VersionChangeTransaction::SendCompleteNotification(nsresult aResult)
   }
 
   if (NS_FAILED(aResult) && NS_SUCCEEDED(openDatabaseOp->mResultCode)) {
-    openDatabaseOp->mResultCode = aResult;
+    // 3.3.1 Opening a database:
+    // "If the upgrade transaction was aborted, run the steps for closing a
+    //  database connection with connection, create and return a new AbortError
+    //  exception and abort these steps."
+    openDatabaseOp->mResultCode = NS_ERROR_DOM_INDEXEDDB_ABORT_ERR;
   }
 
   openDatabaseOp->mState = OpenDatabaseOp::State::SendingResults;
@@ -16151,6 +16556,34 @@ Cursor::VerifyRequestParams(const CursorRequestParams& aParams) const
       break;
     }
 
+    case CursorRequestParams::TContinuePrimaryKeyParams: {
+      const Key& key = aParams.get_ContinuePrimaryKeyParams().key();
+      const Key& primaryKey = aParams.get_ContinuePrimaryKeyParams().primaryKey();
+      MOZ_ASSERT(!key.IsUnset());
+      MOZ_ASSERT(!primaryKey.IsUnset());
+      switch (mDirection) {
+        case IDBCursor::NEXT:
+          if (NS_WARN_IF(key < sortKey ||
+                         (key == sortKey && primaryKey <= mObjectKey))) {
+            ASSERT_UNLESS_FUZZING();
+            return false;
+          }
+          break;
+
+        case IDBCursor::PREV:
+          if (NS_WARN_IF(key > sortKey ||
+                         (key == sortKey && primaryKey >= mObjectKey))) {
+            ASSERT_UNLESS_FUZZING();
+            return false;
+          }
+          break;
+
+        default:
+          MOZ_CRASH("Should never get here!");
+      }
+      break;
+    }
+
     case CursorRequestParams::TAdvanceParams:
       if (NS_WARN_IF(!aParams.get_AdvanceParams().count())) {
         ASSERT_UNLESS_FUZZING();
@@ -16185,10 +16618,6 @@ Cursor::Start(const OpenCursorParams& aParams)
     mType == OpenCursorParams::TIndexOpenCursorParams ?
       aParams.get_IndexOpenCursorParams().optionalKeyRange() :
       aParams.get_IndexOpenKeyCursorParams().optionalKeyRange();
-
-  if (mTransaction->IsInvalidated()) {
-    return true;
-  }
 
   RefPtr<OpenOp> openOp = new OpenOp(this, optionalKeyRange);
 
@@ -16238,11 +16667,12 @@ Cursor::SendResponseInternal(
       MOZ_ASSERT(mDatabase);
       MOZ_ASSERT(mBackgroundParent);
 
-      FallibleTArray<BlobOrMutableFile> actors;
-      nsresult rv = ConvertBlobsToActors(mBackgroundParent,
-                                         mDatabase,
-                                         files,
-                                         actors);
+      FallibleTArray<SerializedStructuredCloneFile> serializedFiles;
+      nsresult rv = SerializeStructuredCloneFiles(mBackgroundParent,
+                                                  mDatabase,
+                                                  files,
+                                                  /* aForPreprocess */ false,
+                                                  serializedFiles);
       if (NS_WARN_IF(NS_FAILED(rv))) {
         aResponse = ClampResultCode(rv);
         break;
@@ -16267,9 +16697,9 @@ Cursor::SendResponseInternal(
       }
 
       MOZ_ASSERT(serializedInfo);
-      MOZ_ASSERT(serializedInfo->blobs().IsEmpty());
+      MOZ_ASSERT(serializedInfo->files().IsEmpty());
 
-      serializedInfo->blobs().SwapElements(actors);
+      serializedInfo->files().SwapElements(serializedFiles);
     }
   }
 
@@ -16315,7 +16745,7 @@ Cursor::RecvDeleteMe()
 }
 
 bool
-Cursor::RecvContinue(const CursorRequestParams& aParams, const Key& aKey)
+Cursor::RecvContinue(const CursorRequestParams& aParams)
 {
   AssertIsOnBackgroundThread();
   MOZ_ASSERT(aParams.type() != CursorRequestParams::T__None);
@@ -16349,11 +16779,7 @@ Cursor::RecvContinue(const CursorRequestParams& aParams, const Key& aKey)
     return false;
   }
 
-  if (mTransaction->IsInvalidated()) {
-    return true;
-  }
-
-  RefPtr<ContinueOp> continueOp = new ContinueOp(this, aParams, aKey);
+  RefPtr<ContinueOp> continueOp = new ContinueOp(this, aParams);
   if (NS_WARN_IF(!continueOp->Init(mTransaction))) {
     continueOp->Cleanup();
     return false;
@@ -16529,6 +16955,25 @@ FileManager::GetDirectory()
 }
 
 already_AddRefed<nsIFile>
+FileManager::GetCheckedDirectory()
+{
+  nsCOMPtr<nsIFile> directory = GetDirectory();
+  if (NS_WARN_IF(!directory)) {
+    return nullptr;
+  }
+
+  DebugOnly<bool> exists;
+  MOZ_ASSERT(NS_SUCCEEDED(directory->Exists(&exists)));
+  MOZ_ASSERT(exists);
+
+  DebugOnly<bool> isDirectory;
+  MOZ_ASSERT(NS_SUCCEEDED(directory->IsDirectory(&isDirectory)));
+  MOZ_ASSERT(isDirectory);
+
+  return directory.forget();
+}
+
+already_AddRefed<nsIFile>
 FileManager::GetJournalDirectory()
 {
   return GetFileForPath(mJournalDirectoryPath);
@@ -16631,6 +17076,26 @@ FileManager::GetFileForId(nsIFile* aDirectory, int64_t aId)
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return nullptr;
   }
+
+  return file.forget();
+}
+
+// static
+already_AddRefed<nsIFile>
+FileManager::GetCheckedFileForId(nsIFile* aDirectory, int64_t aId)
+{
+  nsCOMPtr<nsIFile> file = GetFileForId(aDirectory, aId);
+  if (NS_WARN_IF(!file)) {
+    return nullptr;
+  }
+
+  DebugOnly<bool> exists;
+  MOZ_ASSERT(NS_SUCCEEDED(file->Exists(&exists)));
+  MOZ_ASSERT(exists);
+
+  DebugOnly<bool> isFile;
+  MOZ_ASSERT(NS_SUCCEEDED(file->IsFile(&isFile)));
+  MOZ_ASSERT(isFile);
 
   return file.forget();
 }
@@ -17410,6 +17875,26 @@ QuotaClient::ShutdownWorkThreads()
     fileHandleThreadPool->Shutdown();
 
     gFileHandleThreadPool = nullptr;
+  }
+}
+
+void
+QuotaClient::DidInitialize(QuotaManager* aQuotaManager)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (IndexedDatabaseManager* mgr = IndexedDatabaseManager::Get()) {
+    mgr->NoteLiveQuotaManager(aQuotaManager);
+  }
+}
+
+void
+QuotaClient::WillShutdown()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (IndexedDatabaseManager* mgr = IndexedDatabaseManager::Get()) {
+    mgr->NoteShuttingDownQuotaManager();
   }
 }
 
@@ -18583,8 +19068,7 @@ DatabaseMaintenance::RunOnOwningThread()
   AssertIsOnBackgroundThread();
 
   if (mCompleteCallback) {
-    MOZ_ALWAYS_SUCCEEDS(NS_DispatchToCurrentThread(mCompleteCallback));
-    mCompleteCallback = nullptr;
+    MOZ_ALWAYS_SUCCEEDS(NS_DispatchToCurrentThread(mCompleteCallback.forget()));
   }
 
   mMaintenance->UnregisterDatabaseMaintenance(this);
@@ -18725,13 +19209,13 @@ UpgradeFileIdsFunction::Init(nsIFile* aFMDirectory,
     return rv;
   }
 
-  nsAutoPtr<NormalJSRuntime> runtime(NormalJSRuntime::Create());
-  if (NS_WARN_IF(!runtime)) {
+  nsAutoPtr<NormalJSContext> context(NormalJSContext::Create());
+  if (NS_WARN_IF(!context)) {
     return NS_ERROR_FAILURE;
   }
 
   mFileManager.swap(fileManager);
-  mRuntime = runtime;
+  mContext = context;
   return NS_OK;
 }
 
@@ -18744,7 +19228,7 @@ UpgradeFileIdsFunction::OnFunctionCall(mozIStorageValueArray* aArguments,
   MOZ_ASSERT(aArguments);
   MOZ_ASSERT(aResult);
   MOZ_ASSERT(mFileManager);
-  MOZ_ASSERT(mRuntime);
+  MOZ_ASSERT(mContext);
 
   PROFILER_LABEL("IndexedDB",
                  "UpgradeFileIdsFunction::OnFunctionCall",
@@ -18768,9 +19252,9 @@ UpgradeFileIdsFunction::OnFunctionCall(mozIStorageValueArray* aArguments,
                                                                   mFileManager,
                                                                   &cloneInfo);
 
-  JSContext* cx = mRuntime->Context();
+  JSContext* cx = mContext->Context();
   JSAutoRequest ar(cx);
-  JSAutoCompartment ac(cx, mRuntime->Global());
+  JSAutoCompartment ac(cx, mContext->Global());
 
   JS::Rooted<JS::Value> clone(cx);
   if (NS_WARN_IF(!IDBObjectStore::DeserializeUpgradeValue(cx, cloneInfo,
@@ -18791,7 +19275,7 @@ UpgradeFileIdsFunction::OnFunctionCall(mozIStorageValueArray* aArguments,
     if (index) {
       fileIds.Append(' ');
     }
-    fileIds.AppendInt(file.mMutable ? -id : id);
+    fileIds.AppendInt(file.mType == StructuredCloneFile::eBlob ? id : -id);
   }
 
   nsCOMPtr<nsIVariant> result = new mozilla::storage::TextVariant(fileIds);
@@ -18853,12 +19337,7 @@ uint64_t
 DatabaseOperationBase::ReinterpretDoubleAsUInt64(double aDouble)
 {
   // This is a duplicate of the js engine's byte munging in StructuredClone.cpp
-  union {
-    double d;
-    uint64_t u;
-  } pun;
-  pun.d = aDouble;
-  return pun.u;
+  return BitwiseCast<uint64_t>(aDouble);
 }
 
 // static
@@ -18876,20 +19355,14 @@ DatabaseOperationBase::GetStructuredCloneReadInfoFromSource(
   MOZ_ASSERT(aFileManager);
   MOZ_ASSERT(aInfo);
 
-#ifdef DEBUG
-  {
-    int32_t columnType;
-    MOZ_ASSERT(NS_SUCCEEDED(aSource->GetTypeOfIndex(aDataIndex, &columnType)));
-    MOZ_ASSERT(columnType == mozIStorageStatement::VALUE_TYPE_BLOB);
-  }
-#endif
-
-  const uint8_t* blobData;
-  uint32_t blobDataLength;
-  nsresult rv = aSource->GetSharedBlob(aDataIndex, &blobDataLength, &blobData);
+  int32_t columnType;
+  nsresult rv = aSource->GetTypeOfIndex(aDataIndex, &columnType);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
+
+  MOZ_ASSERT(columnType == mozIStorageStatement::VALUE_TYPE_BLOB ||
+             columnType == mozIStorageStatement::VALUE_TYPE_INTEGER);
 
   bool isNull;
   rv = aSource->GetIsNull(aFileIdsIndex, &isNull);
@@ -18908,11 +19381,32 @@ DatabaseOperationBase::GetStructuredCloneReadInfoFromSource(
     }
   }
 
-  rv = GetStructuredCloneReadInfoFromBlob(blobData,
-                                          blobDataLength,
-                                          fileIds,
-                                          aFileManager,
-                                          aInfo);
+  if (columnType == mozIStorageStatement::VALUE_TYPE_INTEGER) {
+    uint64_t intData;
+    rv = aSource->GetInt64(aDataIndex, reinterpret_cast<int64_t*>(&intData));
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+
+    rv = GetStructuredCloneReadInfoFromExternalBlob(intData,
+                                                    aFileManager,
+                                                    fileIds,
+                                                    aInfo);
+  } else {
+    const uint8_t* blobData;
+    uint32_t blobDataLength;
+    nsresult rv =
+      aSource->GetSharedBlob(aDataIndex, &blobDataLength, &blobData);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+
+    rv = GetStructuredCloneReadInfoFromBlob(blobData,
+                                            blobDataLength,
+                                            aFileManager,
+                                            fileIds,
+                                            aInfo);
+  }
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
@@ -18925,8 +19419,8 @@ nsresult
 DatabaseOperationBase::GetStructuredCloneReadInfoFromBlob(
                                                  const uint8_t* aBlobData,
                                                  uint32_t aBlobDataLength,
-                                                 const nsAString& aFileIds,
                                                  FileManager* aFileManager,
+                                                 const nsAString& aFileIds,
                                                  StructuredCloneReadInfo* aInfo)
 {
   MOZ_ASSERT(!IsOnBackgroundThread());
@@ -18958,29 +19452,99 @@ DatabaseOperationBase::GetStructuredCloneReadInfoFromBlob(
     return NS_ERROR_FILE_CORRUPTED;
   }
 
-  aInfo->mData.SwapElements(uncompressed);
+  if (!aInfo->mData.WriteBytes(uncompressedBuffer, uncompressed.Length())) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
 
   if (!aFileIds.IsVoid()) {
-    AutoTArray<int64_t, 10> array;
-    nsresult rv = ConvertFileIdsToArray(aFileIds, array);
+    nsresult rv = DeserializeStructuredCloneFiles(aFileManager,
+                                                  aFileIds,
+                                                  aInfo->mFiles,
+                                                  &aInfo->mHasPreprocessInfo);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
-    }
-
-    for (uint32_t count = array.Length(), index = 0; index < count; index++) {
-      int64_t id = array[index];
-      MOZ_ASSERT(id != 0);
-
-      RefPtr<FileInfo> fileInfo = aFileManager->GetFileInfo(Abs(id));
-      MOZ_ASSERT(fileInfo);
-
-      StructuredCloneFile* file = aInfo->mFiles.AppendElement();
-      file->mFileInfo.swap(fileInfo);
-      file->mMutable = id < 0;
     }
   }
 
   return NS_OK;
+}
+
+// static
+nsresult
+DatabaseOperationBase::GetStructuredCloneReadInfoFromExternalBlob(
+                                                 uint64_t aIntData,
+                                                 FileManager* aFileManager,
+                                                 const nsAString& aFileIds,
+                                                 StructuredCloneReadInfo* aInfo)
+{
+  MOZ_ASSERT(!IsOnBackgroundThread());
+  MOZ_ASSERT(aFileManager);
+  MOZ_ASSERT(aInfo);
+
+  PROFILER_LABEL(
+            "IndexedDB",
+            "DatabaseOperationBase::GetStructuredCloneReadInfoFromExternalBlob",
+            js::ProfileEntry::Category::STORAGE);
+
+  nsresult rv;
+
+  if (!aFileIds.IsVoid()) {
+    rv = DeserializeStructuredCloneFiles(aFileManager,
+                                         aFileIds,
+                                         aInfo->mFiles,
+                                         &aInfo->mHasPreprocessInfo);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+  }
+
+  // Higher and lower 32 bits described
+  // in ObjectStoreAddOrPutRequestOp::DoDatabaseWork.
+  uint32_t index = uint32_t(aIntData & 0xFFFFFFFF);
+
+  if (index >= aInfo->mFiles.Length()) {
+    MOZ_ASSERT(false, "Bad index value!");
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  StructuredCloneFile& file = aInfo->mFiles[index];
+  MOZ_ASSERT(file.mFileInfo);
+  MOZ_ASSERT(file.mType == StructuredCloneFile::eStructuredClone);
+
+  nsCOMPtr<nsIFile> nativeFile = GetFileForFileInfo(file.mFileInfo);
+  if (NS_WARN_IF(!nativeFile)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCOMPtr<nsIInputStream> fileInputStream;
+  rv = NS_NewLocalFileInputStream(getter_AddRefs(fileInputStream), nativeFile);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  RefPtr<SnappyUncompressInputStream> snappyInputStream =
+    new SnappyUncompressInputStream(fileInputStream);
+
+  do {
+    char buffer[kFileCopyBufferSize];
+
+    uint32_t numRead;
+    rv = snappyInputStream->Read(buffer, sizeof(buffer), &numRead);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      break;
+    }
+
+    if (!numRead) {
+      break;
+    }
+
+    if (NS_WARN_IF(!aInfo->mData.WriteBytes(buffer, numRead))) {
+      rv = NS_ERROR_OUT_OF_MEMORY;
+      break;
+    }
+  } while (true);
+
+  return rv;
 }
 
 // static
@@ -19173,7 +19737,7 @@ DatabaseOperationBase::IndexDataValuesFromUpdateInfos(
     const Key& key = updateInfo.value();
     const Key& sortKey = updateInfo.localizedValue();
 
-    bool unique;
+    bool unique = false;
     MOZ_ALWAYS_TRUE(aUniqueIndexTable.Get(indexId, &unique));
 
     IndexDataValue idv(indexId, unique, key, sortKey);
@@ -19930,13 +20494,11 @@ FactoryOp::Open()
   {
     // These services have to be started on the main thread currently.
 
-    IndexedDatabaseManager* mgr = IndexedDatabaseManager::GetOrCreate();
-    if (NS_WARN_IF(!mgr)) {
+    IndexedDatabaseManager* mgr;
+    if (NS_WARN_IF(!(mgr = IndexedDatabaseManager::GetOrCreate()))) {
       IDB_REPORT_INTERNAL_ERR();
       return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
     }
-
-    mgr->NoteBackgroundThread(mOwningThread);
 
     nsCOMPtr<mozIStorageService> ss;
     if (NS_WARN_IF(!(ss = do_GetService(MOZ_STORAGE_SERVICE_CONTRACTID)))) {
@@ -20143,8 +20705,7 @@ FactoryOp::FinishSendResults()
 
   if (mBlockedDatabaseOpen) {
     if (mDelayedOp) {
-      MOZ_ALWAYS_SUCCEEDS(NS_DispatchToCurrentThread(mDelayedOp));
-      mDelayedOp = nullptr;
+      MOZ_ALWAYS_SUCCEEDS(NS_DispatchToCurrentThread(mDelayedOp.forget()));
     }
 
     MOZ_ASSERT(gFactoryOps);
@@ -20283,25 +20844,9 @@ FactoryOp::CheckPermission(ContentParent* aContentParent,
   PermissionRequestBase::PermissionValue permission;
 
   if (QuotaManager::IsFirstPromptRequired(persistenceType, origin, isApp)) {
-#ifdef MOZ_CHILD_PERMISSIONS
-    if (aContentParent) {
-      if (NS_WARN_IF(!AssertAppPrincipal(aContentParent, principal))) {
-        IDB_REPORT_INTERNAL_ERR();
-        return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
-      }
-
-      uint32_t intPermission =
-        mozilla::CheckPermission(aContentParent, principal, IDB_PREFIX);
-
-      permission =
-        PermissionRequestBase::PermissionValueForIntPermission(intPermission);
-    } else
-#endif // MOZ_CHILD_PERMISSIONS
-    {
-      rv = PermissionRequestBase::GetCurrentPermission(principal, &permission);
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return rv;
-      }
+    rv = PermissionRequestBase::GetCurrentPermission(principal, &permission);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
     }
   } else {
     permission = PermissionRequestBase::kPermissionAllowed;
@@ -20380,65 +20925,7 @@ FactoryOp::CheckAtLeastOneAppHasPermission(ContentParent* aContentParent,
   MOZ_ASSERT(aContentParent);
   MOZ_ASSERT(!aPermissionString.IsEmpty());
 
-#ifdef MOZ_CHILD_PERMISSIONS
-  const ManagedContainer<PBrowserParent>& browsers =
-    aContentParent->ManagedPBrowserParent();
-
-  if (!browsers.IsEmpty()) {
-    nsCOMPtr<nsIAppsService> appsService =
-      do_GetService(APPS_SERVICE_CONTRACTID);
-    if (NS_WARN_IF(!appsService)) {
-      return false;
-    }
-
-    nsCOMPtr<nsIIOService> ioService = do_GetIOService();
-    if (NS_WARN_IF(!ioService)) {
-      return false;
-    }
-
-    nsCOMPtr<nsIPermissionManager> permMan =
-      mozilla::services::GetPermissionManager();
-    if (NS_WARN_IF(!permMan)) {
-      return false;
-    }
-
-    const nsPromiseFlatCString permissionString =
-      PromiseFlatCString(aPermissionString);
-
-    for (auto iter = browsers.ConstIter(); !iter.Done(); iter.Next()) {
-      uint32_t appId =
-        TabParent::GetFrom(iter.Get()->GetKey())->OwnOrContainingAppId();
-      MOZ_ASSERT(appId != nsIScriptSecurityManager::UNKNOWN_APP_ID &&
-                 appId != nsIScriptSecurityManager::NO_APP_ID);
-
-      nsCOMPtr<mozIApplication> app;
-      nsresult rv = appsService->GetAppByLocalId(appId, getter_AddRefs(app));
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return false;
-      }
-
-      nsCOMPtr<nsIPrincipal> principal;
-      app->GetPrincipal(getter_AddRefs(principal));
-      NS_ENSURE_TRUE(principal, false);
-
-      uint32_t permission;
-      rv = permMan->TestExactPermissionFromPrincipal(principal,
-                                                     permissionString.get(),
-                                                     &permission);
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return false;
-      }
-
-      if (permission == nsIPermissionManager::ALLOW_ACTION) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-#else
   return true;
-#endif // MOZ_CHILD_PERMISSIONS
 }
 
 nsresult
@@ -20726,9 +21213,7 @@ OpenDatabaseOp::OpenDatabaseOp(Factory* aFactory,
   if (mContentParent) {
     // This is a little scary but it looks safe to call this off the main thread
     // for now.
-    mOptionalContentParentId = mContentParent->ChildID();
-  } else {
-    mOptionalContentParentId = void_t();
+    mOptionalContentParentId = Some(mContentParent->ChildID());
   }
 }
 
@@ -21554,12 +22039,12 @@ OpenDatabaseOp::DispatchToWorkThread()
   RefPtr<VersionChangeOp> versionChangeOp = new VersionChangeOp(this);
 
   uint64_t transactionId =
-    gConnectionPool->Start(backgroundChildLoggingId,
-                           mVersionChangeTransaction->DatabaseId(),
-                           loggingSerialNumber,
-                           objectStoreNames,
-                           /* aIsWriteTransaction */ true,
-                           versionChangeOp);
+    versionChangeOp->StartOnConnectionPool(
+                                        backgroundChildLoggingId,
+                                        mVersionChangeTransaction->DatabaseId(),
+                                        loggingSerialNumber,
+                                        objectStoreNames,
+                                        /* aIsWriteTransaction */ true);
 
   mVersionChangeOp = versionChangeOp;
 
@@ -22276,7 +22761,8 @@ DeleteDatabaseOp::DispatchToWorkThread()
   MOZ_ASSERT(quotaManager);
 
   nsresult rv =
-    quotaManager->IOThread()->Dispatch(versionChangeOp, NS_DISPATCH_NORMAL);
+    quotaManager->IOThread()->Dispatch(versionChangeOp.forget(),
+                                       NS_DISPATCH_NORMAL);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     IDB_REPORT_INTERNAL_ERR();
     return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
@@ -22685,6 +23171,7 @@ TransactionDatabaseOperationBase::TransactionDatabaseOperationBase(
                           aTransaction->GetLoggingInfo()->NextRequestSN())
   , mTransaction(aTransaction)
   , mTransactionLoggingSerialNumber(aTransaction->LoggingSerialNumber())
+  , mInternalState(InternalState::Initial)
   , mTransactionIsAborted(aTransaction->IsAborted())
 {
   MOZ_ASSERT(aTransaction);
@@ -22698,6 +23185,7 @@ TransactionDatabaseOperationBase::TransactionDatabaseOperationBase(
                           aLoggingSerialNumber)
   , mTransaction(aTransaction)
   , mTransactionLoggingSerialNumber(aTransaction->LoggingSerialNumber())
+  , mInternalState(InternalState::Initial)
   , mTransactionIsAborted(aTransaction->IsAborted())
 {
   MOZ_ASSERT(aTransaction);
@@ -22705,6 +23193,7 @@ TransactionDatabaseOperationBase::TransactionDatabaseOperationBase(
 
 TransactionDatabaseOperationBase::~TransactionDatabaseOperationBase()
 {
+  MOZ_ASSERT(mInternalState == InternalState::Completed);
   MOZ_ASSERT(!mTransaction,
              "TransactionDatabaseOperationBase::Cleanup() was not called by a "
              "subclass!");
@@ -22721,20 +23210,43 @@ TransactionDatabaseOperationBase::AssertIsOnConnectionThread() const
 
 #endif // DEBUG
 
+uint64_t
+TransactionDatabaseOperationBase::StartOnConnectionPool(
+                                    const nsID& aBackgroundChildLoggingId,
+                                    const nsACString& aDatabaseId,
+                                    int64_t aLoggingSerialNumber,
+                                    const nsTArray<nsString>& aObjectStoreNames,
+                                    bool aIsWriteTransaction)
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mInternalState == InternalState::Initial);
+
+  // Must set mInternalState before dispatching otherwise we will race with the
+  // connection thread.
+  mInternalState = InternalState::DatabaseWork;
+
+  return gConnectionPool->Start(aBackgroundChildLoggingId,
+                                aDatabaseId,
+                                aLoggingSerialNumber,
+                                aObjectStoreNames,
+                                aIsWriteTransaction,
+                                this);
+}
+
 void
 TransactionDatabaseOperationBase::DispatchToConnectionPool()
 {
   AssertIsOnOwningThread();
+  MOZ_ASSERT(mInternalState == InternalState::Initial);
 
-  gConnectionPool->Dispatch(mTransaction->TransactionId(), this);
-
-  mTransaction->NoteActiveRequest();
+  Unused << this->Run();
 }
 
 void
 TransactionDatabaseOperationBase::RunOnConnectionThread()
 {
   MOZ_ASSERT(!IsOnBackgroundThread());
+  MOZ_ASSERT(mInternalState == InternalState::DatabaseWork);
   MOZ_ASSERT(mTransaction);
   MOZ_ASSERT(NS_SUCCEEDED(mResultCode));
 
@@ -22744,12 +23256,9 @@ TransactionDatabaseOperationBase::RunOnConnectionThread()
 
   // There are several cases where we don't actually have to to any work here.
 
-  if (mTransactionIsAborted) {
-    // This transaction is already set to be aborted.
+  if (mTransactionIsAborted || mTransaction->IsInvalidatedOnAnyThread()) {
+    // This transaction is already set to be aborted or invalidated.
     mResultCode = NS_ERROR_DOM_INDEXEDDB_ABORT_ERR;
-  } else if (mTransaction->IsInvalidatedOnAnyThread()) {
-    // This transaction is being invalidated.
-    mResultCode = NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
   } else if (!OperationMayProceed()) {
     // The operation was canceled in some way, likely because the child process
     // has crashed.
@@ -22804,14 +23313,86 @@ TransactionDatabaseOperationBase::RunOnConnectionThread()
     }
   }
 
+  // Must set mInternalState before dispatching otherwise we will race with the
+  // owning thread.
+  if (HasPreprocessInfo()) {
+    mInternalState = InternalState::SendingPreprocess;
+  } else {
+    mInternalState = InternalState::SendingResults;
+  }
+
   MOZ_ALWAYS_SUCCEEDS(mOwningThread->Dispatch(this, NS_DISPATCH_NORMAL));
 }
 
+bool
+TransactionDatabaseOperationBase::HasPreprocessInfo()
+{
+  return false;
+}
+
+nsresult
+TransactionDatabaseOperationBase::SendPreprocessInfo()
+{
+  return NS_OK;
+}
+
 void
-TransactionDatabaseOperationBase::RunOnOwningThread()
+TransactionDatabaseOperationBase::NoteContinueReceived()
 {
   AssertIsOnOwningThread();
+  MOZ_ASSERT(mInternalState == InternalState::WaitingForContinue);
+
+  mInternalState = InternalState::SendingResults;
+
+  Unused << this->Run();
+}
+
+void
+TransactionDatabaseOperationBase::SendToConnectionPool()
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mInternalState == InternalState::Initial);
+
+  // Must set mInternalState before dispatching otherwise we will race with the
+  // connection thread.
+  mInternalState = InternalState::DatabaseWork;
+
+  gConnectionPool->Dispatch(mTransaction->TransactionId(), this);
+
+  mTransaction->NoteActiveRequest();
+}
+
+void
+TransactionDatabaseOperationBase::SendPreprocess()
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mInternalState == InternalState::SendingPreprocess);
+
+  SendPreprocessInfoOrResults(/* aSendPreprocessInfo */ true);
+}
+
+void
+TransactionDatabaseOperationBase::SendResults()
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mInternalState == InternalState::SendingResults);
+
+  SendPreprocessInfoOrResults(/* aSendPreprocessInfo */ false);
+}
+
+void
+TransactionDatabaseOperationBase::SendPreprocessInfoOrResults(
+                                                       bool aSendPreprocessInfo)
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mInternalState == InternalState::SendingPreprocess ||
+             mInternalState == InternalState::SendingResults);
   MOZ_ASSERT(mTransaction);
+
+  // Only needed if we're being called from within NoteContinueReceived() since
+  // this TransactionDatabaseOperationBase is only held alive by the IPDL.
+  // SendSuccessResult/SendFailureResult releases that last reference.
+  RefPtr<TransactionDatabaseOperationBase> kungFuDeathGrip;
 
   if (NS_WARN_IF(IsActorDestroyed())) {
     // Don't send any notifications if the actor was destroyed already.
@@ -22820,15 +23401,22 @@ TransactionDatabaseOperationBase::RunOnOwningThread()
       mResultCode = NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
     }
   } else {
-    if (mTransaction->IsInvalidated()) {
-      mResultCode = NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
-    } else if (mTransaction->IsAborted()) {
+    if (!aSendPreprocessInfo) {
+      kungFuDeathGrip = this;
+    }
+
+    if (mTransaction->IsInvalidated() || mTransaction->IsAborted()) {
       // Aborted transactions always see their requests fail with ABORT_ERR,
       // even if the request succeeded or failed with another error.
       mResultCode = NS_ERROR_DOM_INDEXEDDB_ABORT_ERR;
     } else if (NS_SUCCEEDED(mResultCode)) {
-      // This may release the IPDL reference.
-      mResultCode = SendSuccessResult();
+      if (aSendPreprocessInfo) {
+        // This should not release the IPDL reference.
+        mResultCode = SendPreprocessInfo();
+      } else {
+        // This may release the IPDL reference.
+        mResultCode = SendSuccessResult();
+      }
     }
 
     if (NS_FAILED(mResultCode)) {
@@ -22840,17 +23428,24 @@ TransactionDatabaseOperationBase::RunOnOwningThread()
     }
   }
 
-  if (mLoggingSerialNumber) {
-    mTransaction->NoteFinishedRequest();
-  }
+  if (aSendPreprocessInfo && NS_SUCCEEDED(mResultCode)) {
+    mInternalState = InternalState::WaitingForContinue;
+  } else {
+    if (mLoggingSerialNumber) {
+      mTransaction->NoteFinishedRequest();
+    }
 
-  Cleanup();
+    Cleanup();
+
+    mInternalState = InternalState::Completed;
+  }
 }
 
 bool
 TransactionDatabaseOperationBase::Init(TransactionBase* aTransaction)
 {
   AssertIsOnBackgroundThread();
+  MOZ_ASSERT(mInternalState == InternalState::Initial);
   MOZ_ASSERT(aTransaction);
 
   return true;
@@ -22860,6 +23455,7 @@ void
 TransactionDatabaseOperationBase::Cleanup()
 {
   AssertIsOnOwningThread();
+  MOZ_ASSERT(mInternalState == InternalState::SendingResults);
   MOZ_ASSERT(mTransaction);
 
   mTransaction = nullptr;
@@ -22868,15 +23464,26 @@ TransactionDatabaseOperationBase::Cleanup()
 NS_IMETHODIMP
 TransactionDatabaseOperationBase::Run()
 {
-  MOZ_ASSERT(mTransaction);
+  switch (mInternalState) {
+    case InternalState::Initial:
+      SendToConnectionPool();
+      return NS_OK;
 
-  if (IsOnBackgroundThread()) {
-    RunOnOwningThread();
-  } else {
-    RunOnConnectionThread();
+    case InternalState::DatabaseWork:
+      RunOnConnectionThread();
+      return NS_OK;
+
+    case InternalState::SendingPreprocess:
+      SendPreprocess();
+      return NS_OK;
+
+    case InternalState::SendingResults:
+      SendResults();
+      return NS_OK;
+
+    default:
+      MOZ_CRASH("Bad state!");
   }
-
-  return NS_OK;
 }
 
 TransactionBase::
@@ -23061,19 +23668,20 @@ CommitOp::Run()
       if (NS_SUCCEEDED(mResultCode)) {
         if (fileRefcountFunction) {
           mResultCode = fileRefcountFunction->WillCommit();
-          NS_WARN_IF_FALSE(NS_SUCCEEDED(mResultCode), "WillCommit() failed!");
+          NS_WARNING_ASSERTION(NS_SUCCEEDED(mResultCode),
+                               "WillCommit() failed!");
         }
 
         if (NS_SUCCEEDED(mResultCode)) {
           mResultCode = WriteAutoIncrementCounts();
-          NS_WARN_IF_FALSE(NS_SUCCEEDED(mResultCode),
-                           "WriteAutoIncrementCounts() failed!");
+          NS_WARNING_ASSERTION(NS_SUCCEEDED(mResultCode),
+                               "WriteAutoIncrementCounts() failed!");
 
           if (NS_SUCCEEDED(mResultCode)) {
             AssertForeignKeyConsistency(connection);
 
             mResultCode = connection->CommitWriteTransaction();
-            NS_WARN_IF_FALSE(NS_SUCCEEDED(mResultCode), "Commit failed!");
+            NS_WARNING_ASSERTION(NS_SUCCEEDED(mResultCode), "Commit failed!");
 
             if (NS_SUCCEEDED(mResultCode) &&
                 mTransaction->GetMode() == IDBTransaction::READ_WRITE_FLUSH) {
@@ -23792,12 +24400,10 @@ RenameObjectStoreOp::DoDatabaseWork(DatabaseConnection* aConnection)
         &stmt));
 
     MOZ_ALWAYS_SUCCEEDS(
-      stmt->BindStringByName(NS_LITERAL_CSTRING("name"),
-                             mMetadata->mCommonMetadata.name()));
+      stmt->BindStringByName(NS_LITERAL_CSTRING("name"), mNewName));
 
     MOZ_ALWAYS_SUCCEEDS(
-      stmt->BindInt64ByName(NS_LITERAL_CSTRING("id"),
-                            mMetadata->mCommonMetadata.id()));
+      stmt->BindInt64ByName(NS_LITERAL_CSTRING("id"), mId));
 
     bool hasResult;
     MOZ_ALWAYS_SUCCEEDS(stmt->ExecuteStep(&hasResult));
@@ -23821,15 +24427,13 @@ RenameObjectStoreOp::DoDatabaseWork(DatabaseConnection* aConnection)
     return rv;
   }
 
-  rv = stmt->BindStringByName(NS_LITERAL_CSTRING("name"),
-                              mMetadata->mCommonMetadata.name());
+  rv = stmt->BindStringByName(NS_LITERAL_CSTRING("name"), mNewName);
 
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
 
-  rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("id"),
-                             mMetadata->mCommonMetadata.id());
+  rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("id"), mId);
 
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
@@ -23881,15 +24485,15 @@ CreateIndexOp::InsertDataFromObjectStore(DatabaseConnection* aConnection)
     aConnection->GetStorageConnection();
   MOZ_ASSERT(storageConnection);
 
-  ThreadLocalJSRuntime* runtime = ThreadLocalJSRuntime::GetOrCreate();
-  if (NS_WARN_IF(!runtime)) {
+  ThreadLocalJSContext* context = ThreadLocalJSContext::GetOrCreate();
+  if (NS_WARN_IF(!context)) {
     IDB_REPORT_INTERNAL_ERR();
     return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
   }
 
-  JSContext* cx = runtime->Context();
+  JSContext* cx = context->Context();
   JSAutoRequest ar(cx);
-  JSAutoCompartment ac(cx, runtime->Global());
+  JSAutoCompartment ac(cx, context->Global());
 
   RefPtr<UpdateIndexDataValuesFunction> updateFunction =
     new UpdateIndexDataValuesFunction(this, aConnection, cx);
@@ -23924,8 +24528,7 @@ CreateIndexOp::InsertDataFromObjectStoreInternal(
   MOZ_ASSERT(!IndexedDatabaseManager::InLowDiskSpaceMode());
   MOZ_ASSERT(mMaybeUniqueIndexTable);
 
-  nsCOMPtr<mozIStorageConnection> storageConnection =
-    aConnection->GetStorageConnection();
+  DebugOnly<void*> storageConnection = aConnection->GetStorageConnection();
   MOZ_ASSERT(storageConnection);
 
   DatabaseConnection::CachedStatement stmt;
@@ -23964,7 +24567,7 @@ CreateIndexOp::Init(TransactionBase* aTransaction)
     static void
     Destroy(void* aThreadLocal)
     {
-      delete static_cast<ThreadLocalJSRuntime*>(aThreadLocal);
+      delete static_cast<ThreadLocalJSContext*>(aThreadLocal);
     }
   };
 
@@ -24124,7 +24727,7 @@ CreateIndexOp::DoDatabaseWork(DatabaseConnection* aConnection)
   return NS_OK;
 }
 
-static const JSClassOps sNormalJSRuntimeGlobalClassOps = {
+static const JSClassOps sNormalJSContextGlobalClassOps = {
   /* addProperty */ nullptr,
   /* delProperty */ nullptr,
   /* getProperty */ nullptr,
@@ -24139,27 +24742,30 @@ static const JSClassOps sNormalJSRuntimeGlobalClassOps = {
   /* trace */ JS_GlobalObjectTraceHook
 };
 
-const JSClass NormalJSRuntime::sGlobalClass = {
+const JSClass NormalJSContext::sGlobalClass = {
   "IndexedDBTransactionThreadGlobal",
   JSCLASS_GLOBAL_FLAGS,
-  &sNormalJSRuntimeGlobalClassOps
+  &sNormalJSContextGlobalClassOps
 };
 
 bool
-NormalJSRuntime::Init()
+NormalJSContext::Init()
 {
   MOZ_ASSERT(!IsOnBackgroundThread());
 
-  mRuntime = JS_NewRuntime(kRuntimeHeapSize);
-  if (NS_WARN_IF(!mRuntime)) {
+  mContext = JS_NewContext(kContextHeapSize);
+  if (NS_WARN_IF(!mContext)) {
     return false;
   }
 
-  // Not setting this will cause JS_CHECK_RECURSION to report false positives.
-  JS_SetNativeStackQuota(mRuntime, 128 * sizeof(size_t) * 1024);
+  // Let everyone know that we might be able to call JS. This alerts the
+  // profiler about certain possible deadlocks.
+  NS_GetCurrentThread()->SetCanInvokeJS(true);
 
-  mContext = JS_NewContext(mRuntime, 0);
-  if (NS_WARN_IF(!mContext)) {
+  // Not setting this will cause JS_CHECK_RECURSION to report false positives.
+  JS_SetNativeStackQuota(mContext, 128 * sizeof(size_t) * 1024);
+
+  if (NS_WARN_IF(!JS::InitSelfHostedCode(mContext))) {
     return false;
   }
 
@@ -24176,46 +24782,46 @@ NormalJSRuntime::Init()
 }
 
 // static
-NormalJSRuntime*
-NormalJSRuntime::Create()
+NormalJSContext*
+NormalJSContext::Create()
 {
   MOZ_ASSERT(!IsOnBackgroundThread());
 
-  nsAutoPtr<NormalJSRuntime> newRuntime(new NormalJSRuntime());
+  nsAutoPtr<NormalJSContext> newContext(new NormalJSContext());
 
-  if (NS_WARN_IF(!newRuntime->Init())) {
+  if (NS_WARN_IF(!newContext->Init())) {
     return nullptr;
   }
 
-  return newRuntime.forget();
+  return newContext.forget();
 }
 
 // static
 auto
 CreateIndexOp::
-ThreadLocalJSRuntime::GetOrCreate() -> ThreadLocalJSRuntime*
+ThreadLocalJSContext::GetOrCreate() -> ThreadLocalJSContext*
 {
   MOZ_ASSERT(!IsOnBackgroundThread());
   MOZ_ASSERT(CreateIndexOp::kBadThreadLocalIndex !=
              CreateIndexOp::sThreadLocalIndex);
 
-  auto* runtime = static_cast<ThreadLocalJSRuntime*>(
+  auto* context = static_cast<ThreadLocalJSContext*>(
     PR_GetThreadPrivate(CreateIndexOp::sThreadLocalIndex));
-  if (runtime) {
-    return runtime;
+  if (context) {
+    return context;
   }
 
-  nsAutoPtr<ThreadLocalJSRuntime> newRuntime(new ThreadLocalJSRuntime());
+  nsAutoPtr<ThreadLocalJSContext> newContext(new ThreadLocalJSContext());
 
-  if (NS_WARN_IF(!newRuntime->Init())) {
+  if (NS_WARN_IF(!newContext->Init())) {
     return nullptr;
   }
 
   DebugOnly<PRStatus> status =
-    PR_SetThreadPrivate(CreateIndexOp::sThreadLocalIndex, newRuntime);
+    PR_SetThreadPrivate(CreateIndexOp::sThreadLocalIndex, newContext);
   MOZ_ASSERT(status == PR_SUCCESS);
 
-  return newRuntime.forget();
+  return newContext.forget();
 }
 
 NS_IMPL_ISUPPORTS(CreateIndexOp::UpdateIndexDataValuesFunction,
@@ -24256,7 +24862,8 @@ UpdateIndexDataValuesFunction::OnFunctionCall(mozIStorageValueArray* aValues,
                valueType == mozIStorageValueArray::VALUE_TYPE_TEXT);
 
     MOZ_ALWAYS_SUCCEEDS(aValues->GetTypeOfIndex(3, &valueType));
-    MOZ_ASSERT(valueType == mozIStorageValueArray::VALUE_TYPE_BLOB);
+    MOZ_ASSERT(valueType == mozIStorageValueArray::VALUE_TYPE_BLOB ||
+               valueType == mozIStorageValueArray::VALUE_TYPE_INTEGER);
   }
 #endif
 
@@ -24899,12 +25506,10 @@ RenameIndexOp::DoDatabaseWork(DatabaseConnection* aConnection)
                             mObjectStoreId));
 
     MOZ_ALWAYS_SUCCEEDS(
-      stmt->BindStringByName(NS_LITERAL_CSTRING("name"),
-                             mMetadata->mCommonMetadata.name()));
+      stmt->BindStringByName(NS_LITERAL_CSTRING("name"), mNewName));
 
     MOZ_ALWAYS_SUCCEEDS(
-      stmt->BindInt64ByName(NS_LITERAL_CSTRING("id"),
-                            mMetadata->mCommonMetadata.id()));
+      stmt->BindInt64ByName(NS_LITERAL_CSTRING("id"), mIndexId));
 
     bool hasResult;
     MOZ_ALWAYS_SUCCEEDS(stmt->ExecuteStep(&hasResult));
@@ -24930,15 +25535,13 @@ RenameIndexOp::DoDatabaseWork(DatabaseConnection* aConnection)
     return rv;
   }
 
-  rv = stmt->BindStringByName(NS_LITERAL_CSTRING("name"),
-                              mMetadata->mCommonMetadata.name());
+  rv = stmt->BindStringByName(NS_LITERAL_CSTRING("name"), mNewName);
 
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
 
-  rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("id"),
-                             mMetadata->mCommonMetadata.id());
+  rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("id"), mIndexId);
 
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
@@ -24997,6 +25600,34 @@ NormalTransactionOp::ObjectStoreHasIndexes(NormalTransactionOp* aOp,
   }
 
   *aHasIndexes = hasIndexes;
+  return NS_OK;
+}
+
+nsresult
+NormalTransactionOp::GetPreprocessParams(PreprocessParams& aParams)
+{
+  return NS_OK;
+}
+
+nsresult
+NormalTransactionOp::SendPreprocessInfo()
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(!IsActorDestroyed());
+
+  PreprocessParams params;
+  nsresult rv = GetPreprocessParams(params);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  MOZ_ASSERT(params.type() != PreprocessParams::T__None);
+
+  if (NS_WARN_IF(!PBackgroundIDBRequestParent::SendPreprocess(params))) {
+    IDB_REPORT_INTERNAL_ERR();
+    return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+  }
+
   return NS_OK;
 }
 
@@ -25069,6 +25700,31 @@ NormalTransactionOp::ActorDestroy(ActorDestroyReason aWhy)
   NoteActorDestroyed();
 }
 
+bool
+NormalTransactionOp::RecvContinue(const PreprocessResponse& aResponse)
+{
+  AssertIsOnOwningThread();
+
+  switch (aResponse.type()) {
+    case PreprocessResponse::Tnsresult:
+      mResultCode = aResponse.get_nsresult();
+      break;
+
+    case PreprocessResponse::TObjectStoreGetPreprocessResponse:
+      break;
+
+    case PreprocessResponse::TObjectStoreGetAllPreprocessResponse:
+      break;
+
+    default:
+      MOZ_CRASH("Should never get here!");
+  }
+
+  NoteContinueReceived();
+
+  return true;
+}
+
 ObjectStoreAddOrPutRequestOp::ObjectStoreAddOrPutRequestOp(
                                                   TransactionBase* aTransaction,
                                                   const RequestParams& aParams)
@@ -25090,6 +25746,10 @@ ObjectStoreAddOrPutRequestOp::ObjectStoreAddOrPutRequestOp(
   MOZ_ASSERT(mMetadata);
 
   mObjectStoreMayHaveIndexes = mMetadata->HasLiveIndexes();
+
+  mDataOverThreshold =
+    snappy::MaxCompressedLength(mParams.cloneInfo().data().data.Size()) >
+      IndexedDatabaseManager::DataThreshold();
 }
 
 nsresult
@@ -25161,7 +25821,9 @@ ObjectStoreAddOrPutRequestOp::RemoveOldIndexDataValues(
 
 nsresult
 ObjectStoreAddOrPutRequestOp::CopyFileData(nsIInputStream* aInputStream,
-                                           nsIOutputStream* aOutputStream)
+                                           nsIOutputStream* aOutputStream,
+                                           char* aBuffer,
+                                           uint32_t aBufferSize)
 {
   AssertIsOnConnectionThread();
   MOZ_ASSERT(aInputStream);
@@ -25174,10 +25836,8 @@ ObjectStoreAddOrPutRequestOp::CopyFileData(nsIInputStream* aInputStream,
   nsresult rv;
 
   do {
-    char copyBuffer[kFileCopyBufferSize];
-
     uint32_t numRead;
-    rv = aInputStream->Read(copyBuffer, sizeof(copyBuffer), &numRead);
+    rv = aInputStream->Read(aBuffer, aBufferSize, &numRead);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       break;
     }
@@ -25187,7 +25847,7 @@ ObjectStoreAddOrPutRequestOp::CopyFileData(nsIInputStream* aInputStream,
     }
 
     uint32_t numWrite;
-    rv = aOutputStream->Write(copyBuffer, numRead, &numWrite);
+    rv = aOutputStream->Write(aBuffer, numRead, &numWrite);
     if (rv == NS_ERROR_FILE_NO_DEVICE_SPACE) {
       rv = NS_ERROR_DOM_INDEXEDDB_QUOTA_ERR;
     }
@@ -25259,10 +25919,10 @@ ObjectStoreAddOrPutRequestOp::Init(TransactionBase* aTransaction)
   }
 #endif
 
-  const nsTArray<DatabaseOrMutableFile>& files = mParams.files();
+  const nsTArray<FileAddInfo>& fileAddInfos = mParams.fileAddInfos();
 
-  if (!files.IsEmpty()) {
-    const uint32_t count = files.Length();
+  if (!fileAddInfos.IsEmpty()) {
+    const uint32_t count = fileAddInfos.Length();
 
     if (NS_WARN_IF(!mStoredFileInfos.SetCapacity(count, fallible))) {
       return false;
@@ -25273,17 +25933,23 @@ ObjectStoreAddOrPutRequestOp::Init(TransactionBase* aTransaction)
     MOZ_ASSERT(fileManager);
 
     for (uint32_t index = 0; index < count; index++) {
-      const DatabaseOrMutableFile& file = files[index];
-      MOZ_ASSERT(file.type() ==
-                   DatabaseOrMutableFile::TPBackgroundIDBDatabaseFileParent ||
-                 file.type() ==
-                   DatabaseOrMutableFile::TPBackgroundMutableFileParent);
+      const FileAddInfo& fileAddInfo = fileAddInfos[index];
+
+      MOZ_ASSERT(fileAddInfo.type() == StructuredCloneFile::eBlob ||
+                 fileAddInfo.type() == StructuredCloneFile::eMutableFile ||
+                 fileAddInfo.type() == StructuredCloneFile::eWasmBytecode ||
+                 fileAddInfo.type() == StructuredCloneFile::eWasmCompiled);
+
+      const DatabaseOrMutableFile& file = fileAddInfo.file();
 
       StoredFileInfo* storedFileInfo = mStoredFileInfos.AppendElement(fallible);
       MOZ_ASSERT(storedFileInfo);
 
-      switch (file.type()) {
-        case DatabaseOrMutableFile::TPBackgroundIDBDatabaseFileParent: {
+      switch (fileAddInfo.type()) {
+        case StructuredCloneFile::eBlob: {
+          MOZ_ASSERT(file.type() ==
+                       DatabaseOrMutableFile::TPBackgroundIDBDatabaseFileParent);
+
           storedFileInfo->mFileActor =
             static_cast<DatabaseFile*>(
               file.get_PBackgroundIDBDatabaseFileParent());
@@ -25297,10 +25963,15 @@ ObjectStoreAddOrPutRequestOp::Init(TransactionBase* aTransaction)
           if (storedFileInfo->mInputStream && !mFileManager) {
             mFileManager = fileManager;
           }
+
+          storedFileInfo->mType = StructuredCloneFile::eBlob;
           break;
         }
 
-        case DatabaseOrMutableFile::TPBackgroundMutableFileParent: {
+        case StructuredCloneFile::eMutableFile: {
+          MOZ_ASSERT(file.type() ==
+                       DatabaseOrMutableFile::TPBackgroundMutableFileParent);
+
           auto mutableFileActor =
             static_cast<MutableFile*>(
               file.get_PBackgroundMutableFileParent());
@@ -25309,15 +25980,54 @@ ObjectStoreAddOrPutRequestOp::Init(TransactionBase* aTransaction)
           storedFileInfo->mFileInfo = mutableFileActor->GetFileInfo();
           MOZ_ASSERT(storedFileInfo->mFileInfo);
 
-          storedFileInfo->mMutable = true;
+          storedFileInfo->mType = StructuredCloneFile::eMutableFile;
           break;
         }
 
-        case DatabaseOrMutableFile::TPBackgroundIDBDatabaseFileChild:
+        case StructuredCloneFile::eWasmBytecode:
+        case StructuredCloneFile::eWasmCompiled: {
+          MOZ_ASSERT(file.type() ==
+                       DatabaseOrMutableFile::TPBackgroundIDBDatabaseFileParent);
+
+          storedFileInfo->mFileActor =
+            static_cast<DatabaseFile*>(
+              file.get_PBackgroundIDBDatabaseFileParent());
+          MOZ_ASSERT(storedFileInfo->mFileActor);
+
+          storedFileInfo->mFileInfo = storedFileInfo->mFileActor->GetFileInfo();
+          MOZ_ASSERT(storedFileInfo->mFileInfo);
+
+          storedFileInfo->mInputStream =
+            storedFileInfo->mFileActor->GetInputStream();
+          if (storedFileInfo->mInputStream && !mFileManager) {
+            mFileManager = fileManager;
+          }
+
+          storedFileInfo->mType = fileAddInfo.type();
+          break;
+        }
+
         default:
           MOZ_CRASH("Should never get here!");
       }
     }
+  }
+
+  if (mDataOverThreshold) {
+    StoredFileInfo* storedFileInfo = mStoredFileInfos.AppendElement(fallible);
+    MOZ_ASSERT(storedFileInfo);
+
+    if (!mFileManager) {
+      mFileManager = aTransaction->GetDatabase()->GetFileManager();
+      MOZ_ASSERT(mFileManager);
+    }
+
+    storedFileInfo->mFileInfo = mFileManager->GetNewFileInfo();
+
+    storedFileInfo->mInputStream =
+      new SCInputStream(mParams.cloneInfo().data().data);
+
+    storedFileInfo->mType = StructuredCloneFile::eStructuredClone;
   }
 
   return true;
@@ -25361,7 +26071,6 @@ ObjectStoreAddOrPutRequestOp::DoDatabaseWork(DatabaseConnection* aConnection)
 
   const bool keyUnset = key.IsUnset();
   const int64_t osid = mParams.objectStoreId();
-  const KeyPath& keyPath = mMetadata->mCommonMetadata.keyPath();
 
   // First delete old index_data_values if we're overwriting something and we
   // have indexes.
@@ -25399,6 +26108,10 @@ ObjectStoreAddOrPutRequestOp::DoDatabaseWork(DatabaseConnection* aConnection)
     return rv;
   }
 
+  const SerializedStructuredCloneWriteInfo& cloneInfo = mParams.cloneInfo();
+  const JSStructuredCloneData& cloneData = cloneInfo.data().data;
+  size_t cloneDataSize = cloneData.Size();
+
   MOZ_ASSERT(!keyUnset || mMetadata->mCommonMetadata.autoIncrement(),
              "Should have key unless autoIncrement");
 
@@ -25420,47 +26133,80 @@ ObjectStoreAddOrPutRequestOp::DoDatabaseWork(DatabaseConnection* aConnection)
       autoIncrementNum = floor(key.ToFloat());
     }
 
-    if (keyUnset && keyPath.IsValid()) {
+    if (keyUnset && mMetadata->mCommonMetadata.keyPath().IsValid()) {
       const SerializedStructuredCloneWriteInfo& cloneInfo = mParams.cloneInfo();
       MOZ_ASSERT(cloneInfo.offsetToKeyProp());
-      MOZ_ASSERT(cloneInfo.data().Length() > sizeof(uint64_t));
+      MOZ_ASSERT(cloneDataSize > sizeof(uint64_t));
       MOZ_ASSERT(cloneInfo.offsetToKeyProp() <=
-                 (cloneInfo.data().Length() - sizeof(uint64_t)));
+                 (cloneDataSize - sizeof(uint64_t)));
 
       // Special case where someone put an object into an autoIncrement'ing
       // objectStore with no key in its keyPath set. We needed to figure out
       // which row id we would get above before we could set that properly.
-      uint8_t* keyPropPointer =
-        const_cast<uint8_t*>(cloneInfo.data().Elements() +
-                             cloneInfo.offsetToKeyProp());
       uint64_t keyPropValue =
         ReinterpretDoubleAsUInt64(static_cast<double>(autoIncrementNum));
 
-      LittleEndian::writeUint64(keyPropPointer, keyPropValue);
+      static const size_t keyPropSize = sizeof(uint64_t);
+
+      char keyPropBuffer[keyPropSize];
+      LittleEndian::writeUint64(keyPropBuffer, keyPropValue);
+
+      auto iter = cloneData.Iter();
+      DebugOnly<bool> result =
+       iter.AdvanceAcrossSegments(cloneData, cloneInfo.offsetToKeyProp());
+      MOZ_ASSERT(result);
+
+      for (uint32_t index = 0; index < keyPropSize; index++) {
+        char* keyPropPointer = iter.Data();
+        *keyPropPointer = keyPropBuffer[index];
+
+        result = iter.AdvanceAcrossSegments(cloneData, 1);
+        MOZ_ASSERT(result);
+      }
     }
   }
 
   key.BindToStatement(stmt, NS_LITERAL_CSTRING("key"));
 
-  // Compress the bytes before adding into the database.
-  const char* uncompressed =
-    reinterpret_cast<const char*>(mParams.cloneInfo().data().Elements());
-  size_t uncompressedLength = mParams.cloneInfo().data().Length();
+  if (mDataOverThreshold) {
+    // The data we store in the SQLite database is a (signed) 64-bit integer.
+    // The flags are left-shifted 32 bits so the max value is 0xFFFFFFFF.
+    // The file_ids index occupies the lower 32 bits and its max is 0xFFFFFFFF.
+    static const uint32_t kCompressedFlag = (1<<0);
 
-  // We don't have a smart pointer class that calls free, so we need to
-  // manage | compressed | manually.
-  {
+    uint32_t flags = 0;
+    flags |= kCompressedFlag;
+
+    uint32_t index = mStoredFileInfos.Length() - 1;
+
+    int64_t data = (uint64_t(flags) << 32) | index;
+
+    rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("data"), data);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+  } else {
+    nsCString flatCloneData;
+    flatCloneData.SetLength(cloneDataSize);
+    auto iter = cloneData.Iter();
+    cloneData.ReadBytes(iter, flatCloneData.BeginWriting(), cloneDataSize);
+
+    // Compress the bytes before adding into the database.
+    const char* uncompressed = flatCloneData.BeginReading();
+    size_t uncompressedLength = cloneDataSize;
+
     size_t compressedLength = snappy::MaxCompressedLength(uncompressedLength);
 
-    char* compressed = static_cast<char*>(malloc(compressedLength));
+    UniqueFreePtr<char> compressed(
+      static_cast<char*>(malloc(compressedLength)));
     if (NS_WARN_IF(!compressed)) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
 
-    snappy::RawCompress(uncompressed, uncompressedLength, compressed,
+    snappy::RawCompress(uncompressed, uncompressedLength, compressed.get(),
                         &compressedLength);
 
-    uint8_t* dataBuffer = reinterpret_cast<uint8_t*>(compressed);
+    uint8_t* dataBuffer = reinterpret_cast<uint8_t*>(compressed.release());
     size_t dataBufferLength = compressedLength;
 
     rv = stmt->BindAdoptedBlobByName(NS_LITERAL_CSTRING("data"), dataBuffer,
@@ -25585,17 +26331,34 @@ ObjectStoreAddOrPutRequestOp::DoDatabaseWork(DatabaseConnection* aConnection)
           }
 
           // Now try to copy the stream.
-          RefPtr<FileOutputStream> outputStream =
+          RefPtr<FileOutputStream> fileOutputStream =
             FileOutputStream::Create(mPersistenceType,
                                      mGroup,
                                      mOrigin,
                                      diskFile);
-          if (NS_WARN_IF(!outputStream)) {
+          if (NS_WARN_IF(!fileOutputStream)) {
             IDB_REPORT_INTERNAL_ERR();
             return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
           }
 
-          rv = CopyFileData(inputStream, outputStream);
+          if (storedFileInfo.mType == StructuredCloneFile::eStructuredClone) {
+            RefPtr<SnappyCompressOutputStream> snappyOutputStream =
+              new SnappyCompressOutputStream(fileOutputStream);
+
+            UniquePtr<char[]> buffer(new char[snappyOutputStream->BlockSize()]);
+
+            rv = CopyFileData(inputStream,
+                              snappyOutputStream,
+                              buffer.get(),
+                              snappyOutputStream->BlockSize());
+          } else {
+            char buffer[kFileCopyBufferSize];
+
+            rv = CopyFileData(inputStream,
+                              fileOutputStream,
+                              buffer,
+                              kFileCopyBufferSize);
+          }
           if (NS_FAILED(rv) &&
               NS_ERROR_GET_MODULE(rv) != NS_ERROR_MODULE_DOM_INDEXEDDB) {
             IDB_REPORT_INTERNAL_ERR();
@@ -25643,7 +26406,7 @@ ObjectStoreAddOrPutRequestOp::DoDatabaseWork(DatabaseConnection* aConnection)
       if (index) {
         fileIds.Append(' ');
       }
-      fileIds.AppendInt(storedFileInfo.mMutable ? -id : id);
+      storedFileInfo.Serialize(fileIds);
     }
 
     rv = stmt->BindStringByName(NS_LITERAL_CSTRING("file_ids"), fileIds);
@@ -25726,10 +26489,11 @@ ObjectStoreAddOrPutRequestOp::Cleanup()
          index < count;
          index++) {
       StoredFileInfo& storedFileInfo = mStoredFileInfos[index];
+
+      MOZ_ASSERT_IF(storedFileInfo.mType == StructuredCloneFile::eMutableFile,
+                    !storedFileInfo.mCopiedSuccessfully);
+
       RefPtr<DatabaseFile>& fileActor = storedFileInfo.mFileActor;
-
-      MOZ_ASSERT_IF(!fileActor, !storedFileInfo.mCopiedSuccessfully);
-
       if (fileActor && storedFileInfo.mCopiedSuccessfully) {
         fileActor->ClearInputStream();
       }
@@ -25739,6 +26503,73 @@ ObjectStoreAddOrPutRequestOp::Cleanup()
   }
 
   NormalTransactionOp::Cleanup();
+}
+
+NS_IMPL_ISUPPORTS(ObjectStoreAddOrPutRequestOp::SCInputStream, nsIInputStream)
+
+NS_IMETHODIMP
+ObjectStoreAddOrPutRequestOp::
+SCInputStream::Close()
+{
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ObjectStoreAddOrPutRequestOp::
+SCInputStream::Available(uint64_t* _retval)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+ObjectStoreAddOrPutRequestOp::
+SCInputStream::Read(char* aBuf, uint32_t aCount, uint32_t* _retval)
+{
+  return ReadSegments(NS_CopySegmentToBuffer, aBuf, aCount, _retval);
+}
+
+NS_IMETHODIMP
+ObjectStoreAddOrPutRequestOp::
+SCInputStream::ReadSegments(nsWriteSegmentFun aWriter,
+                            void* aClosure,
+                            uint32_t aCount,
+                            uint32_t* _retval)
+{
+  *_retval = 0;
+
+  while (aCount) {
+    uint32_t count = std::min(uint32_t(mIter.RemainingInSegment()), aCount);
+    if (!count) {
+      // We've run out of data in the last segment.
+      break;
+    }
+
+    uint32_t written;
+    nsresult rv =
+      aWriter(this, aClosure, mIter.Data(), *_retval, count, &written);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      // InputStreams do not propagate errors to caller.
+      return NS_OK;
+    }
+
+    // Writer should write what we asked it to write.
+    MOZ_ASSERT(written == count);
+
+    *_retval += count;
+    aCount -= count;
+
+    mIter.Advance(mData, count);
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ObjectStoreAddOrPutRequestOp::
+SCInputStream::IsNonBlocking(bool* _retval)
+{
+  *_retval = false;
+  return NS_OK;
 }
 
 ObjectStoreGetRequestOp::ObjectStoreGetRequestOp(TransactionBase* aTransaction,
@@ -25755,6 +26586,7 @@ ObjectStoreGetRequestOp::ObjectStoreGetRequestOp(TransactionBase* aTransaction,
                         OptionalKeyRange(aParams.get_ObjectStoreGetParams()
                                                 .keyRange()))
   , mBackgroundParent(aTransaction->GetBackgroundParent())
+  , mPreprocessInfoCount(0)
   , mLimit(aGetAll ? aParams.get_ObjectStoreGetAllParams().limit() : 1)
   , mGetAll(aGetAll)
 {
@@ -25768,29 +26600,46 @@ ObjectStoreGetRequestOp::ObjectStoreGetRequestOp(TransactionBase* aTransaction,
   MOZ_ASSERT(mBackgroundParent);
 }
 
-nsresult
-ObjectStoreGetRequestOp::ConvertResponse(
-                             uint32_t aIndex,
-                             SerializedStructuredCloneReadInfo& aSerializedInfo)
+template <typename T>
+void MoveData(StructuredCloneReadInfo& aInfo, T& aResult);
+
+template <>
+void
+MoveData<SerializedStructuredCloneReadInfo>(
+                                     StructuredCloneReadInfo& aInfo,
+                                     SerializedStructuredCloneReadInfo& aResult)
 {
-  MOZ_ASSERT(aIndex < mResponse.Length());
+  aResult.data().data = Move(aInfo.mData);
+  aResult.hasPreprocessInfo() = aInfo.mHasPreprocessInfo;
+}
 
-  StructuredCloneReadInfo& info = mResponse[aIndex];
+template <>
+void
+MoveData<WasmModulePreprocessInfo>(StructuredCloneReadInfo& aInfo,
+                                   WasmModulePreprocessInfo& aResult)
+{
+}
 
-  info.mData.SwapElements(aSerializedInfo.data());
+template <bool aForPreprocess, typename T>
+nsresult
+ObjectStoreGetRequestOp::ConvertResponse(StructuredCloneReadInfo& aInfo,
+                                         T& aResult)
+{
+  MoveData(aInfo, aResult);
 
-  FallibleTArray<BlobOrMutableFile> blobs;
-  nsresult rv = ConvertBlobsToActors(mBackgroundParent,
-                                     mDatabase,
-                                     info.mFiles,
-                                     blobs);
+  FallibleTArray<SerializedStructuredCloneFile> serializedFiles;
+  nsresult rv = SerializeStructuredCloneFiles(mBackgroundParent,
+                                              mDatabase,
+                                              aInfo.mFiles,
+                                              aForPreprocess,
+                                              serializedFiles);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
 
-  MOZ_ASSERT(aSerializedInfo.blobs().IsEmpty());
+  MOZ_ASSERT(aResult.files().IsEmpty());
 
-  aSerializedInfo.blobs().SwapElements(blobs);
+  aResult.files().SwapElements(serializedFiles);
 
   return NS_OK;
 }
@@ -25865,6 +26714,10 @@ ObjectStoreGetRequestOp::DoDatabaseWork(DatabaseConnection* aConnection)
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
+
+    if (cloneInfo->mHasPreprocessInfo) {
+      mPreprocessInfoCount++;
+    }
   }
 
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -25872,6 +26725,63 @@ ObjectStoreGetRequestOp::DoDatabaseWork(DatabaseConnection* aConnection)
   }
 
   MOZ_ASSERT_IF(!mGetAll, mResponse.Length() <= 1);
+
+  return NS_OK;
+}
+
+bool
+ObjectStoreGetRequestOp::HasPreprocessInfo()
+{
+  return mPreprocessInfoCount > 0;
+}
+
+nsresult
+ObjectStoreGetRequestOp::GetPreprocessParams(PreprocessParams& aParams)
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(!mResponse.IsEmpty());
+
+  if (mGetAll) {
+    aParams = ObjectStoreGetAllPreprocessParams();
+
+    FallibleTArray<WasmModulePreprocessInfo> falliblePreprocessInfos;
+    if (NS_WARN_IF(!falliblePreprocessInfos.SetLength(mPreprocessInfoCount,
+                                                      fallible))) {
+      return NS_ERROR_OUT_OF_MEMORY;
+    }
+
+    uint32_t fallibleIndex = 0;
+    for (uint32_t count = mResponse.Length(), index = 0;
+         index < count;
+         index++) {
+      StructuredCloneReadInfo& info = mResponse[index];
+
+      if (info.mHasPreprocessInfo) {
+        nsresult rv =
+          ConvertResponse<true>(info, falliblePreprocessInfos[fallibleIndex++]);
+        if (NS_WARN_IF(NS_FAILED(rv))) {
+          return rv;
+        }
+      }
+    }
+
+    nsTArray<WasmModulePreprocessInfo>& preprocessInfos =
+      aParams.get_ObjectStoreGetAllPreprocessParams().preprocessInfos();
+
+    falliblePreprocessInfos.SwapElements(preprocessInfos);
+
+    return NS_OK;
+  }
+
+  aParams = ObjectStoreGetPreprocessParams();
+
+  WasmModulePreprocessInfo& preprocessInfo =
+    aParams.get_ObjectStoreGetPreprocessParams().preprocessInfo();
+
+  nsresult rv = ConvertResponse<true>(mResponse[0], preprocessInfo);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
 
   return NS_OK;
 }
@@ -25895,7 +26805,8 @@ ObjectStoreGetRequestOp::GetResponse(RequestResponse& aResponse)
       for (uint32_t count = mResponse.Length(), index = 0;
            index < count;
            index++) {
-        nsresult rv = ConvertResponse(index, fallibleCloneInfos[index]);
+        nsresult rv =
+          ConvertResponse<false>(mResponse[index], fallibleCloneInfos[index]);
         if (NS_WARN_IF(NS_FAILED(rv))) {
           aResponse = rv;
           return;
@@ -25917,38 +26828,61 @@ ObjectStoreGetRequestOp::GetResponse(RequestResponse& aResponse)
     SerializedStructuredCloneReadInfo& serializedInfo =
       aResponse.get_ObjectStoreGetResponse().cloneInfo();
 
-    nsresult rv = ConvertResponse(0, serializedInfo);
+    nsresult rv = ConvertResponse<false>(mResponse[0], serializedInfo);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       aResponse = rv;
     }
   }
 }
 
+ObjectStoreGetKeyRequestOp::ObjectStoreGetKeyRequestOp(
+                                                  TransactionBase* aTransaction,
+                                                  const RequestParams& aParams,
+                                                  bool aGetAll)
+  : NormalTransactionOp(aTransaction)
+  , mObjectStoreId(aGetAll ?
+                     aParams.get_ObjectStoreGetAllKeysParams().objectStoreId() :
+                     aParams.get_ObjectStoreGetKeyParams().objectStoreId())
+  , mOptionalKeyRange(aGetAll ?
+                        aParams.get_ObjectStoreGetAllKeysParams()
+                               .optionalKeyRange() :
+                        OptionalKeyRange(aParams.get_ObjectStoreGetKeyParams()
+                                                .keyRange()))
+  , mLimit(aGetAll ? aParams.get_ObjectStoreGetAllKeysParams().limit() : 1)
+  , mGetAll(aGetAll)
+{
+  MOZ_ASSERT(aParams.type() == RequestParams::TObjectStoreGetKeyParams ||
+             aParams.type() == RequestParams::TObjectStoreGetAllKeysParams);
+  MOZ_ASSERT(mObjectStoreId);
+  MOZ_ASSERT_IF(!aGetAll,
+                mOptionalKeyRange.type() ==
+                  OptionalKeyRange::TSerializedKeyRange);
+}
+
 nsresult
-ObjectStoreGetAllKeysRequestOp::DoDatabaseWork(DatabaseConnection* aConnection)
+ObjectStoreGetKeyRequestOp::DoDatabaseWork(DatabaseConnection* aConnection)
 {
   MOZ_ASSERT(aConnection);
   aConnection->AssertIsOnConnectionThread();
 
   PROFILER_LABEL("IndexedDB",
-                 "ObjectStoreGetAllKeysRequestOp::DoDatabaseWork",
+                 "ObjectStoreGetKeyRequestOp::DoDatabaseWork",
                  js::ProfileEntry::Category::STORAGE);
 
   const bool hasKeyRange =
-    mParams.optionalKeyRange().type() == OptionalKeyRange::TSerializedKeyRange;
+      mOptionalKeyRange.type() == OptionalKeyRange::TSerializedKeyRange;
 
   nsAutoCString keyRangeClause;
   if (hasKeyRange) {
-    GetBindingClauseForKeyRange(
-      mParams.optionalKeyRange().get_SerializedKeyRange(),
-      NS_LITERAL_CSTRING("key"),
-      keyRangeClause);
+    GetBindingClauseForKeyRange(mOptionalKeyRange.get_SerializedKeyRange(),
+                                NS_LITERAL_CSTRING("key"),
+                                keyRangeClause);
   }
 
   nsAutoCString limitClause;
-  if (uint32_t limit = mParams.limit()) {
+  if (mLimit) {
     limitClause.AssignLiteral(" LIMIT ");
-    limitClause.AppendInt(limit);
+    limitClause.AppendInt(mLimit);
   }
 
   nsCString query =
@@ -25965,16 +26899,14 @@ ObjectStoreGetAllKeysRequestOp::DoDatabaseWork(DatabaseConnection* aConnection)
     return rv;
   }
 
-  rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("osid"),
-                             mParams.objectStoreId());
+  rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("osid"), mObjectStoreId);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
 
   if (hasKeyRange) {
-    rv = BindKeyRangeToStatement(
-      mParams.optionalKeyRange().get_SerializedKeyRange(),
-      stmt);
+    rv = BindKeyRangeToStatement(mOptionalKeyRange.get_SerializedKeyRange(),
+                                 stmt);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
@@ -25997,18 +26929,32 @@ ObjectStoreGetAllKeysRequestOp::DoDatabaseWork(DatabaseConnection* aConnection)
     return rv;
   }
 
+  MOZ_ASSERT_IF(!mGetAll, mResponse.Length() <= 1);
+
   return NS_OK;
 }
 
 void
-ObjectStoreGetAllKeysRequestOp::GetResponse(RequestResponse& aResponse)
+ObjectStoreGetKeyRequestOp::GetResponse(RequestResponse& aResponse)
 {
-  aResponse = ObjectStoreGetAllKeysResponse();
+  MOZ_ASSERT_IF(mLimit, mResponse.Length() <= mLimit);
+
+  if (mGetAll) {
+    aResponse = ObjectStoreGetAllKeysResponse();
+
+    if (!mResponse.IsEmpty()) {
+      nsTArray<Key>& response =
+        aResponse.get_ObjectStoreGetAllKeysResponse().keys();
+      mResponse.SwapElements(response);
+    }
+
+    return;
+  }
+
+  aResponse = ObjectStoreGetKeyResponse();
 
   if (!mResponse.IsEmpty()) {
-    nsTArray<Key>& response =
-      aResponse.get_ObjectStoreGetAllKeysResponse().keys();
-    mResponse.SwapElements(response);
+    aResponse.get_ObjectStoreGetKeyResponse().key() = Move(mResponse[0]);
   }
 }
 
@@ -26465,21 +27411,22 @@ IndexGetRequestOp::GetResponse(RequestResponse& aResponse)
         SerializedStructuredCloneReadInfo& serializedInfo =
           fallibleCloneInfos[index];
 
-        info.mData.SwapElements(serializedInfo.data());
+        serializedInfo.data().data = Move(info.mData);
 
-        FallibleTArray<BlobOrMutableFile> blobs;
-        nsresult rv = ConvertBlobsToActors(mBackgroundParent,
-                                           mDatabase,
-                                           info.mFiles,
-                                           blobs);
+        FallibleTArray<SerializedStructuredCloneFile> serializedFiles;
+        nsresult rv = SerializeStructuredCloneFiles(mBackgroundParent,
+                                                    mDatabase,
+                                                    info.mFiles,
+                                                    /* aForPreprocess */ false,
+                                                    serializedFiles);
         if (NS_WARN_IF(NS_FAILED(rv))) {
           aResponse = rv;
           return;
         }
 
-        MOZ_ASSERT(serializedInfo.blobs().IsEmpty());
+        MOZ_ASSERT(serializedInfo.files().IsEmpty());
 
-        serializedInfo.blobs().SwapElements(blobs);
+        serializedInfo.files().SwapElements(serializedFiles);
       }
 
       nsTArray<SerializedStructuredCloneReadInfo>& cloneInfos =
@@ -26499,22 +27446,23 @@ IndexGetRequestOp::GetResponse(RequestResponse& aResponse)
     SerializedStructuredCloneReadInfo& serializedInfo =
       aResponse.get_IndexGetResponse().cloneInfo();
 
-    info.mData.SwapElements(serializedInfo.data());
+    serializedInfo.data().data = Move(info.mData);
 
-    FallibleTArray<BlobOrMutableFile> blobs;
+    FallibleTArray<SerializedStructuredCloneFile> serializedFiles;
     nsresult rv =
-      ConvertBlobsToActors(mBackgroundParent,
-                           mDatabase,
-                           info.mFiles,
-                           blobs);
+      SerializeStructuredCloneFiles(mBackgroundParent,
+                                    mDatabase,
+                                    info.mFiles,
+                                    /* aForPreprocess */ false,
+                                    serializedFiles);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       aResponse = rv;
       return;
     }
 
-    MOZ_ASSERT(serializedInfo.blobs().IsEmpty());
+    MOZ_ASSERT(serializedInfo.files().IsEmpty());
 
-    serializedInfo.blobs().SwapElements(blobs);
+    serializedInfo.files().SwapElements(serializedFiles);
   }
 }
 
@@ -26740,6 +27688,14 @@ CursorOpBase::SendFailureResult(nsresult aResultCode)
   if (!IsActorDestroyed()) {
     mResponse = ClampResultCode(aResultCode);
 
+    // This is an expected race when the transaction is invalidated after
+    // data is retrieved from database. We clear the retrieved files to prevent
+    // the assertion failure in SendResponseInternal when mResponse.type() is
+    // CursorResponse::Tnsresult.
+    if (Transaction()->IsInvalidated() && !mFiles.IsEmpty()) {
+      mFiles.Clear();
+    }
+
     mCursor->SendResponseInternal(mResponse, mFiles);
   }
 
@@ -26805,7 +27761,7 @@ CursorOpBase::PopulateResponseFromStatement(
 
       auto& responses = mResponse.get_ArrayOfObjectStoreCursorResponse();
       auto& response = *responses.AppendElement();
-      response.cloneInfo().data().SwapElements(cloneInfo.mData);
+      response.cloneInfo().data().data = Move(cloneInfo.mData);
       response.key() = mCursor->mKey;
 
       mFiles.AppendElement(Move(cloneInfo.mFiles));
@@ -26843,7 +27799,7 @@ CursorOpBase::PopulateResponseFromStatement(
       mResponse = IndexCursorResponse();
 
       auto& response = mResponse.get_IndexCursorResponse();
-      response.cloneInfo().data().SwapElements(cloneInfo.mData);
+      response.cloneInfo().data().data = Move(cloneInfo.mData);
       response.key() = mCursor->mKey;
       response.sortKey() = mCursor->mSortKey;
       response.objectKey() = mCursor->mObjectKey;
@@ -27388,6 +28344,13 @@ OpenOp::DoIndexDatabaseWork(DatabaseConnection* aConnection)
         NS_LITERAL_CSTRING(" AND sort_column >= :current_key") +
         directionClause +
         openLimit;
+      mCursor->mContinuePrimaryKeyQuery =
+        queryStart +
+        NS_LITERAL_CSTRING(" AND sort_column >= :current_key "
+                            "AND index_table.object_data_key >= :object_key "
+                          ) +
+        directionClause +
+        openLimit;
       break;
     }
 
@@ -27431,6 +28394,13 @@ OpenOp::DoIndexDatabaseWork(DatabaseConnection* aConnection)
       mCursor->mContinueToQuery =
         queryStart +
         NS_LITERAL_CSTRING(" AND sort_column <= :current_key") +
+        directionClause +
+        openLimit;
+      mCursor->mContinuePrimaryKeyQuery =
+        queryStart +
+        NS_LITERAL_CSTRING(" AND sort_column <= :current_key "
+                            "AND index_table.object_data_key <= :object_key "
+                          ) +
         directionClause +
         openLimit;
       break;
@@ -27610,6 +28580,13 @@ OpenOp::DoIndexKeyDatabaseWork(DatabaseConnection* aConnection)
         NS_LITERAL_CSTRING(" AND sort_column >= :current_key ") +
         directionClause +
         openLimit;
+      mCursor->mContinuePrimaryKeyQuery =
+        queryStart +
+        NS_LITERAL_CSTRING(" AND sort_column >= :current_key "
+                            "AND object_data_key >= :object_key "
+                          ) +
+        directionClause +
+        openLimit;
       break;
     }
 
@@ -27655,6 +28632,13 @@ OpenOp::DoIndexKeyDatabaseWork(DatabaseConnection* aConnection)
         NS_LITERAL_CSTRING(" AND sort_column <= :current_key ") +
         directionClause +
         openLimit;
+      mCursor->mContinuePrimaryKeyQuery =
+        queryStart +
+        NS_LITERAL_CSTRING(" AND sort_column <= :current_key "
+                            "AND object_data_key <= :object_key "
+                          ) +
+        directionClause +
+        openLimit;
       break;
     }
 
@@ -27695,6 +28679,7 @@ OpenOp::DoDatabaseWork(DatabaseConnection* aConnection)
   MOZ_ASSERT(mCursor);
   MOZ_ASSERT(mCursor->mContinueQuery.IsEmpty());
   MOZ_ASSERT(mCursor->mContinueToQuery.IsEmpty());
+  MOZ_ASSERT(mCursor->mContinuePrimaryKeyQuery.IsEmpty());
   MOZ_ASSERT(mCursor->mKey.IsUnset());
   MOZ_ASSERT(mCursor->mRangeKey.IsUnset());
 
@@ -27777,6 +28762,10 @@ ContinueOp::DoDatabaseWork(DatabaseConnection* aConnection)
     mCursor->mType == OpenCursorParams::TIndexOpenCursorParams ||
     mCursor->mType == OpenCursorParams::TIndexOpenKeyCursorParams;
 
+  MOZ_ASSERT_IF(isIndex &&
+                (mCursor->mDirection == IDBCursor::NEXT ||
+                 mCursor->mDirection == IDBCursor::PREV),
+                !mCursor->mContinuePrimaryKeyQuery.IsEmpty());
   MOZ_ASSERT_IF(isIndex, mCursor->mIndexId);
   MOZ_ASSERT_IF(isIndex, !mCursor->mObjectKey.IsUnset());
 
@@ -27794,21 +28783,35 @@ ContinueOp::DoDatabaseWork(DatabaseConnection* aConnection)
   // Note: Changing the number or order of SELECT columns in the query will
   // require changes to CursorOpBase::PopulateResponseFromStatement.
   bool hasContinueKey = false;
+  bool hasContinuePrimaryKey = false;
   uint32_t advanceCount = 1;
+  Key& currentKey = mCursor->IsLocaleAware() ? mCursor->mSortKey : mCursor->mKey;
 
-  if (mParams.type() == CursorRequestParams::TContinueParams) {
-    // Always go to the next result.
-    if (mParams.get_ContinueParams().key().IsUnset()) {
-      hasContinueKey = false;
-    } else {
+  switch (mParams.type()) {
+    case CursorRequestParams::TContinueParams:
+      if (!mParams.get_ContinueParams().key().IsUnset()) {
+        hasContinueKey = true;
+        currentKey = mParams.get_ContinueParams().key();
+      }
+      break;
+    case CursorRequestParams::TContinuePrimaryKeyParams:
+      MOZ_ASSERT(!mParams.get_ContinuePrimaryKeyParams().key().IsUnset());
+      MOZ_ASSERT(!mParams.get_ContinuePrimaryKeyParams().primaryKey().IsUnset());
+      MOZ_ASSERT(mCursor->mDirection == IDBCursor::NEXT ||
+                 mCursor->mDirection == IDBCursor::PREV);
       hasContinueKey = true;
-    }
-  } else {
-    advanceCount = mParams.get_AdvanceParams().count();
-    hasContinueKey = false;
+      hasContinuePrimaryKey = true;
+      currentKey = mParams.get_ContinuePrimaryKeyParams().key();
+      break;
+    case CursorRequestParams::TAdvanceParams:
+      advanceCount = mParams.get_AdvanceParams().count();
+      break;
+    default:
+      MOZ_CRASH("Should never get here!");
   }
 
   const nsCString& continueQuery =
+    hasContinuePrimaryKey ? mCursor->mContinuePrimaryKeyQuery :
     hasContinueKey ? mCursor->mContinueToQuery : mCursor->mContinueQuery;
 
   MOZ_ASSERT(advanceCount > 0);
@@ -27820,15 +28823,6 @@ ContinueOp::DoDatabaseWork(DatabaseConnection* aConnection)
   NS_NAMED_LITERAL_CSTRING(currentKeyName, "current_key");
   NS_NAMED_LITERAL_CSTRING(rangeKeyName, "range_key");
   NS_NAMED_LITERAL_CSTRING(objectKeyName, "object_key");
-
-  const bool localeAware = mCursor->IsLocaleAware();
-
-  Key& currentKey = mCursor->mKey;
-  if (hasContinueKey) {
-    currentKey = mParams.get_ContinueParams().key();
-  } else if (localeAware) {
-    currentKey = mCursor->mSortKey;
-  }
 
   const bool usingRangeKey = !mCursor->mRangeKey.IsUnset();
 
@@ -27871,6 +28865,16 @@ ContinueOp::DoDatabaseWork(DatabaseConnection* aConnection)
     }
   }
 
+  // Bind object key if primaryKey is specified.
+  if (hasContinuePrimaryKey) {
+    rv = mParams.get_ContinuePrimaryKeyParams().primaryKey()
+      .BindToStatement(stmt, objectKeyName);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+  }
+
+
   bool hasResult;
   for (uint32_t index = 0; index < advanceCount; index++) {
     rv = stmt->ExecuteStep(&hasResult);
@@ -27891,23 +28895,6 @@ ContinueOp::DoDatabaseWork(DatabaseConnection* aConnection)
   rv = PopulateResponseFromStatement(stmt, true);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
-  }
-
-  uint32_t extraCount = 1;
-  for (uint32_t i = 0; i < extraCount; i++) {
-    rv = stmt->ExecuteStep(&hasResult);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    if (!hasResult) {
-      break;
-    }
-
-    rv = PopulateResponseFromStatement(stmt, false);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
   }
 
   return NS_OK;

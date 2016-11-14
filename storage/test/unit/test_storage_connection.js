@@ -4,8 +4,7 @@
 
 // This file tests the functions of mozIStorageConnection
 
-////////////////////////////////////////////////////////////////////////////////
-//// Test Functions
+// Test Functions
 
 add_task(function* test_connectionReady_open() {
   // there doesn't seem to be a way for the connection to not be ready (unless
@@ -355,12 +354,27 @@ add_task(function* test_open_async() {
   yield standardAsyncTest(openAsyncDatabase("memory"),
     "in-memory database", true);
   yield standardAsyncTest(openAsyncDatabase("memory",
-    {shared: false, growthIncrement: 54}),
+    {shared: false}),
     "in-memory database and options", true);
 
-  do_print("Testing async opening with bogus options 1");
+  do_print("Testing async opening with bogus options 0");
   let raised = false;
   let adb = null;
+
+  try {
+    adb = yield openAsyncDatabase("memory", {shared: false, growthIncrement: 54});
+  } catch (ex) {
+    raised = true;
+  } finally {
+    if (adb) {
+      yield asyncClose(adb);
+    }
+  }
+  do_check_true(raised);
+
+  do_print("Testing async opening with bogus options 1");
+  raised = false;
+  adb = null;
   try {
     adb = yield openAsyncDatabase(getTestDB(), {shared: "forty-two"});
   } catch (ex) {
@@ -416,15 +430,16 @@ add_task(function* test_async_open_with_shared_cache() {
 });
 
 add_task(function* test_clone_trivial_async() {
-  let db1 = getService().openDatabase(getTestDB());
-  do_print("Opened adb1");
-  do_check_true(db1 instanceof Ci.mozIStorageAsyncConnection);
-  let adb2 = yield asyncClone(db1, true);
-  do_check_true(adb2 instanceof Ci.mozIStorageAsyncConnection);
-  do_print("Cloned to adb2");
-  db1.close();
-  do_print("Closed db1");
-  yield asyncClose(adb2);
+  do_print("Open connection");
+  let db = getService().openDatabase(getTestDB());
+  do_check_true(db instanceof Ci.mozIStorageAsyncConnection);
+  do_print("AsyncClone connection");
+  let clone = yield asyncClone(db, true);
+  do_check_true(clone instanceof Ci.mozIStorageAsyncConnection);
+  do_print("Close connection");
+  yield asyncClose(db);
+  do_print("Close clone");
+  yield asyncClose(clone);
 });
 
 add_task(function* test_clone_no_optional_param_async() {
@@ -696,6 +711,45 @@ add_task(function* test_readonly_clone_copies_pragmas() {
   db2.close();
 });
 
+add_task(function* test_clone_attach_database() {
+  let db1 = getService().openUnsharedDatabase(getTestDB());
+
+  let c = 0;
+  function attachDB(conn, name) {
+    let file = dirSvc.get("ProfD", Ci.nsIFile);
+    file.append("test_storage_" + (++c) + ".sqlite");
+    let db = getService().openUnsharedDatabase(file);
+    conn.executeSimpleSQL(`ATTACH DATABASE '${db.databaseFile.path}' AS ${name}`);
+    db.close();
+  }
+  attachDB(db1, "attached_1");
+  attachDB(db1, "attached_2");
+
+  // These should not throw.
+  db1.createStatement("SELECT * FROM attached_1.sqlite_master");
+  db1.createStatement("SELECT * FROM attached_2.sqlite_master");
+
+  // R/W clone.
+  let db2 = db1.clone();
+  do_check_true(db2.connectionReady);
+
+  // These should not throw.
+  db2.createStatement("SELECT * FROM attached_1.sqlite_master");
+  db2.createStatement("SELECT * FROM attached_2.sqlite_master");
+
+  // R/O clone.
+  let db3 = db1.clone(true);
+  do_check_true(db3.connectionReady);
+
+  // These should not throw.
+  db3.createStatement("SELECT * FROM attached_1.sqlite_master");
+  db3.createStatement("SELECT * FROM attached_2.sqlite_master");
+
+  db1.close();
+  db2.close();
+  db3.close();
+});
+
 add_task(function* test_getInterface() {
   let db = getOpenedDatabase();
   let target = db.QueryInterface(Ci.nsIInterfaceRequestor)
@@ -707,8 +761,3 @@ add_task(function* test_getInterface() {
   yield asyncClose(db);
   gDBConn = null;
 });
-
-
-function run_test() {
-  run_next_test();
-}

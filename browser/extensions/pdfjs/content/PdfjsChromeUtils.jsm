@@ -49,8 +49,12 @@ var DEFAULT_PREFERENCES =
   "disableFontFace": false,
   "disableTextLayer": false,
   "useOnlyCssZoom": false,
-  "externalLinkTarget": 0
+  "externalLinkTarget": 0,
+  "enhanceTextSelection": false,
+  "renderInteractiveForms": false,
+  "disablePageLabels": false
 }
+
 
 var PdfjsChromeUtils = {
   // For security purposes when running remote, we restrict preferences
@@ -64,7 +68,7 @@ var PdfjsChromeUtils = {
    */
 
   init: function () {
-    this._browsers = new Set();
+    this._browsers = new WeakSet();
     if (!this._ppmm) {
       // global parent process message manager (PPMM)
       this._ppmm = Cc['@mozilla.org/parentprocessmessagemanager;1'].
@@ -181,8 +185,7 @@ var PdfjsChromeUtils = {
   _findbarFromMessage: function(aMsg) {
     let browser = aMsg.target;
     let tabbrowser = browser.getTabBrowser();
-    let tab;
-    tab = tabbrowser.getTabForBrowser(browser);
+    let tab = tabbrowser.getTabForBrowser(browser);
     return tabbrowser.getFindBar(tab);
   },
 

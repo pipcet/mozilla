@@ -109,7 +109,7 @@ module.exports = createClass({
         dom.input({
           id: "filter",
           type: "search",
-          className: "devtools-searchinput",
+          className: "devtools-filterinput",
           placeholder: L10N.getStr("filter.placeholder"),
           title: L10N.getStr("filter.tooltip"),
           onChange: event => setFilterString(event.target.value),
@@ -245,6 +245,7 @@ module.exports = createClass({
           dom.button({
             id: "clear-snapshots",
             className: "clear-snapshots devtools-button",
+            disabled: !snapshots.length,
             onClick: onClearSnapshotsClick,
             title: L10N.getStr("clear-snapshots.tooltip")
           }),
@@ -272,9 +273,7 @@ module.exports = createClass({
               className: "devtools-toolbarbutton import-snapshot devtools-button",
               onClick: onImportClick,
               title: L10N.getStr("import-snapshot"),
-              "data-text-only": true,
-            },
-            L10N.getStr("import-snapshot")
+            }
           )
         ),
 

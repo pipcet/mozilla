@@ -34,7 +34,7 @@
   color: #fff;
   border: 1px solid #111;
   border-radius: 2px;
-  padding: 5px;
+  padding: 0 5px;
   width: 200px;
   margin: 0;
 }
@@ -165,6 +165,10 @@
 
 .devtools-responsiveui-close {
   list-style-image: url("chrome://devtools/skin/images/close.svg");
+}
+
+.devtools-responsiveui-close > image {
+  filter: invert(1);
 }
 
 .devtools-responsiveui-rotate {

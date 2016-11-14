@@ -16,15 +16,18 @@
 #include "mozilla/layers/LayerManagerComposite.h"
 #include "gfxPrefs.h"
 #include "gfxCrashReporterUtils.h"
+#include "gfxUtils.h"
+#include "mozilla/gfx/DeviceManagerDx.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
-#include "mozilla/widget/WinCompositorWidgetProxy.h"
+#include "mozilla/widget/WinCompositorWidget.h"
+#include "D3D9SurfaceImage.h"
 
 namespace mozilla {
 namespace layers {
 
 using namespace mozilla::gfx;
 
-CompositorD3D9::CompositorD3D9(CompositorBridgeParent* aParent, widget::CompositorWidgetProxy* aWidget)
+CompositorD3D9::CompositorD3D9(CompositorBridgeParent* aParent, widget::CompositorWidget* aWidget)
   : Compositor(aWidget, aParent)
   , mDeviceResetCount(0)
   , mFailedResetAttempts(0)
@@ -38,25 +41,29 @@ CompositorD3D9::~CompositorD3D9()
 }
 
 bool
-CompositorD3D9::Initialize()
+CompositorD3D9::Initialize(nsCString* const out_failureReason)
 {
   ScopedGfxFeatureReporter reporter("D3D9 Layers");
 
-  mDeviceManager = gfxWindowsPlatform::GetPlatform()->GetD3D9DeviceManager();
+  mDeviceManager = DeviceManagerD3D9::Get();
   if (!mDeviceManager) {
+    *out_failureReason = "FEATURE_FAILURE_D3D9_DEVICE_MANAGER";
     return false;
   }
 
-  mSwapChain = mDeviceManager->CreateSwapChain(mWidget->AsWindowsProxy()->GetHwnd());
+  mSwapChain = mDeviceManager->CreateSwapChain(mWidget->AsWindows()->GetHwnd());
   if (!mSwapChain) {
+    *out_failureReason = "FEATURE_FAILURE_D3D9_SWAP_CHAIN";
     return false;
   }
 
   if (!mWidget->InitCompositor(this)) {
+    *out_failureReason = "FEATURE_FAILURE_D3D9_INIT_COMPOSITOR";
     return false;
   }
 
   reporter.SetSuccessful();
+
   return true;
 }
 
@@ -66,7 +73,8 @@ CompositorD3D9::GetTextureFactoryIdentifier()
   TextureFactoryIdentifier ident;
   ident.mMaxTextureSize = GetMaxTextureSize();
   ident.mParentBackend = LayersBackend::LAYERS_D3D9;
-  ident.mParentProcessId = XRE_GetProcessType();
+  ident.mParentProcessType = XRE_GetProcessType();
+  ident.mSupportsComponentAlpha = SupportsEffect(EffectTypes::COMPONENT_ALPHA);
   return ident;
 }
 
@@ -192,6 +200,10 @@ CompositorD3D9::CreateRenderTargetFromSource(const gfx::IntRect &aRect,
                                              const gfx::IntPoint &aSourcePoint)
 {
   RefPtr<IDirect3DTexture9> texture = CreateTexture(aRect, aSource, aSourcePoint);
+
+  if (!texture) {
+    return nullptr;
+  }
 
   return MakeAndAddRef<CompositingRenderTargetD3D9>(texture,
                                                     INIT_MODE_NONE,
@@ -406,6 +418,10 @@ CompositorD3D9::DrawQuad(const gfx::Rect &aRect,
         return;
       }
 
+
+      float* yuvToRgb = gfxUtils::Get4x3YuvColorMatrix(ycbcrEffect->mYUVColorSpace);
+      d3d9Device->SetPixelShaderConstantF(CBmYuvColorMatrix, yuvToRgb, 3);
+
       TextureSourceD3D9* sourceY  = source->GetSubSource(Y)->AsSourceD3D9();
       TextureSourceD3D9* sourceCb = source->GetSubSource(Cb)->AsSourceD3D9();
       TextureSourceD3D9* sourceCr = source->GetSubSource(Cr)->AsSourceD3D9();
@@ -590,7 +606,7 @@ CompositorD3D9::EnsureSwapChain()
   MOZ_ASSERT(mDeviceManager, "Don't call EnsureSwapChain without a device manager");
 
   if (!mSwapChain) {
-    mSwapChain = mDeviceManager->CreateSwapChain(mWidget->AsWindowsProxy()->GetHwnd());
+    mSwapChain = mDeviceManager->CreateSwapChain(mWidget->AsWindows()->GetHwnd());
     // We could not create a swap chain, return false
     if (!mSwapChain) {
       // Check the state of the device too
@@ -644,7 +660,7 @@ CompositorD3D9::Ready()
                "Shouldn't have any render targets around, they must be released before our device");
   mSwapChain = nullptr;
 
-  mDeviceManager = gfxWindowsPlatform::GetPlatform()->GetD3D9DeviceManager();
+  mDeviceManager = DeviceManagerD3D9::Get();
   if (!mDeviceManager) {
     FailedToResetDevice();
     mParent->InvalidateRemoteLayers();
@@ -664,7 +680,7 @@ CompositorD3D9::FailedToResetDevice() {
   // depending on how things behave in the wild.
   if (mFailedResetAttempts > 10) {
     mFailedResetAttempts = 0;
-    gfxWindowsPlatform::GetPlatform()->D3D9DeviceReset();
+    DeviceManagerDx::Get()->NotifyD3D9DeviceReset();
     gfxCriticalNote << "[D3D9] Unable to get a working D3D9 Compositor";
   }
 }
@@ -716,8 +732,6 @@ CompositorD3D9::BeginFrame(const nsIntRegion& aInvalidRegion,
 void
 CompositorD3D9::EndFrame()
 {
-  Compositor::EndFrame();
-
   if (mDeviceManager) {
     device()->EndScene();
 
@@ -731,6 +745,8 @@ CompositorD3D9::EndFrame()
       }
     }
   }
+
+  Compositor::EndFrame();
 
   mCurrentRT = nullptr;
   mDefaultRT = nullptr;
@@ -755,6 +771,17 @@ CompositorD3D9::PrepareViewport(const gfx::IntSize& aSize)
   if (FAILED(hr)) {
     NS_WARNING("Failed to set projection matrix");
   }
+}
+
+bool
+CompositorD3D9::SupportsEffect(EffectTypes aEffect)
+{
+  if (aEffect == EffectTypes::COMPONENT_ALPHA &&
+      !mDeviceManager->HasComponentAlpha()) {
+    return false;
+  }
+
+  return Compositor::SupportsEffect(aEffect);
 }
 
 void

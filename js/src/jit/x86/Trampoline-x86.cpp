@@ -4,6 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/MathAlgorithms.h"
+
 #include "jscompartment.h"
 
 #include "jit/Bailouts.h"
@@ -21,6 +23,8 @@
 #include "jsscriptinlines.h"
 
 #include "jit/MacroAssembler-inl.h"
+
+using mozilla::IsPowerOfTwo;
 
 using namespace js;
 using namespace js::jit;
@@ -413,8 +417,9 @@ JitRuntime::generateArgumentsRectifier(JSContext* cx, void** returnAddrOut)
       "No need to consider |this| and the frame pointer and its padding for aligning the stack");
     static_assert(JitStackAlignment % sizeof(Value) == 0,
       "Ensure that we can pad the stack by pushing extra UndefinedValue");
+    static_assert(IsPowerOfTwo(JitStackValueAlignment),
+                  "must have power of two for masm.andl to do its job");
 
-    MOZ_ASSERT(IsPowerOfTwo(JitStackValueAlignment));
     masm.addl(Imm32(JitStackValueAlignment - 1 /* for padding */), ecx);
 
     // Account for newTarget, if necessary.
@@ -559,11 +564,11 @@ PushBailoutFrame(MacroAssembler& masm, uint32_t frameClass, Register spArg)
         // the float registers to have the maximal possible size
         // (Simd128DataSize). To work around this, we just spill the double
         // registers by hand here, using the register dump offset directly.
-        for (GeneralRegisterBackwardIterator iter(AllRegs.gprs()); iter.more(); iter++)
+        for (GeneralRegisterBackwardIterator iter(AllRegs.gprs()); iter.more(); ++iter)
             masm.Push(*iter);
 
         masm.reserveStack(sizeof(RegisterDump::FPUArray));
-        for (FloatRegisterBackwardIterator iter(AllRegs.fpus()); iter.more(); iter++) {
+        for (FloatRegisterBackwardIterator iter(AllRegs.fpus()); iter.more(); ++iter) {
             FloatRegister reg = *iter;
             Address spillAddress(StackPointer, reg.getRegisterDumpOffsetInBytes());
             masm.storeDouble(reg, spillAddress);
@@ -735,6 +740,9 @@ JitRuntime::generateVMWrapper(JSContext* cx, const VMFunction& f)
         break;
     }
 
+    if (!generateTLEnterVM(cx, masm, f))
+        return nullptr;
+
     masm.setupUnalignedABICall(regs.getAny());
     masm.passABIArg(cxreg);
 
@@ -774,6 +782,9 @@ JitRuntime::generateVMWrapper(JSContext* cx, const VMFunction& f)
         masm.passABIArg(outReg);
 
     masm.callWithABI(f.wrapped);
+
+    if (!generateTLExitVM(cx, masm, f))
+        return nullptr;
 
     // Test for failure.
     switch (f.failType()) {
@@ -878,7 +889,8 @@ JitRuntime::generatePreBarrier(JSContext* cx, MIRType type)
 }
 
 typedef bool (*HandleDebugTrapFn)(JSContext*, BaselineFrame*, uint8_t*, bool*);
-static const VMFunction HandleDebugTrapInfo = FunctionInfo<HandleDebugTrapFn>(HandleDebugTrap);
+static const VMFunction HandleDebugTrapInfo =
+    FunctionInfo<HandleDebugTrapFn>(HandleDebugTrap, "HandleDebugTrap");
 
 JitCode*
 JitRuntime::generateDebugTrapHandler(JSContext* cx)

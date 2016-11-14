@@ -20,11 +20,10 @@ namespace jsipc {
 class WrapperOwner : public virtual JavaScriptShared
 {
   public:
-    typedef mozilla::ipc::IProtocolManager<
-                       mozilla::ipc::IProtocol>::ActorDestroyReason
+    typedef mozilla::ipc::IProtocol::ActorDestroyReason
            ActorDestroyReason;
 
-    explicit WrapperOwner(JSRuntime* rt);
+    WrapperOwner();
     bool init();
 
     // Standard internal methods.
@@ -54,7 +53,7 @@ class WrapperOwner : public virtual JavaScriptShared
     bool getOwnEnumerablePropertyKeys(JSContext* cx, JS::HandleObject proxy,
                                       JS::AutoIdVector& props);
     bool hasInstance(JSContext* cx, JS::HandleObject proxy, JS::MutableHandleValue v, bool* bp);
-    bool getBuiltinClass(JSContext* cx, JS::HandleObject proxy, js::ESClassValue* classValue);
+    bool getBuiltinClass(JSContext* cx, JS::HandleObject proxy, js::ESClass* cls);
     bool isArray(JSContext* cx, JS::HandleObject proxy, JS::IsArrayAnswer* answer);
     const char* className(JSContext* cx, JS::HandleObject proxy);
     bool getPrototype(JSContext* cx, JS::HandleObject proxy, JS::MutableHandleObject protop);
@@ -84,9 +83,9 @@ class WrapperOwner : public virtual JavaScriptShared
     virtual void ActorDestroy(ActorDestroyReason why);
 
     virtual bool toObjectVariant(JSContext* cx, JSObject* obj, ObjectVariant* objVarp);
-    virtual JSObject* fromObjectVariant(JSContext* cx, ObjectVariant objVar);
-    JSObject* fromRemoteObjectVariant(JSContext* cx, RemoteObject objVar);
-    JSObject* fromLocalObjectVariant(JSContext* cx, LocalObject objVar);
+    virtual JSObject* fromObjectVariant(JSContext* cx, const ObjectVariant& objVar);
+    JSObject* fromRemoteObjectVariant(JSContext* cx, const RemoteObject& objVar);
+    JSObject* fromLocalObjectVariant(JSContext* cx, const LocalObject& objVar);
 
   protected:
     ObjectId idOf(JSObject* obj);

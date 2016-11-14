@@ -6,6 +6,7 @@
 #include "AudioNodeStream.h"
 
 #include "MediaStreamGraphImpl.h"
+#include "MediaStreamListener.h"
 #include "AudioNodeEngine.h"
 #include "ThreeDPoint.h"
 #include "AudioChannelFormat.h"
@@ -29,7 +30,7 @@ namespace mozilla {
 AudioNodeStream::AudioNodeStream(AudioNodeEngine* aEngine,
                                  Flags aFlags,
                                  TrackRate aSampleRate)
-  : ProcessedMediaStream(nullptr),
+  : ProcessedMediaStream(),
     mEngine(aEngine),
     mSampleRate(aSampleRate),
     mFlags(aFlags),
@@ -70,20 +71,20 @@ AudioNodeStream::Create(AudioContext* aCtx, AudioNodeEngine* aEngine,
                         Flags aFlags, MediaStreamGraph* aGraph)
 {
   MOZ_ASSERT(NS_IsMainThread());
+  MOZ_RELEASE_ASSERT(aGraph);
 
   // MediaRecorders use an AudioNodeStream, but no AudioNode
   AudioNode* node = aEngine->NodeMainThread();
-  MediaStreamGraph* graph = aGraph ? aGraph : aCtx->Graph();
 
   RefPtr<AudioNodeStream> stream =
-    new AudioNodeStream(aEngine, aFlags, graph->GraphRate());
+    new AudioNodeStream(aEngine, aFlags, aGraph->GraphRate());
   stream->mSuspendedCount += aCtx->ShouldSuspendNewStream();
   if (node) {
     stream->SetChannelMixingParametersImpl(node->ChannelCount(),
                                            node->ChannelCountModeValue(),
                                            node->ChannelInterpretationValue());
   }
-  graph->AddStream(stream);
+  aGraph->AddStream(stream);
   return stream.forget();
 }
 
@@ -581,7 +582,7 @@ AudioNodeStream::ProcessInput(GraphTime aFrom, GraphTime aTo, uint32_t aFlags)
       }
     }
 
-    if (mDisabledTrackIDs.Contains(static_cast<TrackID>(AUDIO_TRACK))) {
+    if (GetDisabledTrackMode(static_cast<TrackID>(AUDIO_TRACK)) != DisabledTrackMode::ENABLED) {
       for (uint32_t i = 0; i < outputCount; ++i) {
         mLastChunks[i].SetNull(WEBAUDIO_BLOCK_SIZE);
       }
@@ -620,7 +621,7 @@ AudioNodeStream::ProduceOutputBeforeInput(GraphTime aFrom)
     mEngine->ProduceBlockBeforeInput(this, aFrom, &mLastChunks[0]);
     NS_ASSERTION(mLastChunks[0].GetDuration() == WEBAUDIO_BLOCK_SIZE,
                  "Invalid WebAudio chunk size");
-    if (mDisabledTrackIDs.Contains(static_cast<TrackID>(AUDIO_TRACK))) {
+    if (GetDisabledTrackMode(static_cast<TrackID>(AUDIO_TRACK)) != DisabledTrackMode::ENABLED) {
       mLastChunks[0].SetNull(WEBAUDIO_BLOCK_SIZE);
     }
   }
@@ -647,7 +648,7 @@ AudioNodeStream::AdvanceOutputSegment()
     AudioSegment tmpSegment;
     tmpSegment.AppendAndConsumeChunk(&copyChunk);
     l->NotifyQueuedTrackChanges(Graph(), AUDIO_TRACK,
-                                segment->GetDuration(), 0, tmpSegment);
+                                segment->GetDuration(), TrackEventCommand::TRACK_EVENT_NONE, tmpSegment);
   }
 }
 
@@ -662,7 +663,7 @@ AudioNodeStream::FinishOutput()
     AudioSegment emptySegment;
     l->NotifyQueuedTrackChanges(Graph(), AUDIO_TRACK,
                                 track->GetSegment()->GetDuration(),
-                                MediaStreamListener::TRACK_EVENT_ENDED, emptySegment);
+                                TrackEventCommand::TRACK_EVENT_ENDED, emptySegment);
   }
 }
 

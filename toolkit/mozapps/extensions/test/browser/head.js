@@ -1,7 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
-/*globals end_test*/
+/* globals end_test*/
 
 Components.utils.import("resource://gre/modules/NetUtil.jsm");
 
@@ -261,12 +261,10 @@ var get_tooltip_info = Task.async(function*(addon) {
       version: undefined
     };
   }
-  else {
-    return {
-      name: tiptext.substring(0, expectedName.length),
-      version: tiptext.substring(expectedName.length + 1)
-    };
-  }
+  return {
+    name: tiptext.substring(0, expectedName.length),
+    version: tiptext.substring(expectedName.length + 1)
+  };
 });
 
 function get_addon_file_url(aFilename) {
@@ -275,7 +273,7 @@ function get_addon_file_url(aFilename) {
              getService(Ci.nsIChromeRegistry);
     var fileurl = cr.convertChromeURL(makeURI(CHROMEROOT + "addons/" + aFilename));
     return fileurl.QueryInterface(Ci.nsIFileURL);
-  } catch(ex) {
+  } catch (ex) {
     var jar = getJar(CHROMEROOT + "addons/" + aFilename);
     var tmpDir = extractJarToTmp(jar);
     tmpDir.append(aFilename);
@@ -453,7 +451,7 @@ function close_manager(aManagerWindow, aCallback, aLongerTimeout) {
         dump("Manager window unload handler\n");
         this.removeEventListener("unload", arguments.callee, false);
         resolve();
-      } catch(e) {
+      } catch (e) {
         reject(e);
       }
     }, false);
@@ -506,14 +504,11 @@ function get_string(aName, ...aArgs) {
 }
 
 function formatDate(aDate) {
-  return Cc["@mozilla.org/intl/scriptabledateformat;1"]
-           .getService(Ci.nsIScriptableDateFormat)
-           .FormatDate("",
-                       Ci.nsIScriptableDateFormat.dateFormatLong,
-                       aDate.getFullYear(),
-                       aDate.getMonth() + 1,
-                       aDate.getDate()
-                       );
+  const locale = Cc["@mozilla.org/chrome/chrome-registry;1"]
+                 .getService(Ci.nsIXULChromeRegistry)
+                 .getSelectedLocale("global", true);
+  const dtOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+  return aDate.toLocaleDateString(locale, dtOptions);
 }
 
 function is_hidden(aElement) {
@@ -689,7 +684,7 @@ function addCertOverride(host, bits) {
   }
 }
 
-/***** Mock Provider *****/
+/** *** Mock Provider *****/
 
 function MockProvider(aUseAsyncCallbacks, aTypes) {
   this.addons = [];
@@ -724,7 +719,7 @@ MockProvider.prototype = {
   useAsyncCallbacks: null,
   types: null,
 
-  /***** Utility functions *****/
+  /** *** Utility functions *****/
 
   /**
    * Register this provider with the AddonManager
@@ -887,7 +882,7 @@ MockProvider.prototype = {
     return newInstalls;
   },
 
-  /***** AddonProvider implementation *****/
+  /** *** AddonProvider implementation *****/
 
   /**
    * Called to initialize the provider.
@@ -911,7 +906,7 @@ MockProvider.prototype = {
         info("Notifying timer set at " + (setAt || "unknown location"));
         timer.callback.notify(timer);
         timer.cancel();
-      } catch(e) {
+      } catch (e) {
         info("Timer notify failed: " + e);
       }
     }
@@ -1087,7 +1082,7 @@ MockProvider.prototype = {
   },
 
 
-  /***** Internal functions *****/
+  /** *** Internal functions *****/
 
   /**
    * Delay calling a callback to fake a time-consuming async operation.
@@ -1123,7 +1118,7 @@ MockProvider.prototype = {
   }
 };
 
-/***** Mock Addon object for the Mock Provider *****/
+/** *** Mock Addon object for the Mock Provider *****/
 
 function MockAddon(aId, aName, aType, aOperationsRequiringRestart) {
   // Only set required attributes.
@@ -1154,6 +1149,12 @@ function MockAddon(aId, aName, aType, aOperationsRequiringRestart) {
 }
 
 MockAddon.prototype = {
+  get isCorrectlySigned() {
+    if (this.signedState === AddonManager.SIGNEDSTATE_NOT_REQUIRED)
+      return true;
+    return this.signedState > AddonManager.SIGNEDSTATE_MISSING;
+  },
+
   get shouldBeActive() {
     return !this.appDisabled && !this._userDisabled &&
            !(this.pendingOperations & AddonManager.PENDING_UNINSTALL);
@@ -1288,7 +1289,7 @@ MockAddon.prototype = {
   }
 };
 
-/***** Mock AddonInstall object for the Mock Provider *****/
+/** *** Mock AddonInstall object for the Mock Provider *****/
 
 function MockInstall(aName, aType, aAddonToInstall) {
   this.name = aName || "";

@@ -7,7 +7,7 @@ from __future__ import print_function
 
 import platform
 import sys
-import os.path
+import os
 import subprocess
 
 # Don't forgot to add new mozboot modules to the bootstrap download
@@ -20,27 +20,37 @@ from mozboot.osx import OSXBootstrapper
 from mozboot.openbsd import OpenBSDBootstrapper
 from mozboot.archlinux import ArchlinuxBootstrapper
 from mozboot.windows import WindowsBootstrapper
+from mozboot.mozillabuild import MozillaBuildBootstrapper
+from mozboot.util import (
+    get_state_dir,
+)
 
 APPLICATION_CHOICE = '''
 Please choose the version of Firefox you want to build:
 %s
 
-Note: (For Firefox for Android)
+Note on Artifact Mode:
 
-The Firefox for Android front-end is built using Java, the Android
-Platform SDK, JavaScript, HTML, and CSS. If you want to work on the
-look-and-feel of Firefox for Android, you want "Firefox for Android
-Artifact Mode".
+Firefox for Desktop and Android supports a fast build mode called
+artifact mode. Artifact mode downloads pre-built C++ components rather
+than building them locally, trading bandwidth for time.
 
-Firefox for Android is built on top of the Gecko technology
-platform. Gecko is Mozilla's web rendering engine, similar to Edge,
+Artifact builds will be useful to many developers who are not working
+with compiled code. If you want to work on look-and-feel of Firefox,
+you want "Firefox for Desktop Artifact Mode".
+
+Similarly, if you want to work on the look-and-feel of Firefox for Android,
+you want "Firefox for Android Artifact Mode".
+
+To work on the Gecko technology platform, you would need to opt to full,
+non-artifact mode. Gecko is Mozilla's web rendering engine, similar to Edge,
 Blink, and WebKit. Gecko is implemented in C++ and JavaScript. If you
-want to work on web rendering, you want "Firefox for Android".
+want to work on web rendering, you want "Firefox for Desktop", or
+"Firefox for Android".
 
-If you don't know what you want, start with just "Firefox for Android
-Artifact Mode". Your builds will be much shorter than if you build
-Gecko as well. But don't worry! You can always switch configurations
-later.
+If you don't know what you want, start with just Artifact Mode of the desired
+platform. Your builds will be much shorter than if you build Gecko as well.
+But don't worry! You can always switch configurations later.
 
 You can learn more about Artifact mode builds at
 https://developer.mozilla.org/en-US/docs/Artifact_builds.
@@ -49,6 +59,7 @@ Your choice:
 '''
 
 APPLICATIONS_LIST=[
+    ('Firefox for Desktop Artifact Mode', 'browser_artifact_mode'),
     ('Firefox for Desktop', 'browser'),
     ('Firefox for Android Artifact Mode', 'mobile_android_artifact_mode'),
     ('Firefox for Android', 'mobile_android'),
@@ -57,9 +68,10 @@ APPLICATIONS_LIST=[
 # This is a workaround for the fact that we must support python2.6 (which has
 # no OrderedDict)
 APPLICATIONS = dict(
-    browser=APPLICATIONS_LIST[0],
-    mobile_android_artifact_mode=APPLICATIONS_LIST[1],
-    mobile_android=APPLICATIONS_LIST[2],
+    browser_artifact_mode=APPLICATIONS_LIST[0],
+    browser=APPLICATIONS_LIST[1],
+    mobile_android_artifact_mode=APPLICATIONS_LIST[2],
+    mobile_android=APPLICATIONS_LIST[3],
 )
 
 STATE_DIR_INFO = '''
@@ -88,7 +100,7 @@ Your system should be ready to build %s!
 SOURCE_ADVERTISE = '''
 Source code can be obtained by running
 
-    hg clone https://hg.mozilla.org/firefox
+    hg clone https://hg.mozilla.org/mozilla-unified
 
 Or, if you prefer Git, you should install git-cinnabar, and follow the
 instruction here to clone from the Mercurial repository:
@@ -135,16 +147,6 @@ DEBIAN_DISTROS = (
     'Elementary',
     '"elementary OS"',
 )
-
-
-def get_state_dir():
-    """Obtain path to a directory to hold state.
-
-    This code is shared with ``mach_bootstrap.py``.
-    """
-    state_user_dir = os.path.expanduser('~/.mozbuild')
-    state_env_dir = os.environ.get('MOZBUILD_STATE_PATH')
-    return state_env_dir or state_user_dir
 
 
 class Bootstrapper(object):
@@ -197,7 +199,10 @@ class Bootstrapper(object):
             args['flavor'] = platform.system()
 
         elif sys.platform.startswith('win32') or sys.platform.startswith('msys'):
-            cls = WindowsBootstrapper
+            if 'MOZILLABUILD' in os.environ:
+                cls = MozillaBuildBootstrapper
+            else:
+                cls = WindowsBootstrapper
 
         if cls is None:
             raise NotImplementedError('Bootstrap support is not yet available '
@@ -230,7 +235,7 @@ class Bootstrapper(object):
         # run in self-contained mode and only the files in this directory will
         # be available. We /could/ refactor parts of mach_bootstrap.py to be
         # part of this directory to avoid the code duplication.
-        state_dir = get_state_dir()
+        state_dir, _ = get_state_dir()
 
         if not os.path.exists(state_dir):
             if not self.instance.no_interactive:
@@ -369,7 +374,7 @@ def clone_firefox(hg, dest):
     # unless someone complains about it.
     with open(os.path.join(dest, '.hg', 'hgrc'), 'ab') as fh:
         fh.write('[paths]\n')
-        fh.write('default = https://hg.mozilla.org/firefox\n')
+        fh.write('default = https://hg.mozilla.org/mozilla-unified\n')
         fh.write('\n')
 
         # The server uses aggressivemergedeltas which can blow up delta chain
@@ -380,10 +385,10 @@ def clone_firefox(hg, dest):
         fh.write('# This is necessary to keep performance in check\n')
         fh.write('maxchainlen = 10000\n')
 
-    res = subprocess.call([hg, 'pull', 'https://hg.mozilla.org/firefox'], cwd=dest)
+    res = subprocess.call([hg, 'pull', 'https://hg.mozilla.org/mozilla-unified'], cwd=dest)
     print('')
     if res:
-        print('error pulling; try running `hg pull https://hg.mozilla.org/firefox` manually')
+        print('error pulling; try running `hg pull https://hg.mozilla.org/mozilla-unified` manually')
         return False
 
     print('updating to "central" - the development head of Gecko and Firefox')
@@ -412,7 +417,7 @@ def current_firefox_checkout(check_output, hg=None):
         if hg and os.path.exists(hg_dir):
             # Verify the hg repo is a Firefox repo by looking at rev 0.
             try:
-                node = check_output([hg, 'log', '-r', '0', '-T', '{node}'], cwd=path)
+                node = check_output([hg, 'log', '-r', '0', '--template', '{node}'], cwd=path)
                 if node in HG_ROOT_REVISIONS:
                     return 'hg'
                 # Else the root revision is different. There could be nested

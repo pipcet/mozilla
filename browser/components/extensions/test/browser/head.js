@@ -8,6 +8,11 @@
  *          getBrowserActionPopup getPageActionPopup
  *          closeBrowserAction closePageAction
  *          promisePopupShown promisePopupHidden
+ *          openContextMenu closeContextMenu
+ *          openExtensionContextMenu closeExtensionContextMenu
+ *          imageBuffer getListStyleImage getPanelForNode
+ *          awaitExtensionPanel awaitPopupResize
+ *          promiseContentDimensions alterContent
  */
 
 var {AppConstants} = Cu.import("resource://gre/modules/AppConstants.jsm");
@@ -45,6 +50,17 @@ var focusWindow = Task.async(function* focusWindow(win) {
   yield promise;
 });
 
+let img = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQImWNgYGBgAAAABQABh6FO1AAAAABJRU5ErkJggg==";
+var imageBuffer = Uint8Array.from(atob(img), byte => byte.charCodeAt(0)).buffer;
+
+function getListStyleImage(button) {
+  let style = button.ownerDocument.defaultView.getComputedStyle(button);
+
+  let match = /^url\("(.*)"\)$/.exec(style.listStyleImage);
+
+  return match && match[1];
+}
+
 function promisePopupShown(popup) {
   return new Promise(resolve => {
     if (popup.state == "open") {
@@ -69,6 +85,71 @@ function promisePopupHidden(popup) {
   });
 }
 
+function promiseContentDimensions(browser) {
+  return ContentTask.spawn(browser, null, function* () {
+    function copyProps(obj, props) {
+      let res = {};
+      for (let prop of props) {
+        res[prop] = obj[prop];
+      }
+      return res;
+    }
+
+    return {
+      window: copyProps(content,
+                        ["innerWidth", "innerHeight", "outerWidth", "outerHeight",
+                         "scrollX", "scrollY", "scrollMaxX", "scrollMaxY"]),
+      body: copyProps(content.document.body,
+                      ["clientWidth", "clientHeight", "scrollWidth", "scrollHeight"]),
+      root: copyProps(content.document.documentElement,
+                      ["clientWidth", "clientHeight", "scrollWidth", "scrollHeight"]),
+
+      isStandards: content.document.compatMode !== "BackCompat",
+    };
+  });
+}
+
+function* awaitPopupResize(browser) {
+  return BrowserTestUtils.waitForEvent(browser, "WebExtPopupResized",
+                                       event => event.detail === "delayed");
+}
+
+function alterContent(browser, task, arg = null) {
+  return Promise.all([
+    ContentTask.spawn(browser, arg, task),
+    awaitPopupResize(browser),
+  ]).then(() => {
+    return promiseContentDimensions(browser);
+  });
+}
+
+function getPanelForNode(node) {
+  while (node.localName != "panel") {
+    node = node.parentNode;
+  }
+  return node;
+}
+
+var awaitBrowserLoaded = browser => ContentTask.spawn(browser, null, () => {
+  if (content.document.readyState !== "complete") {
+    return ContentTaskUtils.waitForEvent(content, "load").then(() => {});
+  }
+});
+
+var awaitExtensionPanel = Task.async(function* (extension, win = window, awaitLoad = true) {
+  let {originalTarget: browser} = yield BrowserTestUtils.waitForEvent(
+    win.document, "WebExtPopupLoaded", true,
+    event => event.detail.extension.id === extension.id);
+
+  yield Promise.all([
+    promisePopupShown(getPanelForNode(browser)),
+
+    awaitLoad && awaitBrowserLoaded(browser),
+  ]);
+
+  return browser;
+});
+
 function getBrowserActionWidget(extension) {
   return CustomizableUI.getWidget(makeWidgetId(extension.id) + "-browser-action");
 }
@@ -82,7 +163,7 @@ function getBrowserActionPopup(extension, win = window) {
   return win.PanelUI.panel;
 }
 
-var clickBrowserAction = Task.async(function* (extension, win = window) {
+var showBrowserAction = Task.async(function* (extension, win = window) {
   let group = getBrowserActionWidget(extension);
   let widget = group.forWindow(win);
 
@@ -91,6 +172,12 @@ var clickBrowserAction = Task.async(function* (extension, win = window) {
   } else if (group.areaType == CustomizableUI.TYPE_MENU_PANEL) {
     yield win.PanelUI.show();
   }
+});
+
+var clickBrowserAction = Task.async(function* (extension, win = window) {
+  yield showBrowserAction(extension, win);
+
+  let widget = getBrowserActionWidget(extension).forWindow(win);
 
   EventUtils.synthesizeMouseAtCenter(widget.node, {}, win);
 });
@@ -102,6 +189,44 @@ function closeBrowserAction(extension, win = window) {
   CustomizableUI.hidePanelForNode(node);
 
   return Promise.resolve();
+}
+
+function* openContextMenu(selector = "#img1") {
+  let contentAreaContextMenu = document.getElementById("contentAreaContextMenu");
+  let popupShownPromise = BrowserTestUtils.waitForEvent(contentAreaContextMenu, "popupshown");
+  yield BrowserTestUtils.synthesizeMouseAtCenter(selector, {type: "contextmenu"}, gBrowser.selectedBrowser);
+  yield popupShownPromise;
+  return contentAreaContextMenu;
+}
+
+function* closeContextMenu() {
+  let contentAreaContextMenu = document.getElementById("contentAreaContextMenu");
+  let popupHiddenPromise = BrowserTestUtils.waitForEvent(contentAreaContextMenu, "popuphidden");
+  contentAreaContextMenu.hidePopup();
+  yield popupHiddenPromise;
+}
+
+function* openExtensionContextMenu(selector = "#img1") {
+  let contextMenu = yield openContextMenu(selector);
+  let topLevelMenu = contextMenu.getElementsByAttribute("ext-type", "top-level-menu");
+
+  // Return null if the extension only has one item and therefore no extension menu.
+  if (topLevelMenu.length == 0) {
+    return null;
+  }
+
+  let extensionMenu = topLevelMenu[0].childNodes[0];
+  let popupShownPromise = BrowserTestUtils.waitForEvent(contextMenu, "popupshown");
+  EventUtils.synthesizeMouseAtCenter(extensionMenu, {});
+  yield popupShownPromise;
+  return extensionMenu;
+}
+
+function* closeExtensionContextMenu(itemToSelect) {
+  let contentAreaContextMenu = document.getElementById("contentAreaContextMenu");
+  let popupHiddenPromise = BrowserTestUtils.waitForEvent(contentAreaContextMenu, "popuphidden");
+  EventUtils.synthesizeMouseAtCenter(itemToSelect, {});
+  yield popupHiddenPromise;
 }
 
 function getPageActionPopup(extension, win = window) {

@@ -180,7 +180,6 @@ var listener = {
   },
 
   receiveMessage(message) {
-    let data = message.data;
     switch (message.name) {
       case "gfxSanity:ContentLoaded":
         this.runSanityTest();
@@ -244,7 +243,6 @@ SanityTest.prototype = {
   shouldRunTest: function() {
     // Only test gfx features if firefox has updated, or if the user has a new
     // gpu or drivers.
-    var appInfo = Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULAppInfo);
     var buildId = Services.appinfo.platformBuildID;
     var gfxinfo = Cc["@mozilla.org/gfx/info;1"].getService(Ci.nsIGfxInfo);
 
@@ -309,7 +307,7 @@ SanityTest.prototype = {
 
     // There's no clean way to have an invisible window and ensure it's always painted.
     // Instead, move the window far offscreen so it doesn't show up during launch.
-    sanityTest.moveTo(100000000,1000000000);
+    sanityTest.moveTo(100000000, 1000000000);
     tester.scheduleTest(sanityTest);
   },
 };

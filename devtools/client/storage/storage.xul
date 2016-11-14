@@ -26,7 +26,7 @@
     <menupopup id="storage-tree-popup">
       <menuitem id="storage-tree-popup-delete-all"
                 label="&storage.popupMenu.deleteAllLabel;"/>
-      <menuitem id="storage-tree-popup-delete-database"/>
+      <menuitem id="storage-tree-popup-delete"/>
     </menupopup>
     <menupopup id="storage-table-popup">
       <menuitem id="storage-table-popup-delete"/>
@@ -42,7 +42,7 @@
     <vbox flex="1">
       <hbox id="storage-toolbar" class="devtools-toolbar">
         <textbox id="storage-searchbox"
-                 class="devtools-searchinput"
+                 class="devtools-filterinput"
                  type="search"
                  timeout="200"
                  placeholder="&searchBox.placeholder;"/>

@@ -9,6 +9,8 @@
 using namespace mozilla;
 using namespace mozilla::pkix;
 
+namespace mozilla { namespace psm {
+
 OCSPVerificationTrustDomain::OCSPVerificationTrustDomain(
   NSSCertDBTrustDomain& certDBTrustDomain)
   : mCertDBTrustDomain(certDBTrustDomain)
@@ -108,6 +110,13 @@ OCSPVerificationTrustDomain::NetscapeStepUpMatchesServerAuth(Time notBefore,
   return mCertDBTrustDomain.NetscapeStepUpMatchesServerAuth(notBefore, matches);
 }
 
+void
+OCSPVerificationTrustDomain::NoteAuxiliaryExtension(
+  AuxiliaryExtension extension, Input extensionData)
+{
+  mCertDBTrustDomain.NoteAuxiliaryExtension(extension, extensionData);
+}
+
 Result
 OCSPVerificationTrustDomain::DigestBuf(
   Input item, DigestAlgorithm digestAlg,
@@ -115,3 +124,5 @@ OCSPVerificationTrustDomain::DigestBuf(
 {
   return mCertDBTrustDomain.DigestBuf(item, digestAlg, digestBuf, digestBufLen);
 }
+
+} } // namespace mozilla::psm

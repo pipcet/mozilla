@@ -7,11 +7,13 @@
 #ifndef VideoUtils_h
 #define VideoUtils_h
 
+#include "MediaInfo.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/MozPromise.h"
 #include "mozilla/ReentrantMonitor.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtr.h"
 
 #include "nsAutoPtr.h"
 #include "nsIThread.h"
@@ -38,6 +40,13 @@ using mozilla::CheckedUint32;
 // This belongs in xpcom/monitor/Monitor.h, once we've made
 // mozilla::Monitor non-reentrant.
 namespace mozilla {
+
+class MediaContentType;
+
+// EME Key System String.
+extern const nsLiteralCString kEMEKeySystemClearkey;
+extern const nsLiteralCString kEMEKeySystemWidevine;
+extern const nsLiteralCString kEMEKeySystemPrimetime;
 
 /**
  * ReentrantMonitorConditionallyEnter
@@ -100,7 +109,7 @@ public:
     : mObject(aObject)
   {
   }
-  NS_IMETHOD Run() {
+  NS_IMETHOD Run() override {
     NS_ASSERTION(NS_IsMainThread(), "Must be on main thread.");
     mObject = nullptr;
     return NS_OK;
@@ -323,16 +332,148 @@ void
 LogToBrowserConsole(const nsAString& aMsg);
 
 bool
+ParseMIMETypeString(const nsAString& aMIMEType,
+                    nsString& aOutContainerType,
+                    nsTArray<nsString>& aOutCodecs);
+
+bool
 ParseCodecsString(const nsAString& aCodecs, nsTArray<nsString>& aOutCodecs);
 
 bool
-IsH264ContentType(const nsAString& aContentType);
-
-bool
-IsAACContentType(const nsAString& aContentType);
+IsH264CodecString(const nsAString& aCodec);
 
 bool
 IsAACCodecString(const nsAString& aCodec);
+
+bool
+IsVP8CodecString(const nsAString& aCodec);
+
+bool
+IsVP9CodecString(const nsAString& aCodec);
+
+// Try and create a TrackInfo with a given codec MIME type.
+UniquePtr<TrackInfo>
+CreateTrackInfoWithMIMEType(const nsACString& aCodecMIMEType);
+
+// Try and create a TrackInfo with a given codec MIME type, and optional extra
+// parameters from a content type (its MIME type and codecs are ignored).
+UniquePtr<TrackInfo>
+CreateTrackInfoWithMIMETypeAndContentTypeExtraParameters(
+  const nsACString& aCodecMIMEType,
+  const MediaContentType& aContentType);
+
+template <typename String>
+class StringListRange
+{
+  typedef typename String::char_type CharType;
+  typedef const CharType* Pointer;
+
+public:
+  // Iterator into range, trims items and skips empty items.
+  class Iterator
+  {
+  public:
+    bool operator!=(const Iterator& a) const
+    {
+      return mStart != a.mStart || mEnd != a.mEnd;
+    }
+    Iterator& operator++()
+    {
+      SearchItemAt(mComma + 1);
+      return *this;
+    }
+    typedef decltype(Substring(Pointer(), Pointer())) DereferencedType;
+    DereferencedType operator*()
+    {
+      return Substring(mStart, mEnd);
+    }
+  private:
+    friend class StringListRange;
+    Iterator(const CharType* aRangeStart, uint32_t aLength)
+      : mRangeEnd(aRangeStart + aLength)
+    {
+      SearchItemAt(aRangeStart);
+    }
+    void SearchItemAt(Pointer start)
+    {
+      // First, skip leading whitespace.
+      for (Pointer p = start; ; ++p) {
+        if (p >= mRangeEnd) {
+          mStart = mEnd = mComma = mRangeEnd;
+          return;
+        }
+        auto c = *p;
+        if (c == CharType(',')) {
+          // Comma -> Empty item -> Skip.
+        } else if (c != CharType(' ')) {
+          mStart = p;
+          break;
+        }
+      }
+      // Find comma, recording start of trailing space.
+      Pointer trailingWhitespace = nullptr;
+      for (Pointer p = mStart + 1; ; ++p) {
+        if (p >= mRangeEnd) {
+          mEnd = trailingWhitespace ? trailingWhitespace : p;
+          mComma = p;
+          return;
+        }
+        auto c = *p;
+        if (c == CharType(',')) {
+          mEnd = trailingWhitespace ? trailingWhitespace : p;
+          mComma = p;
+          return;
+        }
+        if (c == CharType(' ')) {
+          // Found a whitespace -> Record as trailing if not first one.
+          if (!trailingWhitespace) {
+            trailingWhitespace = p;
+          }
+        } else {
+          // Found a non-whitespace -> Reset trailing whitespace if needed.
+          if (trailingWhitespace) {
+            trailingWhitespace = nullptr;
+          }
+        }
+      }
+    }
+    const Pointer mRangeEnd;
+    Pointer mStart;
+    Pointer mEnd;
+    Pointer mComma;
+  };
+
+  explicit StringListRange(const String& aList) : mList(aList) {}
+  Iterator begin()
+  {
+    return Iterator(mList.Data(), mList.Length());
+  }
+  Iterator end()
+  {
+    return Iterator(mList.Data() + mList.Length(), 0);
+  }
+private:
+  const String& mList;
+};
+
+template <typename String>
+StringListRange<String>
+MakeStringListRange(const String& aList)
+{
+  return StringListRange<String>(aList);
+}
+
+template <typename ListString, typename ItemString>
+static bool
+StringListContains(const ListString& aList, const ItemString& aItem)
+{
+  for (const auto& listItem : MakeStringListRange(aList)) {
+    if (listItem.Equals(aItem)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 } // end namespace mozilla
 

@@ -98,7 +98,7 @@ public:
     bool IsHead() { return EqualsMethod(kMethod_Head); }
     bool IsPut() { return EqualsMethod(kMethod_Put); }
     bool IsTrace() { return EqualsMethod(kMethod_Trace); }
-    void ParseHeaderSet(char *buffer);
+    void ParseHeaderSet(const char *buffer);
 private:
     // All members must be copy-constructable and assignable
     nsHttpHeaderArray mHeaders;
@@ -115,11 +115,33 @@ private:
     bool              mHTTPS;
 
     // We are using ReentrantMonitor instead of a Mutex because VisitHeader
-    // function calls nsIHttpHeaderVisitor::VisitHeader while under lock. 
+    // function calls nsIHttpHeaderVisitor::VisitHeader while under lock.
     ReentrantMonitor  mReentrantMonitor;
 
     // During VisitHeader we sould not allow cal to SetHeader.
     bool mInVisitHeaders;
+
+#if defined(XP_WIN) && (defined(_M_IX86) || defined(_M_X64))
+    class DbgReentrantMonitorAutoEnter : ReentrantMonitorAutoEnter
+    {
+    public:
+        explicit DbgReentrantMonitorAutoEnter(nsHttpRequestHead& aInst)
+            : ReentrantMonitorAutoEnter(aInst.mReentrantMonitor),
+              mInst(aInst)
+        {
+            Protect(false);
+        }
+        ~DbgReentrantMonitorAutoEnter(void)
+        {
+            Protect(true);
+        }
+
+    private:
+        void Protect(bool aOn);
+
+        nsHttpRequestHead& mInst;
+    };
+#endif
 };
 
 } // namespace net

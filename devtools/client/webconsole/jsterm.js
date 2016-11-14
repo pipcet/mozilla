@@ -6,13 +6,12 @@
 
 "use strict";
 
-const {Ci} = require("chrome");
-
 const {Utils: WebConsoleUtils} =
-  require("devtools/shared/webconsole/utils");
+  require("devtools/client/webconsole/utils");
 const promise = require("promise");
 const Debugger = require("Debugger");
 const Services = require("Services");
+const {KeyCodes} = require("devtools/client/shared/keycodes");
 
 loader.lazyServiceGetter(this, "clipboardHelper",
                          "@mozilla.org/widget/clipboardhelper;1",
@@ -28,7 +27,7 @@ loader.lazyImporter(this, "VariablesView", "resource://devtools/client/shared/wi
 loader.lazyImporter(this, "VariablesViewController", "resource://devtools/client/shared/widgets/VariablesViewController.jsm");
 loader.lazyRequireGetter(this, "gDevTools", "devtools/client/framework/devtools", true);
 
-const STRINGS_URI = "chrome://devtools/locale/webconsole.properties";
+const STRINGS_URI = "devtools/client/locales/webconsole.properties";
 var l10n = new WebConsoleUtils.L10n(STRINGS_URI);
 
 // Constants used for defining the direction of JSTerm input history navigation.
@@ -246,22 +245,24 @@ JSTerm.prototype = {
     let autocompleteOptions = {
       onSelect: this.onAutocompleteSelect.bind(this),
       onClick: this.acceptProposedCompletion.bind(this),
-      panelId: "webConsole_autocompletePopup",
-      listBoxId: "webConsole_autocompletePopupListBox",
-      position: "before_start",
+      listId: "webConsole_autocompletePopupListBox",
+      position: "top",
       theme: "auto",
-      direction: "ltr",
       autoSelect: true
     };
-    this.autocompletePopup = new AutocompletePopup(this.hud.document,
-                                                   autocompleteOptions);
 
     let doc = this.hud.document;
+    let toolbox = gDevTools.getToolbox(this.hud.owner.target);
+    let tooltipDoc = toolbox ? toolbox.doc : doc;
+    // The popup will be attached to the toolbox document or HUD document in the case
+    // such as the browser console which doesn't have a toolbox.
+    this.autocompletePopup = new AutocompletePopup(tooltipDoc, autocompleteOptions);
+
     let inputContainer = doc.querySelector(".jsterm-input-container");
     this.completeNode = doc.querySelector(".jsterm-complete-node");
     this.inputNode = doc.querySelector(".jsterm-input-node");
 
-    if (this.hud.owner._browserConsole &&
+    if (this.hud.isBrowserConsole &&
         !Services.prefs.getBoolPref("devtools.chrome.enabled")) {
       inputContainer.style.display = "none";
     } else {
@@ -316,7 +317,7 @@ JSTerm.prototype = {
       errorDocLink = this.hud.document.createElementNS(XHTML_NS, "a");
       errorDocLink.className = "learn-more-link webconsole-learn-more-link";
       errorDocLink.textContent = `[${l10n.getStr("webConsoleMoreInfoLabel")}]`;
-      errorDocLink.title = errorDocURL;
+      errorDocLink.title = errorDocURL.split("?")[0];
       errorDocLink.href = "#";
       errorDocLink.draggable = false;
       errorDocLink.addEventListener("click", () => {
@@ -373,8 +374,7 @@ JSTerm.prototype = {
     }
 
     if (this.hud.NEW_CONSOLE_OUTPUT_ENABLED) {
-      this.hud.newConsoleOutput.dispatchMessageAdd(response);
-      // @TODO figure out what to do about the callback.
+      this.hud.newConsoleOutput.dispatchMessageAdd(response, true).then(callback);
       return;
     }
     let msg = new Messages.JavaScriptEvalOutput(response,
@@ -420,12 +420,17 @@ JSTerm.prototype = {
    */
   execute: function (executeString, callback) {
     let deferred = promise.defer();
-    let resultCallback = function (msg) {
-      deferred.resolve(msg);
-      if (callback) {
-        callback(msg);
-      }
-    };
+    let resultCallback;
+    if (this.hud.NEW_CONSOLE_OUTPUT_ENABLED) {
+      resultCallback = (msg) => deferred.resolve(msg);
+    } else {
+      resultCallback = (msg) => {
+        deferred.resolve(msg);
+        if (callback) {
+          callback(msg);
+        }
+      };
+    }
 
     // attempt to execute the content of the inputNode
     executeString = executeString || this.getInputValue();
@@ -439,11 +444,19 @@ JSTerm.prototype = {
       selectedNodeActor = inspectorSelection.nodeFront.actorID;
     }
 
-    let message = new Messages.Simple(executeString, {
-      category: "input",
-      severity: "log",
-    });
-    this.hud.output.addMessage(message);
+    if (this.hud.NEW_CONSOLE_OUTPUT_ENABLED) {
+      const { ConsoleCommand } = require("devtools/client/webconsole/new-console-output/types");
+      let message = new ConsoleCommand({
+        messageText: executeString,
+      });
+      this.hud.proxy.dispatchMessageAdd(message);
+    } else {
+      let message = new Messages.Simple(executeString, {
+        category: "input",
+        severity: "log",
+      });
+      this.hud.output.addMessage(message);
+    }
     let onResult = this._executeResultCallback.bind(this, resultCallback);
 
     let options = {
@@ -657,7 +670,7 @@ JSTerm.prototype = {
       }
     } else {
       this.sidebar.once("variablesview-ready", onTabReady);
-      this.sidebar.addTab("variablesview", VARIABLES_VIEW_URL, true);
+      this.sidebar.addTab("variablesview", VARIABLES_VIEW_URL, {selected: true});
     }
 
     return deferred.promise;
@@ -673,7 +686,7 @@ JSTerm.prototype = {
    */
   _onKeypressInVariablesView: function (event) {
     let tag = event.target.nodeName;
-    if (event.keyCode != Ci.nsIDOMKeyEvent.DOM_VK_ESCAPE || event.shiftKey ||
+    if (event.keyCode != KeyCodes.DOM_VK_ESCAPE || event.shiftKey ||
         event.altKey || event.ctrlKey || event.metaKey ||
         ["input", "textarea", "select", "textbox"].indexOf(tag) > -1) {
       return;
@@ -753,7 +766,7 @@ JSTerm.prototype = {
     });
 
     if (options.objectActor &&
-        (!this.hud.owner._browserConsole ||
+        (!this.hud.isBrowserConsole ||
          Services.prefs.getBoolPref("devtools.chrome.enabled"))) {
       // Make sure eval works in the correct context.
       view.eval = this._variablesViewEvaluate.bind(this, options);
@@ -1102,7 +1115,7 @@ JSTerm.prototype = {
           break;
       }
       return;
-    } else if (event.keyCode == Ci.nsIDOMKeyEvent.DOM_VK_RETURN) {
+    } else if (event.keyCode == KeyCodes.DOM_VK_RETURN) {
       let autoMultiline = Services.prefs.getBoolPref(PREF_AUTO_MULTILINE);
       if (event.shiftKey ||
           (!Debugger.isCompilableUnit(inputNode.value) && autoMultiline)) {
@@ -1112,7 +1125,7 @@ JSTerm.prototype = {
     }
 
     switch (event.keyCode) {
-      case Ci.nsIDOMKeyEvent.DOM_VK_ESCAPE:
+      case KeyCodes.DOM_VK_ESCAPE:
         if (this.autocompletePopup.isOpen) {
           this.clearCompletion();
           event.preventDefault();
@@ -1124,7 +1137,7 @@ JSTerm.prototype = {
         }
         break;
 
-      case Ci.nsIDOMKeyEvent.DOM_VK_RETURN:
+      case KeyCodes.DOM_VK_RETURN:
         if (this._autocompletePopupNavigated &&
             this.autocompletePopup.isOpen &&
             this.autocompletePopup.selectedIndex > -1) {
@@ -1136,7 +1149,7 @@ JSTerm.prototype = {
         event.preventDefault();
         break;
 
-      case Ci.nsIDOMKeyEvent.DOM_VK_UP:
+      case KeyCodes.DOM_VK_UP:
         if (this.autocompletePopup.isOpen) {
           inputUpdated = this.complete(this.COMPLETE_BACKWARD);
           if (inputUpdated) {
@@ -1150,7 +1163,7 @@ JSTerm.prototype = {
         }
         break;
 
-      case Ci.nsIDOMKeyEvent.DOM_VK_DOWN:
+      case KeyCodes.DOM_VK_DOWN:
         if (this.autocompletePopup.isOpen) {
           inputUpdated = this.complete(this.COMPLETE_FORWARD);
           if (inputUpdated) {
@@ -1164,67 +1177,67 @@ JSTerm.prototype = {
         }
         break;
 
-      case Ci.nsIDOMKeyEvent.DOM_VK_PAGE_UP:
+      case KeyCodes.DOM_VK_PAGE_UP:
         if (this.autocompletePopup.isOpen) {
           inputUpdated = this.complete(this.COMPLETE_PAGEUP);
           if (inputUpdated) {
             this._autocompletePopupNavigated = true;
           }
         } else {
-          this.hud.outputWrapper.scrollTop =
+          this.hud.outputScroller.scrollTop =
             Math.max(0,
-              this.hud.outputWrapper.scrollTop -
-              this.hud.outputWrapper.clientHeight
+              this.hud.outputScroller.scrollTop -
+              this.hud.outputScroller.clientHeight
             );
         }
         event.preventDefault();
         break;
 
-      case Ci.nsIDOMKeyEvent.DOM_VK_PAGE_DOWN:
+      case KeyCodes.DOM_VK_PAGE_DOWN:
         if (this.autocompletePopup.isOpen) {
           inputUpdated = this.complete(this.COMPLETE_PAGEDOWN);
           if (inputUpdated) {
             this._autocompletePopupNavigated = true;
           }
         } else {
-          this.hud.outputWrapper.scrollTop =
-            Math.min(this.hud.outputWrapper.scrollHeight,
-              this.hud.outputWrapper.scrollTop +
-              this.hud.outputWrapper.clientHeight
+          this.hud.outputScroller.scrollTop =
+            Math.min(this.hud.outputScroller.scrollHeight,
+              this.hud.outputScroller.scrollTop +
+              this.hud.outputScroller.clientHeight
             );
         }
         event.preventDefault();
         break;
 
-      case Ci.nsIDOMKeyEvent.DOM_VK_HOME:
+      case KeyCodes.DOM_VK_HOME:
         if (this.autocompletePopup.isOpen) {
           this.autocompletePopup.selectedIndex = 0;
           event.preventDefault();
         } else if (inputValue.length <= 0) {
-          this.hud.outputWrapper.scrollTop = 0;
+          this.hud.outputScroller.scrollTop = 0;
           event.preventDefault();
         }
         break;
 
-      case Ci.nsIDOMKeyEvent.DOM_VK_END:
+      case KeyCodes.DOM_VK_END:
         if (this.autocompletePopup.isOpen) {
           this.autocompletePopup.selectedIndex =
             this.autocompletePopup.itemCount - 1;
           event.preventDefault();
         } else if (inputValue.length <= 0) {
-          this.hud.outputWrapper.scrollTop =
-            this.hud.outputWrapper.scrollHeight;
+          this.hud.outputScroller.scrollTop =
+            this.hud.outputScroller.scrollHeight;
           event.preventDefault();
         }
         break;
 
-      case Ci.nsIDOMKeyEvent.DOM_VK_LEFT:
+      case KeyCodes.DOM_VK_LEFT:
         if (this.autocompletePopup.isOpen || this.lastCompletion.value) {
           this.clearCompletion();
         }
         break;
 
-      case Ci.nsIDOMKeyEvent.DOM_VK_RIGHT:
+      case KeyCodes.DOM_VK_RIGHT:
         let cursorAtTheEnd = this.inputNode.selectionStart ==
                              this.inputNode.selectionEnd &&
                              this.inputNode.selectionStart ==
@@ -1243,7 +1256,7 @@ JSTerm.prototype = {
         }
         break;
 
-      case Ci.nsIDOMKeyEvent.DOM_VK_TAB:
+      case KeyCodes.DOM_VK_TAB:
         // Generate a completion and accept the first proposed value.
         if (this.complete(this.COMPLETE_HINT_ONLY) &&
             this.lastCompletion &&
@@ -1700,12 +1713,6 @@ JSTerm.prototype = {
 
     this.autocompletePopup.destroy();
     this.autocompletePopup = null;
-
-    let popup = this.hud.owner.chromeWindow.document
-                .getElementById("webConsole_autocompletePopup");
-    if (popup) {
-      popup.parentNode.removeChild(popup);
-    }
 
     if (this._onPaste) {
       this.inputNode.removeEventListener("paste", this._onPaste, false);

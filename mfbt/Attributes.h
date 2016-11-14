@@ -45,24 +45,9 @@
  * standardly, by checking whether __cplusplus has a C++11 or greater value.
  * Current versions of g++ do not correctly set __cplusplus, so we check both
  * for forward compatibility.
- *
- * Even though some versions of MSVC support explicit conversion operators, we
- * don't indicate support for them here, due to
- * http://stackoverflow.com/questions/20498142/visual-studio-2013-explicit-keyword-bug
  */
 #  define MOZ_HAVE_NEVER_INLINE          __declspec(noinline)
 #  define MOZ_HAVE_NORETURN              __declspec(noreturn)
-#  if _MSC_VER >= 1900
-#    define MOZ_HAVE_CXX11_CONSTEXPR
-#    define MOZ_HAVE_CXX11_CONSTEXPR_IN_TEMPLATES
-#    define MOZ_HAVE_EXPLICIT_CONVERSION
-#  endif
-#  ifdef __clang__
-     /* clang-cl probably supports explicit conversions. */
-#    if __has_extension(cxx_explicit_conversions)
-#      define MOZ_HAVE_EXPLICIT_CONVERSION
-#    endif
-#  endif
 #elif defined(__clang__)
    /*
     * Per Clang documentation, "Note that marketing version numbers should not
@@ -72,12 +57,6 @@
 #  ifndef __has_extension
 #    define __has_extension __has_feature /* compatibility, for older versions of clang */
 #  endif
-#  if __has_extension(cxx_constexpr)
-#    define MOZ_HAVE_CXX11_CONSTEXPR
-#  endif
-#  if __has_extension(cxx_explicit_conversions)
-#    define MOZ_HAVE_EXPLICIT_CONVERSION
-#  endif
 #  if __has_attribute(noinline)
 #    define MOZ_HAVE_NEVER_INLINE        __attribute__((noinline))
 #  endif
@@ -85,11 +64,6 @@
 #    define MOZ_HAVE_NORETURN            __attribute__((noreturn))
 #  endif
 #elif defined(__GNUC__)
-#  if defined(__GXX_EXPERIMENTAL_CXX0X__) || __cplusplus >= 201103L
-#    define MOZ_HAVE_CXX11_CONSTEXPR
-#    define MOZ_HAVE_CXX11_CONSTEXPR_IN_TEMPLATES
-#    define MOZ_HAVE_EXPLICIT_CONVERSION
-#  endif
 #  define MOZ_HAVE_NEVER_INLINE          __attribute__((noinline))
 #  define MOZ_HAVE_NORETURN              __attribute__((noreturn))
 #endif
@@ -102,55 +76,6 @@
 #  if __has_extension(attribute_analyzer_noreturn)
 #    define MOZ_HAVE_ANALYZER_NORETURN __attribute__((analyzer_noreturn))
 #  endif
-#endif
-
-/*
- * The MOZ_CONSTEXPR specifier declares that a C++11 compiler can evaluate a
- * function at compile time. A constexpr function cannot examine any values
- * except its arguments and can have no side effects except its return value.
- * The MOZ_CONSTEXPR_VAR specifier tells a C++11 compiler that a variable's
- * value may be computed at compile time.  It should be prefered to just
- * marking variables as MOZ_CONSTEXPR because if the compiler does not support
- * constexpr it will fall back to making the variable const, and some compilers
- * do not accept variables being marked both const and constexpr.
- */
-#ifdef MOZ_HAVE_CXX11_CONSTEXPR
-#  define MOZ_CONSTEXPR         constexpr
-#  define MOZ_CONSTEXPR_VAR     constexpr
-#  ifdef MOZ_HAVE_CXX11_CONSTEXPR_IN_TEMPLATES
-#    define MOZ_CONSTEXPR_TMPL  constexpr
-#  else
-#    define MOZ_CONSTEXPR_TMPL
-#  endif
-#else
-#  define MOZ_CONSTEXPR         /* no support */
-#  define MOZ_CONSTEXPR_VAR     const
-#  define MOZ_CONSTEXPR_TMPL
-#endif
-
-/*
- * MOZ_EXPLICIT_CONVERSION is a specifier on a type conversion
- * overloaded operator that declares that a C++11 compiler should restrict
- * this operator to allow only explicit type conversions, disallowing
- * implicit conversions.
- *
- * Example:
- *
- *   template<typename T>
- *   class Ptr
- *   {
- *     T* mPtr;
- *     MOZ_EXPLICIT_CONVERSION operator bool() const
- *     {
- *       return mPtr != nullptr;
- *     }
- *   };
- *
- */
-#ifdef MOZ_HAVE_EXPLICIT_CONVERSION
-#  define MOZ_EXPLICIT_CONVERSION explicit
-#else
-#  define MOZ_EXPLICIT_CONVERSION /* no support */
 #endif
 
 /*
@@ -527,16 +452,28 @@
  *   declarations where an instance of the template should be considered, for
  *   static analysis purposes, to inherit any type annotations (such as
  *   MOZ_MUST_USE_TYPE and MOZ_STACK_CLASS) from its template arguments.
- * MOZ_IGNORE_INITIALIZATION: Applies to class member declarations.  Occasionally
- *   there are class members that are not initialized in the constructor, but logic
- *   elsewhere in the class ensures they are initialized prior to use.  Using this
- *   attribute on a member disables the check that this member must be initialized
- *   in constructors via list-initialization, in the constructor body, or via functions
- *   called from the constructor body.
+ * MOZ_INIT_OUTSIDE_CTOR: Applies to class member declarations. Occasionally
+ *   there are class members that are not initialized in the constructor,
+ *   but logic elsewhere in the class ensures they are initialized prior to use.
+ *   Using this attribute on a member disables the check that this member must be
+ *   initialized in constructors via list-initialization, in the constructor body,
+ *   or via functions called from the constructor body.
+ * MOZ_IS_CLASS_INIT: Applies to class method declarations. Occasionally the
+ *   constructor doesn't initialize all of the member variables and another function
+ *   is used to initialize the rest. This marker is used to make the static analysis
+ *   tool aware that the marked function is part of the initialization process
+ *   and to include the marked function in the scan mechanism that determines witch
+ *   member variables still remain uninitialized.
+ * MOZ_NON_PARAM: Applies to types. Makes it compile time error to use the type
+ *   in parameter without pointer or reference.
  * MOZ_NON_AUTOABLE: Applies to class declarations. Makes it a compile time error to
  *   use `auto` in place of this type in variable declarations.  This is intended to
  *   be used with types which are intended to be implicitly constructed into other
  *   other types before being assigned to variables.
+ * MOZ_REQUIRED_BASE_METHOD: Applies to virtual class method declarations.
+ *  Sometimes derived classes override methods that need to be called by their
+ *  overridden counterparts. This marker indicates that the marked method must
+ *  be called by the method that it overrides.
  */
 #ifdef MOZ_CLANG_PLUGIN
 #  define MOZ_MUST_OVERRIDE __attribute__((annotate("moz_must_override")))
@@ -566,8 +503,14 @@
 #  define MOZ_INHERIT_TYPE_ANNOTATIONS_FROM_TEMPLATE_ARGS \
     __attribute__((annotate("moz_inherit_type_annotations_from_template_args")))
 #  define MOZ_NON_AUTOABLE __attribute__((annotate("moz_non_autoable")))
-#  define MOZ_INITIALIZED_OUTSIDE_CONSTRUCTOR \
+#  define MOZ_INIT_OUTSIDE_CTOR \
     __attribute__((annotate("moz_ignore_ctor_initialization")))
+#  define MOZ_IS_CLASS_INIT \
+    __attribute__((annotate("moz_is_class_init")))
+#  define MOZ_NON_PARAM \
+    __attribute__((annotate("moz_non_param")))
+#  define MOZ_REQUIRED_BASE_METHOD \
+    __attribute__((annotate("moz_required_base_method")))
 /*
  * It turns out that clang doesn't like void func() __attribute__ {} without a
  * warning, so use pragmas to disable the warning. This code won't work on GCC
@@ -599,8 +542,11 @@
 #  define MOZ_NEEDS_MEMMOVABLE_TYPE /* nothing */
 #  define MOZ_NEEDS_MEMMOVABLE_MEMBERS /* nothing */
 #  define MOZ_INHERIT_TYPE_ANNOTATIONS_FROM_TEMPLATE_ARGS /* nothing */
-#  define MOZ_INITIALIZED_OUTSIDE_CONSTRUCTOR /* nothing */
+#  define MOZ_INIT_OUTSIDE_CTOR /* nothing */
+#  define MOZ_IS_CLASS_INIT /* nothing */
+#  define MOZ_NON_PARAM /* nothing */
 #  define MOZ_NON_AUTOABLE /* nothing */
+#  define MOZ_REQUIRED_BASE_METHOD /* nothing */
 #endif /* MOZ_CLANG_PLUGIN */
 
 #define MOZ_RAII MOZ_NON_TEMPORARY_CLASS MOZ_STACK_CLASS
@@ -622,5 +568,37 @@
 #endif
 
 #endif /* __cplusplus */
+
+/**
+ * Printf style formats.  MOZ_FORMAT_PRINTF can be used to annotate a
+ * function or method that is "printf-like"; this will let (some)
+ * compilers check that the arguments match the template string.
+ *
+ * This macro takes two arguments.  The first argument is the argument
+ * number of the template string.  The second argument is the argument
+ * number of the '...' argument holding the arguments.
+ *
+ * Argument numbers start at 1.  Note that the implicit "this"
+ * argument of a non-static member function counts as an argument.
+ *
+ * So, for a simple case like:
+ *   void print_something (int whatever, const char *fmt, ...);
+ * The corresponding annotation would be
+ *   MOZ_FORMAT_PRINTF(2, 3)
+ * However, if "print_something" were a non-static member function,
+ * then the annotation would be:
+ *   MOZ_FORMAT_PRINTF(3, 4)
+ *
+ * Note that the checking is limited to standards-conforming
+ * printf-likes, and in particular this should not be used for
+ * PR_snprintf and friends, which are "printf-like" but which assign
+ * different meanings to the various formats.
+ */
+#ifdef __GNUC__
+#define MOZ_FORMAT_PRINTF(stringIndex, firstToCheck)  \
+    __attribute__ ((format (printf, stringIndex, firstToCheck)))
+#else
+#define MOZ_FORMAT_PRINTF(stringIndex, firstToCheck)
+#endif
 
 #endif /* mozilla_Attributes_h */

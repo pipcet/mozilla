@@ -9,18 +9,10 @@ import os
 
 from .. import create
 from ..graph import Graph
-from ..types import Task, TaskGraph
+from ..taskgraph import TaskGraph
+from .util import TestTask
 
 from mozunit import main
-
-
-class FakeKind(object):
-
-    def get_task_definition(self, task, deps_by_name):
-        # sanity-check the deps_by_name
-        for k, v in deps_by_name.iteritems():
-            assert k == 'edge'
-        return {'payload': 'hello world'}
 
 
 class TestCreate(unittest.TestCase):
@@ -44,20 +36,19 @@ class TestCreate(unittest.TestCase):
         self.created_tasks[task_id] = task_def
 
     def test_create_tasks(self):
-        os.environ['TASK_ID'] = 'decisiontask'
-        kind = FakeKind()
         tasks = {
-            'tid-a': Task(kind=kind, label='a', task={'payload': 'hello world'}),
-            'tid-b': Task(kind=kind, label='b', task={'payload': 'hello world'}),
+            'tid-a': TestTask(label='a', task={'payload': 'hello world'}),
+            'tid-b': TestTask(label='b', task={'payload': 'hello world'}),
         }
         label_to_taskid = {'a': 'tid-a', 'b': 'tid-b'}
         graph = Graph(nodes={'tid-a', 'tid-b'}, edges={('tid-a', 'tid-b', 'edge')})
         taskgraph = TaskGraph(tasks, graph)
 
-        create.create_tasks(taskgraph, label_to_taskid)
+        create.create_tasks(taskgraph, label_to_taskid, {'level': '4'})
 
         for tid, task in self.created_tasks.iteritems():
             self.assertEqual(task['payload'], 'hello world')
+            self.assertEqual(task['schedulerId'], 'gecko-level-4')
             # make sure the dependencies exist, at least
             for depid in task.get('dependencies', []):
                 if depid is 'decisiontask':
@@ -68,18 +59,17 @@ class TestCreate(unittest.TestCase):
     def test_create_task_without_dependencies(self):
         "a task with no dependencies depends on the decision task"
         os.environ['TASK_ID'] = 'decisiontask'
-        kind = FakeKind()
         tasks = {
-            'tid-a': Task(kind=kind, label='a', task={'payload': 'hello world'}),
+            'tid-a': TestTask(label='a', task={'payload': 'hello world'}),
         }
         label_to_taskid = {'a': 'tid-a'}
         graph = Graph(nodes={'tid-a'}, edges=set())
         taskgraph = TaskGraph(tasks, graph)
 
-        create.create_tasks(taskgraph, label_to_taskid)
+        create.create_tasks(taskgraph, label_to_taskid, {'level': '4'})
 
         for tid, task in self.created_tasks.iteritems():
-            self.assertEqual(task['dependencies'], [os.environ['TASK_ID']])
+            self.assertEqual(task.get('dependencies'), [os.environ['TASK_ID']])
 
 
 if __name__ == '__main__':

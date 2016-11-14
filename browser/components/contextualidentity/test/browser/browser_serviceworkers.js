@@ -16,7 +16,7 @@ function openTabInUserContext(uri, userContextId) {
 
   // select tab and make sure its browser is focused
   gBrowser.selectedTab = tab;
-  tab.ownerDocument.defaultView.focus();
+  tab.ownerGlobal.focus();
 
   return tab;
 }
@@ -25,7 +25,8 @@ add_task(function* setup() {
   // make sure userContext is enabled.
   yield new Promise(resolve => {
     SpecialPowers.pushPrefEnv({"set": [
-      ["privacy.userContext.enabled", true]
+      ["privacy.userContext.enabled", true],
+      ["dom.ipc.processCount", 1]
     ]}, resolve);
   });
 });

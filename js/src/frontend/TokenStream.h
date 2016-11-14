@@ -32,6 +32,8 @@ struct KeywordInfo;
 namespace js {
 namespace frontend {
 
+class AutoAwaitIsKeyword;
+
 struct TokenPos {
     uint32_t    begin;  // Offset of the token's first char.
     uint32_t    end;    // Offset of 1 past the token's last char.
@@ -175,24 +177,6 @@ struct Token
     ModifierException modifierException; // Exception for this modifier
 #endif
 
-    // This constructor is necessary only for MSVC 2013 and how it compiles the
-    // initialization of TokenStream::tokens.  That field is initialized as
-    // tokens() in the constructor init-list.  This *should* zero the entire
-    // array, then (because Token has a non-trivial constructor, because
-    // TokenPos has a user-provided constructor) call the implicit Token
-    // constructor on each element, which would call the TokenPos constructor
-    // for Token::pos and do nothing.  (All of which is equivalent to just
-    // zeroing TokenStream::tokens.)  But MSVC 2013 (2010/2012 don't have this
-    // bug) doesn't zero out each element, so we need this extra constructor to
-    // make it do the right thing.  (Token is used primarily by reference or
-    // pointer, and it's only initialized a very few places, so having a
-    // user-defined constructor won't hurt perf.)  See also bug 920318.
-    Token()
-      : pos(0, 0)
-    {
-        MOZ_MAKE_MEM_UNDEFINED(&type, sizeof(type));
-    }
-
     // Mutators
 
     void setName(PropertyName* name) {
@@ -255,19 +239,9 @@ struct Token
     }
 };
 
-struct CompileError {
-    JSErrorReport report;
-    char* message;
-    ErrorArgumentsType argumentsType;
-    CompileError() : message(nullptr), argumentsType(ArgumentsAreUnicode) {}
-    ~CompileError();
+class CompileError : public JSErrorReport {
+public:
     void throwError(JSContext* cx);
-
-  private:
-    // CompileError owns raw allocated memory, so disable assignment and copying
-    // for safety.
-    void operator=(const CompileError&) = delete;
-    CompileError(const CompileError&) = delete;
 };
 
 // Ideally, tokenizing would be entirely independent of context.  But the
@@ -352,8 +326,6 @@ class MOZ_STACK_CLASS TokenStream
     }
     const CharBuffer& getTokenbuf() const { return tokenbuf; }
     const char* getFilename() const { return filename; }
-    unsigned getLineno() const { return lineno; }
-    unsigned getColumn() const { return userbuf.offset() - linebase - 1; }
     bool getMutedErrors() const { return mutedErrors; }
     JSVersion versionNumber() const { return VersionNumber(options().version); }
     JSVersion versionWithFlags() const { return options().version; }
@@ -372,6 +344,13 @@ class MOZ_STACK_CLASS TokenStream
         return nextToken().name();
     }
 
+    bool nextNameContainsEscape() const {
+        if (nextToken().type == TOK_YIELD)
+            return false;
+        MOZ_ASSERT(nextToken().type == TOK_NAME);
+        return nextToken().nameContainsEscape();
+    }
+
     bool isCurrentTokenAssignment() const {
         return TokenKindIsAssignment(currentToken().type);
     }
@@ -380,6 +359,7 @@ class MOZ_STACK_CLASS TokenStream
     bool isEOF() const { return flags.isEOF; }
     bool sawOctalEscape() const { return flags.sawOctalEscape; }
     bool hadError() const { return flags.hadError; }
+    void clearSawOctalEscape() { flags.sawOctalEscape = false; }
 
     // TokenStream-specific error reporters.
     bool reportError(unsigned errorNumber, ...);
@@ -452,18 +432,21 @@ class MOZ_STACK_CLASS TokenStream
         {}
     };
 
+    bool awaitIsKeyword = false;
+    friend class AutoAwaitIsKeyword;
+
   public:
     typedef Token::Modifier Modifier;
-    static MOZ_CONSTEXPR_VAR Modifier None = Token::None;
-    static MOZ_CONSTEXPR_VAR Modifier Operand = Token::Operand;
-    static MOZ_CONSTEXPR_VAR Modifier KeywordIsName = Token::KeywordIsName;
-    static MOZ_CONSTEXPR_VAR Modifier TemplateTail = Token::TemplateTail;
+    static constexpr Modifier None = Token::None;
+    static constexpr Modifier Operand = Token::Operand;
+    static constexpr Modifier KeywordIsName = Token::KeywordIsName;
+    static constexpr Modifier TemplateTail = Token::TemplateTail;
 
     typedef Token::ModifierException ModifierException;
-    static MOZ_CONSTEXPR_VAR ModifierException NoException = Token::NoException;
-    static MOZ_CONSTEXPR_VAR ModifierException NoneIsOperand = Token::NoneIsOperand;
-    static MOZ_CONSTEXPR_VAR ModifierException OperandIsNone = Token::OperandIsNone;
-    static MOZ_CONSTEXPR_VAR ModifierException NoneIsKeywordIsName = Token::NoneIsKeywordIsName;
+    static constexpr ModifierException NoException = Token::NoException;
+    static constexpr ModifierException NoneIsOperand = Token::NoneIsOperand;
+    static constexpr ModifierException OperandIsNone = Token::OperandIsNone;
+    static constexpr ModifierException NoneIsKeywordIsName = Token::NoneIsKeywordIsName;
 
     void addModifierException(ModifierException modifierException) {
 #ifdef DEBUG
@@ -755,10 +738,8 @@ class MOZ_STACK_CLASS TokenStream
     // If it is a reserved word in this version and strictness mode, and thus
     // can't be present in correct code, report a SyntaxError and return false.
     //
-    // If it is a keyword, like "if", the behavior depends on ttp. If ttp is
-    // null, report a SyntaxError ("if is a reserved identifier") and return
-    // false. If ttp is non-null, return true with the keyword's TokenKind in
-    // *ttp.
+    // If it is a keyword, like "if", return true with the keyword's TokenKind
+    // in *ttp.
     MOZ_MUST_USE bool checkForKeyword(JSAtom* atom, TokenKind* ttp);
 
     // Same semantics as above, but for the provided keyword.
@@ -967,9 +948,10 @@ class MOZ_STACK_CLASS TokenStream
     void ungetChar(int32_t c);
     void ungetCharIgnoreEOL(int32_t c);
     Token* newToken(ptrdiff_t adjust);
-    bool peekUnicodeEscape(int32_t* c);
-    bool matchUnicodeEscapeIdStart(int32_t* c);
-    bool matchUnicodeEscapeIdent(int32_t* c);
+    uint32_t peekUnicodeEscape(uint32_t* codePoint);
+    uint32_t peekExtendedUnicodeEscape(uint32_t* codePoint);
+    uint32_t matchUnicodeEscapeIdStart(uint32_t* codePoint);
+    bool matchUnicodeEscapeIdent(uint32_t* codePoint);
     bool peekChars(int n, char16_t* cp);
 
     MOZ_MUST_USE bool getDirectives(bool isMultiline, bool shouldWarnDeprecated);
@@ -1039,9 +1021,24 @@ class MOZ_STACK_CLASS TokenStream
     StrictModeGetter*   strictModeGetter;  // used to test for strict mode
 };
 
-// Steal one JSREPORT_* bit (see jsapi.h) to tell that arguments to the error
-// message have const char16_t* type, not const char*.
-#define JSREPORT_UC 0x100
+class MOZ_STACK_CLASS AutoAwaitIsKeyword
+{
+private:
+    TokenStream* ts_;
+    bool oldAwaitIsKeyword_;
+
+public:
+    AutoAwaitIsKeyword(TokenStream* ts, bool awaitIsKeyword) {
+        ts_ = ts;
+        oldAwaitIsKeyword_ = ts_->awaitIsKeyword;
+        ts_->awaitIsKeyword = awaitIsKeyword;
+    }
+
+    ~AutoAwaitIsKeyword() {
+        ts_->awaitIsKeyword = oldAwaitIsKeyword_;
+        ts_ = nullptr;
+    }
+};
 
 extern const char*
 TokenKindToDesc(TokenKind tt);

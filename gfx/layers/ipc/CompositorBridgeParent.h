@@ -27,16 +27,17 @@
 #include "mozilla/gfx/Point.h"          // for IntSize
 #include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/ipc/SharedMemory.h"
+#include "mozilla/layers/CompositorController.h"
 #include "mozilla/layers/GeckoContentController.h"
 #include "mozilla/layers/ISurfaceAllocator.h" // for ShmemAllocator
 #include "mozilla/layers/LayersMessages.h"  // for TargetConfig
+#include "mozilla/layers/MetricsSharingController.h"
 #include "mozilla/layers/PCompositorBridgeParent.h"
-#include "mozilla/layers/ShadowLayersManager.h" // for ShadowLayersManager
 #include "mozilla/layers/APZTestData.h"
+#include "mozilla/widget/CompositorWidget.h"
 #include "nsISupportsImpl.h"
 #include "ThreadSafeRefcountingWithMainThreadDestruction.h"
 #include "mozilla/VsyncDispatcher.h"
-#include "CompositorWidgetProxy.h"
 
 class MessageLoop;
 class nsIWidget;
@@ -48,16 +49,17 @@ class CancelableRunnable;
 namespace gfx {
 class DrawTarget;
 class GPUProcessManager;
+class GPUParent;
 } // namespace gfx
 
 namespace ipc {
-class GeckoChildProcessHost;
 class Shmem;
 } // namespace ipc
 
 namespace layers {
 
 class APZCTreeManager;
+class APZCTreeManagerParent;
 class AsyncCompositionManager;
 class Compositor;
 class CompositorBridgeParent;
@@ -91,20 +93,7 @@ class CompositorVsyncScheduler
 
 public:
   explicit CompositorVsyncScheduler(CompositorBridgeParent* aCompositorBridgeParent,
-                                    widget::CompositorWidgetProxy* aWidgetProxy);
-
-#ifdef MOZ_WIDGET_GONK
-  // emulator-ics never trigger the display on/off, so compositor will always
-  // skip composition request at that device. Only check the display status
-  // with kk device and upon.
-#if ANDROID_VERSION >= 19
-  // SetDisplay() and CancelSetDisplayTask() are used for the display on/off.
-  // It will clear all composition related task and flag, and skip another
-  // composition task during the display off. That could prevent the problem
-  // that compositor might show the old content at the first frame of display on.
-  void SetDisplay(bool aDisplayEnable);
-#endif
-#endif
+                                    widget::CompositorWidget* aWidget);
 
   bool NotifyVsync(TimeStamp aVsyncTimestamp);
   void SetNeedsComposite();
@@ -142,11 +131,6 @@ private:
   void DispatchTouchEvents(TimeStamp aVsyncTimestamp);
   void DispatchVREvents(TimeStamp aVsyncTimestamp);
   void CancelCurrentSetNeedsCompositeTask();
-#ifdef MOZ_WIDGET_GONK
-#if ANDROID_VERSION >= 19
-  void CancelSetDisplayTask();
-#endif
-#endif
 
   class Observer final : public VsyncObserver
   {
@@ -173,7 +157,7 @@ private:
   bool mIsObservingVsync;
   uint32_t mNeedsComposite;
   int32_t mVsyncNotificationsSkipped;
-  RefPtr<CompositorVsyncDispatcher> mCompositorVsyncDispatcher;
+  widget::CompositorWidget* mWidget;
   RefPtr<CompositorVsyncScheduler::Observer> mVsyncObserver;
 
   mozilla::Monitor mCurrentCompositeTaskMonitor;
@@ -181,52 +165,111 @@ private:
 
   mozilla::Monitor mSetNeedsCompositeMonitor;
   RefPtr<CancelableRunnable> mSetNeedsCompositeTask;
-
-#ifdef MOZ_WIDGET_GONK
-#if ANDROID_VERSION >= 19
-  bool mDisplayEnabled;
-  mozilla::Monitor mSetDisplayMonitor;
-  RefPtr<CancelableRunnable> mSetDisplayTask;
-#endif
-#endif
 };
 
-class CompositorUpdateObserver
+class CompositorBridgeParentBase : public PCompositorBridgeParent,
+                                   public HostIPCAllocator,
+                                   public ShmemAllocator,
+                                   public MetricsSharingController
 {
 public:
-  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(CompositorUpdateObserver);
+  virtual void ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
+                                   const uint64_t& aTransactionId,
+                                   const TargetConfig& aTargetConfig,
+                                   const InfallibleTArray<PluginWindowData>& aPlugins,
+                                   bool aIsFirstPaint,
+                                   bool aScheduleComposite,
+                                   uint32_t aPaintSequenceNumber,
+                                   bool aIsRepeatTransaction,
+                                   int32_t aPaintSyncId,
+                                   bool aHitTestUpdate) = 0;
 
-  virtual void ObserveUpdate(uint64_t aLayersId, bool aActive) = 0;
+  virtual AsyncCompositionManager* GetCompositionManager(LayerTransactionParent* aLayerTree) { return nullptr; }
 
-protected:
-  virtual ~CompositorUpdateObserver() {}
+  virtual void NotifyClearCachedResources(LayerTransactionParent* aLayerTree) { }
+
+  virtual void ForceComposite(LayerTransactionParent* aLayerTree) { }
+  virtual bool SetTestSampleTime(LayerTransactionParent* aLayerTree,
+                                 const TimeStamp& aTime) { return true; }
+  virtual void LeaveTestMode(LayerTransactionParent* aLayerTree) { }
+  virtual void ApplyAsyncProperties(LayerTransactionParent* aLayerTree) = 0;
+  virtual void FlushApzRepaints(const LayerTransactionParent* aLayerTree) = 0;
+  virtual void GetAPZTestData(const LayerTransactionParent* aLayerTree,
+                              APZTestData* aOutData) { }
+  virtual void SetConfirmedTargetAPZC(const LayerTransactionParent* aLayerTree,
+                                      const uint64_t& aInputBlockId,
+                                      const nsTArray<ScrollableLayerGuid>& aTargets) = 0;
+  virtual void UpdatePaintTime(LayerTransactionParent* aLayerTree, const TimeDuration& aPaintTime) {}
+
+  virtual ShmemAllocator* AsShmemAllocator() override { return this; }
+
+  virtual bool RecvSyncWithCompositor() override { return true; }
+
+  // HostIPCAllocator
+  virtual base::ProcessId GetChildProcessId() override;
+  virtual void NotifyNotUsed(PTextureParent* aTexture, uint64_t aTransactionId) override;
+  virtual void SendAsyncMessage(const InfallibleTArray<AsyncParentMessageData>& aMessage) override;
+
+  // ShmemAllocator
+  virtual bool AllocShmem(size_t aSize,
+                          mozilla::ipc::SharedMemory::SharedMemoryType aType,
+                          mozilla::ipc::Shmem* aShmem) override;
+  virtual bool AllocUnsafeShmem(size_t aSize,
+                                mozilla::ipc::SharedMemory::SharedMemoryType aType,
+                                mozilla::ipc::Shmem* aShmem) override;
+  virtual void DeallocShmem(mozilla::ipc::Shmem& aShmem) override;
+
+  // MetricsSharingController
+  NS_IMETHOD_(MozExternalRefCountType) AddRef() override { return HostIPCAllocator::AddRef(); }
+  NS_IMETHOD_(MozExternalRefCountType) Release() override { return HostIPCAllocator::Release(); }
+  base::ProcessId RemotePid() override;
+  bool StartSharingMetrics(mozilla::ipc::SharedMemoryBasic::Handle aHandle,
+                           CrossProcessMutexHandle aMutexHandle,
+                           uint64_t aLayersId,
+                           uint32_t aApzcId) override;
+  bool StopSharingMetrics(FrameMetrics::ViewID aScrollId,
+                          uint32_t aApzcId) override;
 };
 
-class CompositorBridgeParent final : public PCompositorBridgeParent,
-                                     public ShadowLayersManager,
-                                     public CompositorBridgeParentIPCAllocator,
-                                     public ShmemAllocator
+class CompositorBridgeParent final : public CompositorBridgeParentBase
+                                   , public CompositorController
 {
   friend class CompositorVsyncScheduler;
   friend class CompositorThreadHolder;
   friend class InProcessCompositorSession;
   friend class gfx::GPUProcessManager;
+  friend class gfx::GPUParent;
 
 public:
-  explicit CompositorBridgeParent(widget::CompositorWidgetProxy* aWidget,
-                                  CSSToLayoutDeviceScale aScale,
-                                  bool aUseAPZ,
-                                  bool aUseExternalSurfaceSize = false,
-                                  int aSurfaceWidth = -1, int aSurfaceHeight = -1);
+  NS_IMETHOD_(MozExternalRefCountType) AddRef() override { return CompositorBridgeParentBase::AddRef(); }
+  NS_IMETHOD_(MozExternalRefCountType) Release() override { return CompositorBridgeParentBase::Release(); }
 
+  explicit CompositorBridgeParent(CSSToLayoutDeviceScale aScale,
+                                  const TimeDuration& aVsyncRate,
+                                  bool aUseExternalSurfaceSize,
+                                  const gfx::IntSize& aSurfaceSize);
+
+  // Must only be called by CompositorBridgeChild. After invoking this, the
+  // IPC channel is active and RecvWillStop/ActorDestroy must be called to
+  // free the compositor.
+  void InitSameProcess(widget::CompositorWidget* aWidget,
+                       const uint64_t& aLayerTreeId,
+                       bool aUseAPZ);
+
+  // Must only be called by GPUParent. After invoking this, the IPC channel
+  // is active and RecvWillStop/ActorDestroy must be called to free the
+  // compositor.
+  bool Bind(Endpoint<PCompositorBridgeParent>&& aEndpoint);
+
+  virtual bool RecvInitialize(const uint64_t& aRootLayerTreeId) override;
+  virtual bool RecvReset(nsTArray<LayersBackend>&& aBackendHints, bool* aResult, TextureFactoryIdentifier* aOutIdentifier) override;
   virtual bool RecvGetFrameUniformity(FrameUniformityData* aOutData) override;
   virtual bool RecvRequestOverfill() override;
   virtual bool RecvWillClose() override;
   virtual bool RecvPause() override;
   virtual bool RecvResume() override;
-  virtual bool RecvNotifyHidden(const uint64_t& id) override { return true; }
-  virtual bool RecvNotifyVisible(const uint64_t& id) override { return true; }
   virtual bool RecvNotifyChildCreated(const uint64_t& child) override;
+  virtual bool RecvNotifyChildRecreated(const uint64_t& child) override;
   virtual bool RecvAdoptChild(const uint64_t& child) override;
   virtual bool RecvMakeSnapshot(const SurfaceDescriptor& aInSnapshot,
                                 const gfx::IntRect& aRect) override;
@@ -238,8 +281,6 @@ public:
     return true;
   }
 
-  virtual bool RecvGetTileSize(int32_t* aWidth, int32_t* aHeight) override;
-
   virtual bool RecvNotifyRegionInvalidated(const nsIntRegion& aRegion) override;
   virtual bool RecvStartFrameTimeRecording(const int32_t& aBufferSize, uint32_t* aOutStartIndex) override;
   virtual bool RecvStopFrameTimeRecording(const uint32_t& aStartIndex, InfallibleTArray<float>* intervals) override;
@@ -248,16 +289,14 @@ public:
   // @see CrossProcessCompositorBridgeParent::RecvRequestNotifyAfterRemotePaint
   virtual bool RecvRequestNotifyAfterRemotePaint() override { return true; };
 
-  virtual bool RecvClearVisibleRegions(const uint64_t& aLayersId,
-                                       const uint32_t& aPresShellId) override;
-  void ClearVisibleRegions(const uint64_t& aLayersId,
-                           const Maybe<uint32_t>& aPresShellId);
-  virtual bool RecvUpdateVisibleRegion(const VisibilityCounter& aCounter,
-                                       const ScrollableLayerGuid& aGuid,
-                                       const CSSIntRegion& aRegion) override;
-  void UpdateVisibleRegion(const VisibilityCounter& aCounter,
-                           const ScrollableLayerGuid& aGuid,
-                           const CSSIntRegion& aRegion);
+  virtual bool RecvClearApproximatelyVisibleRegions(const uint64_t& aLayersId,
+                                                    const uint32_t& aPresShellId) override;
+  void ClearApproximatelyVisibleRegions(const uint64_t& aLayersId,
+                                        const Maybe<uint32_t>& aPresShellId);
+  virtual bool RecvNotifyApproximatelyVisibleRegion(const ScrollableLayerGuid& aGuid,
+                                                    const CSSIntRegion& aRegion) override;
+
+  virtual bool RecvAllPluginsCaptured() override;
 
   virtual void ActorDestroy(ActorDestroyReason why) override;
 
@@ -294,26 +333,9 @@ public:
 
   virtual bool IsSameProcess() const override;
 
-  virtual ShmemAllocator* AsShmemAllocator() override { return this; }
 
-  virtual bool AllocShmem(size_t aSize,
-                          mozilla::ipc::SharedMemory::SharedMemoryType aType,
-                          mozilla::ipc::Shmem* aShmem) override;
-
-  virtual bool AllocUnsafeShmem(size_t aSize,
-                                mozilla::ipc::SharedMemory::SharedMemoryType aType,
-                                mozilla::ipc::Shmem* aShmem) override;
-
-  virtual void DeallocShmem(mozilla::ipc::Shmem& aShmem) override;
-
-  virtual base::ProcessId GetChildProcessId() override
-  {
-    return OtherPid();
-  }
-
-  virtual void SendAsyncMessage(const InfallibleTArray<AsyncParentMessageData>& aMessage) override;
-
-  virtual CompositorBridgeParentIPCAllocator* AsCompositorBridgeParentIPCAllocator() override { return this; }
+  PCompositorWidgetParent* AllocPCompositorWidgetParent(const CompositorWidgetInitData& aInitData) override;
+  bool DeallocPCompositorWidgetParent(PCompositorWidgetParent* aActor) override;
 
   /**
    * Request that the compositor be recreated due to a shared device reset.
@@ -345,7 +367,7 @@ public:
   void AsyncRender();
 
   // Can be called from any thread
-  void ScheduleRenderOnCompositorThread();
+  void ScheduleRenderOnCompositorThread() override;
   void SchedulePauseOnCompositorThread();
   void InvalidateOnCompositorThread();
   /**
@@ -359,6 +381,9 @@ public:
   void NotifyShadowTreeTransaction(uint64_t aId, bool aIsFirstPaint,
       bool aScheduleComposite, uint32_t aPaintSequenceNumber,
       bool aIsRepeatTransaction, bool aHitTestUpdate);
+
+  void UpdatePaintTime(LayerTransactionParent* aLayerTree,
+                       const TimeDuration& aPaintTime) override;
 
   /**
    * Check rotation info and schedule a rendering task if needed.
@@ -382,9 +407,14 @@ public:
   void InvalidateRemoteLayers();
 
   /**
-   * Returns a pointer to the compositor corresponding to the given ID.
+   * Returns a pointer to the CompositorBridgeParent corresponding to the given ID.
    */
-  static CompositorBridgeParent* GetCompositor(uint64_t id);
+  static CompositorBridgeParent* GetCompositorBridgeParent(uint64_t id);
+
+  /**
+   * Notify the compositor for the given layer tree that vsync has occurred.
+   */
+  static void NotifyVsync(const TimeStamp& aTimeStamp, const uint64_t& aLayersId);
 
   /**
    * Set aController as the pan/zoom callback for the subtree referred
@@ -399,14 +429,15 @@ public:
    * A new child process has been configured to push transactions
    * directly to us.  Transport is to its thread context.
    */
-  static PCompositorBridgeParent*
-  Create(Transport* aTransport, ProcessId aOtherProcess, mozilla::ipc::GeckoChildProcessHost* aProcessHost);
+  static bool
+  CreateForContent(Endpoint<PCompositorBridgeParent>&& aEndpoint);
 
   struct LayerTreeState {
     LayerTreeState();
     ~LayerTreeState();
     RefPtr<Layer> mRoot;
     RefPtr<GeckoContentController> mController;
+    APZCTreeManagerParent* mApzcTreeManagerParent;
     CompositorBridgeParent* mParent;
     LayerManagerComposite* mLayerManager;
     // Pointer to the CrossProcessCompositorBridgeParent. Used by APZCs to share
@@ -418,14 +449,14 @@ public:
     LayerTransactionParent* mLayerTree;
     nsTArray<PluginWindowData> mPluginData;
     bool mUpdatedPluginDataAvailable;
-    RefPtr<CompositorUpdateObserver> mLayerTreeReadyObserver;
-    RefPtr<CompositorUpdateObserver> mLayerTreeClearedObserver;
 
     // Number of times the compositor has been reset without having been
     // acknowledged by the child.
     uint32_t mPendingCompositorUpdates;
 
-    PCompositorBridgeParent* CrossProcessPCompositorBridge() const;
+    CompositorController* GetCompositorController() const;
+    MetricsSharingController* CrossProcessSharingController() const;
+    MetricsSharingController* InProcessSharingController() const;
   };
 
   /**
@@ -434,6 +465,24 @@ public:
    * the compositor thread.
    */
   static LayerTreeState* GetIndirectShadowTree(uint64_t aId);
+
+  /**
+   * Given the layers id for a content process, get the APZCTreeManagerParent
+   * for the corresponding *root* layers id. That is, the APZCTreeManagerParent,
+   * if one is found, will always be connected to the parent process rather
+   * than a content process. Note that unless the compositor process is
+   * separated this is expected to return null, because if the compositor is
+   * living in the gecko parent process then there is no APZCTreeManagerParent
+   * for the parent process.
+   */
+  static APZCTreeManagerParent* GetApzcTreeManagerParentForRoot(
+        uint64_t aContentLayersId);
+  /**
+   * Same as the GetApzcTreeManagerParentForRoot function, but returns
+   * the GeckoContentController for the parent process.
+   */
+  static GeckoContentController* GetGeckoContentControllerForRoot(
+        uint64_t aContentLayersId);
 
 #if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
   /**
@@ -446,10 +495,13 @@ public:
    * Plugin visibility helpers for the apz (main thread) and compositor
    * thread.
    */
-  void ScheduleShowAllPluginWindows();
-  void ScheduleHideAllPluginWindows();
+  void ScheduleShowAllPluginWindows() override;
+  void ScheduleHideAllPluginWindows() override;
   void ShowAllPluginWindows();
   void HideAllPluginWindows();
+#else
+  void ScheduleShowAllPluginWindows() override {}
+  void ScheduleHideAllPluginWindows() override {}
 #endif
 
   /**
@@ -463,17 +515,28 @@ public:
    */
   static void PostInsertVsyncProfilerMarker(mozilla::TimeStamp aVsyncTimestamp);
 
-  float ComputeRenderIntegrity();
-
-  widget::CompositorWidgetProxy* GetWidgetProxy() { return mWidgetProxy; }
+  widget::CompositorWidget* GetWidget() { return mWidget; }
 
   void ForceComposeToTarget(gfx::DrawTarget* aTarget, const gfx::IntRect* aRect = nullptr);
+
+  PAPZCTreeManagerParent* AllocPAPZCTreeManagerParent(const uint64_t& aLayersId) override;
+  bool DeallocPAPZCTreeManagerParent(PAPZCTreeManagerParent* aActor) override;
+
+  PAPZParent* AllocPAPZParent(const uint64_t& aLayersId) override;
+  bool DeallocPAPZParent(PAPZParent* aActor) override;
+
+  bool RecvAsyncPanZoomEnabled(const uint64_t& aLayersId, bool* aHasAPZ) override;
+
+  RefPtr<APZCTreeManager> GetAPZCTreeManager();
 
   bool AsyncPanZoomEnabled() const {
     return !!mApzcTreeManager;
   }
 
 private:
+
+  void Initialize();
+
   /**
    * Called during destruction in order to release resources as early as possible.
    */
@@ -486,36 +549,11 @@ private:
   static already_AddRefed<APZCTreeManager> GetAPZCTreeManager(uint64_t aLayersId);
 
   /**
-   * Allocate an ID that can be used to refer to a layer tree and
-   * associated resources that live only on the compositor thread.
-   *
-   * Must run on the content main thread.
-   */
-  static uint64_t AllocateLayerTreeId();
-  /**
    * Release compositor-thread resources referred to by |aID|.
    *
    * Must run on the content main thread.
    */
   static void DeallocateLayerTreeId(uint64_t aId);
-
-  static void RequestNotifyLayerTreeReady(uint64_t aLayersId, CompositorUpdateObserver* aObserver);
-  static void RequestNotifyLayerTreeCleared(uint64_t aLayersId, CompositorUpdateObserver* aObserver);
-  static void SwapLayerTreeObservers(uint64_t aLayer, uint64_t aOtherLayer);
-
-  /**
-   * Creates a new RemoteContentController for aTabId. Should only be called on
-   * the main thread.
-   *
-   * aLayersId The layers id for the browser corresponding to aTabId.
-   * aContentParent The ContentParent for the process that the TabChild for
-   *                aTabId lives in.
-   * aBrowserParent The toplevel TabParent for aTabId.
-   */
-  static bool UpdateRemoteContentController(uint64_t aLayersId,
-                                            dom::ContentParent* aContentParent,
-                                            const dom::TabId& aTabId,
-                                            dom::TabParent* aBrowserParent);
 
 protected:
   // Protected destructor, to discourage deletion outside of Release():
@@ -541,6 +579,8 @@ protected:
   void ForceComposition();
   void CancelCurrentCompositeTask();
   void Invalidate();
+  bool IsPendingComposite();
+  void FinishPendingComposite();
 
   RefPtr<Compositor> NewCompositor(const nsTArray<LayersBackend>& aBackendHints);
   void ResetCompositorTask(const nsTArray<LayersBackend>& aBackendHints,
@@ -559,7 +599,7 @@ protected:
   /**
    * Creates the global compositor map.
    */
-  static void Initialize();
+  static void Setup();
 
   /**
    * Destroys the compositor thread and global compositor map.
@@ -587,8 +627,10 @@ protected:
   RefPtr<LayerManagerComposite> mLayerManager;
   RefPtr<Compositor> mCompositor;
   RefPtr<AsyncCompositionManager> mCompositionManager;
-  widget::CompositorWidgetProxy* mWidgetProxy;
+  widget::CompositorWidget* mWidget;
   TimeStamp mTestTime;
+  CSSToLayoutDeviceScale mScale;
+  TimeDuration mVsyncRate;
   bool mIsTesting;
 
   uint64_t mPendingTransaction;
@@ -603,7 +645,7 @@ protected:
   mozilla::Monitor mResetCompositorMonitor;
 
   uint64_t mCompositorID;
-  const uint64_t mRootLayerTreeID;
+  uint64_t mRootLayerTreeID;
 
   bool mOverrideComposeReadiness;
   RefPtr<CancelableRunnable> mForceCompositionTask;
@@ -617,12 +659,18 @@ protected:
   // mSelfRef is cleared in DeferredDestroy which is scheduled by ActorDestroy.
   RefPtr<CompositorBridgeParent> mSelfRef;
 
+  TimeDuration mPaintTime;
+
 #if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
   // cached plugin data used to reduce the number of updates we request.
   uint64_t mLastPluginUpdateLayerTreeId;
   nsIntPoint mPluginsLayerOffset;
   nsIntRegion mPluginsLayerVisibleRegion;
   nsTArray<PluginWindowData> mCachedPluginData;
+  // Time until which we will block composition to wait for plugin updates.
+  TimeStamp mWaitForPluginsUntil;
+  // Indicates that we have actually blocked a composition waiting for plugins.
+  bool mHaveBlockedForPlugins = false;
   // indicates if plugin window visibility and metric updates are currently
   // being defered due to a scroll operation.
   bool mDeferPluginWindows;

@@ -8,9 +8,10 @@
 
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/Tools.h"
+#include "mozilla/layers/BufferTexture.h"
+#include "mozilla/layers/ImageBridgeChild.h"  // for ImageBridgeChild
 #include "mozilla/layers/TextureClient.h"
 #include "mozilla/layers/TextureHost.h"
-#include "mozilla/layers/BufferTexture.h"
 #include "mozilla/RefPtr.h"
 #include "gfx2DGlue.h"
 #include "gfxImageSurface.h"
@@ -225,7 +226,8 @@ TEST(Layers, TextureSerialization) {
 
     auto texData = BufferTextureData::Create(surface->GetSize(),
       gfx::ImageFormatToSurfaceFormat(surface->Format()),
-      gfx::BackendType::CAIRO, TextureFlags::DEALLOCATE_CLIENT, ALLOC_DEFAULT, nullptr
+      gfx::BackendType::CAIRO, LayersBackend::LAYERS_NONE,
+      TextureFlags::DEALLOCATE_CLIENT, ALLOC_DEFAULT, nullptr
     );
     ASSERT_TRUE(!!texData);
 
@@ -257,6 +259,7 @@ TEST(Layers, TextureYCbCrSerialization) {
   clientData.mYStride = ySurface->Stride();
   clientData.mCbCrStride = cbSurface->Stride();
   clientData.mStereoMode = StereoMode::MONO;
+  clientData.mYUVColorSpace = YUVColorSpace::BT601;
   clientData.mYSkip = 0;
   clientData.mCbSkip = 0;
   clientData.mCrSkip = 0;
@@ -264,8 +267,18 @@ TEST(Layers, TextureYCbCrSerialization) {
   clientData.mPicX = 0;
   clientData.mPicX = 0;
 
-  RefPtr<TextureClient> client = TextureClient::CreateForYCbCr(nullptr, clientData.mYSize, clientData.mCbCrSize,
-                                                               StereoMode::MONO, TextureFlags::DEALLOCATE_CLIENT);
+  ImageBridgeChild::InitSameProcess();
+  // wait until IPDL connection
+#ifdef XP_WIN
+  Sleep(1);
+#else
+  sleep(1);
+#endif
+  RefPtr<ImageBridgeChild> imageBridge = ImageBridgeChild::GetSingleton();
+
+  RefPtr<TextureClient> client = TextureClient::CreateForYCbCr(imageBridge, clientData.mYSize, clientData.mCbCrSize,
+                                                               StereoMode::MONO, YUVColorSpace::BT601,
+                                                               TextureFlags::DEALLOCATE_CLIENT);
 
   TestTextureClientYCbCr(client, clientData);
 

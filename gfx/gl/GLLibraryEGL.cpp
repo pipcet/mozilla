@@ -4,13 +4,16 @@
 
 #include "GLLibraryEGL.h"
 
+#include "angle/Platform.h"
 #include "gfxConfig.h"
 #include "gfxCrashReporterUtils.h"
 #include "gfxUtils.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/Telemetry.h"
-#include "mozilla/unused.h"
+#include "mozilla/Tokenizer.h"
+#include "mozilla/ScopeExit.h"
+#include "mozilla/Unused.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsDirectoryServiceUtils.h"
 #include "nsIGfxInfo.h"
@@ -35,7 +38,7 @@ MOZ_THREAD_LOCAL(EGLContext) GLLibraryEGL::sCurrentContext;
 #endif
 
 // should match the order of EGLExtensions, and be null-terminated.
-static const char *sEGLExtensionNames[] = {
+static const char* sEGLExtensionNames[] = {
     "EGL_KHR_image_base",
     "EGL_KHR_image_pixmap",
     "EGL_KHR_gl_texture_2D_image",
@@ -129,7 +132,7 @@ GetAndInitWARPDisplay(GLLibraryEGL& egl, void* displayType)
     if (display == EGL_NO_DISPLAY) {
         const EGLint err = egl.fGetError();
         if (err != LOCAL_EGL_SUCCESS) {
-	    gfxCriticalError() << "Unexpected GL error: " << gfx::hexa(err);
+            gfxCriticalError() << "Unexpected GL error: " << gfx::hexa(err);
             MOZ_CRASH("GFX: Unexpected GL error.");
         }
         return EGL_NO_DISPLAY;
@@ -142,7 +145,8 @@ GetAndInitWARPDisplay(GLLibraryEGL& egl, void* displayType)
 }
 
 static bool
-IsAccelAngleSupported(const nsCOMPtr<nsIGfxInfo>& gfxInfo, nsACString& aFailureId)
+IsAccelAngleSupported(const nsCOMPtr<nsIGfxInfo>& gfxInfo,
+                      nsACString* const out_failureId)
 {
     int32_t angleSupport;
     nsCString failureId;
@@ -150,10 +154,13 @@ IsAccelAngleSupported(const nsCOMPtr<nsIGfxInfo>& gfxInfo, nsACString& aFailureI
                                          nsIGfxInfo::FEATURE_WEBGL_ANGLE,
                                          failureId,
                                          &angleSupport);
-    Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_ACCL_FAILURE_ID,
-                          failureId);
-    if (failureId.IsEmpty()) {
-      aFailureId = failureId;
+    if (failureId.IsEmpty() && angleSupport != nsIGfxInfo::FEATURE_STATUS_OK) {
+        // This shouldn't happen, if we see this it's because we've missed
+        // some failure paths
+        failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_ACCL_ANGLE_NOT_OK");
+    }
+    if (out_failureId->IsEmpty()) {
+        *out_failureId = failureId;
     }
     return (angleSupport == nsIGfxInfo::FEATURE_STATUS_OK);
 }
@@ -171,8 +178,55 @@ GetAndInitDisplay(GLLibraryEGL& egl, void* displayType)
     return display;
 }
 
+class AngleErrorReporting: public angle::Platform {
+public:
+    AngleErrorReporting()
+    {
+      // No static constructor
+    }
+
+    void SetFailureId(nsACString* const aFailureId)
+    {
+      mFailureId = aFailureId;
+    }
+
+    void logError(const char *errorMessage) override
+    {
+        if (!mFailureId) {
+            return;
+        }
+
+        nsCString str(errorMessage);
+        Tokenizer tokenizer(str);
+
+        // Parse "ANGLE Display::initialize error " << error.getID() << ": "
+        //       << error.getMessage()
+        nsCString currWord;
+        Tokenizer::Token intToken;
+        if (tokenizer.CheckWord("ANGLE") &&
+            tokenizer.CheckWhite() &&
+            tokenizer.CheckWord("Display") &&
+            tokenizer.CheckChar(':') &&
+            tokenizer.CheckChar(':') &&
+            tokenizer.CheckWord("initialize") &&
+            tokenizer.CheckWhite() &&
+            tokenizer.CheckWord("error") &&
+            tokenizer.CheckWhite() &&
+            tokenizer.Check(Tokenizer::TOKEN_INTEGER, intToken)) {
+            *mFailureId = "FAILURE_ID_ANGLE_ID_";
+            mFailureId->AppendPrintf("%i", intToken.AsInteger());
+        } else {
+            *mFailureId = "FAILURE_ID_ANGLE_UNKNOWN";
+        }
+    }
+private:
+    nsACString* mFailureId;
+};
+
+AngleErrorReporting gAngleErrorReporter;
+
 static EGLDisplay
-GetAndInitDisplayForAccelANGLE(GLLibraryEGL& egl)
+GetAndInitDisplayForAccelANGLE(GLLibraryEGL& egl, nsACString* const out_failureId)
 {
     EGLDisplay ret = 0;
 
@@ -185,8 +239,19 @@ GetAndInitDisplayForAccelANGLE(GLLibraryEGL& egl)
     if (gfxPrefs::WebGLANGLEForceD3D11())
         d3d11ANGLE.UserForceEnable("User force-enabled D3D11 ANGLE on disabled hardware");
 
-    if (gfxConfig::IsForcedOnByUser(Feature::D3D11_HW_ANGLE))
+    gAngleErrorReporter.SetFailureId(out_failureId);
+    egl.fANGLEPlatformInitialize(&gAngleErrorReporter);
+
+    auto guardShutdown = mozilla::MakeScopeExit([&] {
+        gAngleErrorReporter.SetFailureId(nullptr);
+        // NOTE: Ideally we should be calling ANGLEPlatformShutdown after the
+        //       ANGLE display is destroyed. However gAngleErrorReporter
+        //       will live longer than the ANGLE display so we're fine.
+    });
+
+    if (gfxConfig::IsForcedOnByUser(Feature::D3D11_HW_ANGLE)) {
         return GetAndInitDisplay(egl, LOCAL_EGL_D3D11_ONLY_DISPLAY_ANGLE);
+    }
 
     if (d3d11ANGLE.IsEnabled()) {
         ret = GetAndInitDisplay(egl, LOCAL_EGL_D3D11_ELSE_D3D9_DISPLAY_ANGLE);
@@ -194,6 +259,10 @@ GetAndInitDisplayForAccelANGLE(GLLibraryEGL& egl)
 
     if (!ret) {
         ret = GetAndInitDisplay(egl, EGL_DEFAULT_DISPLAY);
+    }
+
+    if (!ret && out_failureId->IsEmpty()) {
+        *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_ACCL_ANGLE_NO_DISP");
     }
 
     return ret;
@@ -206,11 +275,11 @@ GLLibraryEGL::ReadbackEGLImage(EGLImage image, gfx::DataSourceSurface* out_surfa
     if (!mReadbackGL) {
         nsCString discardFailureId;
         mReadbackGL = gl::GLContextProvider::CreateHeadless(gl::CreateContextFlags::NONE,
-                                                            discardFailureId);
+                                                            &discardFailureId);
     }
 
     ScopedTexture destTex(mReadbackGL);
-    const GLuint target = LOCAL_GL_TEXTURE_EXTERNAL;
+    const GLuint target = mReadbackGL->GetPreferredEGLImageTextureTarget();
     ScopedBindTexture autoTex(mReadbackGL, destTex.Texture(), target);
     mReadbackGL->fTexParameteri(target, LOCAL_GL_TEXTURE_WRAP_S, LOCAL_GL_CLAMP_TO_EDGE);
     mReadbackGL->fTexParameteri(target, LOCAL_GL_TEXTURE_WRAP_T, LOCAL_GL_CLAMP_TO_EDGE);
@@ -228,7 +297,7 @@ GLLibraryEGL::ReadbackEGLImage(EGLImage image, gfx::DataSourceSurface* out_surfa
 }
 
 bool
-GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString& aFailureId)
+GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString* const out_failureId)
 {
     if (mInitialized) {
         return true;
@@ -277,8 +346,10 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString& aFailureId)
 
         mEGLLibrary = LoadLibraryForEGLOnWindows(NS_LITERAL_STRING("libEGL.dll"));
 
-        if (!mEGLLibrary)
+        if (!mEGLLibrary) {
+            *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_LOAD");
             return false;
+        }
     }
 
 #else // !Windows
@@ -303,6 +374,7 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString& aFailureId)
 
     if (!mEGLLibrary) {
         NS_WARNING("Couldn't load EGL LIB.");
+        *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_LOAD_2");
         return false;
     }
 
@@ -343,6 +415,7 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString& aFailureId)
 
     if (!GLLibraryLoader::LoadSymbols(mEGLLibrary, &earlySymbols[0])) {
         NS_WARNING("Couldn't find required entry points in EGL library (early init)");
+        *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_SYM");
         return false;
     }
 
@@ -358,11 +431,6 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString& aFailureId)
     Unused << GLLibraryLoader::LoadSymbols(mEGLLibrary, &optionalSymbols[0],
                                            nullptr, nullptr, false);
 
-#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 18
-    MOZ_RELEASE_ASSERT(mSymbols.fQueryStringImplementationANDROID,
-                       "GFX: Couldn't find eglQueryStringImplementationANDROID");
-#endif
-
     InitClientExtensions();
 
     const auto lookupFunction =
@@ -371,7 +439,9 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString& aFailureId)
     // Client exts are ready. (But not display exts!)
     if (IsExtensionSupported(ANGLE_platform_angle_d3d)) {
         GLLibraryLoader::SymLoadStruct d3dSymbols[] = {
-            { (PRFuncPtr*)&mSymbols.fGetPlatformDisplayEXT, { "eglGetPlatformDisplayEXT", nullptr } },
+            { (PRFuncPtr*)&mSymbols.fANGLEPlatformInitialize, { "ANGLEPlatformInitialize", nullptr } },
+            { (PRFuncPtr*)&mSymbols.fANGLEPlatformShutdown,   { "ANGLEPlatformShutdown", nullptr } },
+            { (PRFuncPtr*)&mSymbols.fGetPlatformDisplayEXT,   { "eglGetPlatformDisplayEXT", nullptr } },
             { nullptr, { nullptr } }
         };
 
@@ -394,44 +464,58 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString& aFailureId)
     EGLDisplay chosenDisplay = nullptr;
 
     if (IsExtensionSupported(ANGLE_platform_angle_d3d)) {
-        bool accelAngleSupport = IsAccelAngleSupported(gfxInfo, aFailureId);
-
+        nsCString accelAngleFailureId;
+        bool accelAngleSupport = IsAccelAngleSupported(gfxInfo, &accelAngleFailureId);
         bool shouldTryAccel = forceAccel || accelAngleSupport;
-        bool shouldTryWARP = !shouldTryAccel;
+        bool shouldTryWARP = !forceAccel; // Only if ANGLE not supported or fails
+
+        // If WARP preferred, will override ANGLE support
         if (gfxPrefs::WebGLANGLEForceWARP()) {
             shouldTryWARP = true;
             shouldTryAccel = false;
-        }
-
-        // Fallback to a WARP display if non-WARP is blacklisted, or if WARP is forced.
-        if (shouldTryWARP) {
-            chosenDisplay = GetAndInitWARPDisplay(*this, EGL_DEFAULT_DISPLAY);
-            if (chosenDisplay) {
-                mIsWARP = true;
+            if (accelAngleFailureId.IsEmpty()) {
+                accelAngleFailureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_FORCE_WARP");
             }
         }
 
+        // Hardware accelerated ANGLE path (supported or force accel)
+        if (shouldTryAccel) {
+            chosenDisplay = GetAndInitDisplayForAccelANGLE(*this, out_failureId);
+        }
+
+        // Report the acceleration status to telemetry
         if (!chosenDisplay) {
-            // If falling back to WARP did not work and we don't want to try
-            // using HW accelerated ANGLE, then fail.
-            if (!shouldTryAccel) {
-                if (aFailureId.IsEmpty()) {
-                    aFailureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WARP_FALLBACK");
+            if (accelAngleFailureId.IsEmpty()) {
+                Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_ACCL_FAILURE_ID,
+                                      NS_LITERAL_CSTRING("FEATURE_FAILURE_ACCL_ANGLE_UNKNOWN"));
+            } else {
+                Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_ACCL_FAILURE_ID,
+                                      accelAngleFailureId);
+            }
+        } else {
+            Telemetry::Accumulate(Telemetry::CANVAS_WEBGL_ACCL_FAILURE_ID,
+                                  NS_LITERAL_CSTRING("SUCCESS"));
+        }
+
+        // Fallback to a WARP display if ANGLE fails, or if WARP is forced
+        if (!chosenDisplay && shouldTryWARP) {
+            chosenDisplay = GetAndInitWARPDisplay(*this, EGL_DEFAULT_DISPLAY);
+            if (!chosenDisplay) {
+                if (out_failureId->IsEmpty()) {
+                    *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_WARP_FALLBACK");
                 }
-                NS_ERROR("Fallback WARP ANGLE context failed to initialize.");
+                NS_ERROR("Fallback WARP context failed to initialize.");
                 return false;
             }
-
-            // Hardware accelerated ANGLE path
-            chosenDisplay = GetAndInitDisplayForAccelANGLE(*this);
+            mIsWARP = true;
         }
     } else {
         chosenDisplay = GetAndInitDisplay(*this, EGL_DEFAULT_DISPLAY);
     }
 
     if (!chosenDisplay) {
-        if (aFailureId.IsEmpty()) {
-            aFailureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_NO_DISPLAY");
+        if (out_failureId->IsEmpty()) {
+            *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_NO_DISPLAY");
         }
         NS_WARNING("Failed to initialize a display.");
         return false;
@@ -672,11 +756,11 @@ GLLibraryEGL::DumpEGLConfigs()
 {
     int nc = 0;
     fGetConfigs(mEGLDisplay, nullptr, 0, &nc);
-    EGLConfig *ec = new EGLConfig[nc];
+    EGLConfig* ec = new EGLConfig[nc];
     fGetConfigs(mEGLDisplay, ec, nc, &nc);
 
     for (int i = 0; i < nc; ++i) {
-        printf_stderr ("========= EGL Config %d ========\n", i);
+        printf_stderr("========= EGL Config %d ========\n", i);
         DumpEGLConfig(ec[i]);
     }
 
@@ -684,19 +768,25 @@ GLLibraryEGL::DumpEGLConfigs()
 }
 
 #ifdef DEBUG
+static bool
+ShouldTrace()
+{
+    static bool ret = gfxEnv::GlDebugVerbose();
+    return ret;
+}
+
 /*static*/ void
 GLLibraryEGL::BeforeGLCall(const char* glFunction)
 {
-    if (GLContext::DebugMode()) {
-        if (GLContext::DebugMode() & GLContext::DebugTrace)
-            printf_stderr("[egl] > %s\n", glFunction);
+    if (ShouldTrace()) {
+        printf_stderr("[egl] > %s\n", glFunction);
     }
 }
 
 /*static*/ void
 GLLibraryEGL::AfterGLCall(const char* glFunction)
 {
-    if (GLContext::DebugMode() & GLContext::DebugTrace) {
+    if (ShouldTrace()) {
         printf_stderr("[egl] < %s\n", glFunction);
     }
 }

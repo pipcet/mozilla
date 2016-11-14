@@ -22,7 +22,7 @@ Buffer9::~Buffer9()
     mSize = 0;
 }
 
-gl::Error Buffer9::setData(const void* data, size_t size, GLenum usage)
+gl::Error Buffer9::setData(GLenum /*target*/, const void *data, size_t size, GLenum usage)
 {
     if (size > mMemory.size())
     {
@@ -38,9 +38,10 @@ gl::Error Buffer9::setData(const void* data, size_t size, GLenum usage)
         memcpy(mMemory.data(), data, size);
     }
 
-    invalidateStaticData(D3D_BUFFER_INVALIDATE_WHOLE_CACHE);
-
     updateD3DBufferUsage(usage);
+
+    invalidateStaticData();
+
     return gl::Error(GL_NO_ERROR);
 }
 
@@ -50,7 +51,7 @@ gl::Error Buffer9::getData(const uint8_t **outData)
     return gl::Error(GL_NO_ERROR);
 }
 
-gl::Error Buffer9::setSubData(const void* data, size_t size, size_t offset)
+gl::Error Buffer9::setSubData(GLenum /*target*/, const void *data, size_t size, size_t offset)
 {
     if (offset + size > mMemory.size())
     {
@@ -66,7 +67,7 @@ gl::Error Buffer9::setSubData(const void* data, size_t size, size_t offset)
         memcpy(mMemory.data() + offset, data, size);
     }
 
-    invalidateStaticData(D3D_BUFFER_INVALIDATE_WHOLE_CACHE);
+    invalidateStaticData();
 
     return gl::Error(GL_NO_ERROR);
 }
@@ -79,7 +80,7 @@ gl::Error Buffer9::copySubData(BufferImpl* source, GLintptr sourceOffset, GLintp
 
     memcpy(mMemory.data() + destOffset, sourceBuffer->mMemory.data() + sourceOffset, size);
 
-    invalidateStaticData(D3D_BUFFER_INVALIDATE_WHOLE_CACHE);
+    invalidateStaticData();
 
     return gl::Error(GL_NO_ERROR);
 }
@@ -103,9 +104,10 @@ gl::Error Buffer9::unmap(GLboolean *result)
     return gl::Error(GL_INVALID_OPERATION);
 }
 
-void Buffer9::markTransformFeedbackUsage()
+gl::Error Buffer9::markTransformFeedbackUsage()
 {
     UNREACHABLE();
+    return gl::Error(GL_INVALID_OPERATION);
 }
 
-}
+}  // namespace rx

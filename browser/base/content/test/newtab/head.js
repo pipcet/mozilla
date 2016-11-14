@@ -109,7 +109,7 @@ function watchLinksChangeOnce() {
     observer.onDownloadFail = observer.onManyLinksChanged;
     DirectoryLinksProvider.addObserver(observer);
   });
-};
+}
 
 add_task(function* setup() {
   registerCleanupFunction(function() {
@@ -151,7 +151,7 @@ function performOnCell(aIndex, aFn) {
   return ContentTask.spawn(gWindow.gBrowser.selectedBrowser,
                            { index: aIndex, fn: aFn.toString() }, function* (args) {
     let cell = content.gGrid.cells[args.index];
-    return eval("(" + args.fn + ")(cell)");
+    return eval(args.fn)(cell);
   });
 }
 
@@ -250,6 +250,7 @@ function setPinnedLinks(aLinks) {
         return {url: "http://example" + (id != "-1" ? id : "") + ".com/",
                 title: "site#" + id,
                 type: "history"};
+      return undefined;
     });
   }
 
@@ -413,12 +414,10 @@ function* simulateExternalDrop(aDestIndex) {
       let iframe = doc.createElement("iframe");
 
       function iframeLoaded() {
-        let link = iframe.contentDocument.getElementById("link");
-
         let dataTransfer = new iframe.contentWindow.DataTransfer("dragstart", false);
         dataTransfer.mozSetDataAt("text/x-moz-url", "http://example99.com/", 0);
 
-        let event = content.document.createEvent("DragEvents");
+        let event = content.document.createEvent("DragEvent");
         event.initDragEvent("drop", true, true, content, 0, 0, 0, 0, 0,
                             false, false, false, false, 0, null, dataTransfer);
 

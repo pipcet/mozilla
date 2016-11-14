@@ -48,6 +48,14 @@ public abstract class SessionParser {
         public JSONObject getTabObject() {
             return mTabObject;
         }
+
+        /**
+         * Is this tab pointing to about:home and does not contain any other history?
+         */
+        public boolean isAboutHomeWithoutHistory() {
+            JSONArray entries = mTabObject.optJSONArray("entries");
+            return entries != null && entries.length() == 1 && AboutPages.isAboutHome(mUrl);
+        }
     };
 
     abstract public void onTabRead(SessionTab tab);
@@ -61,7 +69,13 @@ public abstract class SessionParser {
     public void onClosedTabsRead(final JSONArray closedTabs) throws JSONException {
     }
 
-    public void parse(String... sessionStrings) {
+    /**
+     * Parses the provided session store data and calls onTabRead for each tab that has been found.
+     *
+     * @param sessionStrings One or more strings containing session store data.
+     * @return False if any of the session strings provided didn't contain valid session store data.
+     */
+    public boolean parse(String... sessionStrings) {
         final LinkedList<SessionTab> sessionTabs = new LinkedList<SessionTab>();
         int totalCount = 0;
         int selectedIndex = -1;
@@ -109,7 +123,7 @@ public abstract class SessionParser {
             }
         } catch (JSONException e) {
             Log.e(LOGTAG, "JSON error", e);
-            return;
+            return false;
         }
 
         // If no selected index was found, select the first tab.
@@ -120,5 +134,7 @@ public abstract class SessionParser {
         for (SessionTab tab : sessionTabs) {
             onTabRead(tab);
         }
+
+        return true;
     }
 }

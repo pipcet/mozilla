@@ -68,7 +68,7 @@ public:
         , mDone(false) {}
 
 private:
-    virtual ~nsDNSRecord() {}
+    virtual ~nsDNSRecord() = default;
 
     RefPtr<nsHostRecord>  mHostRecord;
     NetAddrElement         *mIter;
@@ -147,8 +147,7 @@ nsDNSRecord::GetNextAddr(uint16_t port, NetAddr *addr)
             mDone = true;
             return NS_ERROR_NOT_AVAILABLE;
         }
-    }
-    else {
+    } else {
         mHostRecord->addr_info_lock.Unlock();
 
         if (!mHostRecord->addr) {
@@ -165,8 +164,7 @@ nsDNSRecord::GetNextAddr(uint16_t port, NetAddr *addr)
     port = htons(port);
     if (addr->raw.family == AF_INET) {
         addr->inet.port = port;
-    }
-    else if (addr->raw.family == AF_INET6) {
+    } else if (addr->raw.family == AF_INET6) {
         addr->inet6.port = port;
     }
 
@@ -296,7 +294,7 @@ nsDNSRecord::ReportUnusable(uint16_t aPort)
 class nsDNSAsyncRequest final : public nsResolveHostCallback
                               , public nsICancelable
 {
-    ~nsDNSAsyncRequest() {}
+    ~nsDNSAsyncRequest() = default;
 
 public:
     NS_DECL_THREADSAFE_ISUPPORTS
@@ -343,8 +341,6 @@ nsDNSAsyncRequest::OnLookupComplete(nsHostResolver *resolver,
     if (NS_SUCCEEDED(status)) {
         NS_ASSERTION(hostRecord, "no host record");
         rec = new nsDNSRecord(hostRecord);
-        if (!rec)
-            status = NS_ERROR_OUT_OF_MEMORY;
     }
 
     mListener->OnLookupComplete(this, rec, status);
@@ -400,11 +396,11 @@ public:
         : mDone(false)
         , mStatus(NS_OK)
         , mMonitor(mon) {}
-    virtual ~nsDNSSyncRequest() {}
+    virtual ~nsDNSSyncRequest() = default;
 
-    void OnLookupComplete(nsHostResolver *, nsHostRecord *, nsresult);
-    bool EqualsAsyncListener(nsIDNSListener *aListener);
-    size_t SizeOfIncludingThis(mozilla::MallocSizeOf) const;
+    void OnLookupComplete(nsHostResolver *, nsHostRecord *, nsresult) override;
+    bool EqualsAsyncListener(nsIDNSListener *aListener) override;
+    size_t SizeOfIncludingThis(mozilla::MallocSizeOf) const override;
 
     bool                   mDone;
     nsresult               mStatus;
@@ -458,7 +454,7 @@ public:
     {
     }
 
-    NS_IMETHOD Run()
+    NS_IMETHOD Run() override
     {
         MOZ_ASSERT(NS_IsMainThread());
         nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
@@ -486,9 +482,7 @@ nsDNSService::nsDNSService()
 {
 }
 
-nsDNSService::~nsDNSService()
-{
-}
+nsDNSService::~nsDNSService() = default;
 
 NS_IMPL_ISUPPORTS(nsDNSService, nsIDNSService, nsPIDNSService, nsIObserver,
                   nsIMemoryReporter)
@@ -572,13 +566,11 @@ nsDNSService::Init()
         // If a manual proxy is in use, disable prefetch implicitly
         prefs->GetIntPref("network.proxy.type", &proxyType);
         prefs->GetBoolPref(kPrefDnsNotifyResolution, &notifyResolution);
-    }
 
-    if (mFirstTime) {
-        mFirstTime = false;
+        if (mFirstTime) {
+            mFirstTime = false;
 
-        // register as prefs observer
-        if (prefs) {
+            // register as prefs observer
             prefs->AddObserver(kPrefDnsCacheEntries, this, false);
             prefs->AddObserver(kPrefDnsCacheExpiration, this, false);
             prefs->AddObserver(kPrefDnsCacheGrace, this, false);
@@ -594,14 +586,13 @@ nsDNSService::Init()
             // If a manual proxy is in use, disable prefetch implicitly
             prefs->AddObserver("network.proxy.type", this, false);
         }
+    }
 
-        nsCOMPtr<nsIObserverService> observerService =
-            mozilla::services::GetObserverService();
-        if (observerService) {
-            observerService->AddObserver(this, "last-pb-context-exited", false);
-            observerService->AddObserver(this, NS_NETWORK_LINK_TOPIC, false);
-        }
-
+    nsCOMPtr<nsIObserverService> observerService =
+        mozilla::services::GetObserverService();
+    if (observerService) {
+        observerService->AddObserver(this, "last-pb-context-exited", false);
+        observerService->AddObserver(this, NS_NETWORK_LINK_TOPIC, false);
     }
 
     nsDNSPrefetch::Initialize(this);
@@ -791,7 +782,7 @@ nsDNSService::AsyncResolveExtended(const nsACString  &aHostname,
 
     uint16_t af = GetAFForLookup(hostname, flags);
 
-    nsDNSAsyncRequest *req =
+    auto *req =
         new nsDNSAsyncRequest(res, hostname, listener, flags, af,
                               aNetworkInterface);
     if (!req)
@@ -919,7 +910,7 @@ nsDNSService::Resolve(const nsACString &aHostname,
             rv = syncReq.mStatus;
         else {
             NS_ASSERTION(syncReq.mHostRecord, "no host record");
-            nsDNSRecord *rec = new nsDNSRecord(syncReq.mHostRecord);
+            auto *rec = new nsDNSRecord(syncReq.mHostRecord);
             if (!rec)
                 rv = NS_ERROR_OUT_OF_MEMORY;
             else
@@ -1064,9 +1055,11 @@ NS_IMETHODIMP
 nsDNSService::CollectReports(nsIHandleReportCallback* aHandleReport,
                              nsISupports* aData, bool aAnonymize)
 {
-    return MOZ_COLLECT_REPORT(
+    MOZ_COLLECT_REPORT(
         "explicit/network/dns-service", KIND_HEAP, UNITS_BYTES,
         SizeOfIncludingThis(DNSServiceMallocSizeOf),
         "Memory used for the DNS service.");
+
+    return NS_OK;
 }
 

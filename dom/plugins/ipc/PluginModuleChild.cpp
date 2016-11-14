@@ -4,12 +4,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifdef MOZ_WIDGET_QT
-#include <QtCore/QTimer>
-#include "nsQAppInstance.h"
-#include "NestedLoopTimer.h"
-#endif
-
 #include "mozilla/plugins/PluginModuleChild.h"
 
 /* This must occur *after* plugins/PluginModuleChild.h to avoid typedefs conflicts. */
@@ -38,7 +32,8 @@
 #include "mozilla/plugins/BrowserStreamChild.h"
 #include "mozilla/plugins/PluginStreamChild.h"
 #include "mozilla/dom/CrashReporterChild.h"
-#include "mozilla/unused.h"
+#include "mozilla/Sprintf.h"
+#include "mozilla/Unused.h"
 
 #include "nsNPAPIPlugin.h"
 
@@ -73,12 +68,6 @@ namespace {
 PluginModuleChild* gChromeInstance = nullptr;
 } // namespace
 
-#ifdef MOZ_WIDGET_QT
-typedef void (*_gtk_init_fn)(int argc, char **argv);
-static _gtk_init_fn s_gtk_init = nullptr;
-static PRLibrary *sGtkLib = nullptr;
-#endif
-
 #ifdef XP_WIN
 // Hooking CreateFileW for protected-mode magic
 static WindowsDllInterceptor sKernel32Intercept;
@@ -102,6 +91,9 @@ static WindowsDllInterceptor sUser32Intercept;
 typedef BOOL (WINAPI *GetWindowInfoPtr)(HWND hwnd, PWINDOWINFO pwi);
 static GetWindowInfoPtr sGetWindowInfoPtrStub = nullptr;
 static HWND sBrowserHwnd = nullptr;
+// sandbox process doesn't get current key states.  So we need get it on chrome.
+typedef SHORT (WINAPI *GetKeyStatePtr)(int);
+static GetKeyStatePtr sGetKeyStatePtrStub = nullptr;
 #endif
 
 /* static */
@@ -131,12 +123,11 @@ PluginModuleChild::PluginModuleChild(bool aIsChrome)
   , mGetEntryPointsFunc(0)
 #elif defined(MOZ_WIDGET_GTK)
   , mNestedLoopTimerId(0)
-#elif defined(MOZ_WIDGET_QT)
-  , mNestedLoopTimerObject(0)
 #endif
 #ifdef OS_WIN
   , mNestedEventHook(nullptr)
   , mGlobalCallWndProcHook(nullptr)
+  , mAsyncRenderSupport(false)
 #endif
 {
     memset(&mFunctions, 0, sizeof(mFunctions));
@@ -154,15 +145,6 @@ PluginModuleChild::PluginModuleChild(bool aIsChrome)
 
 PluginModuleChild::~PluginModuleChild()
 {
-    if (mTransport) {
-        // For some reason IPDL doesn't automatically delete the channel for a
-        // bridged protocol (bug 1090570). So we have to do it ourselves. This
-        // code is only invoked for PluginModuleChild instances created via
-        // bridging; otherwise mTransport is null.
-        RefPtr<DeleteTask<Transport>> task = new DeleteTask<Transport>(mTransport);
-        XRE_GetIOMessageLoop()->PostTask(task.forget());
-    }
-
     if (mIsChrome) {
         MOZ_ASSERT(gChromeInstance == this);
 
@@ -266,26 +248,29 @@ PluginModuleChild::InitForChrome(const std::string& aPluginFilename,
 
     nsPluginFile pluginFile(localFile);
 
-#if defined(MOZ_X11) || defined(XP_MACOSX)
     nsPluginInfo info = nsPluginInfo();
     if (NS_FAILED(pluginFile.GetPluginInfo(info, &mLibrary))) {
         return false;
     }
 
+#if defined(XP_WIN)
+    // XXX quirks isn't initialized yet
+    mAsyncRenderSupport = info.fSupportsAsyncRender;
+#endif
 #if defined(MOZ_X11)
     NS_NAMED_LITERAL_CSTRING(flash10Head, "Shockwave Flash 10.");
     if (StringBeginsWith(nsDependentCString(info.fDescription), flash10Head)) {
         AddQuirk(QUIRK_FLASH_EXPOSE_COORD_TRANSLATION);
     }
-#else // defined(XP_MACOSX)
+#endif
+#if defined(XP_MACOSX)
     const char* namePrefix = "Plugin Content";
     char nameBuffer[80];
-    snprintf(nameBuffer, sizeof(nameBuffer), "%s (%s)", namePrefix, info.fName);
+    SprintfLiteral(nameBuffer, "%s (%s)", namePrefix, info.fName);
     mozilla::plugins::PluginUtilsOSX::SetProcessName(nameBuffer);
 #endif
-
     pluginFile.FreePluginInfo(info);
-
+#if defined(MOZ_X11) || defined(XP_MACOSX)
     if (!mLibrary)
 #endif
     {
@@ -334,6 +319,7 @@ PluginModuleChild::InitForChrome(const std::string& aPluginFilename,
 }
 
 #if defined(MOZ_WIDGET_GTK)
+
 typedef void (*GObjectDisposeFn)(GObject*);
 typedef gboolean (*GtkWidgetScrollEventFn)(GtkWidget*, GdkEventScroll*);
 typedef void (*GtkPlugEmbeddedFn)(GtkPlug*);
@@ -557,26 +543,6 @@ PluginModuleChild::ExitedCxxStack()
     g_source_remove(mNestedLoopTimerId);
     mNestedLoopTimerId = 0;
 }
-#elif defined (MOZ_WIDGET_QT)
-
-void
-PluginModuleChild::EnteredCxxStack()
-{
-    MOZ_ASSERT(mNestedLoopTimerObject == nullptr,
-               "previous timer not descheduled");
-    mNestedLoopTimerObject = new NestedLoopTimer(this);
-    QTimer::singleShot(kNestedLoopDetectorIntervalMs,
-                       mNestedLoopTimerObject, SLOT(timeOut()));
-}
-
-void
-PluginModuleChild::ExitedCxxStack()
-{
-    MOZ_ASSERT(mNestedLoopTimerObject != nullptr,
-               "nested loop timeout not scheduled");
-    delete mNestedLoopTimerObject;
-    mNestedLoopTimerObject = nullptr;
-}
 
 #endif
 
@@ -637,19 +603,6 @@ PluginModuleChild::InitGraphics()
     real_gtk_plug_embedded = *embedded;
     *embedded = wrap_gtk_plug_embedded;
 
-#elif defined(MOZ_WIDGET_QT)
-    nsQAppInstance::AddRef();
-    // Work around plugins that don't interact well without gtk initialized
-    // see bug 566845
-#if defined(MOZ_X11)
-    if (!sGtkLib)
-         sGtkLib = PR_LoadLibrary("libgtk-x11-2.0.so.0");
-#endif
-    if (sGtkLib) {
-         s_gtk_init = (_gtk_init_fn)PR_FindFunctionSymbol(sGtkLib, "gtk_init");
-         if (s_gtk_init)
-             s_gtk_init(0, 0);
-    }
 #else
     // may not be necessary on all platforms
 #endif
@@ -663,15 +616,6 @@ PluginModuleChild::InitGraphics()
 void
 PluginModuleChild::DeinitGraphics()
 {
-#ifdef MOZ_WIDGET_QT
-    nsQAppInstance::Release();
-    if (sGtkLib) {
-        PR_UnloadLibrary(sGtkLib);
-        sGtkLib = nullptr;
-        s_gtk_init = nullptr;
-    }
-#endif
-
 #if defined(MOZ_X11) && defined(NS_FREE_PERMANENT_DATA)
     // We free some data off of XDisplay close hooks, ensure they're
     // run.  Closing the display is pretty scary, so we only do it to
@@ -1158,7 +1102,7 @@ _getvalue(NPP aNPP,
     switch (aVariable) {
         // Copied from nsNPAPIPlugin.cpp
         case NPNVToolkit:
-#if defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)
+#if defined(MOZ_WIDGET_GTK)
             *static_cast<NPNToolkitType*>(aValue) = NPNVGtk2;
             return NPERR_NO_ERROR;
 #endif
@@ -2126,6 +2070,73 @@ PMCGetWindowInfoHook(HWND hWnd, PWINDOWINFO pwi)
       pwi->rcWindow = pwi->rcClient;
   return result;
 }
+
+SHORT WINAPI PMCGetKeyState(int aVirtKey);
+
+// Runnable that performs GetKeyState on the main thread so that it can be
+// synchronously run on the PluginModuleParent via IPC.
+// The task alerts the given semaphore when it is finished.
+class GetKeyStateTask : public Runnable
+{
+    SHORT* mKeyState;
+    int mVirtKey;
+    HANDLE mSemaphore;
+
+public:
+    explicit GetKeyStateTask(int aVirtKey, HANDLE aSemaphore, SHORT* aKeyState) :
+        mVirtKey(aVirtKey), mSemaphore(aSemaphore), mKeyState(aKeyState)
+    {}
+
+    NS_IMETHOD Run() override
+    {
+        PLUGIN_LOG_DEBUG_METHOD;
+        AssertPluginThread();
+        *mKeyState = PMCGetKeyState(mVirtKey);
+        if (!ReleaseSemaphore(mSemaphore, 1, nullptr)) {
+            return NS_ERROR_FAILURE;
+        }
+        return NS_OK;
+    }
+};
+
+// static
+SHORT WINAPI
+PMCGetKeyState(int aVirtKey)
+{
+    if (!IsPluginThread()) {
+        // synchronously request the key state from the main thread
+
+        // Start a semaphore at 0.  We Release the semaphore (bringing its count to 1)
+        // when the synchronous call is done.
+        HANDLE semaphore = CreateSemaphore(NULL, 0, 1, NULL);
+        if (semaphore == nullptr) {
+            MOZ_ASSERT(semaphore != nullptr);
+            return 0;
+        }
+
+        SHORT keyState;
+        RefPtr<GetKeyStateTask> task = new GetKeyStateTask(aVirtKey, semaphore, &keyState);
+        ProcessChild::message_loop()->PostTask(task.forget());
+        DWORD err = WaitForSingleObject(semaphore, INFINITE);
+        if (err != WAIT_FAILED) {
+            CloseHandle(semaphore);
+            return keyState;
+        }
+        PLUGIN_LOG_DEBUG(("Error while waiting for GetKeyState semaphore: %d",
+                          GetLastError()));
+        MOZ_ASSERT(err != WAIT_FAILED);
+        CloseHandle(semaphore);
+        return 0;
+    }
+    PluginModuleChild* chromeInstance = PluginModuleChild::GetChrome();
+    if (chromeInstance) {
+        int16_t ret = 0;
+        if (chromeInstance->CallGetKeyState(aVirtKey, &ret)) {
+          return ret;
+        }
+    }
+    return sGetKeyStatePtrStub(aVirtKey);
+}
 #endif
 
 PPluginInstanceChild*
@@ -2146,11 +2157,17 @@ PluginModuleChild::AllocPPluginInstanceChild(const nsCString& aMimeType,
     mQuirks = GetChrome()->mQuirks;
 
 #ifdef XP_WIN
+    sUser32Intercept.Init("user32.dll");
     if ((mQuirks & QUIRK_FLASH_HOOK_GETWINDOWINFO) &&
         !sGetWindowInfoPtrStub) {
-        sUser32Intercept.Init("user32.dll");
         sUser32Intercept.AddHook("GetWindowInfo", reinterpret_cast<intptr_t>(PMCGetWindowInfoHook),
                                  (void**) &sGetWindowInfoPtrStub);
+    }
+
+    if ((mQuirks & QUIRK_FLASH_HOOK_GETKEYSTATE) &&
+        !sGetKeyStatePtrStub) {
+        sUser32Intercept.AddHook("GetKeyState", reinterpret_cast<intptr_t>(PMCGetKeyState),
+                                 (void**) &sGetKeyStatePtrStub);
     }
 #endif
 
@@ -2166,6 +2183,18 @@ PluginModuleChild::InitQuirksModes(const nsCString& aMimeType)
     }
 
     mQuirks = GetQuirksFromMimeTypeAndFilename(aMimeType, mPluginFilename);
+}
+
+bool
+PluginModuleChild::AnswerModuleSupportsAsyncRender(bool* aResult)
+{
+#if defined(XP_WIN)
+    *aResult = gChromeInstance->mAsyncRenderSupport;
+    return true;
+#else
+    NS_NOTREACHED("Shouldn't get here!");
+    return false;
+#endif
 }
 
 bool
@@ -2589,4 +2618,63 @@ PluginModuleChild::RecvGatherProfile()
 
     Unused << SendProfile(profileCString);
     return true;
+}
+
+NPError
+PluginModuleChild::PluginRequiresAudioDeviceChanges(
+                          PluginInstanceChild* aInstance,
+                          NPBool aShouldRegister)
+{
+#ifdef XP_WIN
+    // Maintain a set of PluginInstanceChildren that we need to tell when the
+    // default audio device has changed.
+    NPError rv = NPERR_NO_ERROR;
+    if (aShouldRegister) {
+        if (mAudioNotificationSet.IsEmpty()) {
+            // We are registering the first plugin.  Notify the PluginModuleParent
+            // that it needs to start sending us audio device notifications.
+            if (!CallNPN_SetValue_NPPVpluginRequiresAudioDeviceChanges(
+                                                      aShouldRegister, &rv)) {
+                return NPERR_GENERIC_ERROR;
+            }
+        }
+        if (rv == NPERR_NO_ERROR) {
+            mAudioNotificationSet.PutEntry(aInstance);
+        }
+    }
+    else if (!mAudioNotificationSet.IsEmpty()) {
+        mAudioNotificationSet.RemoveEntry(aInstance);
+        if (mAudioNotificationSet.IsEmpty()) {
+            // We released the last plugin.  Unregister from the PluginModuleParent.
+            if (!CallNPN_SetValue_NPPVpluginRequiresAudioDeviceChanges(
+    	      	                                        aShouldRegister, &rv)) {
+                return NPERR_GENERIC_ERROR;
+            }
+        }
+    }
+    return rv;
+#else
+    NS_RUNTIMEABORT("PluginRequiresAudioDeviceChanges is not available on this platform.");
+    return NPERR_GENERIC_ERROR;
+#endif // XP_WIN
+}
+
+bool
+PluginModuleChild::RecvNPP_SetValue_NPNVaudioDeviceChangeDetails(
+                              const NPAudioDeviceChangeDetailsIPC& detailsIPC)
+{
+#if defined(XP_WIN)
+    NPAudioDeviceChangeDetails details;
+    details.flow = detailsIPC.flow;
+    details.role = detailsIPC.role;
+    details.defaultDevice = detailsIPC.defaultDevice.c_str();
+    for (auto iter = mAudioNotificationSet.ConstIter(); !iter.Done(); iter.Next()) {
+      PluginInstanceChild* pluginInst = iter.Get()->GetKey();
+      pluginInst->DefaultAudioDeviceChanged(details);
+    }
+    return true;
+#else
+    NS_RUNTIMEABORT("NPP_SetValue_NPNVaudioDeviceChangeDetails is a Windows-only message");
+    return false;
+#endif
 }

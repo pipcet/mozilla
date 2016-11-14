@@ -17,6 +17,7 @@
 #include "nsNavHistory.h"
 #include "mozilla/Likely.h"
 #include "nsVariant.h"
+#include "mozilla/HashFunctions.h"
 
 // Maximum number of chars to search through.
 // MatchAutoCompleteFunction won't look for matches over this threshold.
@@ -175,6 +176,17 @@ namespace {
     return false;
   }
 
+  static
+  MOZ_ALWAYS_INLINE nsDependentCString
+  getSharedString(mozIStorageValueArray* aValues, uint32_t aIndex) {
+    uint32_t len;
+    const char* str = aValues->AsSharedUTF8String(aIndex, &len);
+    if (!str) {
+      return nsDependentCString("", (uint32_t)0);
+    }
+    return nsDependentCString(str, len);
+  }
+
 } // End anonymous namespace
 
 namespace mozilla {
@@ -182,13 +194,6 @@ namespace places {
 
 ////////////////////////////////////////////////////////////////////////////////
 //// AutoComplete Matching Function
-
-  //////////////////////////////////////////////////////////////////////////////
-  //// MatchAutoCompleteFunction
-
-  MatchAutoCompleteFunction::~MatchAutoCompleteFunction()
-  {
-  }
 
   /* static */
   nsresult
@@ -206,36 +211,40 @@ namespace places {
   }
 
   /* static */
-  void
-  MatchAutoCompleteFunction::fixupURISpec(const nsCString &aURISpec,
+  nsDependentCSubstring
+  MatchAutoCompleteFunction::fixupURISpec(const nsACString &aURISpec,
                                           int32_t aMatchBehavior,
-                                          nsCString &_fixedSpec)
+                                          nsACString &aSpecBuf)
   {
-    nsCString unescapedSpec;
-    (void)NS_UnescapeURL(aURISpec, esc_SkipControl | esc_AlwaysCopy,
-                         unescapedSpec);
+    nsDependentCSubstring fixedSpec;
 
-    // If this unescaped string is valid UTF-8, we'll use it.  Otherwise,
-    // we will simply use our original string.
-    NS_ASSERTION(_fixedSpec.IsEmpty(),
-                 "Passing a non-empty string as an out parameter!");
-    if (IsUTF8(unescapedSpec))
-      _fixedSpec.Assign(unescapedSpec);
-    else
-      _fixedSpec.Assign(aURISpec);
+    // Try to unescape the string.  If that succeeds and yields a different
+    // string which is also valid UTF-8, we'll use it.
+    // Otherwise, we will simply use our original string.
+    bool unescaped = NS_UnescapeURL(aURISpec.BeginReading(),
+      aURISpec.Length(), esc_SkipControl, aSpecBuf);
+    if (unescaped && IsUTF8(aSpecBuf)) {
+      fixedSpec.Rebind(aSpecBuf, 0);
+    } else {
+      fixedSpec.Rebind(aURISpec, 0);
+    }
 
     if (aMatchBehavior == mozIPlacesAutoComplete::MATCH_ANYWHERE_UNMODIFIED)
-      return;
+      return fixedSpec;
 
-    if (StringBeginsWith(_fixedSpec, NS_LITERAL_CSTRING("http://")))
-      _fixedSpec.Cut(0, 7);
-    else if (StringBeginsWith(_fixedSpec, NS_LITERAL_CSTRING("https://")))
-      _fixedSpec.Cut(0, 8);
-    else if (StringBeginsWith(_fixedSpec, NS_LITERAL_CSTRING("ftp://")))
-      _fixedSpec.Cut(0, 6);
+    if (StringBeginsWith(fixedSpec, NS_LITERAL_CSTRING("http://"))) {
+      fixedSpec.Rebind(fixedSpec, 7);
+    } else if (StringBeginsWith(fixedSpec, NS_LITERAL_CSTRING("https://"))) {
+      fixedSpec.Rebind(fixedSpec, 8);
+    } else if (StringBeginsWith(fixedSpec, NS_LITERAL_CSTRING("ftp://"))) {
+      fixedSpec.Rebind(fixedSpec, 6);
+    }
 
-    if (StringBeginsWith(_fixedSpec, NS_LITERAL_CSTRING("www.")))
-      _fixedSpec.Cut(0, 4);
+    if (StringBeginsWith(fixedSpec, NS_LITERAL_CSTRING("www."))) {
+      fixedSpec.Rebind(fixedSpec, 4);
+    }
+
+    return fixedSpec;
   }
 
   /* static */
@@ -328,9 +337,6 @@ namespace places {
     mozIStorageFunction
   )
 
-  //////////////////////////////////////////////////////////////////////////////
-  //// mozIStorageFunction
-
   NS_IMETHODIMP
   MatchAutoCompleteFunction::OnFunctionCall(mozIStorageValueArray *aArguments,
                                             nsIVariant **_result)
@@ -341,19 +347,19 @@ namespace places {
     #define HAS_BEHAVIOR(aBitName) \
       (searchBehavior & mozIPlacesAutoComplete::BEHAVIOR_##aBitName)
 
-    nsAutoCString searchString;
-    (void)aArguments->GetUTF8String(kArgSearchString, searchString);
-    nsCString url;
-    (void)aArguments->GetUTF8String(kArgIndexURL, url);
+    nsDependentCString searchString =
+      getSharedString(aArguments, kArgSearchString);
+    nsDependentCString url =
+      getSharedString(aArguments, kArgIndexURL);
 
     int32_t matchBehavior = aArguments->AsInt32(kArgIndexMatchBehavior);
 
     // We only want to filter javascript: URLs if we are not supposed to search
     // for them, and the search does not start with "javascript:".
     if (matchBehavior != mozIPlacesAutoComplete::MATCH_ANYWHERE_UNMODIFIED &&
+        StringBeginsWith(url, NS_LITERAL_CSTRING("javascript:")) &&
         !HAS_BEHAVIOR(JAVASCRIPT) &&
-        !StringBeginsWith(searchString, NS_LITERAL_CSTRING("javascript:")) &&
-        StringBeginsWith(url, NS_LITERAL_CSTRING("javascript:"))) {
+        !StringBeginsWith(searchString, NS_LITERAL_CSTRING("javascript:"))) {
       NS_ADDREF(*_result = new IntegerVariant(0));
       return NS_OK;
     }
@@ -361,8 +367,7 @@ namespace places {
     int32_t visitCount = aArguments->AsInt32(kArgIndexVisitCount);
     bool typed = aArguments->AsInt32(kArgIndexTyped) ? true : false;
     bool bookmark = aArguments->AsInt32(kArgIndexBookmark) ? true : false;
-    nsAutoCString tags;
-    (void)aArguments->GetUTF8String(kArgIndexTags, tags);
+    nsDependentCString tags = getSharedString(aArguments, kArgIndexTags);
     int32_t openPageCount = aArguments->AsInt32(kArgIndexOpenPageCount);
     bool matches = false;
     if (HAS_BEHAVIOR(RESTRICT)) {
@@ -392,14 +397,14 @@ namespace places {
     searchFunctionPtr searchFunction = getSearchFunction(matchBehavior);
 
     // Clean up our URI spec and prepare it for searching.
-    nsCString fixedUrl;
-    fixupURISpec(url, matchBehavior, fixedUrl);
+    nsCString fixedUrlBuf;
+    nsDependentCSubstring fixedUrl =
+      fixupURISpec(url, matchBehavior, fixedUrlBuf);
     // Limit the number of chars we search through.
     const nsDependentCSubstring& trimmedUrl =
       Substring(fixedUrl, 0, MAX_CHARS_TO_SEARCH_THROUGH);
 
-    nsAutoCString title;
-    (void)aArguments->GetUTF8String(kArgIndexTitle, title);
+    nsDependentCString title = getSharedString(aArguments, kArgIndexTitle);
     // Limit the number of chars we search through.
     const nsDependentCSubstring& trimmedTitle =
       Substring(title, 0, MAX_CHARS_TO_SEARCH_THROUGH);
@@ -438,13 +443,6 @@ namespace places {
 ////////////////////////////////////////////////////////////////////////////////
 //// Frecency Calculation Function
 
-  //////////////////////////////////////////////////////////////////////////////
-  //// CalculateFrecencyFunction
-
-  CalculateFrecencyFunction::~CalculateFrecencyFunction()
-  {
-  }
-
   /* static */
   nsresult
   CalculateFrecencyFunction::create(mozIStorageConnection *aDBConn)
@@ -464,9 +462,6 @@ namespace places {
     CalculateFrecencyFunction,
     mozIStorageFunction
   )
-
-  //////////////////////////////////////////////////////////////////////////////
-  //// mozIStorageFunction
 
   NS_IMETHODIMP
   CalculateFrecencyFunction::OnFunctionCall(mozIStorageValueArray *aArguments,
@@ -628,13 +623,6 @@ namespace places {
 ////////////////////////////////////////////////////////////////////////////////
 //// GUID Creation Function
 
-  GenerateGUIDFunction::~GenerateGUIDFunction()
-  {
-  }
-
-  //////////////////////////////////////////////////////////////////////////////
-  //// GenerateGUIDFunction
-
   /* static */
   nsresult
   GenerateGUIDFunction::create(mozIStorageConnection *aDBConn)
@@ -653,9 +641,6 @@ namespace places {
     mozIStorageFunction
   )
 
-  //////////////////////////////////////////////////////////////////////////////
-  //// mozIStorageFunction
-
   NS_IMETHODIMP
   GenerateGUIDFunction::OnFunctionCall(mozIStorageValueArray *aArguments,
                                        nsIVariant **_result)
@@ -670,13 +655,6 @@ namespace places {
 
 ////////////////////////////////////////////////////////////////////////////////
 //// Get Unreversed Host Function
-
-  GetUnreversedHostFunction::~GetUnreversedHostFunction()
-  {
-  }
-
-  //////////////////////////////////////////////////////////////////////////////
-  //// GetUnreversedHostFunction
 
   /* static */
   nsresult
@@ -695,9 +673,6 @@ namespace places {
     GetUnreversedHostFunction,
     mozIStorageFunction
   )
-
-  //////////////////////////////////////////////////////////////////////////////
-  //// mozIStorageFunction
 
   NS_IMETHODIMP
   GetUnreversedHostFunction::OnFunctionCall(mozIStorageValueArray *aArguments,
@@ -727,13 +702,6 @@ namespace places {
 ////////////////////////////////////////////////////////////////////////////////
 //// Fixup URL Function
 
-  FixupURLFunction::~FixupURLFunction()
-  {
-  }
-
-  //////////////////////////////////////////////////////////////////////////////
-  //// FixupURLFunction
-
   /* static */
   nsresult
   FixupURLFunction::create(mozIStorageConnection *aDBConn)
@@ -751,9 +719,6 @@ namespace places {
     FixupURLFunction,
     mozIStorageFunction
   )
-
-  //////////////////////////////////////////////////////////////////////////////
-  //// mozIStorageFunction
 
   NS_IMETHODIMP
   FixupURLFunction::OnFunctionCall(mozIStorageValueArray *aArguments,
@@ -786,10 +751,6 @@ namespace places {
 
 ////////////////////////////////////////////////////////////////////////////////
 //// Frecency Changed Notification Function
-
-  FrecencyNotificationFunction::~FrecencyNotificationFunction()
-  {
-  }
 
   /* static */
   nsresult
@@ -847,10 +808,6 @@ namespace places {
 ////////////////////////////////////////////////////////////////////////////////
 //// Store Last Inserted Id Function
 
-  StoreLastInsertedIdFunction::~StoreLastInsertedIdFunction()
-  {
-  }
-
   /* static */
   nsresult
   StoreLastInsertedIdFunction::create(mozIStorageConnection *aDBConn)
@@ -885,11 +842,97 @@ namespace places {
 
     int64_t lastInsertedId = aArgs->AsInt64(1);
 
-    nsNavHistory::StoreLastInsertedId(table, lastInsertedId);
+    MOZ_ASSERT(table.EqualsLiteral("moz_places") ||
+               table.EqualsLiteral("moz_historyvisits") ||
+               table.EqualsLiteral("moz_bookmarks"));
+
+    if (table.EqualsLiteral("moz_bookmarks")) {
+      nsNavBookmarks::StoreLastInsertedId(table, lastInsertedId);
+    } else {
+      nsNavHistory::StoreLastInsertedId(table, lastInsertedId);
+    }
 
     RefPtr<nsVariant> result = new nsVariant();
     rv = result->SetAsInt64(lastInsertedId);
     NS_ENSURE_SUCCESS(rv, rv);
+    result.forget(_result);
+    return NS_OK;
+  }
+
+////////////////////////////////////////////////////////////////////////////////
+//// Hash Function
+
+  /* static */
+  nsresult
+  HashFunction::create(mozIStorageConnection *aDBConn)
+  {
+    RefPtr<HashFunction> function = new HashFunction();
+    return aDBConn->CreateFunction(
+      NS_LITERAL_CSTRING("hash"), -1, function
+    );
+  }
+
+  NS_IMPL_ISUPPORTS(
+    HashFunction,
+    mozIStorageFunction
+  )
+
+  NS_IMETHODIMP
+  HashFunction::OnFunctionCall(mozIStorageValueArray *aArguments,
+                               nsIVariant **_result)
+  {
+    // Must have non-null function arguments.
+    MOZ_ASSERT(aArguments);
+
+    // Fetch arguments.  Use default values if they were omitted.
+    uint32_t numEntries;
+    nsresult rv = aArguments->GetNumEntries(&numEntries);
+    NS_ENSURE_SUCCESS(rv, rv);
+    NS_ENSURE_TRUE(numEntries >= 1  && numEntries <= 2, NS_ERROR_FAILURE);
+
+    nsString str;
+    aArguments->GetString(0, str);
+    nsAutoCString mode;
+    if (numEntries > 1) {
+      aArguments->GetUTF8String(1, mode);
+    }
+
+    RefPtr<nsVariant> result = new nsVariant();
+    if (mode.IsEmpty()) {
+      // URI-like strings (having a prefix before a colon), are handled specially,
+      // as a 48 bit hash, where first 16 bits are the prefix hash, while the
+      // other 32 are the string hash.
+      // The 16 bits have been decided based on the fact hashing all of the IANA
+      // known schemes, plus "places", does not generate collisions.
+      nsAString::const_iterator start, tip, end;
+      str.BeginReading(tip);
+      start = tip;
+      str.EndReading(end);
+      if (FindInReadable(NS_LITERAL_STRING(":"), tip, end)) {
+        const nsDependentSubstring& prefix = Substring(start, tip);
+        uint64_t prefixHash = static_cast<uint64_t>(HashString(prefix) & 0x0000FFFF);
+        // The second half of the url is more likely to be unique, so we add it.
+        uint32_t srcHash = HashString(str);
+        uint64_t hash = (prefixHash << 32) + srcHash;
+        result->SetAsInt64(hash);
+      } else {
+        uint32_t hash = HashString(str);
+        result->SetAsInt64(hash);
+      }
+    } else if (mode.Equals(NS_LITERAL_CSTRING("prefix_lo"))) {
+      // Keep only 16 bits.
+      uint64_t hash = static_cast<uint64_t>(HashString(str) & 0x0000FFFF) << 32;
+      result->SetAsInt64(hash);
+    } else if (mode.Equals(NS_LITERAL_CSTRING("prefix_hi"))) {
+      // Keep only 16 bits.
+      uint64_t hash = static_cast<uint64_t>(HashString(str) & 0x0000FFFF) << 32;
+      // Make this a prefix upper bound by filling the lowest 32 bits.
+      hash +=  0xFFFFFFFF;
+      result->SetAsInt64(hash);
+    } else {
+      return NS_ERROR_FAILURE;
+    }
+
     result.forget(_result);
     return NS_OK;
   }

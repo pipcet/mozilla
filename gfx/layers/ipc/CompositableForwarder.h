@@ -10,6 +10,7 @@
 #include <stdint.h>                     // for int32_t, uint64_t
 #include "gfxTypes.h"
 #include "mozilla/Attributes.h"         // for override
+#include "mozilla/UniquePtr.h"
 #include "mozilla/layers/CompositableClient.h"  // for CompositableClient
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/ISurfaceAllocator.h"  // for ISurfaceAllocator
@@ -25,9 +26,7 @@ namespace mozilla {
 namespace layers {
 
 class CompositableClient;
-class AsyncTransactionTracker;
 class ImageContainer;
-struct TextureFactoryIdentifier;
 class SurfaceDescriptor;
 class SurfaceDescriptorTiles;
 class ThebesBufferData;
@@ -42,16 +41,14 @@ class PTextureChild;
  * ShadowLayerForwarder is an example of a CompositableForwarder (that can
  * additionally forward modifications of the Layer tree).
  * ImageBridgeChild is another CompositableForwarder.
+ *
+ * CompositableForwarder implements KnowsCompositor for simplicity as all
+ * implementations of CompositableForwarder currently also implement KnowsCompositor.
+ * This dependency could be split if we add new use cases.
  */
-class CompositableForwarder : public TextureForwarder
+class CompositableForwarder : public KnowsCompositor
 {
 public:
-
-  CompositableForwarder(const char* aName)
-    : TextureForwarder(aName)
-    , mSerial(++sSerialCounter)
-  {}
-
   /**
    * Setup the IPDL actor for aCompositable to be part of layers
    * transactions.
@@ -74,11 +71,7 @@ public:
                                    const ThebesBufferData& aThebesBufferData,
                                    const nsIntRegion& aUpdatedRegion) = 0;
 
-#ifdef MOZ_WIDGET_GONK
-  virtual void UseOverlaySource(CompositableClient* aCompositabl,
-                                const OverlaySource& aOverlay,
-                                const gfx::IntRect& aPictureRect) = 0;
-#endif
+  virtual void Destroy(CompositableChild* aCompositable);
 
   virtual bool DestroyInTransaction(PTextureChild* aTexture, bool synchronously) = 0;
   virtual bool DestroyInTransaction(PCompositableChild* aCompositable, bool synchronously) = 0;
@@ -94,29 +87,15 @@ public:
   virtual void RemoveTextureFromCompositable(CompositableClient* aCompositable,
                                              TextureClient* aTexture) = 0;
 
-  /**
-   * Tell the CompositableHost on the compositor side to remove the texture
-   * from the CompositableHost. The compositor side sends back transaction
-   * complete message.
-   * This function does not delete the TextureHost corresponding to the
-   * TextureClient passed in parameter.
-   * It is used when the TextureClient recycled.
-   * Only ImageBridge implements it.
-   */
-  virtual void RemoveTextureFromCompositableAsync(AsyncTransactionTracker* aAsyncTransactionTracker,
-                                                  CompositableClient* aCompositable,
-                                                  TextureClient* aTexture) {}
-
   struct TimedTextureClient {
     TimedTextureClient()
-        : mTextureClient(nullptr), mFrameID(0), mProducerID(0), mInputFrameID(0) {}
+        : mTextureClient(nullptr), mFrameID(0), mProducerID(0) {}
 
     TextureClient* mTextureClient;
     TimeStamp mTimeStamp;
     nsIntRect mPictureRect;
     int32_t mFrameID;
     int32_t mProducerID;
-    int32_t mInputFrameID;
   };
   /**
    * Tell the CompositableHost on the compositor side what textures to use for
@@ -128,24 +107,18 @@ public:
                                          TextureClient* aClientOnBlack,
                                          TextureClient* aClientOnWhite) = 0;
 
-  void IdentifyTextureHost(const TextureFactoryIdentifier& aIdentifier);
-
   virtual void UpdateFwdTransactionId() = 0;
   virtual uint64_t GetFwdTransactionId() = 0;
 
-  int32_t GetSerial() { return mSerial; }
+  virtual bool InForwarderThread() = 0;
 
-  SyncObject* GetSyncObject() { return mSyncObject; }
-
-  virtual CompositableForwarder* AsCompositableForwarder() override { return this; }
+  void AssertInForwarderThread() {
+    MOZ_ASSERT(InForwarderThread());
+  }
 
 protected:
   nsTArray<RefPtr<TextureClient> > mTexturesToRemove;
   nsTArray<RefPtr<CompositableClient>> mCompositableClientsToRemove;
-  RefPtr<SyncObject> mSyncObject;
-
-  const int32_t mSerial;
-  static mozilla::Atomic<int32_t> sSerialCounter;
 };
 
 } // namespace layers

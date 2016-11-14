@@ -29,10 +29,9 @@ function ellipseString(aStr, doFront)
     if (doFront) {
       var endStr = aStr.substr(aStr.length-fixedLen, fixedLen);
       return "..." + endStr;
-    } else {
-      var frontStr = aStr.substr(0, fixedLen);
-      return frontStr + "...";
     }
+    var frontStr = aStr.substr(0, fixedLen);
+    return frontStr + "...";
   }
   return aStr;
 }
@@ -91,7 +90,6 @@ var progressListener = {
       {
         dialog.tempLabel.setAttribute("hidden", "true");
         dialog.progress.setAttribute("hidden", "false");
-        dialog.cancel.setAttribute("disabled", "false");
 
         var progressLabel = getString("progress");
         if (progressLabel == "") {
@@ -181,14 +179,14 @@ function getString( stringId ) {
            elem.childNodes[0]
            &&
            elem.childNodes[0].nodeValue ) {
-         dialog.strings[ stringId ] = elem.childNodes[0].nodeValue;
+         dialog.strings[stringId] = elem.childNodes[0].nodeValue;
         } else {
           // If unable to fetch string, use an empty string.
-          dialog.strings[ stringId ] = "";
+          dialog.strings[stringId] = "";
         }
-      } catch (e) { dialog.strings[ stringId ] = ""; }
+      } catch (e) { dialog.strings[stringId] = ""; }
    }
-   return dialog.strings[ stringId ];
+   return dialog.strings[stringId];
 }
 
 function loadDialog()
@@ -222,7 +220,7 @@ function onLoad() {
         return;
     }
 
-    dialog = new Object;
+    dialog = {};
     dialog.strings = new Array;
     dialog.title        = document.getElementById("dialog.title");
     dialog.titleLabel   = document.getElementById("dialog.titleLabel");
@@ -230,10 +228,8 @@ function onLoad() {
     dialog.progressText = document.getElementById("dialog.progressText");
     dialog.progressLabel = document.getElementById("dialog.progressLabel");
     dialog.tempLabel    = document.getElementById("dialog.tempLabel");
-    dialog.cancel       = document.getElementById("cancel");
 
     dialog.progress.setAttribute("hidden", "true");
-    dialog.cancel.setAttribute("disabled", "true");
 
     var progressLabel = getString("preparing");
     if (progressLabel == "") {
@@ -243,17 +239,12 @@ function onLoad() {
 
     dialog.title.value = docTitle;
 
-    // Set up dialog button callbacks.
-    var object = this;
-    doSetOKCancel("", function () { return object.onCancel();});
-
     // Fill dialog.
     loadDialog();
 
     // set our web progress listener on the helper app launcher
     printProgress.registerListener(progressListener);
-    moveToAlertPosition();
-    //We need to delay the set title else dom will overwrite it
+    // We need to delay the set title else dom will overwrite it
     window.setTimeout(doneIniting, 500);
 }
 
@@ -267,7 +258,7 @@ function onUnload()
      printProgress = null;
    }
 
-   catch( exception ) {}
+   catch ( exception ) {}
   }
 }
 
@@ -279,7 +270,7 @@ function onCancel ()
    {
      printProgress.processCanceledByUser = true;
    }
-   catch( exception ) {return true;}
+   catch ( exception ) { return true; }
 
   // don't Close up dialog by returning false, the backend will close the dialog when everything will be aborted.
   return false;

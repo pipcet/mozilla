@@ -33,6 +33,11 @@ void TIntermUnary::traverse(TIntermTraverser *it)
     it->traverseUnary(this);
 }
 
+void TIntermTernary::traverse(TIntermTraverser *it)
+{
+    it->traverseTernary(this);
+}
+
 void TIntermSelection::traverse(TIntermTraverser *it)
 {
     it->traverseSelection(this);
@@ -61,6 +66,21 @@ void TIntermLoop::traverse(TIntermTraverser *it)
 void TIntermBranch::traverse(TIntermTraverser *it)
 {
     it->traverseBranch(this);
+}
+
+TIntermTraverser::TIntermTraverser(bool preVisit, bool inVisit, bool postVisit)
+    : preVisit(preVisit),
+      inVisit(inVisit),
+      postVisit(postVisit),
+      mDepth(0),
+      mMaxDepth(0),
+      mInGlobalScope(true),
+      mTemporaryIndex(nullptr)
+{
+}
+
+TIntermTraverser::~TIntermTraverser()
+{
 }
 
 void TIntermTraverser::pushParentBlock(TIntermAggregate *node)
@@ -94,6 +114,13 @@ void TIntermTraverser::insertStatementsInParentBlock(const TIntermSequence &inse
     mInsertions.push_back(insert);
 }
 
+void TIntermTraverser::insertStatementInParentBlock(TIntermNode *statement)
+{
+    TIntermSequence insertions;
+    insertions.push_back(statement);
+    insertStatementsInParentBlock(insertions);
+}
+
 TIntermSymbol *TIntermTraverser::createTempSymbol(const TType &type, TQualifier qualifier)
 {
     // Each traversal uses at most one temporary variable, so the index stays the same within a single traversal.
@@ -125,10 +152,7 @@ TIntermAggregate *TIntermTraverser::createTempInitDeclaration(TIntermTyped *init
     ASSERT(initializer != nullptr);
     TIntermSymbol *tempSymbol = createTempSymbol(initializer->getType(), qualifier);
     TIntermAggregate *tempDeclaration = new TIntermAggregate(EOpDeclaration);
-    TIntermBinary *tempInit = new TIntermBinary(EOpInitialize);
-    tempInit->setLeft(tempSymbol);
-    tempInit->setRight(initializer);
-    tempInit->setType(tempSymbol->getType());
+    TIntermBinary *tempInit           = new TIntermBinary(EOpInitialize, tempSymbol, initializer);
     tempDeclaration->getSequence()->push_back(tempInit);
     return tempDeclaration;
 }
@@ -142,10 +166,7 @@ TIntermBinary *TIntermTraverser::createTempAssignment(TIntermTyped *rightNode)
 {
     ASSERT(rightNode != nullptr);
     TIntermSymbol *tempSymbol = createTempSymbol(rightNode->getType());
-    TIntermBinary *assignment = new TIntermBinary(EOpAssign);
-    assignment->setLeft(tempSymbol);
-    assignment->setRight(rightNode);
-    assignment->setType(tempSymbol->getType());
+    TIntermBinary *assignment = new TIntermBinary(EOpAssign, tempSymbol, rightNode);
     return assignment;
 }
 
@@ -390,6 +411,8 @@ void TIntermTraverser::traverseAggregate(TIntermAggregate *node)
 
         if (node->getOp() == EOpSequence)
             pushParentBlock(node);
+        else if (node->getOp() == EOpFunction)
+            mInGlobalScope = false;
 
         for (auto *child : *sequence)
         {
@@ -406,6 +429,8 @@ void TIntermTraverser::traverseAggregate(TIntermAggregate *node)
 
         if (node->getOp() == EOpSequence)
             popParentBlock();
+        else if (node->getOp() == EOpFunction)
+            mInGlobalScope = true;
 
         decrementDepth();
     }
@@ -481,6 +506,8 @@ void TLValueTrackingTraverser::traverseAggregate(TIntermAggregate *node)
         {
             if (node->getOp() == EOpSequence)
                 pushParentBlock(node);
+            else if (node->getOp() == EOpFunction)
+                mInGlobalScope = false;
 
             // Find the built-in function corresponding to this op so that we can determine the
             // in/out qualifiers of its parameters.
@@ -533,6 +560,8 @@ void TLValueTrackingTraverser::traverseAggregate(TIntermAggregate *node)
 
             if (node->getOp() == EOpSequence)
                 popParentBlock();
+            else if (node->getOp() == EOpFunction)
+                mInGlobalScope = true;
         }
 
         decrementDepth();
@@ -540,6 +569,31 @@ void TLValueTrackingTraverser::traverseAggregate(TIntermAggregate *node)
 
     if (visit && postVisit)
         visitAggregate(PostVisit, node);
+}
+
+//
+// Traverse a ternary node.  Same comments in binary node apply here.
+//
+void TIntermTraverser::traverseTernary(TIntermTernary *node)
+{
+    bool visit = true;
+
+    if (preVisit)
+        visit = visitTernary(PreVisit, node);
+
+    if (visit)
+    {
+        incrementDepth(node);
+        node->getCondition()->traverse(this);
+        if (node->getTrueExpression())
+            node->getTrueExpression()->traverse(this);
+        if (node->getFalseExpression())
+            node->getFalseExpression()->traverse(this);
+        decrementDepth();
+    }
+
+    if (visit && postVisit)
+        visitTernary(PostVisit, node);
 }
 
 //

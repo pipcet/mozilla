@@ -18,19 +18,21 @@
 
   <script type="application/javascript"
           src="chrome://mochikit/content/tests/SimpleTest/EventUtils.js"/>
-  <script type="application/javascript"
-          src="chrome://mochikit/content/tests/SimpleTest/ChromeUtils.js"/>
 
   <script type="application/javascript"><![CDATA[
     const {interfaces: Ci, classes: Cc, results: Cr, utils: Cu} = Components;
+    Cu.import("resource://gre/modules/AppConstants.jsm");
     Cu.import("resource://gre/modules/Task.jsm");
     Cu.import("resource://testing-common/ContentTask.jsm");
     ContentTask.setTestScope(window.opener.wrappedJSObject);
+
+    var gPrefsvc = Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefBranch);
 
     const SAMPLE_URL = "http://www.mozilla.org/";
     const SAMPLE_TEXT = "Some text in a text field.";
     const SEARCH_TEXT = "Text Test";
     const NOT_FOUND_TEXT = "This text is not on the page."
+    const ITERATOR_TIMEOUT = gPrefsvc.getIntPref("findbar.iteratorTimeout");
 
     var gFindBar = null;
     var gBrowser;
@@ -135,9 +137,16 @@
       if (gHasFindClipboard) {
         yield testStatusText();
       }
-      yield testFindCountUI();
-      gFindBar.close();
-      ok(gFindBar.hidden, "Failed to close findbar after testFindCountUI");
+
+      if (!AppConstants.DEBUG) {
+        yield testFindCountUI();
+        gFindBar.close();
+        ok(gFindBar.hidden, "Failed to close findbar after testFindCountUI");
+        yield testFindCountUI(true);
+        gFindBar.close();
+        ok(gFindBar.hidden, "Failed to close findbar after testFindCountUI - linksOnly");
+      }
+
       yield openFindbar();
       yield testFindAfterCaseChanged();
       gFindBar.close();
@@ -149,6 +158,7 @@
       //       remote browser element.
       if (!gBrowser.hasAttribute("remote"))
         yield testFindAgainNotFound();
+      yield testToggleEntireWord();
     }
 
     function* testFindbarSelection() {
@@ -232,9 +242,9 @@
     function promiseFindResult() {
       return new Promise(resolve => {
         let listener = {
-          onFindResult: function() {
+          onFindResult: function(result) {
             gFindBar.browser.finder.removeResultListener(listener);
-            resolve();
+            resolve(result);
           }
         };
         gFindBar.browser.finder.addResultListener(listener);
@@ -250,6 +260,8 @@
           }
         };
         gFindBar.browser.finder.addResultListener(listener);
+        // Make sure we resolve _at least_ after five times the find iterator timeout.
+        setTimeout(resolve, (ITERATOR_TIMEOUT * 5) + 20);
       });
     }
 
@@ -258,7 +270,7 @@
         if (waitForResult) {
           promise = promiseFindResult();
         }
-        let event = document.createEvent("KeyEvents");
+        let event = document.createEvent("KeyboardEvent");
         event.initKeyEvent("keypress", true, true, null, false, false,
                            false, false, 0, str.charCodeAt(i));
         gFindBar._findField.inputField.dispatchEvent(event);
@@ -368,9 +380,7 @@
       ok(!matchCaseCheckbox.hidden, "match case box is hidden in manual mode");
       ok(matchCaseLabel.hidden, "match case label is visible in manual mode");
 
-      var prefsvc = Cc["@mozilla.org/preferences-service;1"].
-                    getService(Components.interfaces.nsIPrefBranch);
-      prefsvc.setIntPref("accessibility.typeaheadfind.casesensitive", 2);
+      gPrefsvc.setIntPref("accessibility.typeaheadfind.casesensitive", 2);
 
       ok(matchCaseCheckbox.hidden,
          "match case box is visible in automatic mode");
@@ -388,7 +398,7 @@
       gFindBar.onFindAgainCommand();
       ok(matchCaseCheckbox.hidden && !matchCaseLabel.hidden,
          "bug 365551: case sensitivity UI is broken after find-again");
-      prefsvc.setIntPref("accessibility.typeaheadfind.casesensitive", 0);
+      gPrefsvc.setIntPref("accessibility.typeaheadfind.casesensitive", 0);
       gFindBar.close();
     }
 
@@ -405,7 +415,7 @@
 
       yield ContentTask.spawn(gBrowser, null, function* () {
         let document = content.document;
-        let event = document.createEvent("KeyEvents");
+        let event = document.createEvent("KeyboardEvent");
         event.initKeyEvent("keypress", true, true, null, false, false,
                            false, false, 0, "'".charCodeAt(0));
         document.documentElement.dispatchEvent(event);
@@ -487,7 +497,7 @@
 
       yield ContentTask.spawn(gBrowser, null, function* () {
         let document = content.document;
-        let event = document.createEvent("KeyEvents");
+        let event = document.createEvent("KeyboardEvent");
         event.initKeyEvent("keypress", true, true, null, false, false,
                            false, false, 0, "/".charCodeAt(0));
         document.documentElement.dispatchEvent(event);
@@ -505,10 +515,20 @@
       testClipboardSearchString(SEARCH_TEXT);
     }
 
-    function* testFindCountUI(callback) {
+    function* testFindCountUI(linksOnly = false) {
       yield clearFocus();
 
-      document.getElementById("cmd_find").doCommand();
+      if (linksOnly) {
+        yield ContentTask.spawn(gBrowser, null, function* () {
+          let document = content.document;
+          let event = document.createEvent("KeyboardEvent");
+          event.initKeyEvent("keypress", true, true, null, false, false,
+                             false, false, 0, "'".charCodeAt(0));
+          document.documentElement.dispatchEvent(event);
+        });
+      } else {
+        document.getElementById("cmd_find").doCommand();
+      }
 
       ok(!gFindBar.hidden, "testFindCountUI: failed to open findbar");
       ok(document.commandDispatcher.focusedElement == gFindBar._findField.inputField,
@@ -519,56 +539,63 @@
       if (matchCase.checked) {
         promise = promiseFindResult();
         matchCase.click();
+        yield new Promise(resolve => setTimeout(resolve, ITERATOR_TIMEOUT + 20));
         yield promise;
       }
 
       let foundMatches = gFindBar._foundMatches;
       let tests = [{
         text: "t",
-        current: 5,
-        total: 10,
+        current: linksOnly ? 1 : 5,
+        total: linksOnly ? 2 : 10,
       }, {
         text: "te",
-        current: 3,
-        total: 5,
+        current: linksOnly ? 1 : 3,
+        total: linksOnly ? 1 : 5,
       }, {
         text: "tes",
         current: 1,
-        total: 2,
+        total: linksOnly ? 1 : 2,
       }, {
         text: "texxx",
         current: 0,
         total: 0
       }];
       let regex = /([\d]*)\sof\s([\d]*)/;
-      let timeout = gFindBar._matchesCountTimeoutLength + 20;
 
       function assertMatches(aTest, aMatches) {
         is(aMatches[1], String(aTest.current),
-          "Currently highlighted match should be at " + aTest.current);
+          `${linksOnly ? "[Links-only] " : ""}Currently highlighted match should be at ${aTest.current} for '${aTest.text}'`);
         is(aMatches[2], String(aTest.total),
-          "Total amount of matches should be " + aTest.total);
+          `${linksOnly ? "[Links-only] " : ""}Total amount of matches should be ${aTest.total} for '${aTest.text}'`);
       }
 
       for (let test of tests) {
-        promise = promiseMatchesCountResult();
-        gFindBar.clear();
-        yield promise;
+        gFindBar._findField.select();
+        gFindBar._findField.focus();
 
-        promise = promiseMatchesCountResult();
+        let timeout = ITERATOR_TIMEOUT;
+        if (test.text.length == 1)
+          timeout *= 4;
+        else if (test.text.length == 2)
+          timeout *= 2;
+        timeout += 20;
+        yield new Promise(resolve => setTimeout(resolve, timeout));
         yield enterStringIntoFindField(test.text, false);
-        yield promise;
+        yield promiseMatchesCountResult();
         let matches = foundMatches.value.match(regex);
         if (!test.total) {
           ok(!matches, "No message should be shown when 0 matches are expected");
         } else {
           assertMatches(test, matches);
           for (let i = 1; i < test.total; i++) {
+            yield new Promise(resolve => setTimeout(resolve, timeout));
             gFindBar.onFindAgainCommand();
             yield promiseMatchesCountResult();
             // test.current + 1, test.current + 2, ..., test.total, 1, ..., test.current
             let current = (test.current + i - 1) % test.total + 1;
             assertMatches({
+              text: test.text,
               current: current,
               total: test.total
             }, foundMatches.value.match(regex));
@@ -584,16 +611,14 @@
       yield enterStringIntoFindField(SEARCH_TEXT);
       gFindBar.clear();
 
-      let prefsvc = Cc["@mozilla.org/preferences-service;1"]
-                      .getService(Ci.nsIPrefBranch);
-      prefsvc.setIntPref("accessibility.typeaheadfind.casesensitive", 0);
+      gPrefsvc.setIntPref("accessibility.typeaheadfind.casesensitive", 0);
 
       yield enterStringIntoFindField("t");
       yield ContentTask.spawn(gBrowser, null, function* () {
         Assert.equal(content.getSelection().toString(), "T", "First T should be selected.");
       });
 
-      prefsvc.setIntPref("accessibility.typeaheadfind.casesensitive", 1);
+      gPrefsvc.setIntPref("accessibility.typeaheadfind.casesensitive", 1);
       yield ContentTask.spawn(gBrowser, null, function* () {
         Assert.equal(content.getSelection().toString(), "t", "First t should be selected.");
       });
@@ -603,16 +628,14 @@
     // 1. Do a search that fails with case sensitivity but matches with no case sensitivity.
     // 2. Uncheck case sensitivity button to match the string.
     function* testFailedStringReset() {
-      let prefsvc = Cc["@mozilla.org/preferences-service;1"].
-                    getService(Components.interfaces.nsIPrefBranch);
-      prefsvc.setIntPref("accessibility.typeaheadfind.casesensitive", 1);
+      gPrefsvc.setIntPref("accessibility.typeaheadfind.casesensitive", 1);
 
       yield enterStringIntoFindField(SEARCH_TEXT.toUpperCase(), false);
       yield ContentTask.spawn(gBrowser, null, function* () {
         Assert.equal(content.getSelection().toString(), "", "Not found.");
       });
 
-      prefsvc.setIntPref("accessibility.typeaheadfind.casesensitive", 0);
+      gPrefsvc.setIntPref("accessibility.typeaheadfind.casesensitive", 0);
       yield ContentTask.spawn(gBrowser, { SEARCH_TEXT }, function* (args) {
         Assert.equal(content.getSelection().toString(), args.SEARCH_TEXT,
           "Search text should be selected.");
@@ -649,6 +672,24 @@
       gFindBar.onFindAgainCommand();
       yield promise;
       ok(gFindBar.hidden, "Successful Find Again leaves the find bar closed.");
+    }
+
+    function* testToggleEntireWord() {
+      yield openFindbar();
+      let promise = promiseFindResult();
+      yield enterStringIntoFindField("Tex", false);
+      let result = yield promise;
+      is(result.result, Ci.nsITypeAheadFind.FIND_FOUND, "Text should be found");
+
+      yield new Promise(resolve => setTimeout(resolve, ITERATOR_TIMEOUT + 20));
+      promise = promiseFindResult();
+      let check = gFindBar.getElement("find-entire-word");
+      check.click();
+      result = yield promise;
+      is(result.result, Ci.nsITypeAheadFind.FIND_NOTFOUND, "Text should NOT be found");
+
+      check.click();
+      gFindBar.close(true);
     }
   ]]></script>
 

@@ -19,13 +19,11 @@ add_task(function* () {
     Assert.ok(uri.startsWith("about:certerror"), "Broken page should go to about:certerror, not about:neterror");
   });
 
-  let advancedDiv, advancedDivVisibility, technicalDivCollapsed;
-
   yield remote(() => {
     let div = content.document.getElementById("badCertAdvancedPanel");
     // Confirm that the expert section is collapsed
     Assert.ok(div, "Advanced content div should exist");
-    Assert.equal(div.ownerDocument.defaultView.getComputedStyle(div, "").display,
+    Assert.equal(div.ownerGlobal.getComputedStyle(div).display,
       "none", "Advanced content should not be visible by default");
   });
 
@@ -41,7 +39,7 @@ add_task(function* () {
   yield remote(() => {
     let div = content.document.getElementById("badCertAdvancedPanel");
     Assert.ok(div, "Advanced content div should exist");
-    Assert.equal(div.ownerDocument.defaultView.getComputedStyle(div, "").display,
+    Assert.equal(div.ownerGlobal.getComputedStyle(div).display,
       "block", "Advanced content should be visible by default");
   });
 

@@ -21,6 +21,7 @@
 #include "nsContentUtils.h"
 #include "nsDocShell.h"
 #include "nsGlobalWindow.h"
+#include "nsNullPrincipal.h"
 
 using namespace mozilla::dom;
 
@@ -44,6 +45,7 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
                         aLoadingContext->NodePrincipal() : aLoadingPrincipal)
   , mTriggeringPrincipal(aTriggeringPrincipal ?
                            aTriggeringPrincipal : mLoadingPrincipal.get())
+  , mPrincipalToInherit(nullptr)
   , mLoadingContext(do_GetWeakReference(aLoadingContext))
   , mSecurityFlags(aSecurityFlags)
   , mInternalContentPolicyType(aContentPolicyType)
@@ -51,14 +53,18 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
   , mUpgradeInsecureRequests(false)
   , mVerifySignedContent(false)
   , mEnforceSRI(false)
+  , mForceInheritPrincipalDropped(false)
   , mInnerWindowID(0)
   , mOuterWindowID(0)
   , mParentOuterWindowID(0)
+  , mFrameOuterWindowID(0)
   , mEnforceSecurity(false)
   , mInitialSecurityCheckDone(false)
   , mIsThirdPartyContext(false)
   , mForcePreflight(false)
   , mIsPreflight(false)
+  , mForceHSTSPriming(false)
+  , mMixedContentWouldBlock(false)
 {
   MOZ_ASSERT(mLoadingPrincipal);
   MOZ_ASSERT(mTriggeringPrincipal);
@@ -90,16 +96,19 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
   // if the load is sandboxed, we can not also inherit the principal
   if (mSecurityFlags & nsILoadInfo::SEC_SANDBOXED) {
     mSecurityFlags ^= nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL;
-    mSecurityFlags |= nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL_WAS_DROPPED;
+    mForceInheritPrincipalDropped = true;
   }
 
   if (aLoadingContext) {
     nsCOMPtr<nsPIDOMWindowOuter> contextOuter = aLoadingContext->OwnerDoc()->GetWindow();
     if (contextOuter) {
       ComputeIsThirdPartyContext(contextOuter);
+      mOuterWindowID = contextOuter->WindowID();
+      nsCOMPtr<nsPIDOMWindowOuter> parent = contextOuter->GetScriptableParent();
+      mParentOuterWindowID = parent ? parent->WindowID() : mOuterWindowID;
     }
 
-    nsCOMPtr<nsPIDOMWindowOuter> outerWindow;
+    mInnerWindowID = aLoadingContext->OwnerDoc()->InnerWindowID();
 
     // When the element being loaded is a frame, we choose the frame's window
     // for the window ID and the frame element's window as the parent
@@ -115,19 +124,11 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
     if (fl) {
       nsCOMPtr<nsIDocShell> docShell;
       if (NS_SUCCEEDED(fl->GetDocShell(getter_AddRefs(docShell))) && docShell) {
-        outerWindow = do_GetInterface(docShell);
+        nsCOMPtr<nsPIDOMWindowOuter> outerWindow = do_GetInterface(docShell);
+        if (outerWindow) {
+          mFrameOuterWindowID = outerWindow->WindowID();
+        }
       }
-    } else {
-      outerWindow = contextOuter.forget();
-    }
-
-    if (outerWindow) {
-      nsCOMPtr<nsPIDOMWindowInner> inner = outerWindow->GetCurrentInnerWindow();
-      mInnerWindowID = inner ? inner->WindowID() : 0;
-      mOuterWindowID = outerWindow->WindowID();
-
-      nsCOMPtr<nsPIDOMWindowOuter> parent = outerWindow->GetScriptableParent();
-      mParentOuterWindowID = parent->WindowID();
     }
 
     // if the document forces all requests to be upgraded from http to https, then
@@ -143,7 +144,7 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
     if (channel) {
       nsCOMPtr<nsILoadInfo> loadInfo = channel->GetLoadInfo();
       if (loadInfo) {
-        loadInfo->GetVerifySignedContent(&mEnforceSRI);
+        mEnforceSRI = loadInfo->GetVerifySignedContent();
       }
     }
   }
@@ -154,33 +155,58 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
       // do not look into the CSP if already true:
       // a CSP saying that SRI isn't needed should not
       // overrule GetVerifySignedContent
-      nsCOMPtr<nsIContentSecurityPolicy> csp;
       if (aLoadingPrincipal) {
+        nsCOMPtr<nsIContentSecurityPolicy> csp;
         aLoadingPrincipal->GetCsp(getter_AddRefs(csp));
+        uint32_t externalType =
+          nsContentUtils::InternalContentPolicyTypeToExternal(aContentPolicyType);
         // csp could be null if loading principal is system principal
         if (csp) {
-          uint32_t loadType =
-            nsContentUtils::InternalContentPolicyTypeToExternal(aContentPolicyType);
-          csp->RequireSRIForType(loadType, &mEnforceSRI);
+          csp->RequireSRIForType(externalType, &mEnforceSRI);
+        }
+        // if CSP is delivered via a meta tag, it's speculatively available
+        // as 'preloadCSP'. If we are preloading a script or style, we have
+        // to apply that speculative 'preloadCSP' for such loads.
+        if (!mEnforceSRI && nsContentUtils::IsPreloadType(aContentPolicyType)) {
+          nsCOMPtr<nsIContentSecurityPolicy> preloadCSP;
+          aLoadingPrincipal->GetPreloadCsp(getter_AddRefs(preloadCSP));
+          if (preloadCSP) {
+            preloadCSP->RequireSRIForType(externalType, &mEnforceSRI);
+          }
         }
       }
     }
 
-  if (!(mSecurityFlags & nsILoadInfo::SEC_FORCE_PRIVATE_BROWSING)) {
-    if (aLoadingContext) {
-      nsCOMPtr<nsILoadContext> loadContext =
-        aLoadingContext->OwnerDoc()->GetLoadContext();
-      if (loadContext) {
-        bool usePrivateBrowsing;
-        nsresult rv = loadContext->GetUsePrivateBrowsing(&usePrivateBrowsing);
-        if (NS_SUCCEEDED(rv) && usePrivateBrowsing) {
-          mSecurityFlags |= nsILoadInfo::SEC_FORCE_PRIVATE_BROWSING;
-        }
+  InheritOriginAttributes(mLoadingPrincipal, mOriginAttributes);
+
+  // We need to do this after inheriting the document's origin attributes
+  // above, in case the loading principal ends up being the system principal.
+  if (aLoadingContext) {
+    nsCOMPtr<nsILoadContext> loadContext =
+      aLoadingContext->OwnerDoc()->GetLoadContext();
+    nsCOMPtr<nsIDocShell> docShell = aLoadingContext->OwnerDoc()->GetDocShell();
+    if (loadContext && docShell &&
+        docShell->ItemType() == nsIDocShellTreeItem::typeContent) {
+      bool usePrivateBrowsing;
+      nsresult rv = loadContext->GetUsePrivateBrowsing(&usePrivateBrowsing);
+      if (NS_SUCCEEDED(rv)) {
+        mOriginAttributes.SyncAttributesWithPrivateBrowsing(usePrivateBrowsing);
       }
     }
   }
 
-  InheritOriginAttributes(mLoadingPrincipal, mOriginAttributes);
+  // For chrome docshell, the mPrivateBrowsingId remains 0 even its
+  // UsePrivateBrowsing() is true, so we only update the mPrivateBrowsingId in
+  // origin attributes if the type of the docshell is content.
+  if (aLoadingContext) {
+    nsCOMPtr<nsIDocShell> docShell = aLoadingContext->OwnerDoc()->GetDocShell();
+    if (docShell) {
+      if (docShell->ItemType() == nsIDocShellTreeItem::typeChrome) {
+        MOZ_ASSERT(mOriginAttributes.mPrivateBrowsingId == 0,
+                   "chrome docshell shouldn't have mPrivateBrowsingId set.");
+      }
+    }
+  }
 }
 
 /* Constructor takes an outer window, but no loadingNode or loadingPrincipal.
@@ -192,20 +218,25 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow,
                    nsSecurityFlags aSecurityFlags)
   : mLoadingPrincipal(nullptr)
   , mTriggeringPrincipal(aTriggeringPrincipal)
+  , mPrincipalToInherit(nullptr)
   , mSecurityFlags(aSecurityFlags)
   , mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT)
   , mTainting(LoadTainting::Basic)
   , mUpgradeInsecureRequests(false)
   , mVerifySignedContent(false)
   , mEnforceSRI(false)
+  , mForceInheritPrincipalDropped(false)
   , mInnerWindowID(0)
   , mOuterWindowID(0)
   , mParentOuterWindowID(0)
+  , mFrameOuterWindowID(0)
   , mEnforceSecurity(false)
   , mInitialSecurityCheckDone(false)
   , mIsThirdPartyContext(false) // NB: TYPE_DOCUMENT implies not third-party.
   , mForcePreflight(false)
   , mIsPreflight(false)
+  , mForceHSTSPriming(false)
+  , mMixedContentWouldBlock(false)
 {
   // Top-level loads are never third-party
   // Grab the information we can out of the window.
@@ -215,7 +246,7 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow,
   // if the load is sandboxed, we can not also inherit the principal
   if (mSecurityFlags & nsILoadInfo::SEC_SANDBOXED) {
     mSecurityFlags ^= nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL;
-    mSecurityFlags |= nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL_WAS_DROPPED;
+    mForceInheritPrincipalDropped = true;
   }
 
   // NB: Ignore the current inner window since we're navigating away from it.
@@ -231,12 +262,19 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow,
   MOZ_ASSERT(docShell);
   const DocShellOriginAttributes attrs =
     nsDocShell::Cast(docShell)->GetOriginAttributes();
+
+  if (docShell->ItemType() == nsIDocShellTreeItem::typeChrome) {
+    MOZ_ASSERT(attrs.mPrivateBrowsingId == 0,
+               "chrome docshell shouldn't have mPrivateBrowsingId set.");
+  }
+
   mOriginAttributes.InheritFromDocShellToNecko(attrs);
 }
 
 LoadInfo::LoadInfo(const LoadInfo& rhs)
   : mLoadingPrincipal(rhs.mLoadingPrincipal)
   , mTriggeringPrincipal(rhs.mTriggeringPrincipal)
+  , mPrincipalToInherit(rhs.mPrincipalToInherit)
   , mLoadingContext(rhs.mLoadingContext)
   , mSecurityFlags(rhs.mSecurityFlags)
   , mInternalContentPolicyType(rhs.mInternalContentPolicyType)
@@ -244,9 +282,11 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
   , mUpgradeInsecureRequests(rhs.mUpgradeInsecureRequests)
   , mVerifySignedContent(rhs.mVerifySignedContent)
   , mEnforceSRI(rhs.mEnforceSRI)
+  , mForceInheritPrincipalDropped(rhs.mForceInheritPrincipalDropped)
   , mInnerWindowID(rhs.mInnerWindowID)
   , mOuterWindowID(rhs.mOuterWindowID)
   , mParentOuterWindowID(rhs.mParentOuterWindowID)
+  , mFrameOuterWindowID(rhs.mFrameOuterWindowID)
   , mEnforceSecurity(rhs.mEnforceSecurity)
   , mInitialSecurityCheckDone(rhs.mInitialSecurityCheckDone)
   , mIsThirdPartyContext(rhs.mIsThirdPartyContext)
@@ -257,20 +297,25 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
   , mCorsUnsafeHeaders(rhs.mCorsUnsafeHeaders)
   , mForcePreflight(rhs.mForcePreflight)
   , mIsPreflight(rhs.mIsPreflight)
+  , mForceHSTSPriming(rhs.mForceHSTSPriming)
+  , mMixedContentWouldBlock(rhs.mMixedContentWouldBlock)
 {
 }
 
 LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
                    nsIPrincipal* aTriggeringPrincipal,
+                   nsIPrincipal* aPrincipalToInherit,
                    nsSecurityFlags aSecurityFlags,
                    nsContentPolicyType aContentPolicyType,
                    LoadTainting aTainting,
                    bool aUpgradeInsecureRequests,
                    bool aVerifySignedContent,
                    bool aEnforceSRI,
+                   bool aForceInheritPrincipalDropped,
                    uint64_t aInnerWindowID,
                    uint64_t aOuterWindowID,
                    uint64_t aParentOuterWindowID,
+                   uint64_t aFrameOuterWindowID,
                    bool aEnforceSecurity,
                    bool aInitialSecurityCheckDone,
                    bool aIsThirdPartyContext,
@@ -279,18 +324,23 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
                    nsTArray<nsCOMPtr<nsIPrincipal>>& aRedirectChain,
                    const nsTArray<nsCString>& aCorsUnsafeHeaders,
                    bool aForcePreflight,
-                   bool aIsPreflight)
+                   bool aIsPreflight,
+                   bool aForceHSTSPriming,
+                   bool aMixedContentWouldBlock)
   : mLoadingPrincipal(aLoadingPrincipal)
   , mTriggeringPrincipal(aTriggeringPrincipal)
+  , mPrincipalToInherit(aPrincipalToInherit)
   , mSecurityFlags(aSecurityFlags)
   , mInternalContentPolicyType(aContentPolicyType)
   , mTainting(aTainting)
   , mUpgradeInsecureRequests(aUpgradeInsecureRequests)
   , mVerifySignedContent(aVerifySignedContent)
   , mEnforceSRI(aEnforceSRI)
+  , mForceInheritPrincipalDropped(aForceInheritPrincipalDropped)
   , mInnerWindowID(aInnerWindowID)
   , mOuterWindowID(aOuterWindowID)
   , mParentOuterWindowID(aParentOuterWindowID)
+  , mFrameOuterWindowID(aFrameOuterWindowID)
   , mEnforceSecurity(aEnforceSecurity)
   , mInitialSecurityCheckDone(aInitialSecurityCheckDone)
   , mIsThirdPartyContext(aIsThirdPartyContext)
@@ -298,6 +348,8 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
   , mCorsUnsafeHeaders(aCorsUnsafeHeaders)
   , mForcePreflight(aForcePreflight)
   , mIsPreflight(aIsPreflight)
+  , mForceHSTSPriming (aForceHSTSPriming)
+  , mMixedContentWouldBlock(aMixedContentWouldBlock)
 {
   // Only top level TYPE_DOCUMENT loads can have a null loadingPrincipal
   MOZ_ASSERT(mLoadingPrincipal || aContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT);
@@ -342,6 +394,14 @@ LoadInfo::Clone() const
 }
 
 already_AddRefed<nsILoadInfo>
+LoadInfo::CloneWithNewSecFlags(nsSecurityFlags aSecurityFlags) const
+{
+  RefPtr<LoadInfo> copy(new LoadInfo(*this));
+  copy->mSecurityFlags = aSecurityFlags;
+  return copy.forget();
+}
+
+already_AddRefed<nsILoadInfo>
 LoadInfo::CloneForNewRequest() const
 {
   RefPtr<LoadInfo> copy(new LoadInfo(*this));
@@ -376,6 +436,27 @@ nsIPrincipal*
 LoadInfo::TriggeringPrincipal()
 {
   return mTriggeringPrincipal;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetPrincipalToInherit(nsIPrincipal** aPrincipalToInherit)
+{
+  NS_IF_ADDREF(*aPrincipalToInherit = mPrincipalToInherit);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::SetPrincipalToInherit(nsIPrincipal* aPrincipalToInherit)
+{
+  MOZ_ASSERT(aPrincipalToInherit, "must be a valid principal to inherit");
+  mPrincipalToInherit = aPrincipalToInherit;
+  return NS_OK;
+}
+
+nsIPrincipal*
+LoadInfo::PrincipalToInherit()
+{
+  return mPrincipalToInherit;
 }
 
 NS_IMETHODIMP
@@ -461,6 +542,14 @@ LoadInfo::GetForceInheritPrincipal(bool* aInheritPrincipal)
 }
 
 NS_IMETHODIMP
+LoadInfo::GetForceInheritPrincipalOverruleOwner(bool* aInheritPrincipal)
+{
+  *aInheritPrincipal =
+    (mSecurityFlags & nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL_OVERRULE_OWNER);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 LoadInfo::GetLoadingSandboxed(bool* aLoadingSandboxed)
 {
   *aLoadingSandboxed = (mSecurityFlags & nsILoadInfo::SEC_SANDBOXED);
@@ -501,10 +590,10 @@ LoadInfo::GetDontFollowRedirects(bool* aResult)
 }
 
 NS_IMETHODIMP
-LoadInfo::GetUsePrivateBrowsing(bool* aUsePrivateBrowsing)
+LoadInfo::GetLoadErrorPage(bool* aResult)
 {
-  *aUsePrivateBrowsing = (mSecurityFlags &
-                          nsILoadInfo::SEC_FORCE_PRIVATE_BROWSING);
+  *aResult =
+    (mSecurityFlags & nsILoadInfo::SEC_LOAD_ERROR_PAGE);
   return NS_OK;
 }
 
@@ -559,6 +648,13 @@ LoadInfo::GetEnforceSRI(bool* aResult)
 }
 
 NS_IMETHODIMP
+LoadInfo::GetForceInheritPrincipalDropped(bool* aResult)
+{
+  *aResult = mForceInheritPrincipalDropped;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 LoadInfo::GetInnerWindowID(uint64_t* aResult)
 {
   *aResult = mInnerWindowID;
@@ -580,12 +676,47 @@ LoadInfo::GetParentOuterWindowID(uint64_t* aResult)
 }
 
 NS_IMETHODIMP
+LoadInfo::GetFrameOuterWindowID(uint64_t* aResult)
+{
+  *aResult = mFrameOuterWindowID;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 LoadInfo::GetScriptableOriginAttributes(JSContext* aCx,
   JS::MutableHandle<JS::Value> aOriginAttributes)
 {
   if (NS_WARN_IF(!ToJSValue(aCx, mOriginAttributes, aOriginAttributes))) {
     return NS_ERROR_FAILURE;
   }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::ResetPrincipalsToNullPrincipal()
+{
+  // take the originAttributes from the LoadInfo and create
+  // a new NullPrincipal using those origin attributes.
+  PrincipalOriginAttributes pAttrs;
+  pAttrs.InheritFromNecko(mOriginAttributes);
+  nsCOMPtr<nsIPrincipal> newNullPrincipal = nsNullPrincipal::Create(pAttrs);
+
+  MOZ_ASSERT(mInternalContentPolicyType != nsIContentPolicy::TYPE_DOCUMENT ||
+             !mLoadingPrincipal,
+             "LoadingPrincipal should be null for toplevel loads");
+
+  // the loadingPrincipal for toplevel loads is always a nullptr;
+  if (mInternalContentPolicyType != nsIContentPolicy::TYPE_DOCUMENT) {
+    mLoadingPrincipal = newNullPrincipal;
+  }
+  mTriggeringPrincipal = newNullPrincipal;
+  mPrincipalToInherit = newNullPrincipal;
+
+  // setting SEC_FORCE_INHERIT_PRINCIPAL_OVERRULE_OWNER will overrule
+  // any non null owner set on the channel and will return the principal
+  // form the loadinfo instead.
+  mSecurityFlags |= SEC_FORCE_INHERIT_PRINCIPAL_OVERRULE_OWNER;
+
   return NS_OK;
 }
 
@@ -736,6 +867,34 @@ LoadInfo::GetIsPreflight(bool* aIsPreflight)
 }
 
 NS_IMETHODIMP
+LoadInfo::GetForceHSTSPriming(bool* aForceHSTSPriming)
+{
+  *aForceHSTSPriming = mForceHSTSPriming;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetMixedContentWouldBlock(bool *aMixedContentWouldBlock)
+{
+  *aMixedContentWouldBlock = mMixedContentWouldBlock;
+  return NS_OK;
+}
+
+void
+LoadInfo::SetHSTSPriming(bool aMixedContentWouldBlock)
+{
+  mForceHSTSPriming = true;
+  mMixedContentWouldBlock = aMixedContentWouldBlock;
+}
+
+void
+LoadInfo::ClearHSTSPriming()
+{
+  mForceHSTSPriming = false;
+  mMixedContentWouldBlock = false;
+}
+
+NS_IMETHODIMP
 LoadInfo::GetTainting(uint32_t* aTaintingOut)
 {
   MOZ_ASSERT(aTaintingOut);
@@ -751,6 +910,14 @@ LoadInfo::MaybeIncreaseTainting(uint32_t aTainting)
   if (tainting > mTainting) {
     mTainting = tainting;
   }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetIsTopLevelLoad(bool *aResult)
+{
+  *aResult = mFrameOuterWindowID ? mFrameOuterWindowID == mOuterWindowID
+                                 : mParentOuterWindowID == mOuterWindowID;
   return NS_OK;
 }
 

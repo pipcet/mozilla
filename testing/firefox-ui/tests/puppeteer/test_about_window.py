@@ -15,7 +15,7 @@ class TestAboutWindow(FirefoxTestCase):
 
     def tearDown(self):
         try:
-            self.windows.close_all([self.browser])
+            self.puppeteer.windows.close_all([self.browser])
         finally:
             FirefoxTestCase.tearDown(self)
 
@@ -30,11 +30,6 @@ class TestAboutWindow(FirefoxTestCase):
 
         # apply panel
         panel = self.deck.apply
-        self.assertEqual(panel.element.get_attribute('localName'), 'hbox')
-        self.assertEqual(panel.button.get_attribute('localName'), 'button')
-
-        # apply_billboard panel
-        panel = self.deck.apply_billboard
         self.assertEqual(panel.element.get_attribute('localName'), 'hbox')
         self.assertEqual(panel.button.get_attribute('localName'), 'button')
 
@@ -69,5 +64,5 @@ class TestAboutWindow(FirefoxTestCase):
         self.about_window.close()
         for trigger in open_strategies:
             about_window = self.browser.open_about_window(trigger=trigger)
-            self.assertEquals(about_window, self.windows.current)
+            self.assertEquals(about_window, self.puppeteer.windows.current)
             about_window.close()

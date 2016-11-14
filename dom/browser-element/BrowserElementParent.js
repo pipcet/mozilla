@@ -19,15 +19,6 @@ Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/BrowserElementPromptService.jsm");
 
-XPCOMUtils.defineLazyGetter(this, "DOMApplicationRegistry", function () {
-  Cu.import("resource://gre/modules/Webapps.jsm");
-  return DOMApplicationRegistry;
-});
-
-XPCOMUtils.defineLazyServiceGetter(this, "systemMessenger",
-                                   "@mozilla.org/system-message-internal;1",
-                                   "nsISystemMessagesInternal");
-
 function debug(msg) {
   //dump("BrowserElementParent - " + msg + "\n");
 }
@@ -138,7 +129,6 @@ BrowserElementParentProxyCallHandler.prototype = {
       case 'reload':
       case 'stop':
       case 'zoom':
-      case 'setNFCFocus':
       case 'findAll':
       case 'findNext':
       case 'clearMatch':
@@ -267,6 +257,7 @@ BrowserElementParent.prototype = {
                                          Ci.nsISupportsWeakReference]),
 
   setFrameLoader: function(frameLoader) {
+    debug("Setting frameLoader");
     this._frameLoader = frameLoader;
     this._frameElement = frameLoader.QueryInterface(Ci.nsIFrameLoader).ownerElement;
     if (!this._frameElement) {
@@ -300,10 +291,14 @@ BrowserElementParent.prototype = {
     // Insert ourself into the prompt service.
     BrowserElementPromptService.mapFrameToBrowserElementParent(this._frameElement, this);
     this._setupMessageListener();
-    this._registerAppManifest();
 
     this.proxyCallHandler.init(
       this._frameElement, this._frameLoader.messageManager);
+  },
+
+  destroyFrameScripts() {
+    debug("Destroying frame scripts");
+    this._mm.sendAsyncMessage("browser-element-api:destroy");
   },
 
   _runPendingAPICall: function() {
@@ -321,30 +316,8 @@ BrowserElementParent.prototype = {
     delete this._pendingAPICalls;
   },
 
-  _registerAppManifest: function() {
-    // If this browser represents an app then let the Webapps module register for
-    // any messages that it needs.
-    let appManifestURL =
-          this._frameElement.QueryInterface(Ci.nsIMozBrowserFrame).appManifestURL;
-    if (appManifestURL) {
-      let inParent = Cc["@mozilla.org/xre/app-info;1"]
-                       .getService(Ci.nsIXULRuntime)
-                       .processType == Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT;
-      if (inParent) {
-        DOMApplicationRegistry.registerBrowserElementParentForApp(
-          { manifestURL: appManifestURL }, this._mm);
-      } else {
-        this._mm.sendAsyncMessage("Webapps:RegisterBEP",
-                                  { manifestURL: appManifestURL });
-      }
-    }
-  },
-
   _setupMessageListener: function() {
     this._mm = this._frameLoader.messageManager;
-    this._isWidget = this._frameLoader
-                         .QueryInterface(Ci.nsIFrameLoader)
-                         .ownerIsWidget;
     this._mm.addMessageListener('browser-element-api:call', this);
     this._mm.loadFrameScript("chrome://global/content/extensions.js", true);
   },
@@ -412,7 +385,7 @@ BrowserElementParent.prototype = {
 
     if (aMsg.data.msg_name in mmCalls) {
       return mmCalls[aMsg.data.msg_name].apply(this, arguments);
-    } else if (!this._isWidget && aMsg.data.msg_name in mmSecuritySensitiveCalls) {
+    } else if (aMsg.data.msg_name in mmSecuritySensitiveCalls) {
       return mmSecuritySensitiveCalls[aMsg.data.msg_name].apply(this, arguments);
     }
   },
@@ -451,10 +424,8 @@ BrowserElementParent.prototype = {
       }
     };
 
-    // 1. We don't handle password-only prompts.
-    // 2. We don't handle for widget case because of security concern.
-    if (authDetail.isOnlyPassword ||
-        this._frameLoader.QueryInterface(Ci.nsIFrameLoader).ownerIsWidget) {
+    // We don't handle password-only prompts.
+    if (authDetail.isOnlyPassword) {
       cancelCallback();
       return;
     }
@@ -793,39 +764,25 @@ BrowserElementParent.prototype = {
                                                 radiisX, radiisY, rotationAngles, forces,
                                                 count, modifiers) {
 
-    let tabParent = this._frameLoader.tabParent;
-    if (tabParent && tabParent.useAsyncPanZoom) {
-      tabParent.injectTouchEvent(type,
-                                 identifiers,
-                                 touchesX,
-                                 touchesY,
-                                 radiisX,
-                                 radiisY,
-                                 rotationAngles,
-                                 forces,
-                                 count,
-                                 modifiers);
-    } else {
-      let offset = this.getChildProcessOffset();
-      for (var i = 0; i < touchesX.length; i++) {
-        touchesX[i] += offset.x;
-      }
-      for (var i = 0; i < touchesY.length; i++) {
-        touchesY[i] += offset.y;
-      }
-      this._sendAsyncMsg("send-touch-event", {
-        "type": type,
-        "identifiers": identifiers,
-        "touchesX": touchesX,
-        "touchesY": touchesY,
-        "radiisX": radiisX,
-        "radiisY": radiisY,
-        "rotationAngles": rotationAngles,
-        "forces": forces,
-        "count": count,
-        "modifiers": modifiers
-      });
+    let offset = this.getChildProcessOffset();
+    for (var i = 0; i < touchesX.length; i++) {
+      touchesX[i] += offset.x;
     }
+    for (var i = 0; i < touchesY.length; i++) {
+      touchesY[i] += offset.y;
+    }
+    this._sendAsyncMsg("send-touch-event", {
+      "type": type,
+      "identifiers": identifiers,
+      "touchesX": touchesX,
+      "touchesY": touchesY,
+      "radiisX": radiisX,
+      "radiisY": radiisY,
+      "rotationAngles": rotationAngles,
+      "forces": forces,
+      "count": count,
+      "modifiers": modifiers
+    });
   }),
 
   getCanGoBack: defineDOMRequestMethod('get-can-go-back'),
@@ -1131,35 +1088,6 @@ BrowserElementParent.prototype = {
                                 {isActive: isActive});
   },
 
-  setNFCFocus: function(isFocus) {
-    if (!this._isAlive()) {
-      throw Components.Exception("Dead content process",
-                                 Cr.NS_ERROR_DOM_INVALID_STATE_ERR);
-    }
-
-    // For now, we use tab id as an identifier to let NFC module know
-    // which app is in foreground. But this approach will not work in
-    // in-process mode because tab id doesn't exist. Fix bug 1116449
-    // if we are going to support in-process mode.
-    try {
-      var tabId = this._frameLoader.QueryInterface(Ci.nsIFrameLoader)
-                                   .tabParent
-                                   .tabId;
-    } catch(e) {
-      debug("SetNFCFocus for in-process mode is not yet supported");
-      throw Components.Exception("SetNFCFocus for in-process mode is not yet supported",
-                                 Cr.NS_ERROR_NOT_IMPLEMENTED);
-    }
-
-    try {
-      let nfcContentHelper =
-        Cc["@mozilla.org/nfc/content-helper;1"].getService(Ci.nsINfcBrowserAPI);
-      nfcContentHelper.setFocusTab(tabId, isFocus);
-    } catch(e) {
-      // Not all platforms support NFC
-    }
-  },
-
   getAudioChannelVolume: function(aAudioChannel) {
     return this._sendDOMRequest('get-audio-channel-volume',
                                 {audioChannel: aAudioChannel});
@@ -1185,26 +1113,6 @@ BrowserElementParent.prototype = {
   isAudioChannelActive: function(aAudioChannel) {
     return this._sendDOMRequest('get-is-audio-channel-active',
                                 {audioChannel: aAudioChannel});
-  },
-
-  notifyChannel: function(aEvent, aManifest, aAudioChannel) {
-    var self = this;
-    var req = Services.DOMRequest.createRequest(self._window);
-
-    // Since the pageURI of the app has been registered to the system messager,
-    // when the app was installed. The system messager can only use the manifest
-    // to send the message to correct page.
-    let manifestURL = Services.io.newURI(aManifest, null, null);
-    systemMessenger.sendMessage(aEvent, aAudioChannel, null, manifestURL)
-      .then(function() {
-        Services.DOMRequest.fireSuccess(req,
-          Cu.cloneInto(true, self._window));
-      }, function() {
-        debug("Error : NotifyChannel fail.");
-        Services.DOMRequest.fireErrorAsync(req,
-          Cu.cloneInto("NotifyChannel fail.", self._window));
-      });
-    return req;
   },
 
   getWebManifest: defineDOMRequestMethod('get-web-manifest'),

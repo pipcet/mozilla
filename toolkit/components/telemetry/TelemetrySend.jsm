@@ -121,9 +121,8 @@ function isDeletionPing(aPing) {
 function savePing(aPing) {
   if (isDeletionPing(aPing)) {
     return TelemetryStorage.saveDeletionPing(aPing);
-  } else {
-    return TelemetryStorage.savePendingPing(aPing);
   }
+  return TelemetryStorage.savePendingPing(aPing);
 }
 
 /**
@@ -675,7 +674,7 @@ var TelemetrySendImpl = {
   },
 
   observe: function(subject, topic, data) {
-    switch(topic) {
+    switch (topic) {
     case TOPIC_IDLE_DAILY:
       SendScheduler.triggerSendingPings(true);
       break;
@@ -845,9 +844,8 @@ var TelemetrySendImpl = {
         return TelemetryStorage.removeDeletionPing();
       }
       return TelemetryStorage.removePendingPing(id);
-    } else {
-      return Promise.resolve();
     }
+    return Promise.resolve();
   },
 
   _getSubmissionPath: function(ping) {
@@ -908,6 +906,9 @@ var TelemetrySendImpl = {
     request.setRequestHeader("Date", Policy.now().toUTCString());
 
     this._pendingPingRequests.set(id, request);
+
+    // Prevent the request channel from running though URLClassifier (bug 1296802)
+    request.channel.loadFlags &= ~Ci.nsIChannel.LOAD_CLASSIFY_URI;
 
     let startTime = new Date();
     let deferred = PromiseUtils.defer();

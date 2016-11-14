@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/DeclarationBlockInlines.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/EventStateManager.h"
@@ -28,7 +29,6 @@
 #include "nsIDOMDocumentFragment.h"
 #include "nsIDOMHTMLElement.h"
 #include "nsIDOMHTMLMenuElement.h"
-#include "nsIDOMElementCSSInlineStyle.h"
 #include "nsIDOMWindow.h"
 #include "nsIDOMDocument.h"
 #include "nsMappedAttributes.h"
@@ -91,7 +91,6 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/FromParser.h"
 #include "mozilla/dom/Link.h"
-#include "mozilla/dom/UndoManager.h"
 #include "mozilla/BloomFilter.h"
 
 #include "nsVariant.h"
@@ -123,7 +122,7 @@ class nsAutoFocusEvent : public Runnable
 public:
   explicit nsAutoFocusEvent(nsGenericHTMLFormElement* aElement) : mElement(aElement) {}
 
-  NS_IMETHOD Run() {
+  NS_IMETHOD Run() override {
     nsFocusManager* fm = nsFocusManager::GetFocusManager();
     if (!fm) {
       return NS_ERROR_NULL_POINTER;
@@ -167,43 +166,6 @@ private:
   RefPtr<nsGenericHTMLElement> mElement;
 };
 
-class nsGenericHTMLElementTearoff : public nsIDOMElementCSSInlineStyle
-{
-  virtual ~nsGenericHTMLElementTearoff()
-  {
-  }
-
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-
-  explicit nsGenericHTMLElementTearoff(nsGenericHTMLElement* aElement)
-    : mElement(aElement)
-  {
-  }
-
-  NS_IMETHOD GetStyle(nsIDOMCSSStyleDeclaration** aStyle) override
-  {
-    NS_ADDREF(*aStyle = mElement->Style());
-    return NS_OK;
-  }
-
-  NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(nsGenericHTMLElementTearoff,
-                                           nsIDOMElementCSSInlineStyle)
-
-private:
-  RefPtr<nsGenericHTMLElement> mElement;
-};
-
-NS_IMPL_CYCLE_COLLECTION(nsGenericHTMLElementTearoff, mElement)
-
-NS_IMPL_CYCLE_COLLECTING_ADDREF(nsGenericHTMLElementTearoff)
-NS_IMPL_CYCLE_COLLECTING_RELEASE(nsGenericHTMLElementTearoff)
-
-NS_INTERFACE_TABLE_HEAD(nsGenericHTMLElementTearoff)
-  NS_INTERFACE_TABLE_INHERITED(nsGenericHTMLElementTearoff,
-                               nsIDOMElementCSSInlineStyle)
-  NS_INTERFACE_TABLE_TO_MAP_SEGUE_CYCLE_COLLECTION(nsGenericHTMLElementTearoff)
-NS_INTERFACE_MAP_END_AGGREGATED(mElement)
-
 NS_IMPL_ADDREF_INHERITED(nsGenericHTMLElement, nsGenericHTMLElementBase)
 NS_IMPL_RELEASE_INHERITED(nsGenericHTMLElement, nsGenericHTMLElementBase)
 
@@ -211,8 +173,6 @@ NS_INTERFACE_MAP_BEGIN(nsGenericHTMLElement)
   NS_INTERFACE_MAP_ENTRY(nsIDOMHTMLElement)
   NS_INTERFACE_MAP_ENTRY(nsIDOMElement)
   NS_INTERFACE_MAP_ENTRY(nsIDOMNode)
-  NS_INTERFACE_MAP_ENTRY_TEAROFF(nsIDOMElementCSSInlineStyle,
-                                 new nsGenericHTMLElementTearoff(this))
 NS_INTERFACE_MAP_END_INHERITING(nsGenericHTMLElementBase)
 
 nsresult
@@ -229,11 +189,11 @@ nsGenericHTMLElement::CopyInnerTo(Element* aDst)
 
     if (name->Equals(nsGkAtoms::style, kNameSpaceID_None) &&
         value->Type() == nsAttrValue::eCSSDeclaration) {
+      DeclarationBlock* decl = value->GetCSSDeclarationValue();
       // We can't just set this as a string, because that will fail
       // to reparse the string into style data until the node is
       // inserted into the document.  Clone the Rule instead.
-      RefPtr<css::Declaration> declClone =
-        new css::Declaration(*value->GetCSSDeclarationValue());
+      RefPtr<DeclarationBlock> declClone = decl->Clone();
 
       rv = aDst->SetInlineStyleDeclaration(declClone, &valStr, false);
       NS_ENSURE_SUCCESS(rv, rv);
@@ -249,21 +209,6 @@ nsGenericHTMLElement::CopyInnerTo(Element* aDst)
   return NS_OK;
 }
 
-already_AddRefed<nsDOMStringMap>
-nsGenericHTMLElement::Dataset()
-{
-  nsDOMSlots *slots = DOMSlots();
-
-  if (!slots->mDataset) {
-    // mDataset is a weak reference so assignment will not AddRef.
-    // AddRef is called before returning the pointer.
-    slots->mDataset = new nsDOMStringMap(this);
-  }
-
-  RefPtr<nsDOMStringMap> ret = slots->mDataset;
-  return ret.forget();
-}
-
 NS_IMETHODIMP
 nsGenericHTMLElement::GetDataset(nsISupports** aDataset)
 {
@@ -271,23 +216,11 @@ nsGenericHTMLElement::GetDataset(nsISupports** aDataset)
   return NS_OK;
 }
 
-nsresult
-nsGenericHTMLElement::ClearDataset()
-{
-  nsDOMSlots *slots = GetExistingDOMSlots();
-
-  NS_ASSERTION(slots && slots->mDataset,
-               "Slots should exist and dataset should not be null.");
-  slots->mDataset = nullptr;
-
-  return NS_OK;
-}
-
 static const nsAttrValue::EnumTable kDirTable[] = {
   { "ltr", eDir_LTR },
   { "rtl", eDir_RTL },
   { "auto", eDir_Auto },
-  { 0 }
+  { nullptr, 0 }
 };
 
 void
@@ -353,7 +286,7 @@ nsGenericHTMLElement::GetOffsetRect(CSSIntRect& aRect)
     parent = frame;
   }
   else {
-    const bool isPositioned = frame->IsAbsPosContaininingBlock();
+    const bool isPositioned = frame->IsAbsPosContainingBlock();
     const bool isAbsolutelyPositioned = frame->IsAbsolutelyPositioned();
     origin += frame->GetPositionIgnoringScrolling();
 
@@ -361,7 +294,7 @@ nsGenericHTMLElement::GetOffsetRect(CSSIntRect& aRect)
       content = parent->GetContent();
 
       // Stop at the first ancestor that is positioned.
-      if (parent->IsAbsPosContaininingBlock()) {
+      if (parent->IsAbsPosContainingBlock()) {
         offsetParent = content;
         break;
       }
@@ -876,8 +809,6 @@ nsGenericHTMLElement::SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
 {
   bool contentEditable = aNameSpaceID == kNameSpaceID_None &&
                            aName == nsGkAtoms::contenteditable;
-  bool undoScope = aNameSpaceID == kNameSpaceID_None &&
-                           aName == nsGkAtoms::undoscope;
   bool accessKey = aName == nsGkAtoms::accesskey && 
                      aNameSpaceID == kNameSpaceID_None;
 
@@ -901,11 +832,6 @@ nsGenericHTMLElement::SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
     }
 
     ChangeEditableState(change);
-  }
-
-  if (undoScope) {
-    rv = SetUndoScopeInternal(true);
-    NS_ENSURE_SUCCESS(rv, rv);
   }
 
   if (accessKey && !aValue.IsEmpty()) {
@@ -933,10 +859,6 @@ nsGenericHTMLElement::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
     else if (aAttribute == nsGkAtoms::contenteditable) {
       contentEditable = true;
       contentEditableChange = GetContentEditableValue() == eTrue ? -1 : 0;
-    }
-    else if (aAttribute == nsGkAtoms::undoscope) {
-      nsresult rv = SetUndoScopeInternal(false);
-      NS_ENSURE_SUCCESS(rv, rv);
     }
     else if (aAttribute == nsGkAtoms::accesskey) {
       // Have to unregister before clearing flag. See UnregAccessKey
@@ -1048,7 +970,7 @@ nsGenericHTMLElement::ParseBackgroundAttribute(int32_t aNamespaceID,
     }
 
     mozilla::css::URLValue *url =
-      new mozilla::css::URLValue(uri, buffer, doc->GetDocumentURI(),
+      new mozilla::css::URLValue(uri, buffer, baseURI, doc->GetDocumentURI(),
                                  NodePrincipal());
     aResult.SetTo(url, &aValue);
     return true;
@@ -1125,7 +1047,7 @@ static const nsAttrValue::EnumTable kDivAlignTable[] = {
   { "center", NS_STYLE_TEXT_ALIGN_MOZ_CENTER },
   { "middle", NS_STYLE_TEXT_ALIGN_MOZ_CENTER },
   { "justify", NS_STYLE_TEXT_ALIGN_JUSTIFY },
-  { 0 }
+  { nullptr, 0 }
 };
 
 static const nsAttrValue::EnumTable kFrameborderTable[] = {
@@ -1133,7 +1055,7 @@ static const nsAttrValue::EnumTable kFrameborderTable[] = {
   { "no", NS_STYLE_FRAME_NO },
   { "1", NS_STYLE_FRAME_1 },
   { "0", NS_STYLE_FRAME_0 },
-  { 0 }
+  { nullptr, 0 }
 };
 
 static const nsAttrValue::EnumTable kScrollingTable[] = {
@@ -1144,7 +1066,7 @@ static const nsAttrValue::EnumTable kScrollingTable[] = {
   { "scroll", NS_STYLE_FRAME_SCROLL },
   { "noscroll", NS_STYLE_FRAME_NOSCROLL },
   { "auto", NS_STYLE_FRAME_AUTO },
-  { 0 }
+  { nullptr, 0 }
 };
 
 static const nsAttrValue::EnumTable kTableVAlignTable[] = {
@@ -1152,7 +1074,7 @@ static const nsAttrValue::EnumTable kTableVAlignTable[] = {
   { "middle",  NS_STYLE_VERTICAL_ALIGN_MIDDLE },
   { "bottom",  NS_STYLE_VERTICAL_ALIGN_BOTTOM },
   { "baseline",NS_STYLE_VERTICAL_ALIGN_BASELINE },
-  { 0 }
+  { nullptr,   0 }
 };
 
 bool
@@ -1174,7 +1096,7 @@ nsGenericHTMLElement::ParseAlignValue(const nsAString& aString,
     { "absmiddle", NS_STYLE_VERTICAL_ALIGN_MIDDLE },
     { "abscenter", NS_STYLE_VERTICAL_ALIGN_MIDDLE },
     { "absbottom", NS_STYLE_VERTICAL_ALIGN_BOTTOM },
-    { 0 }
+    { nullptr,     0 }
   };
 
   return aResult.ParseEnumValue(aString, kAlignTable, false);
@@ -1188,7 +1110,7 @@ static const nsAttrValue::EnumTable kTableHAlignTable[] = {
   { "center", NS_STYLE_TEXT_ALIGN_CENTER },
   { "char",   NS_STYLE_TEXT_ALIGN_CHAR },
   { "justify",NS_STYLE_TEXT_ALIGN_JUSTIFY },
-  { 0 }
+  { nullptr,  0 }
 };
 
 bool
@@ -1209,7 +1131,7 @@ static const nsAttrValue::EnumTable kTableCellHAlignTable[] = {
   { "justify",NS_STYLE_TEXT_ALIGN_JUSTIFY },
   { "middle", NS_STYLE_TEXT_ALIGN_MOZ_CENTER },
   { "absmiddle", NS_STYLE_TEXT_ALIGN_CENTER },
-  { 0 }
+  { nullptr,  0 }
 };
 
 bool
@@ -1257,12 +1179,15 @@ nsGenericHTMLElement::ParseReferrerAttribute(const nsAString& aString,
                                              nsAttrValue& aResult)
 {
   static const nsAttrValue::EnumTable kReferrerTable[] = {
-    { net::kRPS_No_Referrer, net::RP_No_Referrer },
-    { net::kRPS_Origin, net::RP_Origin },
-    { net::kRPS_Origin_When_Cross_Origin, net::RP_Origin_When_Crossorigin },
-    { net::kRPS_No_Referrer_When_Downgrade, net::RP_No_Referrer_When_Downgrade },
-    { net::kRPS_Unsafe_URL, net::RP_Unsafe_URL },
-    { 0 }
+    { net::kRPS_No_Referrer, static_cast<int16_t>(net::RP_No_Referrer) },
+    { net::kRPS_Origin, static_cast<int16_t>(net::RP_Origin) },
+    { net::kRPS_Origin_When_Cross_Origin, static_cast<int16_t>(net::RP_Origin_When_Crossorigin) },
+    { net::kRPS_No_Referrer_When_Downgrade, static_cast<int16_t>(net::RP_No_Referrer_When_Downgrade) },
+    { net::kRPS_Unsafe_URL, static_cast<int16_t>(net::RP_Unsafe_URL) },
+    { net::kRPS_Strict_Origin, static_cast<int16_t>(net::RP_Strict_Origin) },
+    { net::kRPS_Same_Origin, static_cast<int16_t>(net::RP_Same_Origin) },
+    { net::kRPS_Strict_Origin_When_Cross_Origin, static_cast<int16_t>(net::RP_Strict_Origin_When_Cross_Origin) },
+    { nullptr, 0 }
   };
   return aResult.ParseEnumValue(aString, kReferrerTable, false);
 }
@@ -1304,11 +1229,11 @@ MapLangAttributeInto(const nsMappedAttributes* aAttributes, nsRuleData* aData)
     nsCSSValue* emphasisPos = aData->ValueForTextEmphasisPosition();
     if (emphasisPos->GetUnit() == eCSSUnit_Null) {
       const nsAString& lang = langValue->GetStringValue();
-      if (nsStyleUtil::MatchesLanguagePrefix(lang, MOZ_UTF16("zh"))) {
+      if (nsStyleUtil::MatchesLanguagePrefix(lang, u"zh")) {
         emphasisPos->SetIntValue(NS_STYLE_TEXT_EMPHASIS_POSITION_DEFAULT_ZH,
                                 eCSSUnit_Enumerated);
-      } else if (nsStyleUtil::MatchesLanguagePrefix(lang, MOZ_UTF16("ja")) ||
-                 nsStyleUtil::MatchesLanguagePrefix(lang, MOZ_UTF16("mn"))) {
+      } else if (nsStyleUtil::MatchesLanguagePrefix(lang, u"ja") ||
+                 nsStyleUtil::MatchesLanguagePrefix(lang, u"mn")) {
         // This branch is currently no part of the spec.
         // See bug 1040668 comment 69 and comment 75.
         emphasisPos->SetIntValue(NS_STYLE_TEXT_EMPHASIS_POSITION_DEFAULT,
@@ -1333,11 +1258,11 @@ nsGenericHTMLElement::MapCommonAttributesIntoExceptHidden(const nsMappedAttribut
       if (value) {
         if (value->Equals(nsGkAtoms::_empty, eCaseMatters) ||
             value->Equals(nsGkAtoms::_true, eIgnoreCase)) {
-          userModify->SetIntValue(NS_STYLE_USER_MODIFY_READ_WRITE,
+          userModify->SetIntValue(StyleUserModify::ReadWrite,
                                   eCSSUnit_Enumerated);
         }
         else if (value->Equals(nsGkAtoms::_false, eIgnoreCase)) {
-            userModify->SetIntValue(NS_STYLE_USER_MODIFY_READ_ONLY,
+            userModify->SetIntValue(StyleUserModify::ReadOnly,
                                     eCSSUnit_Enumerated);
         }
       }
@@ -1357,7 +1282,7 @@ nsGenericHTMLElement::MapCommonAttributesInto(const nsMappedAttributes* aAttribu
     nsCSSValue* display = aData->ValueForDisplay();
     if (display->GetUnit() == eCSSUnit_Null) {
       if (aAttributes->IndexOfAttr(nsGkAtoms::hidden) >= 0) {
-        display->SetIntValue(NS_STYLE_DISPLAY_NONE, eCSSUnit_Enumerated);
+        display->SetIntValue(StyleDisplay::None, eCSSUnit_Enumerated);
       }
     }
   }
@@ -1422,9 +1347,9 @@ nsGenericHTMLElement::MapImageAlignAttributeInto(const nsMappedAttributes* aAttr
       nsCSSValue* cssFloat = aRuleData->ValueForFloat();
       if (cssFloat->GetUnit() == eCSSUnit_Null) {
         if (align == NS_STYLE_TEXT_ALIGN_LEFT) {
-          cssFloat->SetIntValue(NS_STYLE_FLOAT_LEFT, eCSSUnit_Enumerated);
+          cssFloat->SetIntValue(StyleFloat::Left, eCSSUnit_Enumerated);
         } else if (align == NS_STYLE_TEXT_ALIGN_RIGHT) {
-          cssFloat->SetIntValue(NS_STYLE_FLOAT_RIGHT, eCSSUnit_Enumerated);
+          cssFloat->SetIntValue(StyleFloat::Right, eCSSUnit_Enumerated);
         }
       }
       nsCSSValue* verticalAlign = aRuleData->ValueForVerticalAlign();
@@ -1578,16 +1503,16 @@ nsGenericHTMLElement::MapImageBorderAttributeInto(const nsMappedAttributes* aAtt
 
   nsCSSValue* borderLeftColor = aData->ValueForBorderLeftColor();
   if (borderLeftColor->GetUnit() == eCSSUnit_Null)
-    borderLeftColor->SetIntValue(NS_STYLE_COLOR_MOZ_USE_TEXT_COLOR, eCSSUnit_Enumerated);
+    borderLeftColor->SetIntValue(NS_COLOR_CURRENTCOLOR, eCSSUnit_EnumColor);
   nsCSSValue* borderTopColor = aData->ValueForBorderTopColor();
   if (borderTopColor->GetUnit() == eCSSUnit_Null)
-    borderTopColor->SetIntValue(NS_STYLE_COLOR_MOZ_USE_TEXT_COLOR, eCSSUnit_Enumerated);
+    borderTopColor->SetIntValue(NS_COLOR_CURRENTCOLOR, eCSSUnit_EnumColor);
   nsCSSValue* borderRightColor = aData->ValueForBorderRightColor();
   if (borderRightColor->GetUnit() == eCSSUnit_Null)
-    borderRightColor->SetIntValue(NS_STYLE_COLOR_MOZ_USE_TEXT_COLOR, eCSSUnit_Enumerated);
+    borderRightColor->SetIntValue(NS_COLOR_CURRENTCOLOR, eCSSUnit_EnumColor);
   nsCSSValue* borderBottomColor = aData->ValueForBorderBottomColor();
   if (borderBottomColor->GetUnit() == eCSSUnit_Null)
-    borderBottomColor->SetIntValue(NS_STYLE_COLOR_MOZ_USE_TEXT_COLOR, eCSSUnit_Enumerated);
+    borderBottomColor->SetIntValue(NS_COLOR_CURRENTCOLOR, eCSSUnit_EnumColor);
 }
 
 void
@@ -1743,72 +1668,9 @@ nsGenericHTMLElement::GetURIAttr(nsIAtom* aAttr, nsIAtom* aBaseAttr, nsIURI** aU
 /* static */ bool
 nsGenericHTMLElement::IsScrollGrabAllowed(JSContext*, JSObject*)
 {
-  // Only allow scroll grabbing in chrome and certified apps.
+  // Only allow scroll grabbing in chrome
   nsIPrincipal* prin = nsContentUtils::SubjectPrincipal();
-  return nsContentUtils::IsSystemPrincipal(prin) ||
-    prin->GetAppStatus() == nsIPrincipal::APP_STATUS_CERTIFIED;
-}
-
-nsresult
-nsGenericHTMLElement::GetURIListAttr(nsIAtom* aAttr, nsAString& aResult)
-{
-  aResult.Truncate();
-
-  nsAutoString value;
-  if (!GetAttr(kNameSpaceID_None, aAttr, value))
-    return NS_OK;
-
-  nsIDocument* doc = OwnerDoc(); 
-  nsCOMPtr<nsIURI> baseURI = GetBaseURI();
-
-  nsString::const_iterator end;
-  value.EndReading(end);
-
-  nsAString::const_iterator iter;
-  value.BeginReading(iter);
-
-  while (iter != end) {
-    while (*iter == ' ' && iter != end) {
-      ++iter;
-    }
-
-    if (iter == end) {
-      break;
-    }
-
-    nsAString::const_iterator start = iter;
-
-    while (iter != end && *iter != ' ') {
-      ++iter;
-    }
-
-    if (!aResult.IsEmpty()) {
-      aResult.Append(NS_LITERAL_STRING(" "));
-    }
-
-    const nsSubstring& uriPart = Substring(start, iter);
-    nsCOMPtr<nsIURI> attrURI;
-    nsresult rv =
-      nsContentUtils::NewURIWithDocumentCharset(getter_AddRefs(attrURI),
-                                                uriPart, doc, baseURI);
-    if (NS_FAILED(rv)) {
-      aResult.Append(uriPart);
-      continue;
-    }
-
-    MOZ_ASSERT(attrURI);
-
-    nsAutoCString spec;
-    rv = attrURI->GetSpec(spec);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      aResult.Append(uriPart);
-      continue;
-    }
-
-    AppendUTF8toUTF16(spec, aResult);
-  }
-
-  return NS_OK;
+  return nsContentUtils::IsSystemPrincipal(prin);
 }
 
 HTMLMenuElement*
@@ -1847,83 +1709,11 @@ nsGenericHTMLElement::IsInteractiveHTMLContent(bool aIgnoreTabindex) const
          (!aIgnoreTabindex && HasAttr(kNameSpaceID_None, nsGkAtoms::tabindex));
 }
 
-already_AddRefed<UndoManager>
-nsGenericHTMLElement::GetUndoManager()
-{
-  nsDOMSlots* slots = GetExistingDOMSlots();
-  if (slots && slots->mUndoManager) {
-    RefPtr<UndoManager> undoManager = slots->mUndoManager;
-    return undoManager.forget();
-  } else {
-    return nullptr;
-  }
-}
-
-bool
-nsGenericHTMLElement::UndoScope()
-{
-  nsDOMSlots* slots = GetExistingDOMSlots();
-  return slots && slots->mUndoManager;
-}
-
-void
-nsGenericHTMLElement::SetUndoScope(bool aUndoScope, mozilla::ErrorResult& aError)
-{
-  nsresult rv = SetUndoScopeInternal(aUndoScope);
-  if (NS_FAILED(rv)) {
-    aError.Throw(rv);
-    return;
-  }
-
-  // The undoScope property must reflect the undoscope boolean attribute.
-  if (aUndoScope) {
-    rv = SetAttr(kNameSpaceID_None, nsGkAtoms::undoscope,
-                 NS_LITERAL_STRING(""), true);
-  } else {
-    rv = UnsetAttr(kNameSpaceID_None, nsGkAtoms::undoscope, true);
-  }
-
-  if (NS_FAILED(rv)) {
-    aError.Throw(rv);
-    return;
-  }
-}
-
-nsresult
-nsGenericHTMLElement::SetUndoScopeInternal(bool aUndoScope)
-{
-  if (aUndoScope) {
-    nsDOMSlots* slots = DOMSlots();
-    if (!slots->mUndoManager) {
-      slots->mUndoManager = new UndoManager(this);
-    }
-  } else {
-    nsDOMSlots* slots = GetExistingDOMSlots();
-    if (slots && slots->mUndoManager) {
-      // Clear transaction history and disconnect.
-      ErrorResult rv;
-      slots->mUndoManager->ClearRedo(rv);
-      if (rv.Failed()) {
-        return rv.StealNSResult();
-      }
-
-      slots->mUndoManager->ClearUndo(rv);
-      if (rv.Failed()) {
-        return rv.StealNSResult();
-      }
-
-      slots->mUndoManager->Disconnect();
-      slots->mUndoManager = nullptr;
-    }
-  }
-  return NS_OK;
-}
-
 // static
 bool
-nsGenericHTMLElement::TouchEventsEnabled(JSContext* /* unused */, JSObject* /* unused */)
+nsGenericHTMLElement::TouchEventsEnabled(JSContext* aCx, JSObject* aGlobal)
 {
-  return TouchEvent::PrefEnabled();
+  return TouchEvent::PrefEnabled(aCx, aGlobal);
 }
 
 //----------------------------------------------------------------------
@@ -2481,8 +2271,8 @@ nsGenericHTMLFormElement::IsElementDisabledForEvents(EventMessage aMessage,
   bool disabled = IsDisabled();
   if (!disabled && aFrame) {
     const nsStyleUserInterface* uiStyle = aFrame->StyleUserInterface();
-    disabled = uiStyle->mUserInput == NS_STYLE_USER_INPUT_NONE ||
-      uiStyle->mUserInput == NS_STYLE_USER_INPUT_DISABLED;
+    disabled = uiStyle->mUserInput == StyleUserInput::None ||
+               uiStyle->mUserInput == StyleUserInput::Disabled;
 
   }
   return disabled;
@@ -2621,34 +2411,6 @@ nsGenericHTMLFormElement::IsLabelable() const
 }
 
 //----------------------------------------------------------------------
-
-void
-nsGenericHTMLElement::Blur(mozilla::ErrorResult& aError)
-{
-  if (!ShouldBlur(this)) {
-    return;
-  }
-
-  nsIDocument* doc = GetComposedDoc();
-  if (!doc) {
-    return;
-  }
-
-  nsPIDOMWindowOuter* win = doc->GetWindow();
-  nsIFocusManager* fm = nsFocusManager::GetFocusManager();
-  if (win && fm) {
-    aError = fm->ClearFocus(win);
-  }
-}
-
-void
-nsGenericHTMLElement::Focus(ErrorResult& aError)
-{
-  nsIFocusManager* fm = nsFocusManager::GetFocusManager();
-  if (fm) {
-    aError = fm->SetFocus(this, 0);
-  }
-}
 
 void
 nsGenericHTMLElement::Click()
@@ -3082,7 +2844,7 @@ nsGenericHTMLFormElementWithState::RestoreFormControlState()
 }
 
 void
-nsGenericHTMLFormElementWithState::NodeInfoChanged(mozilla::dom::NodeInfo* aOldNodeInfo)
+nsGenericHTMLFormElementWithState::NodeInfoChanged()
 {
   mStateKey.SetIsVoid(true);
 }
@@ -3192,7 +2954,7 @@ IsOrHasAncestorWithDisplayNone(Element* aElement, nsIPresShell* aPresShell)
       sc = nsComputedDOMStyle::GetStyleContextForElementNoFlush(elementsToCheck[i],
                                                                 nullptr, aPresShell);
     }
-    if (sc->StyleDisplay()->mDisplay == NS_STYLE_DISPLAY_NONE) {
+    if (sc->StyleDisplay()->mDisplay == StyleDisplay::None) {
       return true;
     }
   }
@@ -3218,9 +2980,6 @@ nsGenericHTMLElement::GetInnerText(mozilla::dom::DOMString& aValue,
 void
 nsGenericHTMLElement::SetInnerText(const nsAString& aValue)
 {
-  // Fire DOMNodeRemoved mutation events before we do anything else.
-  nsCOMPtr<nsIContent> kungFuDeathGrip;
-
   // Batch possible DOMSubtreeModified events.
   mozAutoSubtreeModified subtree(OwnerDoc(), nullptr);
   FireNodeRemovedForChildren();

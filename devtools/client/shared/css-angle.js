@@ -4,17 +4,20 @@
 
 "use strict";
 
+const {CSS_ANGLEUNIT} = require("devtools/shared/css/properties-db");
+
 const SPECIALVALUES = new Set([
   "initial",
   "inherit",
   "unset"
 ]);
 
+const {getCSSLexer} = require("devtools/shared/css/lexer");
+
 /**
  * This module is used to convert between various angle units.
  *
  * Usage:
- *   let {require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
  *   let {angleUtils} = require("devtools/client/shared/css-angle");
  *   let angle = new angleUtils.CssAngle("180deg");
  *
@@ -38,12 +41,7 @@ module.exports.angleUtils = {
   classifyAngle: classifyAngle
 };
 
-CssAngle.ANGLEUNIT = {
-  "deg": "deg",
-  "rad": "rad",
-  "grad": "grad",
-  "turn": "turn"
-};
+CssAngle.ANGLEUNIT = CSS_ANGLEUNIT;
 
 CssAngle.prototype = {
   _angleUnit: null,
@@ -66,7 +64,12 @@ CssAngle.prototype = {
   },
 
   get valid() {
-    return /^-?\d+\.?\d*(deg|rad|grad|turn)$/gi.test(this.authored);
+    let token = getCSSLexer(this.authored).nextToken();
+    if (!token) {
+      return false;
+    }
+    return (token.tokenType === "dimension"
+      && token.text.toLowerCase() in CssAngle.ANGLEUNIT);
   },
 
   get specialValue() {

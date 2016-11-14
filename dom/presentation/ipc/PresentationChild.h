@@ -43,7 +43,8 @@ public:
   DeallocPPresentationBuilderChild(PPresentationBuilderChild* aActor) override;
 
   virtual bool
-  RecvNotifyAvailableChange(const bool& aAvailable) override;
+  RecvNotifyAvailableChange(nsTArray<nsString>&& aAvailabilityUrls,
+                            const bool& aAvailable) override;
 
   virtual bool
   RecvNotifySessionStateChange(const nsString& aSessionId,
@@ -52,11 +53,17 @@ public:
 
   virtual bool
   RecvNotifyMessage(const nsString& aSessionId,
-                    const nsCString& aData) override;
+                    const nsCString& aData,
+                    const bool& aIsBinary) override;
 
   virtual bool
   RecvNotifySessionConnect(const uint64_t& aWindowId,
                            const nsString& aSessionId) override;
+
+  virtual bool
+  RecvNotifyCloseSessionTransport(const nsString& aSessionId,
+                                  const uint8_t& aRole,
+                                  const nsresult& aReason) override;
 
 private:
   virtual ~PresentationChild();
@@ -77,6 +84,9 @@ public:
 
   virtual bool
   Recv__delete__(const nsresult& aResult) override;
+
+  virtual bool
+  RecvNotifyRequestUrlSelected(const nsString& aUrl) override;
 
 private:
   virtual ~PresentationRequestChild();

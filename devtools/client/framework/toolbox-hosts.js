@@ -8,6 +8,7 @@
 
 const EventEmitter = require("devtools/shared/event-emitter");
 const promise = require("promise");
+const defer = require("devtools/shared/defer");
 const Services = require("Services");
 const {DOMHelpers} = require("resource://devtools/client/shared/DOMHelpers.jsm");
 
@@ -53,7 +54,7 @@ BottomHost.prototype = {
    * Create a box at the bottom of the host tab.
    */
   create: function () {
-    let deferred = promise.defer();
+    let deferred = defer();
 
     let gBrowser = this.hostTab.ownerDocument.defaultView.gBrowser;
     let ownerDocument = gBrowser.ownerDocument;
@@ -61,6 +62,8 @@ BottomHost.prototype = {
 
     this._splitter = ownerDocument.createElement("splitter");
     this._splitter.setAttribute("class", "devtools-horizontal-splitter");
+    // Avoid resizing notification containers
+    this._splitter.setAttribute("resizebefore", "flex");
 
     this.frame = ownerDocument.createElement("iframe");
     this.frame.className = "devtools-toolbox-bottom-iframe";
@@ -170,6 +173,9 @@ BottomHost.prototype = {
       Services.prefs.setIntPref(this.heightPref, this.frame.height);
       this._nbox.removeChild(this._splitter);
       this._nbox.removeChild(this.frame);
+      this.frame = null;
+      this._nbox = null;
+      this._splitter = null;
     }
 
     return promise.resolve(null);
@@ -194,7 +200,7 @@ SidebarHost.prototype = {
    * Create a box in the sidebar of the host tab.
    */
   create: function () {
-    let deferred = promise.defer();
+    let deferred = defer();
 
     let gBrowser = this.hostTab.ownerDocument.defaultView.gBrowser;
     let ownerDocument = gBrowser.ownerDocument;
@@ -277,7 +283,7 @@ WindowHost.prototype = {
    * Create a new xul window to contain the toolbox.
    */
   create: function () {
-    let deferred = promise.defer();
+    let deferred = defer();
 
     let flags = "chrome,centerscreen,resizable,dialog=no";
     let win = Services.ww.openWindow(null, this.WINDOW_URL, "_blank",

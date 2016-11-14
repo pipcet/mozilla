@@ -50,7 +50,7 @@ function* testClickingLink(toolbox, view) {
 }
 
 function checkDisplayedStylesheet(toolbox) {
-  let def = promise.defer();
+  let def = defer();
 
   let panel = toolbox.getCurrentPanel();
   panel.UI.on("editor-selected", (event, editor) => {
@@ -77,8 +77,9 @@ function editorSelected(editor) {
 
 function verifyLinkText(text, view) {
   info("Verifying that the rule-view stylesheet link is " + text);
-  let label = getRuleViewLinkByIndex(view, 1).querySelector("label");
+  let label = getRuleViewLinkByIndex(view, 1)
+    .querySelector(".ruleview-rule-source-label");
   return waitForSuccess(function* () {
-    return label.getAttribute("value") == text;
+    return label.textContent == text;
   }, "Link text changed to display correct location: " + text);
 }

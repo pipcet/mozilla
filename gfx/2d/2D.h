@@ -30,21 +30,26 @@
 #include <string>
 #endif
 
+#include "gfxPrefs.h"
+
 struct _cairo_surface;
 typedef _cairo_surface cairo_surface_t;
 
 struct _cairo_scaled_font;
 typedef _cairo_scaled_font cairo_scaled_font_t;
 
+struct _FcPattern;
+typedef _FcPattern FcPattern;
+
 struct ID3D11Texture2D;
 struct ID3D11Device;
 struct ID2D1Device;
 struct IDWriteRenderingParams;
-struct IDWriteFont;
-struct IDWriteFontFamily;
 struct IDWriteFontFace;
 
 class GrContext;
+class SkCanvas;
+struct gfxFontStyle;
 
 struct CGContext;
 typedef struct CGContext *CGContextRef;
@@ -635,6 +640,26 @@ struct GlyphBuffer
   uint32_t mNumGlyphs;  //!< Number of glyphs mGlyphs points to.
 };
 
+struct GlyphMetrics
+{
+  // Horizontal distance from the origin to the leftmost side of the bounding
+  // box of the drawn glyph. This can be negative!
+  Float mXBearing;
+  // Horizontal distance from the origin of this glyph to the origin of the
+  // next glyph.
+  Float mXAdvance;
+  // Vertical distance from the origin to the topmost side of the bounding box
+  // of the drawn glyph.
+  Float mYBearing;
+  // Vertical distance from the origin of this glyph to the origin of the next
+  // glyph, this is used when drawing vertically and will typically be 0.
+  Float mYAdvance;
+  // Width of the glyph's black box.
+  Float mWidth;
+  // Height of the glyph's black box.
+  Float mHeight;
+};
+
 /** This class is an abstraction of a backend/platform specific font object
  * at a particular size. It is passed into text drawing calls to describe
  * the font used for the drawing call.
@@ -649,6 +674,13 @@ public:
   typedef void (*FontDescriptorOutput)(const uint8_t *aData, uint32_t aLength, Float aFontSize, void *aBaton);
 
   virtual FontType GetType() const = 0;
+  virtual AntialiasMode GetDefaultAAMode() {
+    if (gfxPrefs::DisableAllTextAA()) {
+      return AntialiasMode::NONE;
+    }
+
+    return AntialiasMode::DEFAULT;
+  }
 
   /** This allows getting a path that describes the outline of a set of glyphs.
    * A target is passed in so that the guarantee is made the returned path
@@ -662,7 +694,11 @@ public:
    * implementation in some backends, and more efficient implementation in
    * others.
    */
-  virtual void CopyGlyphsToBuilder(const GlyphBuffer &aBuffer, PathBuilder *aBuilder, BackendType aBackendType, const Matrix *aTransformHint = nullptr) = 0;
+  virtual void CopyGlyphsToBuilder(const GlyphBuffer &aBuffer, PathBuilder *aBuilder, const Matrix *aTransformHint = nullptr) = 0;
+
+  /* This gets the metrics of a set of glyphs for the current font face.
+   */
+  virtual void GetGlyphDesignMetrics(const uint16_t* aGlyphIndices, uint32_t aNumGlyphs, GlyphMetrics* aGlyphMetrics) = 0;
 
   virtual bool GetFontFileData(FontFileDataOutput, void *) { return false; }
 
@@ -983,6 +1019,16 @@ public:
    */
   virtual void PushClipRect(const Rect &aRect) = 0;
 
+  /**
+   * Push a clip region specifed by the union of axis-aligned rectangular
+   * clips to the DrawTarget. These rectangles are specified in device space.
+   * This must be balanced by a corresponding call to PopClip within a layer.
+   *
+   * @param aRects The rects to clip to
+   * @param aCount The number of rectangles
+   */
+  virtual void PushDeviceSpaceClipRects(const IntRect* aRects, uint32_t aCount);
+
   /** Pop a clip from the DrawTarget. A pop without a corresponding push will
    * be ignored.
    */
@@ -1034,11 +1080,14 @@ public:
    * aSourceSurface or some other existing surface.
    */
   virtual already_AddRefed<SourceSurface> OptimizeSourceSurface(SourceSurface *aSurface) const = 0;
+  virtual already_AddRefed<SourceSurface> OptimizeSourceSurfaceForUnknownAlpha(SourceSurface *aSurface) const {
+    return OptimizeSourceSurface(aSurface);
+  }
 
   /**
    * Create a SourceSurface for a type of NativeSurface. This may fail if the
    * draw target does not know how to deal with the type of NativeSurface passed
-   * in.
+   * in. If this succeeds, the SourceSurface takes the ownersip of the NativeSurface.
    */
   virtual already_AddRefed<SourceSurface>
     CreateSourceSurfaceFromNativeSurface(const NativeSurface &aSurface) const = 0;
@@ -1105,6 +1154,22 @@ public:
   virtual already_AddRefed<FilterNode> CreateFilter(FilterType aType) = 0;
 
   Matrix GetTransform() const { return mTransform; }
+
+  /*
+   * Get the metrics of a glyph, including any additional spacing that is taken
+   * during rasterization to this backends (for example because of antialiasing
+   * filters.
+   *
+   * aScaledFont The scaled font used when drawing.
+   * aGlyphIndices An array of indices for the glyphs whose the metrics are wanted
+   * aNumGlyphs The amount of elements in aGlyphIndices
+   * aGlyphMetrics The glyph metrics
+   */
+  virtual void GetGlyphRasterizationMetrics(ScaledFont *aScaledFont, const uint16_t* aGlyphIndices,
+                                            uint32_t aNumGlyphs, GlyphMetrics* aGlyphMetrics)
+  {
+    aScaledFont->GetGlyphDesignMetrics(aGlyphIndices, aNumGlyphs, aGlyphMetrics);
+  }
 
   /**
    * Set a transform on the surface, this transform is applied at drawing time
@@ -1174,6 +1239,17 @@ public:
   bool GetPermitSubpixelAA() {
     return mPermitSubpixelAA;
   }
+
+  /**
+   * Ensures that no snapshot is still pointing to this DrawTarget's surface data.
+   *
+   * This can be useful if the DrawTarget is wrapped around data that it does not
+   * own, and for some reason the owner of the data has to make it temporarily
+   * unavailable without the DrawTarget knowing about it.
+   * This can cause costly surface copies, so it should not be used without a
+   * a good reason.
+   */
+  virtual void DetachAllSnapshots() = 0;
 
 #ifdef USE_SKIA_GPU
   virtual bool InitWithGrContext(GrContext* aGrContext,
@@ -1285,6 +1361,11 @@ public:
   static already_AddRefed<ScaledFont>
     CreateScaledFontForNativeFont(const NativeFont &aNativeFont, Float aSize);
 
+#ifdef MOZ_WIDGET_GTK
+  static already_AddRefed<ScaledFont>
+    CreateScaledFontForFontconfigFont(cairo_scaled_font_t* aScaledFont, FcPattern* aPattern, Float aSize);
+#endif
+
   /**
    * This creates a NativeFontResource from TrueType data.
    *
@@ -1356,9 +1437,6 @@ public:
 
   static void SetGlobalEventRecorder(DrawEventRecorder *aRecorder);
 
-  // This is a little hacky at the moment, but we want to have this data. Bug 1068613.
-  static void SetLogForwarder(LogForwarder* aLogFwd);
-
   static uint32_t GetMaxSurfaceSize(BackendType aType);
 
   static LogForwarder* GetLogForwarder() { return sConfig ? sConfig->mLogForwarder : nullptr; }
@@ -1376,10 +1454,6 @@ public:
 
   static void PurgeAllCaches();
 
-#if defined(USE_SKIA) && defined(MOZ_ENABLE_FREETYPE)
-  static already_AddRefed<GlyphRenderingOptions>
-    CreateCairoGlyphRenderingOptions(FontHinting aHinting, bool aAutoHinting, AntialiasMode aAntialiasMode = AntialiasMode::DEFAULT);
-#endif
   static already_AddRefed<DrawTarget>
     CreateDualDrawTarget(DrawTarget *targetA, DrawTarget *targetB);
 
@@ -1393,8 +1467,11 @@ public:
 
   static bool DoesBackendSupportDataDrawtarget(BackendType aType);
 
+#ifdef USE_SKIA
+  static already_AddRefed<DrawTarget> CreateDrawTargetWithSkCanvas(SkCanvas* aCanvas);
+#endif
+
 #ifdef XP_DARWIN
-  static already_AddRefed<DrawTarget> CreateDrawTargetForCairoCGContext(CGContextRef cg, const IntSize& aSize);
   static already_AddRefed<GlyphRenderingOptions>
     CreateCGGlyphRenderingOptions(const Color &aFontSmoothingBackgroundColor);
 #endif
@@ -1419,10 +1496,11 @@ public:
   static void D2DCleanup();
 
   static already_AddRefed<ScaledFont>
-    CreateScaledFontForDWriteFont(IDWriteFont* aFont,
-                                  IDWriteFontFamily* aFontFamily,
-                                  IDWriteFontFace* aFontFace,
-                                  Float aSize);
+    CreateScaledFontForDWriteFont(IDWriteFontFace* aFontFace,
+                                  const gfxFontStyle* aStyle,
+                                  Float aSize,
+                                  bool aUseEmbeddedBitmap,
+                                  bool aForceGDIMode);
 
 private:
   static ID2D1Device *mD2D1Device;

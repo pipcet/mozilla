@@ -64,9 +64,32 @@ CompositionEvent::InitCompositionEvent(const nsAString& aType,
                                        const nsAString& aData,
                                        const nsAString& aLocale)
 {
+  NS_ENSURE_TRUE_VOID(!mEvent->mFlags.mIsBeingDispatched);
+
   UIEvent::InitUIEvent(aType, aCanBubble, aCancelable, aView, 0);
   mData = aData;
   mLocale = aLocale;
+}
+
+void
+CompositionEvent::GetRanges(TextClauseArray& aRanges)
+{
+  // If the mRanges is not empty, we return the cached value.
+  if (!mRanges.IsEmpty()) {
+    aRanges = mRanges;
+    return;
+  }
+  RefPtr<TextRangeArray> textRangeArray = mEvent->AsCompositionEvent()->mRanges;
+  if (!textRangeArray) {
+    return;
+  }
+  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(mOwner);
+  const TextRange* targetRange = textRangeArray->GetTargetClause();
+  for (size_t i = 0; i < textRangeArray->Length(); i++) {
+    const TextRange& range = textRangeArray->ElementAt(i);
+    mRanges.AppendElement(new TextClause(window, range, targetRange));
+  }
+  aRanges = mRanges;
 }
 
 } // namespace dom

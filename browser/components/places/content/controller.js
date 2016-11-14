@@ -389,7 +389,7 @@ PlacesController.prototype = {
         return false;
 
       // unwrapNodes() will throw if the data blob is malformed.
-      var unwrappedNodes = PlacesUtils.unwrapNodes(data, type.value);
+      PlacesUtils.unwrapNodes(data, type.value);
       return this._view.insertionPoint != null;
     }
     catch (e) {
@@ -1110,7 +1110,7 @@ PlacesController.prototype = {
       xferable.getTransferData(PlacesUtils.TYPE_X_MOZ_PLACE_ACTION, action, {});
       [action, actionOwner] =
         action.value.QueryInterface(Ci.nsISupportsString).data.split(",");
-    } catch(ex) {
+    } catch (ex) {
       // Paste from external sources don't have any associated action, just
       // fallback to a copy action.
       return "copy";
@@ -1288,7 +1288,7 @@ PlacesController.prototype = {
       data = data.value.QueryInterface(Ci.nsISupportsString).data;
       type = type.value;
       items = PlacesUtils.unwrapNodes(data, type);
-    } catch(ex) {
+    } catch (ex) {
       // No supported data exists or nodes unwrap failed, just bail out.
       return;
     }
@@ -1601,16 +1601,15 @@ var PlacesControllerDragHelper = {
         unwrapped = PlacesUtils.unwrapNodes(data, flavor)[0];
       }
       else if (data instanceof XULElement && data.localName == "tab" &&
-               data.ownerDocument.defaultView instanceof ChromeWindow) {
+               data.ownerGlobal instanceof ChromeWindow) {
         let uri = data.linkedBrowser.currentURI;
         let spec = uri ? uri.spec : "about:blank";
-        let title = data.label;
         unwrapped = { uri: spec,
                       title: data.label,
                       type: PlacesUtils.TYPE_X_MOZ_URL};
       }
       else
-        throw("bogus data was passed as a tab")
+        throw new Error("bogus data was passed as a tab");
 
       let index = insertionPoint.index;
 
@@ -1741,4 +1740,3 @@ function goDoPlacesCommand(aCommand)
   if (controller && controller.isCommandEnabled(aCommand))
     controller.doCommand(aCommand);
 }
-

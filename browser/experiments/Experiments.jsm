@@ -44,7 +44,6 @@ const MANIFEST_VERSION          = 1;
 const CACHE_VERSION             = 1;
 
 const KEEP_HISTORY_N_DAYS       = 180;
-const MIN_EXPERIMENT_ACTIVE_SECONDS = 60;
 
 const PREF_BRANCH               = "experiments.";
 const PREF_ENABLED              = "enabled"; // experiments.enabled
@@ -488,7 +487,7 @@ Experiments.Experiments.prototype = {
       latestLogs: this._forensicsLogs,
       experiments: this._experiments ? [...this._experiments.keys()] : null,
       terminateReason: this._terminateReason,
-      activeExperiment: !!activeExperiment ? activeExperiment.id : null,
+      activeExperiment: activeExperiment ? activeExperiment.id : null,
     };
     if (this._latestError) {
       if (typeof this._latestError == "object") {
@@ -940,12 +939,6 @@ Experiments.Experiments.prototype = {
   _httpGetRequest: function (url) {
     this._log.trace("httpGetRequest(" + url + ")");
     let xhr = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].createInstance(Ci.nsIXMLHttpRequest);
-    try {
-      xhr.open("GET", url);
-    } catch (e) {
-      this._log.error("httpGetRequest() - Error opening request to " + url + ": " + e);
-      return Promise.reject(new Error("Experiments - Error opening XHR for " + url));
-    }
 
     this._networkRequest = xhr;
     let deferred = Promise.defer();
@@ -972,12 +965,19 @@ Experiments.Experiments.prototype = {
       this._networkRequest = null;
     };
 
-    if (xhr.channel instanceof Ci.nsISupportsPriority) {
-      xhr.channel.priority = Ci.nsISupportsPriority.PRIORITY_LOWEST;
-    }
+    try {
+      xhr.open("GET", url);
 
-    xhr.timeout = MANIFEST_FETCH_TIMEOUT_MSEC;
-    xhr.send(null);
+      if (xhr.channel instanceof Ci.nsISupportsPriority) {
+        xhr.channel.priority = Ci.nsISupportsPriority.PRIORITY_LOWEST;
+      }
+
+      xhr.timeout = MANIFEST_FETCH_TIMEOUT_MSEC;
+      xhr.send(null);
+    } catch (e) {
+      this._log.error("httpGetRequest() - Error opening request to " + url + ": " + e);
+      return Promise.reject(new Error("Experiments - Error opening XHR for " + url));
+    }
     return deferred.promise;
   },
 
@@ -1216,7 +1216,6 @@ Experiments.Experiments.prototype = {
 
     let activeExperiment = this._getActiveExperiment();
     let activeChanged = false;
-    let now = this._policy.now();
 
     if (!activeExperiment) {
       // Avoid this pref staying out of sync if there were e.g. crashes.
@@ -1276,7 +1275,6 @@ Experiments.Experiments.prototype = {
 
         if (!applicable && reason && reason[0] != "was-active") {
           // Report this from here to avoid over-reporting.
-          let desc = TELEMETRY_LOG.ACTIVATION;
           let data = [TELEMETRY_LOG.ACTIVATION.REJECTED, id];
           data = data.concat(reason);
           const key = TELEMETRY_LOG.ACTIVATION_KEY;
@@ -1342,7 +1340,7 @@ Experiments.Experiments.prototype = {
       time = now + 1000 * CACHE_WRITE_RETRY_DELAY_SEC;
     }
 
-    for (let [id, experiment] of this._experiments) {
+    for (let [, experiment] of this._experiments) {
       let scheduleTime = experiment.getScheduleTime();
       if (scheduleTime > now) {
         if (time !== null) {
@@ -1566,7 +1564,7 @@ Experiments.ExperimentEntry.prototype = {
 
     // In order for the experiment's data expiration mechanism to work, use the experiment's
     // |_endData| as the |_lastChangedDate| (if available).
-    this._lastChangedDate = !!this._endDate ? this._endDate : this._policy.now();
+    this._lastChangedDate = this._endDate ? this._endDate : this._policy.now();
 
     return true;
   },
@@ -1643,7 +1641,6 @@ Experiments.ExperimentEntry.prototype = {
     let data = this._manifestData;
 
     let now = this._policy.now() / 1000; // The manifest times are in seconds.
-    let minActive = MIN_EXPERIMENT_ACTIVE_SECONDS;
     let maxActive = data.maxActiveSeconds || 0;
     let startSec = (this.startDate || 0) / 1000;
 
@@ -1979,7 +1976,7 @@ Experiments.ExperimentEntry.prototype = {
     }
 
     // Experiment addons should not require a restart.
-    if (!!(addon.operationsRequiringRestart & AddonManager.OP_NEEDS_RESTART_ENABLE)) {
+    if (addon.operationsRequiringRestart & AddonManager.OP_NEEDS_RESTART_ENABLE) {
       throw new Error("Experiment addon requires a restart: " + addon.id);
     }
 
@@ -2068,10 +2065,6 @@ Experiments.ExperimentEntry.prototype = {
       throw new Error("shouldStop must not be called on disabled experiments.");
     }
 
-    let data = this._manifestData;
-    let now = this._policy.now() / 1000; // The manifest times are in seconds.
-    let maxActiveSec = data.maxActiveSeconds || 0;
-
     let deferred = Promise.defer();
     this.isApplicable().then(
       () => deferred.resolve({shouldStop: false}),
@@ -2096,7 +2089,6 @@ Experiments.ExperimentEntry.prototype = {
    */
   getScheduleTime: function () {
     if (this._enabled) {
-      let now = this._policy.now();
       let startTime = this._startDate.getTime();
       let maxActiveTime = startTime + 1000 * this._manifestData.maxActiveSeconds;
       return Math.min(1000 * this._manifestData.endTime,  maxActiveTime);
@@ -2174,7 +2166,7 @@ this.Experiments.PreviousExperimentProvider.prototype = Object.freeze({
     this._log.trace("shutdown()");
     try {
       Services.obs.removeObserver(this, EXPERIMENTS_CHANGED_TOPIC);
-    } catch(e) {
+    } catch (e) {
       // Prevent crash in mochitest-browser3 on Mulet
     }
   },
@@ -2227,7 +2219,7 @@ this.Experiments.PreviousExperimentProvider.prototype = Object.freeze({
       for (let id of removed) {
         this._log.trace("updateExperimentList() - removing " + id);
         let wrapper = new PreviousExperimentAddon(oldMap.get(id));
-        AddonManagerPrivate.callAddonListeners("onUninstalling", plugin, false);
+        AddonManagerPrivate.callAddonListeners("onUninstalling", wrapper, false);
       }
 
       this._experimentList = list;

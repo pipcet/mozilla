@@ -15,7 +15,6 @@
 #include "mozilla/dom/MessageEventBinding.h"
 #include "mozilla/dom/MessagePortBinding.h"
 #include "mozilla/dom/MessagePortChild.h"
-#include "mozilla/dom/MessagePortList.h"
 #include "mozilla/dom/PMessagePort.h"
 #include "mozilla/dom/StructuredCloneTags.h"
 #include "mozilla/dom/WorkerPrivate.h"
@@ -25,7 +24,7 @@
 #include "mozilla/MessagePortTimelineMarker.h"
 #include "mozilla/TimelineConsumers.h"
 #include "mozilla/TimelineMarker.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "nsContentUtils.h"
 #include "nsGlobalWindow.h"
 #include "nsPresContext.h"
@@ -135,19 +134,19 @@ private:
     RefPtr<MessageEvent> event =
       new MessageEvent(eventTarget, nullptr, nullptr);
 
+    Sequence<OwningNonNull<MessagePort>> ports;
+    if (!mData->TakeTransferredPortsAsSequence(ports)) {
+      return NS_ERROR_OUT_OF_MEMORY;
+    }
+
+    Nullable<WindowProxyOrMessagePort> source;
+    source.SetValue().SetAsMessagePort() = mPort;
+
     event->InitMessageEvent(nullptr, NS_LITERAL_STRING("message"),
                             false /* non-bubbling */,
                             false /* cancelable */, value, EmptyString(),
-                            EmptyString(), nullptr, nullptr);
+                            EmptyString(), source, ports);
     event->SetTrusted(true);
-    event->SetSource(mPort);
-
-    nsTArray<RefPtr<MessagePort>> ports = mData->TakeTransferredPorts();
-
-    RefPtr<MessagePortList> portList =
-      new MessagePortList(static_cast<dom::Event*>(event.get()),
-                          ports);
-    event->SetPorts(portList);
 
     bool dummy;
     mPort->DispatchEvent(static_cast<dom::Event*>(event.get()), &dummy);
@@ -195,16 +194,16 @@ NS_IMPL_RELEASE_INHERITED(MessagePort, DOMEventTargetHelper)
 
 namespace {
 
-class MessagePortFeature final : public workers::WorkerFeature
+class MessagePortWorkerHolder final : public workers::WorkerHolder
 {
   MessagePort* mPort;
 
 public:
-  explicit MessagePortFeature(MessagePort* aPort)
+  explicit MessagePortWorkerHolder(MessagePort* aPort)
     : mPort(aPort)
   {
     MOZ_ASSERT(aPort);
-    MOZ_COUNT_CTOR(MessagePortFeature);
+    MOZ_COUNT_CTOR(MessagePortWorkerHolder);
   }
 
   virtual bool Notify(workers::Status aStatus) override
@@ -219,9 +218,9 @@ public:
   }
 
 private:
-  ~MessagePortFeature()
+  ~MessagePortWorkerHolder()
   {
-    MOZ_COUNT_DTOR(MessagePortFeature);
+    MOZ_COUNT_DTOR(MessagePortWorkerHolder);
   }
 };
 
@@ -287,7 +286,7 @@ MessagePort::MessagePort(nsIGlobalObject* aGlobal)
 MessagePort::~MessagePort()
 {
   CloseForced();
-  MOZ_ASSERT(!mWorkerFeature);
+  MOZ_ASSERT(!mWorkerHolder);
 }
 
 /* static */ already_AddRefed<MessagePort>
@@ -340,7 +339,7 @@ MessagePort::Initialize(const nsID& aUUID,
 
   if (mNeutered) {
     // If this port is neutered we don't want to keep it alive artificially nor
-    // we want to add listeners or workerFeatures.
+    // we want to add listeners or workerWorkerHolders.
     mState = eStateDisentangled;
     return;
   }
@@ -357,15 +356,15 @@ MessagePort::Initialize(const nsID& aUUID,
   if (!NS_IsMainThread()) {
     WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
     MOZ_ASSERT(workerPrivate);
-    MOZ_ASSERT(!mWorkerFeature);
+    MOZ_ASSERT(!mWorkerHolder);
 
-    nsAutoPtr<WorkerFeature> feature(new MessagePortFeature(this));
-    if (NS_WARN_IF(!workerPrivate->AddFeature(feature))) {
+    nsAutoPtr<WorkerHolder> workerHolder(new MessagePortWorkerHolder(this));
+    if (NS_WARN_IF(!workerHolder->HoldWorker(workerPrivate, Closing))) {
       aRv.Throw(NS_ERROR_FAILURE);
       return;
     }
 
-    mWorkerFeature = Move(feature);
+    mWorkerHolder = Move(workerHolder);
   } else if (GetOwner()) {
     MOZ_ASSERT(NS_IsMainThread());
     MOZ_ASSERT(GetOwner()->IsInnerWindow());
@@ -444,7 +443,8 @@ MessagePort::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
       MarkerTracingType::START);
   }
 
-  data->Write(aCx, aMessage, transferable, aRv);
+  data->Write(aCx, aMessage, transferable,
+              JS::CloneDataPolicy().denySharedArrayBuffer(), aRv);
 
   if (isTimelineRecording) {
     end = MakeUnique<MessagePortTimelineMarker>(
@@ -912,13 +912,8 @@ MessagePort::UpdateMustKeepAlive()
       mIsKeptAlive) {
     mIsKeptAlive = false;
 
-    if (mWorkerFeature) {
-      WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
-      MOZ_ASSERT(workerPrivate);
-
-      workerPrivate->RemoveFeature(mWorkerFeature);
-      mWorkerFeature = nullptr;
-    }
+    // The DTOR of this WorkerHolder will release the worker for us.
+    mWorkerHolder = nullptr;
 
     if (NS_IsMainThread()) {
       nsCOMPtr<nsIObserverService> obs =

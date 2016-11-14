@@ -12,6 +12,7 @@
 #include "gfxRect.h"                    // for gfxRect
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/gfx/BaseSize.h"       // for BaseSize
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/Rect.h"           // for Rect, RectTyped
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/LayerMetricsWrapper.h" // for LayerMetricsWrapper
@@ -149,7 +150,7 @@ ClientTiledPaintedLayer::BeginPaint()
 
   if (!displayPortAncestor || !scrollAncestor) {
     // No displayport or scroll ancestor, so we can't do progressive rendering.
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_WIDGET_ANDROID)
     // Both Android and b2g on phones are guaranteed to have a displayport set, so this
     // should never happen.
     NS_WARNING("Tiled PaintedLayer with no scrollable container ancestor");
@@ -248,7 +249,7 @@ ClientTiledPaintedLayer::IsScrollingOnCompositor(const FrameMetrics& aParentMetr
 
 bool
 ClientTiledPaintedLayer::UseProgressiveDraw() {
-  if (!gfxPlatform::GetPlatform()->UseProgressivePaint()) {
+  if (!gfxPrefs::ProgressivePaint()) {
     // pref is disabled, so never do progressive
     return false;
   }
@@ -423,11 +424,17 @@ ClientTiledPaintedLayer::RenderLayer()
   void *data = ClientManager()->GetPaintedLayerCallbackData();
 
   IntSize layerSize = mVisibleRegion.ToUnknownRegion().GetBounds().Size();
-  IntSize tileSize(gfxPlatform::GetPlatform()->GetTileWidth(),
-                   gfxPlatform::GetPlatform()->GetTileHeight());
+  IntSize tileSize = gfx::gfxVars::TileSize();
+  bool isHalfTileWidthOrHeight = layerSize.width <= tileSize.width / 2 ||
+    layerSize.height <= tileSize.height / 2;
 
+  // Use single tile when layer is not scrollable, is smaller than one
+  // tile, or when more than half of the tiles' pixels in either
+  // dimension would be wasted.
   bool wantSingleTiledContentClient =
-      (mCreationHint == LayerManager::NONE || layerSize <= tileSize) &&
+      (mCreationHint == LayerManager::NONE ||
+       layerSize <= tileSize ||
+       isHalfTileWidthOrHeight) &&
       SingleTiledContentClient::ClientSupportsLayerSize(layerSize, ClientManager()) &&
       gfxPrefs::LayersSingleTileEnabled();
 
@@ -438,10 +445,10 @@ ClientTiledPaintedLayer::RenderLayer()
 
   if (!mContentClient) {
     if (wantSingleTiledContentClient) {
-      mContentClient = new SingleTiledContentClient(this, ClientManager());
+      mContentClient = new SingleTiledContentClient(*this, ClientManager());
       mHaveSingleTiledContentClient = true;
     } else {
-      mContentClient = new MultiTiledContentClient(this, ClientManager());
+      mContentClient = new MultiTiledContentClient(*this, ClientManager());
       mHaveSingleTiledContentClient = false;
     }
 
@@ -469,9 +476,7 @@ ClientTiledPaintedLayer::RenderLayer()
     // we always have valid content or transparent pixels to sample from.
     IntRect bounds = neededRegion.GetBounds();
     IntRect wholeTiles = bounds;
-    wholeTiles.InflateToMultiple(IntSize(
-      gfxPlatform::GetPlatform()->GetTileWidth(),
-      gfxPlatform::GetPlatform()->GetTileHeight()));
+    wholeTiles.InflateToMultiple(gfx::gfxVars::TileSize());
     IntRect padded = bounds;
     padded.Inflate(1);
     padded.IntersectRect(padded, wholeTiles);

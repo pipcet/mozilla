@@ -23,6 +23,7 @@ _register_modules_protocol_handler();
 
 var _Promise = Components.utils.import("resource://gre/modules/Promise.jsm", {}).Promise;
 var _PromiseTestUtils = Components.utils.import("resource://testing-common/PromiseTestUtils.jsm", {}).PromiseTestUtils;
+Components.utils.importGlobalProperties(["XMLHttpRequest"]);
 
 // Support a common assertion library, Assert.jsm.
 var AssertCls = Components.utils.import("resource://testing-common/Assert.jsm", null).Assert;
@@ -502,6 +503,12 @@ function _execute_test() {
   _PromiseTestUtils.init();
   _PromiseTestUtils.Assert = Assert;
 
+  let coverageCollector = null;
+  if (typeof _JSCOV_DIR === 'string') {
+    let _CoverageCollector = Components.utils.import("resource://testing-common/CoverageUtils.jsm", {}).CoverageCollector;
+    coverageCollector = new _CoverageCollector(_JSCOV_DIR);
+  }
+
   // _HEAD_FILES is dynamically defined by <runxpcshelltests.py>.
   _load_files(_HEAD_FILES);
   // _TEST_FILE is dynamically defined by <runxpcshelltests.py>.
@@ -529,6 +536,11 @@ function _execute_test() {
     } else {
       run_next_test();
     }
+
+    if (coverageCollector != null) {
+      coverageCollector.recordTestCoverage(_TEST_FILE[0]);
+    }
+
     do_test_finished("MAIN run_test");
     _do_main();
     _PromiseTestUtils.assertNoUncaughtRejections();
@@ -539,6 +551,10 @@ function _execute_test() {
     // has already been logged so there is no need to log it again. It's
     // possible that this will mask an NS_ERROR_ABORT that happens after a
     // do_check failure though.
+    if (coverageCollector != null) {
+      coverageCollector.recordTestCoverage(_TEST_FILE[0]);
+    }
+
     if (!_quit || e != Components.results.NS_ERROR_ABORT) {
       let extra = {};
       if (e.fileName) {
@@ -555,6 +571,10 @@ function _execute_test() {
       }
       _testLogger.error(message, extra);
     }
+  }
+
+  if (coverageCollector != null) {
+    coverageCollector.finalize();
   }
 
   // _TAIL_FILES is dynamically defined by <runxpcshelltests.py>.
@@ -1079,20 +1099,21 @@ function do_parse_document(aPath, aType) {
                Components.stack.caller);
   }
 
-  var lf = do_get_file(aPath);
-  const C_i = Components.interfaces;
-  const parserClass = "@mozilla.org/xmlextras/domparser;1";
-  const streamClass = "@mozilla.org/network/file-input-stream;1";
-  var stream = Components.classes[streamClass]
-                         .createInstance(C_i.nsIFileInputStream);
-  stream.init(lf, -1, -1, C_i.nsIFileInputStream.CLOSE_ON_EOF);
-  var parser = Components.classes[parserClass]
-                         .createInstance(C_i.nsIDOMParser);
-  var doc = parser.parseFromStream(stream, null, lf.fileSize, aType);
-  parser = null;
-  stream = null;
-  lf = null;
-  return doc;
+  let file = do_get_file(aPath),
+      ios = Components.classes['@mozilla.org/network/io-service;1']
+            .getService(Components.interfaces.nsIIOService),
+      url = ios.newFileURI(file).spec;
+  file = null;
+  return new Promise((resolve, reject) => {
+    let xhr = new XMLHttpRequest();
+    xhr.open("GET", url);
+    xhr.responseType = "document";
+    xhr.onerror = reject;
+    xhr.onload = () => {
+      resolve(xhr.response);
+    };
+    xhr.send();
+  });
 }
 
 /**
@@ -1248,6 +1269,10 @@ function do_load_child_test_harness()
       // We'll need more magic to get the debugger working in the child
       + "const _JSDEBUGGER_PORT=0; "
       + "const _XPCSHELL_PROCESS='child';";
+
+  if (typeof _JSCOV_DIR === 'string') {
+    command += " const _JSCOV_DIR=" + uneval(_JSCOV_DIR) + ";";
+  }
 
   if (_TESTING_MODULES_DIR) {
     command += " const _TESTING_MODULES_DIR=" + uneval(_TESTING_MODULES_DIR) + ";";
@@ -1591,6 +1616,7 @@ try {
       .getService(Components.interfaces.nsIPrefBranch);
 
     prefs.setCharPref("media.gmp-manager.url.override", "http://%(server)s/dummy-gmp-manager.xml");
+    prefs.setCharPref("media.gmp-manager.updateEnabled", false);
     prefs.setCharPref("extensions.systemAddon.update.url", "http://%(server)s/dummy-system-addons.xml");
     prefs.setCharPref("browser.selfsupport.url", "https://%(server)s/selfsupport-dummy/");
     prefs.setCharPref("toolkit.telemetry.server", "https://%(server)s/telemetry-dummy");

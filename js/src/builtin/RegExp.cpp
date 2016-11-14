@@ -14,6 +14,7 @@
 #include "irregexp/RegExpParser.h"
 #include "jit/InlinableNatives.h"
 #include "vm/RegExpStatics.h"
+#include "vm/SelfHosting.h"
 #include "vm/StringBuffer.h"
 #include "vm/Unicode.h"
 
@@ -24,8 +25,8 @@
 using namespace js;
 using namespace js::unicode;
 
-using mozilla::CheckedInt;
 using mozilla::ArrayLength;
+using mozilla::CheckedInt;
 using mozilla::Maybe;
 
 /*
@@ -187,8 +188,18 @@ enum RegExpSharedUse {
 
 /*
  * ES 2016 draft Mar 25, 2016 21.2.3.2.2.
- * Because this function only ever returns |obj| in the spec, provided by the
- * user, we omit it and just return the usual success/failure.
+ *
+ * Steps 14-15 set |obj|'s "lastIndex" property to zero.  Some of
+ * RegExpInitialize's callers have a fresh RegExp not yet exposed to script:
+ * in these cases zeroing "lastIndex" is infallible.  But others have a RegExp
+ * whose "lastIndex" property might have been made non-writable: here, zeroing
+ * "lastIndex" can fail.  We efficiently solve this problem by completely
+ * removing "lastIndex" zeroing from the provided function.
+ *
+ * CALLERS MUST HANDLE "lastIndex" ZEROING THEMSELVES!
+ *
+ * Because this function only ever returns a user-provided |obj| in the spec,
+ * we omit it and just return the usual success/failure.
  */
 static bool
 RegExpInitializeIgnoringLastIndex(JSContext* cx, Handle<RegExpObject*> obj,
@@ -290,11 +301,11 @@ js::IsRegExp(JSContext* cx, HandleValue value, bool* result)
     }
 
     /* Steps 5-6. */
-    ESClassValue cls;
+    ESClass cls;
     if (!GetClassOfValue(cx, value, &cls))
         return false;
 
-    *result = cls == ESClass_RegExp;
+    *result = cls == ESClass::RegExp;
     return true;
 }
 
@@ -308,13 +319,13 @@ regexp_compile_impl(JSContext* cx, const CallArgs& args)
 
     // Step 3.
     RootedValue patternValue(cx, args.get(0));
-    ESClassValue cls;
+    ESClass cls;
     if (!GetClassOfValue(cx, patternValue, &cls))
         return false;
-    if (cls == ESClass_RegExp) {
+    if (cls == ESClass::RegExp) {
         // Step 3a.
         if (args.hasDefined(1)) {
-            JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_NEWREGEXP_FLAGGED);
+            JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_NEWREGEXP_FLAGGED);
             return false;
         }
 
@@ -347,6 +358,10 @@ regexp_compile_impl(JSContext* cx, const CallArgs& args)
             return false;
     }
 
+    // The final niggling bit of step 5.
+    //
+    // |regexp| is user-exposed, but if its "lastIndex" property hasn't been
+    // made non-writable, we can still use a fast path to zero it.
     if (regexp->lookupPure(cx->names().lastIndex)->writable()) {
         regexp->zeroLastIndex(cx);
     } else {
@@ -405,10 +420,10 @@ js::regexp_construct(JSContext* cx, unsigned argc, Value* vp)
     RootedValue patternValue(cx, args.get(0));
 
     // Step 4.
-    ESClassValue cls;
+    ESClass cls;
     if (!GetClassOfValue(cx, patternValue, &cls))
         return false;
-    if (cls == ESClass_RegExp) {
+    if (cls == ESClass::RegExp) {
         // Beware!  |patternObj| might be a proxy into another compartment, so
         // don't assume |patternObj.is<RegExpObject>()|.  For the same reason,
         // don't reuse the RegExpShared below.
@@ -508,10 +523,9 @@ js::regexp_construct(JSContext* cx, unsigned argc, Value* vp)
 /*
  * ES 2017 draft rev 6a13789aa9e7c6de4e96b7d3e24d9e6eba6584ad 21.2.3.1
  * steps 4, 7-8.
- * Ignore sticky flag of flags argument, for optimized path in @@split.
  */
 bool
-js::regexp_construct_no_sticky(JSContext* cx, unsigned argc, Value* vp)
+js::regexp_construct_raw_flags(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     MOZ_ASSERT(args.length() == 2);
@@ -523,13 +537,7 @@ js::regexp_construct_no_sticky(JSContext* cx, unsigned argc, Value* vp)
     RootedAtom sourceAtom(cx, rx->getSource());
 
     // Step 4.c.
-    RootedString flagStr(cx, args[1].toString());
-    RegExpFlag flags = RegExpFlag(0);
-    if (!ParseRegExpFlags(cx, flagStr, &flags))
-        return false;
-
-    // Ignore sticky flag.
-    flags = RegExpFlag(flags & ~StickyFlag);
+    int32_t flags = int32_t(args[1].toNumber());
 
     // Step 7.
     Rooted<RegExpObject*> regexp(cx, RegExpAlloc(cx));
@@ -537,7 +545,34 @@ js::regexp_construct_no_sticky(JSContext* cx, unsigned argc, Value* vp)
         return false;
 
     // Step 8.
+    regexp->initAndZeroLastIndex(sourceAtom, RegExpFlag(flags), cx);
+    args.rval().setObject(*regexp);
+    return true;
+}
+
+bool
+js::regexp_clone(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    RootedObject from(cx, &args[0].toObject());
+
+    RootedAtom sourceAtom(cx);
+    RegExpFlag flags;
+    {
+        RegExpGuard g(cx);
+        if (!RegExpToShared(cx, from, &g))
+            return false;
+        sourceAtom = g->getSource();
+        flags = g->getFlags();
+    }
+
+    Rooted<RegExpObject*> regexp(cx, RegExpAlloc(cx));
+    if (!regexp)
+        return false;
+
     regexp->initAndZeroLastIndex(sourceAtom, flags, cx);
+
     args.rval().setObject(*regexp);
     return true;
 }
@@ -1165,7 +1200,7 @@ js::regexp_test_no_statics(JSContext* cx, unsigned argc, Value* vp)
 }
 
 static void
-GetParen(JSLinearString* matched, JS::Value capture, JSSubString* out)
+GetParen(JSLinearString* matched, const JS::Value& capture, JSSubString* out)
 {
     if (capture.isUndefined()) {
         out->initEmpty(matched);
@@ -1541,6 +1576,15 @@ js::RegExpPrototypeOptimizableRaw(JSContext* cx, JSObject* proto, uint8_t* resul
         return true;
     }
 
+    JSFunction* flagsGetter;
+    if (!GetGetterPure(cx, proto, NameToId(cx->names().flags), &flagsGetter))
+        return false;
+
+    if (!IsSelfHostedFunctionWithName(flagsGetter, cx->names().RegExpFlagsGetter)) {
+        *result = false;
+        return true;
+    }
+
     JSNative globalGetter;
     if (!GetOwnNativeGetterPure(cx, proto, NameToId(cx->names().global), &globalGetter))
         return false;
@@ -1550,11 +1594,38 @@ js::RegExpPrototypeOptimizableRaw(JSContext* cx, JSObject* proto, uint8_t* resul
         return true;
     }
 
+    JSNative ignoreCaseGetter;
+    if (!GetOwnNativeGetterPure(cx, proto, NameToId(cx->names().ignoreCase), &ignoreCaseGetter))
+        return false;
+
+    if (ignoreCaseGetter != regexp_ignoreCase) {
+        *result = false;
+        return true;
+    }
+
+    JSNative multilineGetter;
+    if (!GetOwnNativeGetterPure(cx, proto, NameToId(cx->names().multiline), &multilineGetter))
+        return false;
+
+    if (multilineGetter != regexp_multiline) {
+        *result = false;
+        return true;
+    }
+
     JSNative stickyGetter;
     if (!GetOwnNativeGetterPure(cx, proto, NameToId(cx->names().sticky), &stickyGetter))
         return false;
 
     if (stickyGetter != regexp_sticky) {
+        *result = false;
+        return true;
+    }
+
+    JSNative unicodeGetter;
+    if (!GetOwnNativeGetterPure(cx, proto, NameToId(cx->names().unicode), &unicodeGetter))
+        return false;
+
+    if (unicodeGetter != regexp_unicode) {
         *result = false;
         return true;
     }
@@ -1604,18 +1675,14 @@ js::RegExpInstanceOptimizable(JSContext* cx, unsigned argc, Value* vp)
 }
 
 bool
-js::RegExpInstanceOptimizableRaw(JSContext* cx, JSObject* rx, JSObject* proto, uint8_t* result)
+js::RegExpInstanceOptimizableRaw(JSContext* cx, JSObject* obj, JSObject* proto, uint8_t* result)
 {
     JS::AutoCheckCannotGC nogc;
-    if (!rx->isNative()) {
-        *result = false;
-        return true;
-    }
 
-    NativeObject* nobj = static_cast<NativeObject*>(rx);
+    RegExpObject* rx = &obj->as<RegExpObject>();
 
     Shape* shape = cx->compartment()->regExps.getOptimizableRegExpInstanceShape();
-    if (shape == nobj->lastProperty()) {
+    if (shape == rx->lastProperty()) {
         *result = true;
         return true;
     }
@@ -1630,12 +1697,12 @@ js::RegExpInstanceOptimizableRaw(JSContext* cx, JSObject* rx, JSObject* proto, u
         return true;
     }
 
-    if (!RegExpObject::isInitialShape(nobj)) {
+    if (!RegExpObject::isInitialShape(rx)) {
         *result = false;
         return true;
     }
 
-    cx->compartment()->regExps.setOptimizableRegExpInstanceShape(nobj->lastProperty());
+    cx->compartment()->regExps.setOptimizableRegExpInstanceShape(rx->lastProperty());
     *result = true;
     return true;
 }
@@ -1672,16 +1739,16 @@ js::intrinsic_GetElemBaseForLambda(JSContext* cx, unsigned argc, Value* vp)
 
     /*
      * JSOP_GETALIASEDVAR tells us exactly where to find the base object 'b'.
-     * Rule out the (unlikely) possibility of a function with a call object
-     * since it would make our scope walk off by 1.
+     * Rule out the (unlikely) possibility of a function with environment
+     * objects since it would make our environment walk off.
      */
-    if (JSOp(*pc) != JSOP_GETALIASEDVAR || fun->needsCallObject())
+    if (JSOp(*pc) != JSOP_GETALIASEDVAR || fun->needsSomeEnvironmentObject())
         return true;
-    ScopeCoordinate sc(pc);
-    ScopeObject* scope = &fun->environment()->as<ScopeObject>();
-    for (unsigned i = 0; i < sc.hops(); ++i)
-        scope = &scope->enclosingScope().as<ScopeObject>();
-    Value b = scope->aliasedVar(sc);
+    EnvironmentCoordinate ec(pc);
+    EnvironmentObject* env = &fun->environment()->as<EnvironmentObject>();
+    for (unsigned i = 0; i < ec.hops(); ++i)
+        env = &env->enclosingEnvironment().as<EnvironmentObject>();
+    Value b = env->aliasedBinding(ec);
     pc += JSOP_GETALIASEDVAR_LENGTH;
 
     /* Look for 'a' to be the lambda's first argument. */

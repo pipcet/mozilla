@@ -233,9 +233,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsNestedAboutURI)
 
 #ifdef NECKO_PROTOCOL_about
 // about
-#ifdef NS_BUILD_REFCNT_LOGGING
-#include "nsAboutBloat.h"
-#endif
 #include "nsAboutCache.h"
 #include "nsAboutCacheEntry.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsAboutCacheEntry)
@@ -269,6 +266,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsFtpProtocolHandler, Init)
 #include "nsHttpDigestAuth.h"
 #include "nsHttpNTLMAuth.h"
 #include "nsHttpActivityDistributor.h"
+#include "ThrottleQueue.h"
 #undef LOG
 #undef LOG_ENABLED
 namespace mozilla {
@@ -281,21 +279,26 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsHttpChannelAuthProvider)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHttpActivityDistributor)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHttpBasicAuth)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHttpDigestAuth)
+NS_GENERIC_FACTORY_CONSTRUCTOR(ThrottleQueue)
 } // namespace net
 } // namespace mozilla
 #endif // !NECKO_PROTOCOL_http
 
 #include "mozilla/net/Dashboard.h"
-#include "mozilla/net/PackagedAppService.h"
-#include "mozilla/net/PackagedAppVerifier.h"
 namespace mozilla {
 namespace net {
   NS_GENERIC_FACTORY_CONSTRUCTOR(Dashboard)
-  NS_GENERIC_FACTORY_CONSTRUCTOR(PackagedAppService)
-  NS_GENERIC_FACTORY_CONSTRUCTOR(PackagedAppVerifier)
 } // namespace net
 } // namespace mozilla
-#include "AppProtocolHandler.h"
+
+#ifdef XP_WIN
+#include "../socket/nsNamedPipeService.h"
+namespace mozilla {
+namespace net {
+NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(NamedPipeService, Init)
+} // namespace net
+} // namespace mozilla
+#endif
 
 #ifdef NECKO_PROTOCOL_res
 // resource
@@ -415,9 +418,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsNotifyAddrListener, Init)
 #elif defined(MOZ_WIDGET_COCOA)
 #include "nsNetworkLinkService.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsNetworkLinkService, Init)
-#elif defined(MOZ_ENABLE_QTNETWORK)
-#include "nsQtNetworkLinkService.h"
-NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsQtNetworkLinkService, Init)
 #elif defined(MOZ_WIDGET_ANDROID)
 #include "nsAndroidNetworkLinkService.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsAndroidNetworkLinkService)
@@ -469,7 +469,6 @@ nsresult NS_NewStreamConv(nsStreamConverterService **aStreamConv);
 #define INDEX_TO_HTML                "?from=application/http-index-format&to=text/html"
 #define MULTI_MIXED_X                "?from=multipart/x-mixed-replace&to=*/*"
 #define MULTI_MIXED                  "?from=multipart/mixed&to=*/*"
-#define APPLICATION_PACKAGE_CONV     "?from=" APPLICATION_PACKAGE "&to=*/*"
 #define MULTI_BYTERANGES             "?from=multipart/byteranges&to=*/*"
 #define UNKNOWN_CONTENT              "?from=" UNKNOWN_CONTENT_TYPE "&to=*/*"
 #define GZIP_TO_UNCOMPRESSED         "?from=gzip&to=uncompressed"
@@ -489,7 +488,6 @@ static const mozilla::Module::CategoryEntry kNeckoCategories[] = {
     { NS_ISTREAMCONVERTER_KEY, INDEX_TO_HTML, "" },
     { NS_ISTREAMCONVERTER_KEY, MULTI_MIXED_X, "" },
     { NS_ISTREAMCONVERTER_KEY, MULTI_MIXED, "" },
-    { NS_ISTREAMCONVERTER_KEY, APPLICATION_PACKAGE_CONV, "" },
     { NS_ISTREAMCONVERTER_KEY, MULTI_BYTERANGES, "" },
     { NS_ISTREAMCONVERTER_KEY, UNKNOWN_CONTENT, "" },
     { NS_ISTREAMCONVERTER_KEY, GZIP_TO_UNCOMPRESSED, "" },
@@ -674,7 +672,7 @@ CreateNewBinaryDetectorFactory(nsISupports *aOuter, REFNSIID aIID, void **aResul
     return NS_ERROR_NO_AGGREGATION;
   }
 
-  nsBinaryDetector* inst = new nsBinaryDetector();
+  auto* inst = new nsBinaryDetector();
   if (!inst) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -767,8 +765,9 @@ NS_DEFINE_NAMED_CID(NS_BUFFEREDOUTPUTSTREAM_CID);
 NS_DEFINE_NAMED_CID(NS_MIMEINPUTSTREAM_CID);
 NS_DEFINE_NAMED_CID(NS_PROTOCOLPROXYSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_STREAMCONVERTERSERVICE_CID);
-NS_DEFINE_NAMED_CID(NS_PACKAGEDAPPSERVICE_CID);
-NS_DEFINE_NAMED_CID(NS_PACKAGEDAPPVERIFIER_CID);
+#if defined(XP_WIN)
+NS_DEFINE_NAMED_CID(NS_NAMEDPIPESERVICE_CID);
+#endif
 NS_DEFINE_NAMED_CID(NS_DASHBOARD_CID);
 #ifdef NECKO_PROTOCOL_ftp
 NS_DEFINE_NAMED_CID(NS_FTPDIRLISTINGCONVERTER_CID);
@@ -798,6 +797,7 @@ NS_DEFINE_NAMED_CID(NS_HTTPNTLMAUTH_CID);
 NS_DEFINE_NAMED_CID(NS_HTTPAUTHMANAGER_CID);
 NS_DEFINE_NAMED_CID(NS_HTTPCHANNELAUTHPROVIDER_CID);
 NS_DEFINE_NAMED_CID(NS_HTTPACTIVITYDISTRIBUTOR_CID);
+NS_DEFINE_NAMED_CID(NS_THROTTLEQUEUE_CID);
 #endif // !NECKO_PROTOCOL_http
 #ifdef NECKO_PROTOCOL_ftp
 NS_DEFINE_NAMED_CID(NS_FTPPROTOCOLHANDLER_CID);
@@ -812,9 +812,6 @@ NS_DEFINE_NAMED_CID(NS_SAFEABOUTPROTOCOLHANDLER_CID);
 NS_DEFINE_NAMED_CID(NS_ABOUT_BLANK_MODULE_CID);
 NS_DEFINE_NAMED_CID(NS_NESTEDABOUTURI_CID);
 #ifdef NECKO_PROTOCOL_about
-#ifdef NS_BUILD_REFCNT_LOGGING
-NS_DEFINE_NAMED_CID(NS_ABOUT_BLOAT_MODULE_CID);
-#endif
 NS_DEFINE_NAMED_CID(NS_ABOUT_CACHE_MODULE_CID);
 NS_DEFINE_NAMED_CID(NS_ABOUT_CACHE_ENTRY_MODULE_CID);
 #endif
@@ -825,7 +822,6 @@ NS_DEFINE_NAMED_CID(NS_CACHESERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_APPLICATIONCACHESERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_APPLICATIONCACHENAMESPACE_CID);
 NS_DEFINE_NAMED_CID(NS_APPLICATIONCACHE_CID);
-NS_DEFINE_NAMED_CID(NS_APPPROTOCOLHANDLER_CID);
 #ifdef NECKO_COOKIES
 NS_DEFINE_NAMED_CID(NS_COOKIEMANAGER_CID);
 NS_DEFINE_NAMED_CID(NS_COOKIESERVICE_CID);
@@ -855,8 +851,6 @@ NS_DEFINE_NAMED_CID(NS_RTSPPROTOCOLHANDLER_CID);
 #if defined(XP_WIN)
 NS_DEFINE_NAMED_CID(NS_NETWORK_LINK_SERVICE_CID);
 #elif defined(MOZ_WIDGET_COCOA)
-NS_DEFINE_NAMED_CID(NS_NETWORK_LINK_SERVICE_CID);
-#elif defined(MOZ_ENABLE_QTNETWORK)
 NS_DEFINE_NAMED_CID(NS_NETWORK_LINK_SERVICE_CID);
 #elif defined(MOZ_WIDGET_ANDROID)
 NS_DEFINE_NAMED_CID(NS_NETWORK_LINK_SERVICE_CID);
@@ -920,8 +914,9 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kNS_MIMEINPUTSTREAM_CID, false, nullptr, nsMIMEInputStreamConstructor },
     { &kNS_PROTOCOLPROXYSERVICE_CID, true, nullptr, nsProtocolProxyServiceConstructor },
     { &kNS_STREAMCONVERTERSERVICE_CID, false, nullptr, CreateNewStreamConvServiceFactory },
-    { &kNS_PACKAGEDAPPSERVICE_CID, false, NULL, mozilla::net::PackagedAppServiceConstructor },
-    { &kNS_PACKAGEDAPPVERIFIER_CID, false, NULL, mozilla::net::PackagedAppVerifierConstructor },
+#if defined (XP_WIN)
+    { &kNS_NAMEDPIPESERVICE_CID, false, NULL, mozilla::net::NamedPipeServiceConstructor },
+#endif
     { &kNS_DASHBOARD_CID, false, nullptr, mozilla::net::DashboardConstructor },
 #ifdef NECKO_PROTOCOL_ftp
     { &kNS_FTPDIRLISTINGCONVERTER_CID, false, nullptr, CreateNewFTPDirListingConv },
@@ -951,6 +946,7 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kNS_HTTPAUTHMANAGER_CID, false, nullptr, mozilla::net::nsHttpAuthManagerConstructor },
     { &kNS_HTTPCHANNELAUTHPROVIDER_CID, false, nullptr, mozilla::net::nsHttpChannelAuthProviderConstructor },
     { &kNS_HTTPACTIVITYDISTRIBUTOR_CID, false, nullptr, mozilla::net::nsHttpActivityDistributorConstructor },
+    { &kNS_THROTTLEQUEUE_CID, false, nullptr, mozilla::net::ThrottleQueueConstructor },
 #endif // !NECKO_PROTOCOL_http
 #ifdef NECKO_PROTOCOL_ftp
     { &kNS_FTPPROTOCOLHANDLER_CID, false, nullptr, nsFtpProtocolHandlerConstructor },
@@ -965,9 +961,6 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kNS_ABOUT_BLANK_MODULE_CID, false, nullptr, nsAboutBlank::Create },
     { &kNS_NESTEDABOUTURI_CID, false, nullptr, nsNestedAboutURIConstructor },
 #ifdef NECKO_PROTOCOL_about
-#ifdef NS_BUILD_REFCNT_LOGGING
-    { &kNS_ABOUT_BLOAT_MODULE_CID, false, nullptr, nsAboutBloat::Create },
-#endif
     { &kNS_ABOUT_CACHE_MODULE_CID, false, nullptr, nsAboutCache::Create },
     { &kNS_ABOUT_CACHE_ENTRY_MODULE_CID, false, nullptr, nsAboutCacheEntryConstructor },
 #endif
@@ -978,7 +971,6 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kNS_APPLICATIONCACHESERVICE_CID, false, nullptr, nsApplicationCacheServiceConstructor },
     { &kNS_APPLICATIONCACHENAMESPACE_CID, false, nullptr, nsApplicationCacheNamespaceConstructor },
     { &kNS_APPLICATIONCACHE_CID, false, nullptr, nsApplicationCacheConstructor },
-    { &kNS_APPPROTOCOLHANDLER_CID, false, nullptr, AppProtocolHandler::Create },
 #ifdef NECKO_COOKIES
     { &kNS_COOKIEMANAGER_CID, false, nullptr, nsICookieServiceConstructor },
     { &kNS_COOKIESERVICE_CID, false, nullptr, nsICookieServiceConstructor },
@@ -1011,8 +1003,6 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kNS_NETWORK_LINK_SERVICE_CID, false, nullptr, nsNotifyAddrListenerConstructor },
 #elif defined(MOZ_WIDGET_COCOA)
     { &kNS_NETWORK_LINK_SERVICE_CID, false, nullptr, nsNetworkLinkServiceConstructor },
-#elif defined(MOZ_ENABLE_QTNETWORK)
-    { &kNS_NETWORK_LINK_SERVICE_CID, false, nullptr, nsQtNetworkLinkServiceConstructor },
 #elif defined(MOZ_WIDGET_ANDROID)
     { &kNS_NETWORK_LINK_SERVICE_CID, false, nullptr, nsAndroidNetworkLinkServiceConstructor },
 #elif defined(XP_LINUX)
@@ -1075,8 +1065,9 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
     { NS_MIMEINPUTSTREAM_CONTRACTID, &kNS_MIMEINPUTSTREAM_CID },
     { NS_PROTOCOLPROXYSERVICE_CONTRACTID, &kNS_PROTOCOLPROXYSERVICE_CID },
     { NS_STREAMCONVERTERSERVICE_CONTRACTID, &kNS_STREAMCONVERTERSERVICE_CID },
-    { NS_PACKAGEDAPPSERVICE_CONTRACTID, &kNS_PACKAGEDAPPSERVICE_CID },
-    { NS_PACKAGEDAPPVERIFIER_CONTRACTID, &kNS_PACKAGEDAPPVERIFIER_CID },
+#if defined(XP_WIN)
+    { NS_NAMEDPIPESERVICE_CONTRACTID, &kNS_NAMEDPIPESERVICE_CID },
+#endif
     { NS_DASHBOARD_CONTRACTID, &kNS_DASHBOARD_CID },
 #ifdef NECKO_PROTOCOL_ftp
     { NS_ISTREAMCONVERTER_KEY FTP_TO_INDEX, &kNS_FTPDIRLISTINGCONVERTER_CID },
@@ -1086,7 +1077,6 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
     { NS_ISTREAMCONVERTER_KEY MULTI_MIXED_X, &kNS_MULTIMIXEDCONVERTER_CID },
     { NS_ISTREAMCONVERTER_KEY MULTI_BYTERANGES, &kNS_MULTIMIXEDCONVERTER_CID },
     { NS_ISTREAMCONVERTER_KEY MULTI_MIXED, &kNS_MULTIMIXEDCONVERTER_CID },
-    { NS_ISTREAMCONVERTER_KEY APPLICATION_PACKAGE_CONV, &kNS_MULTIMIXEDCONVERTER_CID },
     { NS_ISTREAMCONVERTER_KEY UNKNOWN_CONTENT, &kNS_UNKNOWNDECODER_CID },
     { NS_GENERIC_CONTENT_SNIFFER, &kNS_UNKNOWNDECODER_CID },
     { NS_BINARYDETECTOR_CONTRACTID, &kNS_BINARYDETECTOR_CID },
@@ -1115,6 +1105,7 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
     { NS_HTTPAUTHMANAGER_CONTRACTID, &kNS_HTTPAUTHMANAGER_CID },
     { NS_HTTPCHANNELAUTHPROVIDER_CONTRACTID, &kNS_HTTPCHANNELAUTHPROVIDER_CID },
     { NS_HTTPACTIVITYDISTRIBUTOR_CONTRACTID, &kNS_HTTPACTIVITYDISTRIBUTOR_CID },
+    { NS_THROTTLEQUEUE_CONTRACTID, &kNS_THROTTLEQUEUE_CID },
 #endif // !NECKO_PROTOCOL_http
 #ifdef NECKO_PROTOCOL_ftp
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "ftp", &kNS_FTPPROTOCOLHANDLER_CID },
@@ -1127,9 +1118,6 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "moz-safe-about", &kNS_SAFEABOUTPROTOCOLHANDLER_CID },
     { NS_ABOUT_MODULE_CONTRACTID_PREFIX "blank", &kNS_ABOUT_BLANK_MODULE_CID },
 #ifdef NECKO_PROTOCOL_about
-#ifdef NS_BUILD_REFCNT_LOGGING
-    { NS_ABOUT_MODULE_CONTRACTID_PREFIX "bloat", &kNS_ABOUT_BLOAT_MODULE_CID },
-#endif
     { NS_ABOUT_MODULE_CONTRACTID_PREFIX "cache", &kNS_ABOUT_CACHE_MODULE_CID },
     { NS_ABOUT_MODULE_CONTRACTID_PREFIX "cache-entry", &kNS_ABOUT_CACHE_ENTRY_MODULE_CID },
 #endif
@@ -1140,7 +1128,6 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
     { NS_APPLICATIONCACHESERVICE_CONTRACTID, &kNS_APPLICATIONCACHESERVICE_CID },
     { NS_APPLICATIONCACHENAMESPACE_CONTRACTID, &kNS_APPLICATIONCACHENAMESPACE_CID },
     { NS_APPLICATIONCACHE_CONTRACTID, &kNS_APPLICATIONCACHE_CID },
-    { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "app", &kNS_APPPROTOCOLHANDLER_CID },
 #ifdef NECKO_COOKIES
     { NS_COOKIEMANAGER_CONTRACTID, &kNS_COOKIEMANAGER_CID },
     { NS_COOKIESERVICE_CONTRACTID, &kNS_COOKIESERVICE_CID },
@@ -1170,8 +1157,6 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
 #if defined(XP_WIN)
     { NS_NETWORK_LINK_SERVICE_CONTRACTID, &kNS_NETWORK_LINK_SERVICE_CID },
 #elif defined(MOZ_WIDGET_COCOA)
-    { NS_NETWORK_LINK_SERVICE_CONTRACTID, &kNS_NETWORK_LINK_SERVICE_CID },
-#elif defined(MOZ_ENABLE_QTNETWORK)
     { NS_NETWORK_LINK_SERVICE_CONTRACTID, &kNS_NETWORK_LINK_SERVICE_CID },
 #elif defined(MOZ_WIDGET_ANDROID)
     { NS_NETWORK_LINK_SERVICE_CONTRACTID, &kNS_NETWORK_LINK_SERVICE_CID },

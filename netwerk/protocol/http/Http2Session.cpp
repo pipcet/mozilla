@@ -34,7 +34,7 @@
 #include "nsURLHelper.h"
 #include "prnetdb.h"
 #include "sslt.h"
-#include "mozilla/Snprintf.h"
+#include "mozilla/Sprintf.h"
 #include "nsSocketTransportService2.h"
 #include "nsNetUtil.h"
 
@@ -69,6 +69,7 @@ Http2Session::Http2Session(nsISocketTransport *aSocketTransport, uint32_t versio
   , mSegmentReader(nullptr)
   , mSegmentWriter(nullptr)
   , mNextStreamID(3) // 1 is reserved for Updgrade handshakes
+  , mLastPushedID(0)
   , mConcurrentHighWater(0)
   , mDownstreamState(BUFFERING_OPENING_SETTINGS)
   , mInputFrameBufferSize(kDefaultBufferSize)
@@ -122,7 +123,6 @@ Http2Session::Http2Session(nsISocketTransport *aSocketTransport, uint32_t versio
   mInputFrameBuffer = MakeUnique<char[]>(mInputFrameBufferSize);
   mOutputQueueBuffer = MakeUnique<char[]>(mOutputQueueSize);
   mDecompressBuffer.SetCapacity(kDefaultBufferSize);
-  mDecompressor.SetCompressor(&mCompressor);
 
   mPushAllowance = gHttpHandler->SpdyPushAllowance();
   mInitialRwin = std::max(gHttpHandler->SpdyPullAllowance(), mPushAllowance);
@@ -382,6 +382,17 @@ Http2Session::AddStream(nsAHttpTransaction *aHttpTransaction,
 
   if (!mConnection) {
     mConnection = aHttpTransaction->Connection();
+  }
+
+  if (mClosed || mShouldGoAway) {
+    nsHttpTransaction *trans = aHttpTransaction->QueryHttpTransaction();
+    if (trans && !trans->GetPushedStream()) {
+      LOG3(("Http2Session::AddStream %p atrans=%p trans=%p session unusable - resched.\n",
+            this, aHttpTransaction, trans));
+      aHttpTransaction->SetConnection(nullptr);
+      gHttpHandler->InitiateTransaction(trans, trans->Priority());
+      return true;
+    }
   }
 
   aHttpTransaction->SetConnection(this);
@@ -821,10 +832,10 @@ Http2Session::SendHello()
   MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
   LOG3(("Http2Session::SendHello %p\n", this));
 
-  // sized for magic + 4 settings and a session window update and 5 priority frames
+  // sized for magic + 5 settings and a session window update and 5 priority frames
   // 24 magic, 33 for settings (9 header + 4 settings @6), 13 for window update,
   // 5 priority frames at 14 (9 + 5) each
-  static const uint32_t maxSettings = 4;
+  static const uint32_t maxSettings = 5;
   static const uint32_t prioritySize = 5 * (kFrameHeaderBytes + 5);
   static const uint32_t maxDataLen = 24 + kFrameHeaderBytes + maxSettings * 6 + 13 + prioritySize;
   char *packet = EnsureOutputBuffer(maxDataLen);
@@ -843,6 +854,14 @@ Http2Session::SendHello()
   // 2nd entry is bytes 15 to 20
   // 3rd entry is bytes 21 to 26
   // 4th entry is bytes 27 to 32
+  // 5th entry is bytes 33 to 38
+
+  // Let the other endpoint know about our default HPACK decompress table size
+  uint32_t maxHpackBufferSize = gHttpHandler->DefaultHpackBuffer();
+  mDecompressor.SetInitialMaxBufferSize(maxHpackBufferSize);
+  NetworkEndian::writeUint16(packet + kFrameHeaderBytes + (6 * numberOfEntries), SETTINGS_TYPE_HEADER_TABLE_SIZE);
+  NetworkEndian::writeUint32(packet + kFrameHeaderBytes + (6 * numberOfEntries) + 2, maxHpackBufferSize);
+  numberOfEntries++;
 
   if (!gHttpHandler->AllowPush()) {
     // If we don't support push then set MAX_CONCURRENT to 0 and also
@@ -1541,6 +1560,12 @@ Http2Session::RecvPushPromise(Http2Session *self)
     promisedID = NetworkEndian::readUint32(
         self->mInputFrameBuffer.get() + kFrameHeaderBytes + paddingControlBytes);
     promisedID &= 0x7fffffff;
+    if (promisedID <= self->mLastPushedID) {
+      LOG3(("Http2Session::RecvPushPromise %p ID too low %u expected > %u.\n",
+            self, promisedID, self->mLastPushedID));
+      RETURN_SESSION_ERROR(self, PROTOCOL_ERROR);
+    }
+    self->mLastPushedID = promisedID;
   }
 
   uint32_t associatedID = self->mInputFrameID;
@@ -2051,7 +2076,7 @@ UpdateAltSvcEvent(const nsCString &header,
 
     AltSvcMapping::ProcessHeader(mHeader, originScheme, originHost, originPort,
                                  mCI->GetUsername(), mCI->GetPrivate(), mCallbacks,
-                                 mCI->ProxyInfo(), 0);
+                                 mCI->ProxyInfo(), 0, mCI->GetOriginAttributes());
     return NS_OK;
   }
 
@@ -2148,7 +2173,7 @@ Http2Session::RecvAltSvc(Http2Session *self)
     }
   } else {
     // handling of push streams is not defined. Let's ignore it
-    LOG(("Http2Session %p Alt-Svc Stream 0 has empty origin\n", self));
+    LOG(("Http2Session %p Alt-Svc received on pushed stream - ignoring\n", self));
     self->ResetDownstreamState();
     return NS_OK;
   }
@@ -2175,11 +2200,6 @@ Http2Session::RecvAltSvc(Http2Session *self)
     nsAutoCString specifiedOriginHost;
     if (origin.EqualsIgnoreCase("https://", 8)) {
       specifiedOriginHost.Assign(origin.get() + 8, origin.Length() - 8);
-      if (ci->GetInsecureScheme()) {
-        // technically this is ok because it will still be confirmed before being used
-        // but let's not support it.
-        okToReroute = false;
-      }
     } else if (origin.EqualsIgnoreCase("http://", 7)) {
       specifiedOriginHost.Assign(origin.get() + 7, origin.Length() - 7);
     }
@@ -3531,8 +3551,8 @@ Http2Session::ConfirmTLSProfile()
     LOG3(("Http2Session::ConfirmTLSProfile %p FAILED due to DH %d < 2048\n",
           this, keybits));
     RETURN_SESSION_ERROR(this, INADEQUATE_SECURITY);
-  } else if (kea == ssl_kea_ecdh && keybits < 256) { // 256 bits is "security level" of 128
-    LOG3(("Http2Session::ConfirmTLSProfile %p FAILED due to ECDH %d < 256\n",
+  } else if (kea == ssl_kea_ecdh && keybits < 224) { // see rfc7540 9.2.1.
+    LOG3(("Http2Session::ConfirmTLSProfile %p FAILED due to ECDH %d < 224\n",
           this, keybits));
     RETURN_SESSION_ERROR(this, INADEQUATE_SECURITY);
   }
@@ -3581,8 +3601,13 @@ Http2Session::TransactionHasDataToWrite(nsAHttpTransaction *caller)
   LOG3(("Http2Session::TransactionHasDataToWrite %p ID is 0x%X\n",
         this, stream->StreamID()));
 
-  mReadyForWrite.Push(stream);
-  SetWriteCallbacks();
+  if (!mClosed) {
+    mReadyForWrite.Push(stream);
+    SetWriteCallbacks();
+  } else {
+    LOG3(("Http2Session::TransactionHasDataToWrite %p closed so not setting Ready4Write\n",
+          this));
+  }
 
   // NSPR poll will not poll the network if there are non system PR_FileDesc's
   // that are ready - so we can get into a deadlock waiting for the system IO

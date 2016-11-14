@@ -83,6 +83,8 @@ AccessibleCaretManager::sCaretsAllowDraggingAcrossOtherCaret = true;
 AccessibleCaretManager::sHapticFeedback = false;
 /*static*/ bool
 AccessibleCaretManager::sExtendSelectionForPhoneNumber = false;
+/*static*/ bool
+AccessibleCaretManager::sHideCaretsForMouseInput = true;
 
 AccessibleCaretManager::AccessibleCaretManager(nsIPresShell* aPresShell)
   : mPresShell(aPresShell)
@@ -114,6 +116,8 @@ AccessibleCaretManager::AccessibleCaretManager(nsIPresShell* aPresShell)
                                  "layout.accessiblecaret.hapticfeedback");
     Preferences::AddBoolVarCache(&sExtendSelectionForPhoneNumber,
       "layout.accessiblecaret.extend_selection_for_phone_number");
+    Preferences::AddBoolVarCache(&sHideCaretsForMouseInput,
+      "layout.accessiblecaret.hide_carets_for_mouse_input");
     addedPrefs = true;
   }
 }
@@ -181,6 +185,21 @@ AccessibleCaretManager::OnSelectionChanged(nsIDOMDocument* aDoc,
   // Range will collapse after cutting or copying text.
   if (aReason & (nsISelectionListener::COLLAPSETOSTART_REASON |
                  nsISelectionListener::COLLAPSETOEND_REASON)) {
+    HideCarets();
+    return NS_OK;
+  }
+
+  // For mouse input we don't want to show the carets.
+  if (sHideCaretsForMouseInput &&
+      mLastInputSource == nsIDOMMouseEvent::MOZ_SOURCE_MOUSE) {
+    HideCarets();
+    return NS_OK;
+  }
+
+  // No need to show the carets for select all action when we want to hide
+  // the carets for mouse input.
+  if (sHideCaretsForMouseInput &&
+      (aReason & nsISelectionListener::SELECTALL_REASON)) {
     HideCarets();
     return NS_OK;
   }
@@ -457,14 +476,22 @@ AccessibleCaretManager::ProvideHapticFeedback()
 }
 
 nsresult
-AccessibleCaretManager::PressCaret(const nsPoint& aPoint)
+AccessibleCaretManager::PressCaret(const nsPoint& aPoint,
+                                   EventClassID aEventClass)
 {
   nsresult rv = NS_ERROR_FAILURE;
 
-  if (mFirstCaret->Contains(aPoint)) {
+  MOZ_ASSERT(aEventClass == eMouseEventClass || aEventClass == eTouchEventClass,
+             "Unexpected event class!");
+
+  using TouchArea = AccessibleCaret::TouchArea;
+  TouchArea touchArea =
+    aEventClass == eMouseEventClass ? TouchArea::CaretImage : TouchArea::Full;
+
+  if (mFirstCaret->Contains(aPoint, touchArea)) {
     mActiveCaret = mFirstCaret.get();
     SetSelectionDirection(eDirPrevious);
-  } else if (mSecondCaret->Contains(aPoint)) {
+  } else if (mSecondCaret->Contains(aPoint, touchArea)) {
     mActiveCaret = mSecondCaret.get();
     SetSelectionDirection(eDirNext);
   }
@@ -528,6 +555,16 @@ AccessibleCaretManager::SelectWordOrShortcut(const nsPoint& aPoint)
     ProvideHapticFeedback();
   };
 
+  // If the long-tap is landing on a pre-existing selection, don't replace
+  // it with a new one. Instead just return and let the context menu pop up
+  // on the pre-existing selection.
+  if (GetCaretMode() == CaretMode::Selection &&
+      GetSelection()->ContainsPoint(aPoint)) {
+    AC_LOG("%s: UpdateCarets() for current selection", __FUNCTION__);
+    UpdateCaretsWithHapticFeedback();
+    return NS_OK;
+  }
+
   if (!mPresShell) {
     return NS_ERROR_UNEXPECTED;
   }
@@ -538,9 +575,9 @@ AccessibleCaretManager::SelectWordOrShortcut(const nsPoint& aPoint)
   }
 
   // Find the frame under point.
-  nsIFrame* ptFrame = nsLayoutUtils::GetFrameForPoint(rootFrame, aPoint,
+  nsWeakFrame ptFrame = nsLayoutUtils::GetFrameForPoint(rootFrame, aPoint,
     nsLayoutUtils::IGNORE_PAINT_SUPPRESSION | nsLayoutUtils::IGNORE_CROSS_DOC);
-  if (!ptFrame) {
+  if (!ptFrame.IsAlive()) {
     return NS_ERROR_FAILURE;
   }
 
@@ -552,6 +589,14 @@ AccessibleCaretManager::SelectWordOrShortcut(const nsPoint& aPoint)
   AC_LOG("%s: Found %s focusable", __FUNCTION__,
          focusableFrame ? focusableFrame->ListTag().get() : "no frame");
 #endif
+
+  // Get ptInFrame here so that we don't need to check whether rootFrame is
+  // alive later. Note that if ptFrame is being moved by
+  // IMEStateManager::NotifyIME() or ChangeFocusToOrClearOldFocus() below,
+  // something under the original point will be selected, which may not be the
+  // original text the user wants to select.
+  nsPoint ptInFrame = aPoint;
+  nsLayoutUtils::TransformPoint(rootFrame, ptFrame, ptInFrame);
 
   // Firstly check long press on an empty editable content.
   Element* newFocusEditingHost = GetEditingHostForFrame(ptFrame);
@@ -585,24 +630,19 @@ AccessibleCaretManager::SelectWordOrShortcut(const nsPoint& aPoint)
   // is any) before changing the focus.
   IMEStateManager::NotifyIME(widget::REQUEST_TO_COMMIT_COMPOSITION,
                              mPresShell->GetPresContext());
+  if (!ptFrame.IsAlive()) {
+    // Cannot continue because ptFrame died.
+    return NS_ERROR_FAILURE;
+  }
 
   // ptFrame is selectable. Now change the focus.
   ChangeFocusToOrClearOldFocus(focusableFrame);
-
-  if (GetCaretMode() == CaretMode::Selection &&
-      !mFirstCaret->IsLogicallyVisible() && !mSecondCaret->IsLogicallyVisible()) {
-    // We have a selection while both carets have Appearance::None because of
-    // previous operations like blur event. Just update carets on the selection
-    // without selecting a new word.
-    AC_LOG("%s: UpdateCarets() for current selection", __FUNCTION__);
-    UpdateCaretsWithHapticFeedback();
-    return NS_OK;
+  if (!ptFrame.IsAlive()) {
+    // Cannot continue because ptFrame died.
+    return NS_ERROR_FAILURE;
   }
 
   // Then try select a word under point.
-  nsPoint ptInFrame = aPoint;
-  nsLayoutUtils::TransformPoint(rootFrame, ptFrame, ptInFrame);
-
   nsresult rv = SelectWord(ptFrame, ptInFrame);
   UpdateCaretsWithHapticFeedback();
 
@@ -651,6 +691,14 @@ AccessibleCaretManager::OnScrollEnd()
     }
   }
 
+  // For mouse input we don't want to show the carets.
+  if (sHideCaretsForMouseInput &&
+      mLastInputSource == nsIDOMMouseEvent::MOZ_SOURCE_MOUSE) {
+    AC_LOG("%s: HideCarets()", __FUNCTION__);
+    HideCarets();
+    return;
+  }
+
   AC_LOG("%s: UpdateCarets()", __FUNCTION__);
   UpdateCarets();
 }
@@ -695,6 +743,19 @@ AccessibleCaretManager::OnKeyboardEvent()
     AC_LOG("%s: HideCarets()", __FUNCTION__);
     HideCarets();
   }
+}
+
+void
+AccessibleCaretManager::OnFrameReconstruction()
+{
+  mFirstCaret->EnsureApzAware();
+  mSecondCaret->EnsureApzAware();
+}
+
+void
+AccessibleCaretManager::SetLastInputSource(uint16_t aInputSource)
+{
+  mLastInputSource = aInputSource;
 }
 
 Selection*
@@ -948,6 +1009,7 @@ AccessibleCaretManager::GetFrameForFirstRangeStartOrLastRangeEnd(
   }
 
   MOZ_ASSERT(GetCaretMode() == CaretMode::Selection);
+  MOZ_ASSERT(aOutOffset, "aOutOffset shouldn't be nullptr!");
 
   nsRange* range = nullptr;
   RefPtr<nsINode> startNode;
@@ -977,6 +1039,34 @@ AccessibleCaretManager::GetFrameForFirstRangeStartOrLastRangeEnd(
   nsIFrame* startFrame =
     fs->GetFrameForNodeOffset(startContent, nodeOffset, hint, aOutOffset);
 
+  if (!startFrame) {
+    ErrorResult err;
+    RefPtr<TreeWalker> walker = mPresShell->GetDocument()->CreateTreeWalker(
+      *startNode, nsIDOMNodeFilter::SHOW_ALL, nullptr, err);
+
+    if (!walker) {
+      return nullptr;
+    }
+
+    startFrame = startContent ? startContent->GetPrimaryFrame() : nullptr;
+    while (!startFrame && startNode != endNode) {
+      startNode = findInFirstRangeStart ? walker->NextNode(err)
+                                        : walker->PreviousNode(err);
+
+      if (!startNode) {
+        break;
+      }
+
+      startContent = startNode->AsContent();
+      startFrame = startContent ? startContent->GetPrimaryFrame() : nullptr;
+    }
+
+    // We are walking among the nodes in the content tree, so the node offset
+    // relative to startNode should be set to 0.
+    nodeOffset = 0;
+    *aOutOffset = 0;
+  }
+
   if (startFrame) {
     if (aOutNode) {
       *aOutNode = startNode.get();
@@ -984,29 +1074,8 @@ AccessibleCaretManager::GetFrameForFirstRangeStartOrLastRangeEnd(
     if (aOutNodeOffset) {
       *aOutNodeOffset = nodeOffset;
     }
-    return startFrame;
   }
 
-  ErrorResult err;
-  RefPtr<TreeWalker> walker = mPresShell->GetDocument()->CreateTreeWalker(
-    *startNode, nsIDOMNodeFilter::SHOW_ALL, nullptr, err);
-
-  if (!walker) {
-    return nullptr;
-  }
-
-  startFrame = startContent ? startContent->GetPrimaryFrame() : nullptr;
-  while (!startFrame && startNode != endNode) {
-    startNode = findInFirstRangeStart ? walker->NextNode(err)
-                                      : walker->PreviousNode(err);
-
-    if (!startNode) {
-      break;
-    }
-
-    startContent = startNode->AsContent();
-    startFrame = startContent ? startContent->GetPrimaryFrame() : nullptr;
-  }
   return startFrame;
 }
 

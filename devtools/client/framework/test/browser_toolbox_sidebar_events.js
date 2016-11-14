@@ -25,7 +25,7 @@ function test() {
     label: "Test tool",
     isTargetSupported: () => true,
     build: function (iframeWindow, toolbox) {
-      let deferred = promise.defer();
+      let deferred = defer();
       executeSoon(() => {
         deferred.resolve({
           target: toolbox.target,
@@ -67,7 +67,7 @@ function test() {
       });
 
       panel.sidebar.once("tab1-selected", () => finishUp(panel));
-      panel.sidebar.addTab("tab1", tab1URL, true);
+      panel.sidebar.addTab("tab1", tab1URL, {selected: true});
       panel.sidebar.show();
     }).then(null, console.error);
   });
@@ -80,11 +80,13 @@ function test() {
     is(events, "sidebar-created:show:hide:sidebar-destroyed",
       "Found the right amount of collected events.");
 
-    gDevTools.unregisterTool(toolDefinition.id);
-    gBrowser.removeCurrentTab();
+    panel.toolbox.destroy().then(function () {
+      gDevTools.unregisterTool(toolDefinition.id);
+      gBrowser.removeCurrentTab();
 
-    executeSoon(function () {
-      finish();
+      executeSoon(function () {
+        finish();
+      });
     });
   }
 }

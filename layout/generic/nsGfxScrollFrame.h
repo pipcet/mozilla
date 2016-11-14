@@ -30,9 +30,9 @@ class nsIContent;
 class nsIAtom;
 class nsPresState;
 class nsIScrollPositionListener;
-struct ScrollReflowState;
 
 namespace mozilla {
+struct ScrollReflowInput;
 namespace layers {
 class Layer;
 } // namespace layers
@@ -190,7 +190,7 @@ public:
    */
   nsPoint GetLogicalScrollPosition() const {
     nsPoint pt;
-    pt.x = IsLTR() ?
+    pt.x = IsPhysicalLTR() ?
       mScrollPort.x - mScrolledFrame->GetPosition().x :
       mScrollPort.XMost() - mScrolledFrame->GetRect().XMost();
     pt.y = mScrollPort.y - mScrolledFrame->GetPosition().y;
@@ -308,7 +308,7 @@ public:
   nsRect GetScrolledRect() const;
 
   /**
-   * GetScrolledRectInternal is designed to encapsulate deciding which
+   * GetUnsnappedScrolledRectInternal is designed to encapsulate deciding which
    * directions of overflow should be reachable by scrolling and which
    * should not.  Callers should NOT depend on it having any particular
    * behavior (although nsXULScrollFrame currently does).
@@ -318,8 +318,8 @@ public:
    * nsXULScrollFrames, and allows scrolling down and to the left for
    * nsHTMLScrollFrames with RTL directionality.
    */
-  nsRect GetScrolledRectInternal(const nsRect& aScrolledOverflowArea,
-                                 const nsSize& aScrollPortSize) const;
+  nsRect GetUnsnappedScrolledRectInternal(const nsRect& aScrolledOverflowArea,
+                                          const nsSize& aScrollPortSize) const;
 
   uint32_t GetScrollbarVisibility() const {
     return (mHasVerticalScrollbar ? nsIScrollableFrame::VERTICAL : 0) |
@@ -329,7 +329,19 @@ public:
   nsMargin GetDesiredScrollbarSizes(nsBoxLayoutState* aState);
   nscoord GetNondisappearingScrollbarWidth(nsBoxLayoutState* aState,
                                            mozilla::WritingMode aVerticalWM);
-  bool IsLTR() const;
+  bool IsPhysicalLTR() const {
+    WritingMode wm = GetFrameForDir()->GetWritingMode();
+    return wm.IsVertical() ? wm.IsVerticalLR() : wm.IsBidiLTR();
+  }
+  bool IsBidiLTR() const {
+    nsIFrame* frame = GetFrameForDir();
+    return frame->StyleVisibility()->mDirection == NS_STYLE_DIRECTION_LTR;
+  }
+private:
+  nsIFrame* GetFrameForDir() const; // helper for Is{Physical,Bidi}LTR to find
+                                    // the frame whose directionality we use
+
+public:
   bool IsScrollbarOnRight() const;
   bool IsScrollingActive(nsDisplayListBuilder* aBuilder) const;
   bool IsMaybeScrollingActive() const;
@@ -379,13 +391,13 @@ public:
       // because we have special behaviour for it when APZ scrolling is active.
       mOuter->SchedulePaint();
     }
-    NotifyPluginFrames(aTransforming ? BEGIN_APZ : END_APZ);
   }
   bool IsTransformingByAPZ() const {
     return mTransformingByAPZ;
   }
   void SetScrollableByAPZ(bool aScrollable);
   void SetZoomableByAPZ(bool aZoomable);
+  void SetScrollsClipOnUnscrolledOutOfFlow();
 
   bool UsesContainerScrolling() const;
 
@@ -407,6 +419,7 @@ public:
   void HandleScrollbarStyleSwitching();
 
   nsIAtom* LastScrollOrigin() const { return mLastScrollOrigin; }
+  void AllowScrollOriginDowngrade() { mAllowScrollOriginDowngrade = true; }
   nsIAtom* LastSmoothScrollOrigin() const { return mLastSmoothScrollOrigin; }
   uint32_t CurrentScrollGeneration() const { return mScrollGeneration; }
   nsPoint LastScrollDestination() const { return mDestination; }
@@ -467,6 +480,7 @@ public:
   RefPtr<ScrollbarActivity> mScrollbarActivity;
   nsTArray<nsIScrollPositionListener*> mListeners;
   nsIAtom* mLastScrollOrigin;
+  bool mAllowScrollOriginDowngrade;
   nsIAtom* mLastSmoothScrollOrigin;
   Maybe<nsPoint> mApzSmoothScrollDestination;
   uint32_t mScrollGeneration;
@@ -581,6 +595,8 @@ public:
   // True if we don't want the scrollbar to repaint itself right now.
   bool mSuppressScrollbarRepaints:1;
 
+  bool mScrollsClipOnUnscrolledOutOfFlow:1;
+
   mozilla::layout::ScrollVelocityQueue mVelocityQueue;
 
 protected:
@@ -617,15 +633,10 @@ protected:
 
   void CompleteAsyncScroll(const nsRect &aRange, nsIAtom* aOrigin = nullptr);
 
-  /*
-   * Helper that notifies plugins about async smooth scroll operations managed
-   * by nsGfxScrollFrame.
-   */
-  enum AsyncScrollEventType { BEGIN_DOM, BEGIN_APZ, END_DOM, END_APZ };
-  void NotifyPluginFrames(AsyncScrollEventType aEvent);
-  AsyncScrollEventType mAsyncScrollEvent;
   bool HasPluginFrames();
   bool HasPerspective() const;
+  bool HasBgAttachmentLocal() const;
+  uint8_t GetScrolledFrameDir() const;
 
   static void EnsureFrameVisPrefsCached();
   static bool sFrameVisPrefsCached;
@@ -656,6 +667,7 @@ class nsHTMLScrollFrame : public nsContainerFrame,
 public:
   typedef mozilla::ScrollFrameHelper ScrollFrameHelper;
   typedef mozilla::CSSIntPoint CSSIntPoint;
+  typedef mozilla::ScrollReflowInput ScrollReflowInput;
   friend nsHTMLScrollFrame* NS_NewHTMLScrollFrame(nsIPresShell* aPresShell,
                                                   nsStyleContext* aContext,
                                                   bool aIsRoot);
@@ -677,19 +689,19 @@ public:
     mHelper.BuildDisplayList(aBuilder, aDirtyRect, aLists);
   }
 
-  bool TryLayout(ScrollReflowState* aState,
-                   nsHTMLReflowMetrics* aKidMetrics,
+  bool TryLayout(ScrollReflowInput* aState,
+                   ReflowOutput* aKidMetrics,
                    bool aAssumeVScroll, bool aAssumeHScroll,
                    bool aForce);
-  bool ScrolledContentDependsOnHeight(ScrollReflowState* aState);
-  void ReflowScrolledFrame(ScrollReflowState* aState,
+  bool ScrolledContentDependsOnHeight(ScrollReflowInput* aState);
+  void ReflowScrolledFrame(ScrollReflowInput* aState,
                            bool aAssumeHScroll,
                            bool aAssumeVScroll,
-                           nsHTMLReflowMetrics* aMetrics,
+                           ReflowOutput* aMetrics,
                            bool aFirstPass);
-  void ReflowContents(ScrollReflowState* aState,
-                      const nsHTMLReflowMetrics& aDesiredSize);
-  void PlaceScrollArea(const ScrollReflowState& aState,
+  void ReflowContents(ScrollReflowInput* aState,
+                      const ReflowOutput& aDesiredSize);
+  void PlaceScrollArea(ScrollReflowInput& aState,
                        const nsPoint& aScrollPosition);
   nscoord GetIntrinsicVScrollbarWidth(nsRenderingContext *aRenderingContext);
 
@@ -704,13 +716,18 @@ public:
   virtual bool IsXULCollapsed() override;
   
   virtual void Reflow(nsPresContext*           aPresContext,
-                      nsHTMLReflowMetrics&     aDesiredSize,
-                      const nsHTMLReflowState& aReflowState,
+                      ReflowOutput&     aDesiredSize,
+                      const ReflowInput& aReflowInput,
                       nsReflowStatus&          aStatus) override;
 
   virtual bool ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas) override {
     return mHelper.ComputeCustomOverflow(aOverflowAreas);
   }
+
+  // Recomputes the scrollable overflow area we store in the helper to take children
+  // that are affected by perpsective set on the outer frame and scroll at different
+  // rates.
+  void AdjustForPerspective(nsRect& aScrollableOverflow);
 
   // Called to set the child frames. We typically have three: the scroll area,
   // the vertical scrollbar, and the horizontal scrollbar.
@@ -886,6 +903,9 @@ public:
   virtual nsIAtom* LastScrollOrigin() override {
     return mHelper.LastScrollOrigin();
   }
+  virtual void AllowScrollOriginDowngrade() override {
+    mHelper.AllowScrollOriginDowngrade();
+  }
   virtual nsIAtom* LastSmoothScrollOrigin() override {
     return mHelper.LastSmoothScrollOrigin();
   }
@@ -1005,6 +1025,9 @@ public:
   void SetZoomableByAPZ(bool aZoomable) override {
     mHelper.SetZoomableByAPZ(aZoomable);
   }
+  void SetScrollsClipOnUnscrolledOutOfFlow() override {
+    mHelper.SetScrollsClipOnUnscrolledOutOfFlow();
+  }
   
   ScrollSnapInfo GetScrollSnapInfo() const override {
     return mHelper.GetScrollSnapInfo();
@@ -1023,8 +1046,8 @@ protected:
   void SetSuppressScrollbarUpdate(bool aSuppress) {
     mHelper.mSupppressScrollbarUpdate = aSuppress;
   }
-  bool GuessHScrollbarNeeded(const ScrollReflowState& aState);
-  bool GuessVScrollbarNeeded(const ScrollReflowState& aState);
+  bool GuessHScrollbarNeeded(const ScrollReflowInput& aState);
+  bool GuessVScrollbarNeeded(const ScrollReflowInput& aState);
 
   bool IsScrollbarUpdateSuppressed() const {
     return mHelper.mSupppressScrollbarUpdate;
@@ -1158,8 +1181,8 @@ public:
   void RemoveHorizontalScrollbar(nsBoxLayoutState& aState, bool aOnBottom);
   void RemoveVerticalScrollbar  (nsBoxLayoutState& aState, bool aOnRight);
 
-  static void AdjustReflowStateForPrintPreview(nsBoxLayoutState& aState, bool& aSetBack);
-  static void AdjustReflowStateBack(nsBoxLayoutState& aState, bool aSetBack);
+  static void AdjustReflowInputForPrintPreview(nsBoxLayoutState& aState, bool& aSetBack);
+  static void AdjustReflowInputBack(nsBoxLayoutState& aState, bool aSetBack);
 
   // nsIScrollableFrame
   virtual nsIFrame* GetScrolledFrame() const override {
@@ -1295,6 +1318,9 @@ public:
   virtual nsIAtom* LastScrollOrigin() override {
     return mHelper.LastScrollOrigin();
   }
+  virtual void AllowScrollOriginDowngrade() override {
+    mHelper.AllowScrollOriginDowngrade();
+  }
   virtual nsIAtom* LastSmoothScrollOrigin() override {
     return mHelper.LastSmoothScrollOrigin();
   }
@@ -1408,6 +1434,9 @@ public:
   void SetZoomableByAPZ(bool aZoomable) override {
     mHelper.SetZoomableByAPZ(aZoomable);
   }
+  void SetScrollsClipOnUnscrolledOutOfFlow() override {
+    mHelper.SetScrollsClipOnUnscrolledOutOfFlow();
+  }
   virtual bool DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
                                      nsRect* aDirtyRect,
                                      bool aAllowCreateDisplayPort) override {
@@ -1443,7 +1472,7 @@ protected:
      * For RTL frames, restore the original scrolled position of the right
      * edge, then subtract the current width to find the physical position.
      */
-    if (!mHelper.IsLTR()) {
+    if (!mHelper.IsPhysicalLTR()) {
       aRect.x = mHelper.mScrollPort.XMost() - aScrollPosition.x - aRect.width;
     }
     mHelper.mScrolledFrame->SetXULBounds(aState, aRect, aRemoveOverflowAreas);

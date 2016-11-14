@@ -85,6 +85,9 @@ public:
 
   virtual EventStates IntrinsicState() const override;
 
+  // EventTarget
+  virtual void AsyncEventRunning(AsyncEventDispatcher* aEvent) override;
+
   // nsIContent
   virtual bool ParseAttribute(int32_t aNamespaceID,
                                 nsIAtom* aAttribute,
@@ -120,8 +123,8 @@ public:
 
   virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
 
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(HTMLFormElement,
-                                                         nsGenericHTMLElement)
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLFormElement,
+                                           nsGenericHTMLElement)
 
   /**
    * Remove an element from this form's list of elements
@@ -278,6 +281,15 @@ public:
   bool CheckValidFormSubmission();
 
   /**
+   * Check whether submission can proceed for this form.  This basically
+   * implements steps 1-4 (more or less) of
+   * <https://html.spec.whatwg.org/multipage/forms.html#concept-form-submit>.
+   * aSubmitter, if not null, is the "submitter" from that algorithm.  Therefore
+   * it must be a valid submit control.
+   */
+  bool SubmissionCanProceed(Element* aSubmitter);
+
+  /**
    * Walk over the form elements and call SubmitNamesValues() on them to get
    * their data pumped into the FormSubmitter.
    *
@@ -418,24 +430,8 @@ protected:
   virtual JSObject* WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   void PostPasswordEvent();
-  void EventHandled() { mFormPasswordEventDispatcher = nullptr; }
 
-  class FormPasswordEventDispatcher final : public AsyncEventDispatcher
-  {
-  public:
-    FormPasswordEventDispatcher(HTMLFormElement* aEventNode,
-                                const nsAString& aEventType)
-      : AsyncEventDispatcher(aEventNode, aEventType, true, true)
-    {}
-
-    NS_IMETHOD Run() override
-    {
-      static_cast<HTMLFormElement*>(mTarget.get())->EventHandled();
-      return AsyncEventDispatcher::Run();
-    }
-  };
-
-  RefPtr<FormPasswordEventDispatcher> mFormPasswordEventDispatcher;
+  RefPtr<AsyncEventDispatcher> mFormPasswordEventDispatcher;
 
   class RemoveElementRunnable;
   friend class RemoveElementRunnable;

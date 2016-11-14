@@ -7,8 +7,6 @@
     #include <gdk/gdkx.h>
     // we're using default display for now
     #define GET_NATIVE_WINDOW(aWidget) ((EGLNativeWindowType)GDK_WINDOW_XID((GdkWindow*)aWidget->GetNativeData(NS_NATIVE_WINDOW)))
-#elif defined(MOZ_WIDGET_QT)
-    #define GET_NATIVE_WINDOW(aWidget) ((EGLNativeWindowType)aWidget->GetNativeData(NS_NATIVE_SHAREABLE_WINDOW))
 #else
     #define GET_NATIVE_WINDOW(aWidget) ((EGLNativeWindowType)aWidget->GetNativeData(NS_NATIVE_WINDOW))
 #endif
@@ -18,26 +16,14 @@
 #endif
 
 #if defined(XP_UNIX)
-    #ifdef MOZ_WIDGET_GONK
-        #include "libdisplay/GonkDisplay.h"
-        #include "nsWindow.h"
-        #include "nsScreenManagerGonk.h"
-    #endif
-
     #ifdef MOZ_WIDGET_ANDROID
-        #include "AndroidBridge.h"
+        #include <android/native_window.h>
+        #include <android/native_window_jni.h>
     #endif
 
     #ifdef ANDROID
         #include <android/log.h>
         #define LOG(args...)  __android_log_print(ANDROID_LOG_INFO, "Gonk" , ## args)
-
-        #ifdef MOZ_WIDGET_GONK
-            #include "cutils/properties.h"
-            #include <ui/GraphicBuffer.h>
-
-            using namespace android;
-        #endif
     #endif
 
     #define GLES2_LIB "libGLESv2.so"
@@ -103,6 +89,7 @@
 #include "GLLibraryEGL.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/widget/CompositorWidget.h"
 #include "nsDebug.h"
 #include "nsIWidget.h"
 #include "nsThreadUtils.h"
@@ -113,6 +100,8 @@ using namespace mozilla::gfx;
 
 namespace mozilla {
 namespace gl {
+
+using namespace mozilla::widget;
 
 #define ADD_ATTR_2(_array, _k, _v) do {         \
     (_array).AppendElement(_k);                 \
@@ -182,10 +171,12 @@ CreateSurfaceForWindow(nsIWidget* widget, const EGLConfig& config) {
         MOZ_CRASH("GFX: Failed to get Java surface.\n");
     }
     JNIEnv* const env = jni::GetEnvForThread();
-    void* nativeWindow = AndroidBridge::Bridge()->AcquireNativeWindow(env, reinterpret_cast<jobject>(javaSurface));
-    newSurface = sEGLLibrary.fCreateWindowSurface(sEGLLibrary.fGetDisplay(EGL_DEFAULT_DISPLAY), config,
-                                                  nativeWindow, 0);
-    AndroidBridge::Bridge()->ReleaseNativeWindow(nativeWindow);
+    ANativeWindow* const nativeWindow = ANativeWindow_fromSurface(
+            env, reinterpret_cast<jobject>(javaSurface));
+    newSurface = sEGLLibrary.fCreateWindowSurface(
+            sEGLLibrary.fGetDisplay(EGL_DEFAULT_DISPLAY),
+            config, nativeWindow, 0);
+    ANativeWindow_release(nativeWindow);
 #else
     newSurface = sEGLLibrary.fCreateWindowSurface(EGL_DISPLAY(), config,
                                                   GET_NATIVE_WINDOW(widget), 0);
@@ -193,14 +184,10 @@ CreateSurfaceForWindow(nsIWidget* widget, const EGLConfig& config) {
     return newSurface;
 }
 
-GLContextEGL::GLContextEGL(
-                  const SurfaceCaps& caps,
-                  GLContext* shareContext,
-                  bool isOffscreen,
-                  EGLConfig config,
-                  EGLSurface surface,
-                  EGLContext context)
-    : GLContext(caps, shareContext, isOffscreen)
+GLContextEGL::GLContextEGL(CreateContextFlags flags, const SurfaceCaps& caps,
+                           GLContext* shareContext, bool isOffscreen, EGLConfig config,
+                           EGLSurface surface, EGLContext context)
+    : GLContext(flags, caps, shareContext, isOffscreen)
     , mConfig(config)
     , mSurface(surface)
     , mContext(context)
@@ -237,17 +224,6 @@ GLContextEGL::~GLContextEGL()
     sEGLLibrary.fDestroyContext(EGL_DISPLAY(), mContext);
     sEGLLibrary.UnsetCachedCurrentContext();
 
-#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION < 17
-    if (!mIsOffscreen) {
-      // In ICS, SurfaceFlinger's DisplayHardware::fini() does not destroy the EGLSurface associated with the
-      // native framebuffer. Destroying it causes crashes in the ICS emulator
-      // EGL implementation, specifically because the egl_window_surface_t dtor
-      // calls nativeWindow->cancelBuffer and FramebufferNativeWindow does not initialize
-      // the cancelBuffer function pointer, see bug 986836
-      return;
-    }
-#endif
-
     mozilla::gl::DestroySurface(mSurface);
 }
 
@@ -279,7 +255,7 @@ GLContextEGL::Init()
         return false;
     }
 
-    PR_STATIC_ASSERT(sizeof(GLint) >= sizeof(int32_t));
+    static_assert(sizeof(GLint) >= sizeof(int32_t), "GLint is smaller than int32_t");
     mMaxTextureImageSize = INT32_MAX;
 
     mShareWithEGLImage = sEGLLibrary.HasKHRImageBase() &&
@@ -437,12 +413,6 @@ GLContextEGL::SwapBuffers()
                           ? mSurfaceOverride
                           : mSurface;
     if (surface) {
-#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION < 17
-        if (!mIsOffscreen) {
-            // eglSwapBuffers() is called by hwcomposer.
-            return true;
-        }
-#endif
         return sEGLLibrary.fSwapBuffers(EGL_DISPLAY(), surface);
     } else {
         return false;
@@ -452,7 +422,7 @@ GLContextEGL::SwapBuffers()
 // hold a reference to the given surface
 // for the lifetime of this context.
 void
-GLContextEGL::HoldSurface(gfxASurface *aSurf) {
+GLContextEGL::HoldSurface(gfxASurface* aSurf) {
     mThebesSurface = aSurf;
 }
 
@@ -460,7 +430,7 @@ GLContextEGL::HoldSurface(gfxASurface *aSurf) {
 GLContextEGL::CreateSurfaceForWindow(nsIWidget* aWidget)
 {
     nsCString discardFailureId;
-    if (!sEGLLibrary.EnsureInitialized(false, discardFailureId)) {
+    if (!sEGLLibrary.EnsureInitialized(false, &discardFailureId)) {
         MOZ_CRASH("GFX: Failed to load EGL library!\n");
         return nullptr;
     }
@@ -490,14 +460,14 @@ GLContextEGL::DestroySurface(EGLSurface aSurface)
 already_AddRefed<GLContextEGL>
 GLContextEGL::CreateGLContext(CreateContextFlags flags,
                 const SurfaceCaps& caps,
-                GLContextEGL *shareContext,
+                GLContextEGL* shareContext,
                 bool isOffscreen,
                 EGLConfig config,
                 EGLSurface surface,
-                nsACString& aFailureId)
+                nsACString* const out_failureId)
 {
     if (sEGLLibrary.fBindAPI(LOCAL_EGL_OPENGL_ES_API) == LOCAL_EGL_FALSE) {
-        aFailureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_ES");
+        *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_ES");
         NS_WARNING("Failed to bind API to GLES!");
         return nullptr;
     }
@@ -528,26 +498,21 @@ GLContextEGL::CreateGLContext(CreateContextFlags flags,
                                                     contextAttribs.Elements());
     if (!context && shareContext) {
         shareContext = nullptr;
-        context = sEGLLibrary.fCreateContext(EGL_DISPLAY(),
-                                              config,
-                                              EGL_NO_CONTEXT,
-                                              contextAttribs.Elements());
+        context = sEGLLibrary.fCreateContext(EGL_DISPLAY(), config, EGL_NO_CONTEXT,
+                                             contextAttribs.Elements());
     }
     if (!context) {
-        aFailureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_CREATE");
+        *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_CREATE");
         NS_WARNING("Failed to create EGLContext!");
         return nullptr;
     }
 
-    RefPtr<GLContextEGL> glContext = new GLContextEGL(caps,
-                                                        shareContext,
-                                                        isOffscreen,
-                                                        config,
-                                                        surface,
-                                                        context);
+    RefPtr<GLContextEGL> glContext = new GLContextEGL(flags, caps, shareContext,
+                                                      isOffscreen, config, surface,
+                                                      context);
 
     if (!glContext->Init()) {
-        aFailureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_INIT");
+        *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_INIT");
         return nullptr;
     }
 
@@ -638,9 +603,6 @@ static const EGLint kEGLConfigAttribsRGBA32[] = {
     LOCAL_EGL_GREEN_SIZE,      8,
     LOCAL_EGL_BLUE_SIZE,       8,
     LOCAL_EGL_ALPHA_SIZE,      8,
-#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
-    LOCAL_EGL_FRAMEBUFFER_TARGET_ANDROID, LOCAL_EGL_TRUE,
-#endif
     EGL_ATTRIBS_LIST_SAFE_TERMINATION_WORKING_AROUND_BUGS
 };
 
@@ -671,29 +633,6 @@ CreateConfig(EGLConfig* aConfig, int32_t depth, nsIWidget* aWidget)
         ncfg < 1) {
         return false;
     }
-
-#ifdef MOZ_WIDGET_GONK
-    // On gonk, it's important to select a configuration with the
-    // the correct order as well as bits per channel.
-    // EGL_NATIVE_VISUAL_ID gives us the Android pixel format which
-    // is an enum that tells us both order and bits per channel.
-    // For example -
-    //  HAL_PIXEL_FORMAT_RGBX_8888
-    //  HAL_PIXEL_FORMAT_BGRA_8888
-    //  HAL_PIXEL_FORMAT_RGB_565
-    nsWindow* window = static_cast<nsWindow*>(aWidget);
-    for (int j = 0; j < ncfg; ++j) {
-        EGLConfig config = configs[j];
-        EGLint format;
-        if (sEGLLibrary.fGetConfigAttrib(EGL_DISPLAY(), config,
-                                         LOCAL_EGL_NATIVE_VISUAL_ID, &format) &&
-            format == window->GetScreen()->GetSurfaceFormat())
-        {
-            *aConfig = config;
-            return true;
-        }
-    }
-#endif
 
     for (int j = 0; j < ncfg; ++j) {
         EGLConfig config = configs[j];
@@ -749,33 +688,36 @@ already_AddRefed<GLContext>
 GLContextProviderEGL::CreateWrappingExisting(void* aContext, void* aSurface)
 {
     nsCString discardFailureId;
-    if (!sEGLLibrary.EnsureInitialized(false, discardFailureId)) {
+    if (!sEGLLibrary.EnsureInitialized(false, &discardFailureId)) {
         MOZ_CRASH("GFX: Failed to load EGL library 2!\n");
         return nullptr;
     }
 
-    if (aContext && aSurface) {
-        SurfaceCaps caps = SurfaceCaps::Any();
-        EGLConfig config = EGL_NO_CONFIG;
-        RefPtr<GLContextEGL> glContext =
-            new GLContextEGL(caps,
-                             nullptr, false,
-                             config, (EGLSurface)aSurface, (EGLContext)aContext);
+    if (!aContext || !aSurface)
+        return nullptr;
 
-        glContext->SetIsDoubleBuffered(true);
-        glContext->mOwnsContext = false;
+    SurfaceCaps caps = SurfaceCaps::Any();
+    EGLConfig config = EGL_NO_CONFIG;
+    RefPtr<GLContextEGL> gl = new GLContextEGL(CreateContextFlags::NONE, caps, nullptr,
+                                               false, config, (EGLSurface)aSurface,
+                                               (EGLContext)aContext);
+    gl->SetIsDoubleBuffered(true);
+    gl->mOwnsContext = false;
 
-        return glContext.forget();
-    }
-
-    return nullptr;
+    return gl.forget();
 }
 
 already_AddRefed<GLContext>
-GLContextProviderEGL::CreateForWindow(nsIWidget *aWidget, bool aForceAccelerated)
+GLContextProviderEGL::CreateForCompositorWidget(CompositorWidget* aCompositorWidget, bool aForceAccelerated)
+{
+    return CreateForWindow(aCompositorWidget->RealWidget(), aForceAccelerated);
+}
+
+already_AddRefed<GLContext>
+GLContextProviderEGL::CreateForWindow(nsIWidget* aWidget, bool aForceAccelerated)
 {
     nsCString discardFailureId;
-    if (!sEGLLibrary.EnsureInitialized(false, discardFailureId)) {
+    if (!sEGLLibrary.EnsureInitialized(false, &discardFailureId)) {
         MOZ_CRASH("GFX: Failed to load EGL library 3!\n");
         return nullptr;
     }
@@ -795,21 +737,19 @@ GLContextProviderEGL::CreateForWindow(nsIWidget *aWidget, bool aForceAccelerated
     }
 
     SurfaceCaps caps = SurfaceCaps::Any();
-    RefPtr<GLContextEGL> glContext =
-        GLContextEGL::CreateGLContext(CreateContextFlags::NONE, caps,
-                                      nullptr, false,
-                                      config, surface, discardFailureId);
-
-    if (!glContext) {
+    RefPtr<GLContextEGL> gl = GLContextEGL::CreateGLContext(CreateContextFlags::NONE,
+                                                            caps, nullptr, false, config,
+                                                            surface, &discardFailureId);
+    if (!gl) {
         MOZ_CRASH("GFX: Failed to create EGLContext!\n");
         mozilla::gl::DestroySurface(surface);
         return nullptr;
     }
 
-    glContext->MakeCurrent();
-    glContext->SetIsDoubleBuffered(doubleBuffered);
+    gl->MakeCurrent();
+    gl->SetIsDoubleBuffered(doubleBuffered);
 
-    return glContext.forget();
+    return gl.forget();
 }
 
 #if defined(ANDROID)
@@ -817,7 +757,7 @@ EGLSurface
 GLContextProviderEGL::CreateEGLSurface(void* aWindow)
 {
     nsCString discardFailureId;
-    if (!sEGLLibrary.EnsureInitialized(false, discardFailureId)) {
+    if (!sEGLLibrary.EnsureInitialized(false, &discardFailureId)) {
         MOZ_CRASH("GFX: Failed to load EGL library 4!\n");
     }
 
@@ -828,8 +768,8 @@ GLContextProviderEGL::CreateEGLSurface(void* aWindow)
 
     MOZ_ASSERT(aWindow);
 
-    EGLSurface surface = sEGLLibrary.fCreateWindowSurface(EGL_DISPLAY(), config, aWindow, 0);
-
+    EGLSurface surface = sEGLLibrary.fCreateWindowSurface(EGL_DISPLAY(), config, aWindow,
+                                                          0);
     if (surface == EGL_NO_SURFACE) {
         MOZ_CRASH("GFX: Failed to create EGLSurface 2!\n");
     }
@@ -841,7 +781,7 @@ void
 GLContextProviderEGL::DestroyEGLSurface(EGLSurface surface)
 {
     nsCString discardFailureId;
-    if (!sEGLLibrary.EnsureInitialized(false, discardFailureId)) {
+    if (!sEGLLibrary.EnsureInitialized(false, &discardFailureId)) {
         MOZ_CRASH("GFX: Failed to load EGL library 5!\n");
     }
 
@@ -953,17 +893,17 @@ ChooseConfig(GLLibraryEGL* egl, CreateContextFlags flags, const SurfaceCaps& min
 GLContextEGL::CreateEGLPBufferOffscreenContext(CreateContextFlags flags,
                                                const mozilla::gfx::IntSize& size,
                                                const SurfaceCaps& minCaps,
-                                               nsACString& aFailureId)
+                                               nsACString* const out_failureId)
 {
     bool forceEnableHardware = bool(flags & CreateContextFlags::FORCE_ENABLE_HARDWARE);
-    if (!sEGLLibrary.EnsureInitialized(forceEnableHardware, aFailureId)) {
+    if (!sEGLLibrary.EnsureInitialized(forceEnableHardware, out_failureId)) {
         return nullptr;
     }
 
     SurfaceCaps configCaps;
     EGLConfig config = ChooseConfig(&sEGLLibrary, flags, minCaps, &configCaps);
     if (config == EGL_NO_CONFIG) {
-        aFailureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_NO_CONFIG");
+        *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_NO_CONFIG");
         NS_WARNING("Failed to find a compatible config.");
         return nullptr;
     }
@@ -977,13 +917,14 @@ GLContextEGL::CreateEGLPBufferOffscreenContext(CreateContextFlags flags,
                                                                             LOCAL_EGL_NONE,
                                                                             pbSize);
     if (!surface) {
-        aFailureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_POT");
+        *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_POT");
         NS_WARNING("Failed to create PBuffer for context!");
         return nullptr;
     }
 
-    RefPtr<GLContextEGL> gl = GLContextEGL::CreateGLContext(flags, configCaps, nullptr, true,
-                                                            config, surface, aFailureId);
+    RefPtr<GLContextEGL> gl = GLContextEGL::CreateGLContext(flags, configCaps, nullptr,
+                                                            true, config, surface,
+                                                            out_failureId);
     if (!gl) {
         NS_WARNING("Failed to create GLContext from PBuffer");
         sEGLLibrary.fDestroySurface(sEGLLibrary.Display(), surface);
@@ -994,12 +935,13 @@ GLContextEGL::CreateEGLPBufferOffscreenContext(CreateContextFlags flags,
 }
 
 /*static*/ already_AddRefed<GLContext>
-GLContextProviderEGL::CreateHeadless(CreateContextFlags flags, nsACString& aFailureId)
+GLContextProviderEGL::CreateHeadless(CreateContextFlags flags,
+                                     nsACString* const out_failureId)
 {
     mozilla::gfx::IntSize dummySize = mozilla::gfx::IntSize(16, 16);
     SurfaceCaps dummyCaps = SurfaceCaps::Any();
     return GLContextEGL::CreateEGLPBufferOffscreenContext(flags, dummySize, dummyCaps,
-                                                          aFailureId);
+                                                          out_failureId);
 }
 
 // Under EGL, on Android, pbuffers are supported fine, though
@@ -1008,11 +950,10 @@ GLContextProviderEGL::CreateHeadless(CreateContextFlags flags, nsACString& aFail
 GLContextProviderEGL::CreateOffscreen(const mozilla::gfx::IntSize& size,
                                       const SurfaceCaps& minCaps,
                                       CreateContextFlags flags,
-                                      nsACString& aFailureId)
+                                      nsACString* const out_failureId)
 {
     bool forceEnableHardware = bool(flags & CreateContextFlags::FORCE_ENABLE_HARDWARE);
-    if (!sEGLLibrary.EnsureInitialized(forceEnableHardware, aFailureId)) { // Needed for IsANGLE().
-        aFailureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_LIB_INIT");
+    if (!sEGLLibrary.EnsureInitialized(forceEnableHardware, out_failureId)) { // Needed for IsANGLE().
         return nullptr;
     }
 
@@ -1026,7 +967,7 @@ GLContextProviderEGL::CreateOffscreen(const mozilla::gfx::IntSize& size,
     SurfaceCaps minOffscreenCaps = minCaps;
 
     if (canOffscreenUseHeadless) {
-        gl = CreateHeadless(flags, aFailureId);
+        gl = CreateHeadless(flags, out_failureId);
         if (!gl) {
             return nullptr;
         }
@@ -1038,11 +979,11 @@ GLContextProviderEGL::CreateOffscreen(const mozilla::gfx::IntSize& size,
             minBackbufferCaps.stencil = false;
         }
 
-        gl = GLContextEGL::CreateEGLPBufferOffscreenContext(flags, size, minBackbufferCaps,
-                                                            aFailureId);
-        if (!gl) {
+        gl = GLContextEGL::CreateEGLPBufferOffscreenContext(flags, size,
+                                                            minBackbufferCaps,
+                                                            out_failureId);
+        if (!gl)
             return nullptr;
-        }
 
         // Pull the actual resulting caps to ensure that our offscreen matches our
         // backbuffer.
@@ -1057,7 +998,7 @@ GLContextProviderEGL::CreateOffscreen(const mozilla::gfx::IntSize& size,
 
     // Init the offscreen with the updated offscreen caps.
     if (!gl->InitOffscreen(size, minOffscreenCaps)) {
-        aFailureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_OFFSCREEN");
+        *out_failureId = NS_LITERAL_CSTRING("FEATURE_FAILURE_EGL_OFFSCREEN");
         return nullptr;
     }
 

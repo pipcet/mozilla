@@ -27,6 +27,8 @@ const {
 } = require("devtools/client/shared/widgets/view-helpers");
 const { Task } = require("devtools/shared/task");
 const { SideMenuWidget } = require("resource://devtools/client/shared/widgets/SideMenuWidget.jsm");
+const { gDevTools } = require("devtools/client/framework/devtools");
+const {KeyCodes} = require("devtools/client/shared/keycodes");
 
 const NEW_SOURCE_DISPLAY_DELAY = 200; // ms
 const FUNCTION_SEARCH_POPUP_POSITION = "topcenter bottomleft";
@@ -82,7 +84,7 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
   /**
    * Initialization function, called when the debugger is started.
    */
-  initialize: function () {
+  initialize: function (isWorker) {
     dumpn("Initializing the SourcesView");
 
     this.widget = new SideMenuWidget(document.getElementById("sources"), {
@@ -110,7 +112,9 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     this._noResultsFoundToolTip = new Tooltip(document);
     this._noResultsFoundToolTip.defaultPosition = FUNCTION_SEARCH_POPUP_POSITION;
 
-    if (Prefs.prettyPrintEnabled) {
+    // We don't show the pretty print button if debugger a worker
+    // because it simply doesn't work yet. (bug 1273730)
+    if (Prefs.prettyPrintEnabled && !isWorker) {
       this._prettyPrintButton.removeAttribute("hidden");
     }
 
@@ -187,7 +191,6 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
       unBlackBoxButton: () => this._onStopBlackBoxing(),
       prettyPrintCommand: () => this.togglePrettyPrint(),
       toggleBreakpointsCommand: () =>this.toggleBreakpoints(),
-      togglePromiseDebuggerCommand: () => this.togglePromiseDebugger(),
       nextSourceCommand: () => this.selectNextItem(),
       prevSourceCommand: () => this.selectPrevItem()
     });
@@ -610,17 +613,6 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     }
   },
 
-  togglePromiseDebugger: function () {
-    if (Prefs.promiseDebuggerEnabled) {
-      let promisePane = this.DebuggerView._promisePane;
-      promisePane.hidden = !promisePane.hidden;
-
-      if (!this.DebuggerView._promiseDebuggerIframe) {
-        this.DebuggerView._initializePromiseDebugger();
-      }
-    }
-  },
-
   hidePrettyPrinting: function () {
     this._prettyPrintButton.style.display = "none";
 
@@ -695,7 +687,6 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     // Update the conditional expression textbox. If no expression was
     // previously set, revert to using an empty string by default.
     this._cbTextbox.value = expr;
-
 
     function openPopup() {
       // Show the conditional expression panel. The popup arrow should be pointing
@@ -905,7 +896,7 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
    * Opens selected item source in a new tab.
    */
   _onNewTabCommand: function () {
-    let win = Services.wm.getMostRecentWindow("navigator:browser");
+    let win = Services.wm.getMostRecentWindow(gDevTools.chromeWindowType);
     let selected = this.selectedItem.attachment;
     win.openUILinkIn(selected.source.url, "tab", { relatedToCurrent: true });
   },
@@ -1087,10 +1078,6 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
   },
 
   renderSourceSelected: function (source) {
-    // Set window title. No need to split the url by " -> " here,
-    // because it was already sanitized when the source was added.
-    document.title = L10N.getFormatStr("DebuggerWindowScriptTitle", source.url);
-
     if (source.url) {
       this._preferredSourceURL = source.url;
     }
@@ -1170,7 +1157,6 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
    */
   _onConditionalPopupShowing: function () {
     this._conditionalPopupVisible = true; // Used in tests.
-    window.emit(EVENTS.CONDITIONAL_BREAKPOINT_POPUP_SHOWING);
   },
 
   /**
@@ -1179,6 +1165,7 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
   _onConditionalPopupShown: function () {
     this._cbTextbox.focus();
     this._cbTextbox.select();
+    window.emit(EVENTS.CONDITIONAL_BREAKPOINT_POPUP_SHOWN);
   },
 
   /**
@@ -1201,13 +1188,14 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
    */
   _onConditionalPopupHidden: function () {
     this._cbPanel.hidden = true;
+    window.emit(EVENTS.CONDITIONAL_BREAKPOINT_POPUP_HIDDEN);
   },
 
   /**
    * The keypress listener for the breakpoints conditional expression textbox.
    */
   _onConditionalTextboxKeyPress: function (e) {
-    if (e.keyCode == e.DOM_VK_RETURN) {
+    if (e.keyCode == KeyCodes.DOM_VK_RETURN) {
       this._hideConditionalPopup();
     }
   },

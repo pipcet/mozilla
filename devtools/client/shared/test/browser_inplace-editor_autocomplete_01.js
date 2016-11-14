@@ -58,6 +58,7 @@ add_task(function* () {
     }, doc);
   });
 
+  popup.destroy();
   host.destroy();
   gBrowser.removeCurrentTab();
 });

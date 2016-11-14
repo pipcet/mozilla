@@ -32,6 +32,7 @@
 
 #include "nsIDocument.h"
 #include "nsIServiceWorkerManager.h"
+#include "nsIScriptTimeoutHandler.h"
 
 #ifdef ANDROID
 #include <android/log.h>
@@ -51,14 +52,24 @@
 #undef PostMessage
 #endif
 
+extern already_AddRefed<nsIScriptTimeoutHandler>
+NS_CreateJSTimeoutHandler(JSContext* aCx,
+                          mozilla::dom::workers::WorkerPrivate* aWorkerPrivate,
+                          mozilla::dom::Function& aFunction,
+                          const mozilla::dom::Sequence<JS::Value>& aArguments,
+                          mozilla::ErrorResult& aError);
+
+extern already_AddRefed<nsIScriptTimeoutHandler>
+NS_CreateJSTimeoutHandler(JSContext* aCx,
+                          mozilla::dom::workers::WorkerPrivate* aWorkerPrivate,
+                          const nsAString& aExpression);
+
 using namespace mozilla;
 using namespace mozilla::dom;
 USING_WORKERS_NAMESPACE
 
 using mozilla::dom::cache::CacheStorage;
 using mozilla::ipc::PrincipalInfo;
-
-BEGIN_WORKERS_NAMESPACE
 
 WorkerGlobalScope::WorkerGlobalScope(WorkerPrivate* aWorkerPrivate)
 : mWindowInteractionsAllowed(0)
@@ -85,6 +96,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(WorkerGlobalScope,
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mIndexedDB)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCacheStorage)
   tmp->TraverseHostObjectURIs(cb);
+  tmp->mWorkerPrivate->TraverseTimeouts(cb);
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(WorkerGlobalScope,
@@ -98,13 +110,12 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(WorkerGlobalScope,
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mIndexedDB)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mCacheStorage)
   tmp->UnlinkHostObjectURIs();
+  tmp->mWorkerPrivate->UnlinkTimeouts();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(WorkerGlobalScope,
                                                DOMEventTargetHelper)
   tmp->mWorkerPrivate->AssertIsOnWorkerThread();
-
-  tmp->mWorkerPrivate->TraceTimeouts(aCallbacks, aClosure);
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 NS_IMPL_ADDREF_INHERITED(WorkerGlobalScope, DOMEventTargetHelper)
@@ -160,6 +171,15 @@ WorkerGlobalScope::GetCaches(ErrorResult& aRv)
 
   RefPtr<CacheStorage> ref = mCacheStorage;
   return ref.forget();
+}
+
+bool
+WorkerGlobalScope::IsSecureContext() const
+{
+  bool globalSecure =
+    JS_GetIsSecureContext(js::GetObjectCompartment(GetWrapperPreserveColor()));
+  MOZ_ASSERT(globalSecure == mWorkerPrivate->IsSecureContext());
+  return globalSecure;
 }
 
 already_AddRefed<WorkerLocation>
@@ -249,8 +269,14 @@ WorkerGlobalScope::SetTimeout(JSContext* aCx,
                               ErrorResult& aRv)
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
-  return mWorkerPrivate->SetTimeout(aCx, &aHandler, EmptyString(), aTimeout,
-                                    aArguments, false, aRv);
+
+  nsCOMPtr<nsIScriptTimeoutHandler> handler =
+    NS_CreateJSTimeoutHandler(aCx, mWorkerPrivate, aHandler, aArguments, aRv);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return 0;
+  }
+
+  return mWorkerPrivate->SetTimeout(aCx, handler, aTimeout, false, aRv);
 }
 
 int32_t
@@ -261,9 +287,10 @@ WorkerGlobalScope::SetTimeout(JSContext* aCx,
                               ErrorResult& aRv)
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
-  Sequence<JS::Value> dummy;
-  return mWorkerPrivate->SetTimeout(aCx, nullptr, aHandler, aTimeout, dummy,
-                                    false, aRv);
+
+  nsCOMPtr<nsIScriptTimeoutHandler> handler =
+    NS_CreateJSTimeoutHandler(aCx, mWorkerPrivate, aHandler);
+  return mWorkerPrivate->SetTimeout(aCx, handler, aTimeout, false, aRv);
 }
 
 void
@@ -285,8 +312,13 @@ WorkerGlobalScope::SetInterval(JSContext* aCx,
   bool isInterval = aTimeout.WasPassed();
   int32_t timeout = aTimeout.WasPassed() ? aTimeout.Value() : 0;
 
-  return mWorkerPrivate->SetTimeout(aCx, &aHandler, EmptyString(), timeout,
-                                    aArguments, isInterval, aRv);
+  nsCOMPtr<nsIScriptTimeoutHandler> handler =
+    NS_CreateJSTimeoutHandler(aCx, mWorkerPrivate, aHandler, aArguments, aRv);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return 0;
+  }
+
+  return mWorkerPrivate->SetTimeout(aCx, handler,  timeout, isInterval, aRv);
 }
 
 int32_t
@@ -303,8 +335,9 @@ WorkerGlobalScope::SetInterval(JSContext* aCx,
   bool isInterval = aTimeout.WasPassed();
   int32_t timeout = aTimeout.WasPassed() ? aTimeout.Value() : 0;
 
-  return mWorkerPrivate->SetTimeout(aCx, nullptr, aHandler, timeout, dummy,
-                                    isInterval, aRv);
+  nsCOMPtr<nsIScriptTimeoutHandler> handler =
+    NS_CreateJSTimeoutHandler(aCx, mWorkerPrivate, aHandler);
+  return mWorkerPrivate->SetTimeout(aCx, handler, timeout, isInterval, aRv);
 }
 
 void
@@ -472,8 +505,7 @@ DedicatedWorkerGlobalScope::WrapGlobalObject(JSContext* aCx,
   // Note that xpc::ShouldDiscardSystemSource() and
   // xpc::ExtraWarningsForSystemJS() read prefs that are cached on the main
   // thread. This is benignly racey.
-  const bool discardSource = (usesSystemPrincipal ||
-                              mWorkerPrivate->IsInPrivilegedApp()) &&
+  const bool discardSource = usesSystemPrincipal &&
                              xpc::ShouldDiscardSystemSource();
   const bool extraWarnings = usesSystemPrincipal &&
                              xpc::ExtraWarningsForSystemJS();
@@ -482,17 +514,15 @@ DedicatedWorkerGlobalScope::WrapGlobalObject(JSContext* aCx,
   behaviors.setDiscardSource(discardSource)
            .extraWarningsOverride().set(extraWarnings);
 
-  const bool inCertifiedApp = mWorkerPrivate->IsInCertifiedApp();
   const bool sharedMemoryEnabled = xpc::SharedMemoryEnabled();
 
   JS::CompartmentCreationOptions& creationOptions = options.creationOptions();
-  creationOptions.setSharedMemoryAndAtomicsEnabled(sharedMemoryEnabled)
-                 .setExperimentalDateTimeFormatFormatToPartsEnabled(inCertifiedApp);
+  creationOptions.setSharedMemoryAndAtomicsEnabled(sharedMemoryEnabled);
 
-  return DedicatedWorkerGlobalScopeBinding_workers::Wrap(aCx, this, this,
-                                                         options,
-                                                         GetWorkerPrincipal(),
-                                                         true, aReflector);
+  return DedicatedWorkerGlobalScopeBinding::Wrap(aCx, this, this,
+                                                 options,
+                                                 GetWorkerPrincipal(),
+                                                 true, aReflector);
 }
 
 void
@@ -521,9 +551,9 @@ SharedWorkerGlobalScope::WrapGlobalObject(JSContext* aCx,
   JS::CompartmentOptions options;
   mWorkerPrivate->CopyJSCompartmentOptions(options);
 
-  return SharedWorkerGlobalScopeBinding_workers::Wrap(aCx, this, this, options,
-                                                      GetWorkerPrincipal(),
-                                                      true, aReflector);
+  return SharedWorkerGlobalScopeBinding::Wrap(aCx, this, this, options,
+                                              GetWorkerPrincipal(),
+                                              true, aReflector);
 }
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(ServiceWorkerGlobalScope, WorkerGlobalScope,
@@ -555,9 +585,9 @@ ServiceWorkerGlobalScope::WrapGlobalObject(JSContext* aCx,
   JS::CompartmentOptions options;
   mWorkerPrivate->CopyJSCompartmentOptions(options);
 
-  return ServiceWorkerGlobalScopeBinding_workers::Wrap(aCx, this, this, options,
-                                                       GetWorkerPrincipal(),
-                                                       true, aReflector);
+  return ServiceWorkerGlobalScopeBinding::Wrap(aCx, this, this, options,
+                                               GetWorkerPrincipal(),
+                                               true, aReflector);
 }
 
 ServiceWorkerClients*
@@ -590,7 +620,7 @@ class SkipWaitingResultRunnable final : public WorkerRunnable
 public:
   SkipWaitingResultRunnable(WorkerPrivate* aWorkerPrivate,
                             PromiseWorkerProxy* aPromiseProxy)
-    : WorkerRunnable(aWorkerPrivate, WorkerThreadModifyBusyCount)
+    : WorkerRunnable(aWorkerPrivate)
     , mPromiseProxy(aPromiseProxy)
   {
     AssertIsOnMainThread();
@@ -603,7 +633,7 @@ public:
     aWorkerPrivate->AssertIsOnWorkerThread();
 
     RefPtr<Promise> promise = mPromiseProxy->WorkerPromise();
-    promise->MaybeResolve(JS::UndefinedHandleValue);
+    promise->MaybeResolveWithUndefined();
 
     // Release the reference on the worker thread.
     mPromiseProxy->CleanUp();
@@ -626,7 +656,7 @@ public:
     MOZ_ASSERT(aPromiseProxy);
   }
 
-  NS_IMETHODIMP
+  NS_IMETHOD
   Run() override
   {
     AssertIsOnMainThread();
@@ -668,7 +698,7 @@ ServiceWorkerGlobalScope::SkipWaiting(ErrorResult& aRv)
   RefPtr<PromiseWorkerProxy> promiseProxy =
     PromiseWorkerProxy::Create(mWorkerPrivate, promise);
   if (!promiseProxy) {
-    promise->MaybeResolve(JS::UndefinedHandleValue);
+    promise->MaybeResolveWithUndefined();
     return promise.forget();
   }
 
@@ -676,7 +706,7 @@ ServiceWorkerGlobalScope::SkipWaiting(ErrorResult& aRv)
     new WorkerScopeSkipWaitingRunnable(promiseProxy,
                                        NS_ConvertUTF16toUTF8(mScope));
 
-  MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(runnable));
+  MOZ_ALWAYS_SUCCEEDS(mWorkerPrivate->DispatchToMainThread(runnable.forget()));
   return promise.forget();
 }
 
@@ -906,12 +936,14 @@ WorkerDebuggerGlobalScope::Dump(JSContext* aCx,
   }
 }
 
+BEGIN_WORKERS_NAMESPACE
+
 bool
 IsWorkerGlobal(JSObject* object)
 {
   nsIGlobalObject* globalObject = nullptr;
-  return NS_SUCCEEDED(UNWRAP_WORKER_OBJECT(WorkerGlobalScope, object,
-                                           globalObject)) && !!globalObject;
+  return NS_SUCCEEDED(UNWRAP_OBJECT(WorkerGlobalScope, object,
+                                    globalObject)) && !!globalObject;
 }
 
 bool
@@ -932,7 +964,7 @@ IsDebuggerSandbox(JSObject* object)
 bool
 GetterOnlyJSNative(JSContext* aCx, unsigned aArgc, JS::Value* aVp)
 {
-  JS_ReportErrorNumber(aCx, js::GetErrorMessage, nullptr, JSMSG_GETTER_ONLY);
+  JS_ReportErrorNumberASCII(aCx, js::GetErrorMessage, nullptr, JSMSG_GETTER_ONLY);
   return false;
 }
 

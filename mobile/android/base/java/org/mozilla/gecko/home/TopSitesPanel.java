@@ -14,6 +14,7 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Future;
 
 import org.mozilla.gecko.GeckoProfile;
 import org.mozilla.gecko.R;
@@ -22,14 +23,15 @@ import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.db.BrowserContract.Thumbnails;
 import org.mozilla.gecko.db.BrowserContract.TopSites;
 import org.mozilla.gecko.db.BrowserDB;
-import org.mozilla.gecko.favicons.Favicons;
-import org.mozilla.gecko.favicons.OnFaviconLoadedListener;
 import org.mozilla.gecko.gfx.BitmapUtils;
 import org.mozilla.gecko.home.HomeContextMenuInfo.RemoveItemType;
 import org.mozilla.gecko.home.HomePager.OnUrlOpenListener;
 import org.mozilla.gecko.home.PinSiteDialog.OnSiteSelectedListener;
 import org.mozilla.gecko.home.TopSitesGridView.OnEditPinnedSiteListener;
 import org.mozilla.gecko.home.TopSitesGridView.TopSitesGridContextMenuInfo;
+import org.mozilla.gecko.icons.IconCallback;
+import org.mozilla.gecko.icons.IconResponse;
+import org.mozilla.gecko.icons.Icons;
 import org.mozilla.gecko.restrictions.Restrictable;
 import org.mozilla.gecko.restrictions.Restrictions;
 import org.mozilla.gecko.util.StringUtils;
@@ -222,7 +224,7 @@ public class TopSitesPanel extends HomeFragment {
 
                         Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, method, extra);
 
-                        mUrlOpenListener.onUrlOpen(url, EnumSet.noneOf(OnUrlOpenListener.Flags.class));
+                        mUrlOpenListener.onUrlOpen(url, EnumSet.of(OnUrlOpenListener.Flags.NO_READER_VIEW));
                     }
                 } else {
                     if (mEditPinnedSiteListener != null) {
@@ -374,7 +376,7 @@ public class TopSitesPanel extends HomeFragment {
         TopSitesGridContextMenuInfo info = (TopSitesGridContextMenuInfo) menuInfo;
 
         final int itemId = item.getItemId();
-        final BrowserDB db = GeckoProfile.get(getActivity()).getDB();
+        final BrowserDB db = BrowserDB.from(getActivity());
 
         if (itemId == R.id.top_sites_pin) {
             final String url = info.url;
@@ -463,7 +465,7 @@ public class TopSitesPanel extends HomeFragment {
         public void onSiteSelected(final String url, final String title) {
             final int position = mPosition;
             final Context context = getActivity().getApplicationContext();
-            final BrowserDB db = GeckoProfile.get(getActivity()).getDB();
+            final BrowserDB db = BrowserDB.from(getActivity());
             ThreadUtils.postToBackgroundThread(new Runnable() {
                 @Override
                 public void run() {
@@ -497,7 +499,7 @@ public class TopSitesPanel extends HomeFragment {
         public TopSitesLoader(Context context) {
             super(context);
             mMaxGridEntries = context.getResources().getInteger(R.integer.number_of_top_sites);
-            mDB = GeckoProfile.get(context).getDB();
+            mDB = BrowserDB.from(context);
         }
 
         @Override
@@ -526,6 +528,19 @@ public class TopSitesPanel extends HomeFragment {
             return super.getItem(position + mMaxGridEntries);
         }
 
+        /**
+         * We have to override default getItemId implementation, since for a given position, it returns
+         * value of the _id column. In our case _id is always 0 (see Combined view).
+         */
+        @Override
+        public long getItemId(int position) {
+            final int adjustedPosition = position + mMaxGridEntries;
+            final Cursor cursor = getCursor();
+
+            cursor.moveToPosition(adjustedPosition);
+            return getItemIdForTopSitesCursor(cursor);
+        }
+
         @Override
         public void bindView(View view, Context context, Cursor cursor) {
             final int position = cursor.getPosition();
@@ -549,7 +564,7 @@ public class TopSitesPanel extends HomeFragment {
 
         public TopSitesGridAdapter(Context context, Cursor cursor) {
             super(context, cursor, 0);
-            mDB = GeckoProfile.get(context).getDB();
+            mDB = BrowserDB.from(context);
         }
 
         @Override
@@ -585,23 +600,16 @@ public class TopSitesPanel extends HomeFragment {
             notifyDataSetChanged();
         }
 
+        /**
+         * We have to override default getItemId implementation, since for a given position, it returns
+         * value of the _id column. In our case _id is always 0 (see Combined view).
+         */
         @Override
         public long getItemId(int position) {
-            // We are trying to return stable ids so that Android can recycle views appropriately:
-            // * If we have a history id then we return it
-            // * If we only have a bookmark id then we negate it and return it. We negate it in order
-            //   to avoid clashing/conflicting with history ids.
-
             final Cursor cursor = getCursor();
             cursor.moveToPosition(position);
 
-            final long historyId = cursor.getLong(cursor.getColumnIndexOrThrow(TopSites.HISTORY_ID));
-            if (historyId != 0) {
-                return historyId;
-            }
-
-            final long bookmarkId = cursor.getLong(cursor.getColumnIndexOrThrow(TopSites.BOOKMARK_ID));
-            return -1 * bookmarkId;
+            return getItemIdForTopSitesCursor(cursor);
         }
 
         @Override
@@ -651,41 +659,12 @@ public class TopSitesPanel extends HomeFragment {
                 return;
             }
 
-            // If we have no thumbnail, attempt to show a Favicon instead.
-            LoadIDAwareFaviconLoadedListener listener = new LoadIDAwareFaviconLoadedListener(view);
-            final int loadId = Favicons.getSizedFaviconForPageFromLocal(context, url, listener);
-            if (loadId == Favicons.LOADED) {
-                // Great!
-                return;
-            }
-
-            // Give each side enough information to shake hands later.
-            listener.setLoadId(loadId);
-            view.setLoadId(loadId);
+            view.loadFavicon(url);
         }
 
         @Override
         public View newView(Context context, Cursor cursor, ViewGroup parent) {
             return new TopSitesGridItemView(context);
-        }
-    }
-
-    private static class LoadIDAwareFaviconLoadedListener implements OnFaviconLoadedListener {
-        private volatile int loadId = Favicons.NOT_LOADING;
-        private final TopSitesGridItemView view;
-        public LoadIDAwareFaviconLoadedListener(TopSitesGridItemView view) {
-            this.view = view;
-        }
-
-        public void setLoadId(int id) {
-            this.loadId = id;
-        }
-
-        @Override
-        public void onFaviconLoaded(String url, String faviconURL, Bitmap favicon) {
-            if (TextUtils.equals(this.view.getUrl(), url)) {
-                this.view.displayFavicon(favicon, faviconURL, this.loadId);
-            }
         }
     }
 
@@ -717,7 +696,7 @@ public class TopSitesPanel extends HomeFragment {
 
             // Load the thumbnails.
             // Even though the cursor we're given is supposed to be fresh,
-            // we get a bad first value unless we reset its position.
+            // we getIcon a bad first value unless we reset its position.
             // Using move(-1) and moveToNext() doesn't work correctly under
             // rotation, so we use moveToFirst.
             if (!c.moveToFirst()) {
@@ -732,7 +711,7 @@ public class TopSitesPanel extends HomeFragment {
                 // Only try to fetch thumbnails for non-empty URLs that
                 // don't have an associated suggested image URL.
                 final GeckoProfile profile = GeckoProfile.get(getActivity());
-                if (TextUtils.isEmpty(url) || profile.getDB().hasSuggestedImageUrl(url)) {
+                if (TextUtils.isEmpty(url) || BrowserDB.from(profile).hasSuggestedImageUrl(url)) {
                     continue;
                 }
 
@@ -819,7 +798,7 @@ public class TopSitesPanel extends HomeFragment {
         public ThumbnailsLoader(Context context, ArrayList<String> urls) {
             super(context);
             mUrls = urls;
-            mDB = GeckoProfile.get(context).getDB();
+            mDB = BrowserDB.from(context);
         }
 
         @Override
@@ -881,7 +860,7 @@ public class TopSitesPanel extends HomeFragment {
 
                     final Bitmap bitmap = BitmapUtils.decodeByteArray(b);
 
-                    // Our thumbnails are never null, so if we get a null decoded
+                    // Our thumbnails are never null, so if we getIcon a null decoded
                     // bitmap, it's because we hit an OOM or some other disaster.
                     // Give up immediately rather than hammering on.
                     if (bitmap == null) {
@@ -964,5 +943,26 @@ public class TopSitesPanel extends HomeFragment {
                 mGridAdapter.updateThumbnails(null);
             }
         }
+    }
+
+    /**
+     * We are trying to return stable IDs so that Android can recycle views appropriately:
+     * - If we have a history ID then we return it
+     * - If we only have a bookmark ID then we negate it and return it. We negate it in order
+     *   to avoid clashing/conflicting with history IDs.
+     *
+     * @param cursorInPosition Cursor already moved to position for which we're getting a stable ID
+     * @return Stable ID for a given cursor
+     */
+    private static long getItemIdForTopSitesCursor(final Cursor cursorInPosition) {
+        final int historyIdCol = cursorInPosition.getColumnIndexOrThrow(TopSites.HISTORY_ID);
+        final long historyId = cursorInPosition.getLong(historyIdCol);
+        if (historyId != 0) {
+            return historyId;
+        }
+
+        final int bookmarkIdCol = cursorInPosition.getColumnIndexOrThrow(TopSites.BOOKMARK_ID);
+        final long bookmarkId = cursorInPosition.getLong(bookmarkIdCol);
+        return -1 * bookmarkId;
     }
 }

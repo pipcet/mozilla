@@ -101,15 +101,6 @@ protected:
   virtual bool
   DeallocPBroadcastChannelParent(PBroadcastChannelParent* aActor) override;
 
-  virtual PNuwaParent*
-  AllocPNuwaParent() override;
-
-  virtual bool
-  RecvPNuwaConstructor(PNuwaParent* aActor) override;
-
-  virtual bool
-  DeallocPNuwaParent(PNuwaParent* aActor) override;
-
   virtual PSendStreamParent*
   AllocPSendStreamParent() override;
 
@@ -203,6 +194,18 @@ protected:
   virtual bool
   DeallocPFileSystemRequestParent(PFileSystemRequestParent*) override;
 
+  // Gamepad API Background IPC
+  virtual PGamepadEventChannelParent*
+  AllocPGamepadEventChannelParent() override;
+
+  virtual bool
+  DeallocPGamepadEventChannelParent(PGamepadEventChannelParent *aActor) override;
+
+  virtual PGamepadTestChannelParent*
+  AllocPGamepadTestChannelParent() override;
+
+  virtual bool
+  DeallocPGamepadTestChannelParent(PGamepadTestChannelParent* aActor) override;
 };
 
 } // namespace ipc

@@ -8,6 +8,7 @@
 
 #include "Database.h"
 
+#include "nsIAnnotationService.h"
 #include "nsINavBookmarksService.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIFile.h"
@@ -29,7 +30,7 @@
 #include "nsPrintfCString.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "prtime.h"
 
 #include "nsXULAppAPI.h"
@@ -88,6 +89,14 @@
 // Livemarks annotations.
 #define LMANNO_FEEDURI "livemark/feedURI"
 #define LMANNO_SITEURI "livemark/siteURI"
+
+#define MOBILE_ROOT_GUID "mobile______"
+#define MOBILE_ROOT_ANNO "mobile/bookmarksRoot"
+
+// We use a fixed title for the mobile root to avoid marking the database as
+// corrupt if we can't look up the localized title in the string bundle. Sync
+// sets the title to the localized version when it creates the left pane query.
+#define MOBILE_ROOT_TITLE "mobile"
 
 using namespace mozilla;
 
@@ -847,6 +856,27 @@ Database::InitSchema(bool* aDatabaseMigrated)
 
       // Firefox 49 uses schema version 32.
 
+      if (currentSchemaVersion < 33) {
+        rv = MigrateV33Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 50 uses schema version 33.
+
+      if (currentSchemaVersion < 34) {
+        rv = MigrateV34Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 51 uses schema version 34.
+
+      if (currentSchemaVersion < 35) {
+        rv = MigrateV35Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 52 uses schema version 35.
+
       // Schema Upgrades must add migration code here.
 
       rv = UpdateBookmarkRootTitles();
@@ -861,7 +891,7 @@ Database::InitSchema(bool* aDatabaseMigrated)
     // moz_places.
     rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_PLACES);
     NS_ENSURE_SUCCESS(rv, rv);
-    rv = mMainConn->ExecuteSimpleSQL(CREATE_IDX_MOZ_PLACES_URL);
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_IDX_MOZ_PLACES_URL_HASH);
     NS_ENSURE_SUCCESS(rv, rv);
     rv = mMainConn->ExecuteSimpleSQL(CREATE_IDX_MOZ_PLACES_FAVICON);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -973,33 +1003,36 @@ Database::CreateBookmarkRoots()
   if (NS_FAILED(rv)) return rv;
 
   // Fetch the internationalized folder name from the string bundle.
-  rv = bundle->GetStringFromName(MOZ_UTF16("BookmarksMenuFolderTitle"),
+  rv = bundle->GetStringFromName(u"BookmarksMenuFolderTitle",
                                  getter_Copies(rootTitle));
   if (NS_FAILED(rv)) return rv;
   rv = CreateRoot(mMainConn, NS_LITERAL_CSTRING("menu"),
                   NS_LITERAL_CSTRING("menu________"), rootTitle);
   if (NS_FAILED(rv)) return rv;
 
-  rv = bundle->GetStringFromName(MOZ_UTF16("BookmarksToolbarFolderTitle"),
+  rv = bundle->GetStringFromName(u"BookmarksToolbarFolderTitle",
                                  getter_Copies(rootTitle));
   if (NS_FAILED(rv)) return rv;
   rv = CreateRoot(mMainConn, NS_LITERAL_CSTRING("toolbar"),
                   NS_LITERAL_CSTRING("toolbar_____"), rootTitle);
   if (NS_FAILED(rv)) return rv;
 
-  rv = bundle->GetStringFromName(MOZ_UTF16("TagsFolderTitle"),
+  rv = bundle->GetStringFromName(u"TagsFolderTitle",
                                  getter_Copies(rootTitle));
   if (NS_FAILED(rv)) return rv;
   rv = CreateRoot(mMainConn, NS_LITERAL_CSTRING("tags"),
                   NS_LITERAL_CSTRING("tags________"), rootTitle);
   if (NS_FAILED(rv)) return rv;
 
-  rv = bundle->GetStringFromName(MOZ_UTF16("OtherBookmarksFolderTitle"),
+  rv = bundle->GetStringFromName(u"OtherBookmarksFolderTitle",
                                  getter_Copies(rootTitle));
   if (NS_FAILED(rv)) return rv;
   rv = CreateRoot(mMainConn, NS_LITERAL_CSTRING("unfiled"),
                   NS_LITERAL_CSTRING("unfiled_____"), rootTitle);
   if (NS_FAILED(rv)) return rv;
+
+  int64_t mobileRootId = CreateMobileRoot();
+  if (mobileRootId <= 0) return NS_ERROR_FAILURE;
 
 #if DEBUG
   nsCOMPtr<mozIStorageStatement> stmt;
@@ -1014,7 +1047,7 @@ Database::CreateBookmarkRoots()
   MOZ_ASSERT(hasResult);
   int32_t bookmarkCount = stmt->AsInt32(0);
   int32_t positionSum = stmt->AsInt32(1);
-  MOZ_ASSERT(bookmarkCount == 5 && positionSum == 6);
+  MOZ_ASSERT(bookmarkCount == 6 && positionSum == 10);
 #endif
 
   return NS_OK;
@@ -1038,6 +1071,8 @@ Database::InitFunctions()
   rv = FrecencyNotificationFunction::create(mMainConn);
   NS_ENSURE_SUCCESS(rv, rv);
   rv = StoreLastInsertedIdFunction::create(mMainConn);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = HashFunction::create(mMainConn);
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
@@ -1111,11 +1146,13 @@ Database::UpdateBookmarkRootTitles()
                             , "toolbar_____"
                             , "tags________"
                             , "unfiled_____"
+                            , "mobile______"
                             };
   const char *titleStringIDs[] = { "BookmarksMenuFolderTitle"
                                  , "BookmarksToolbarFolderTitle"
                                  , "TagsFolderTitle"
                                  , "OtherBookmarksFolderTitle"
+                                 , "MobileBookmarksFolderTitle"
                                  };
 
   for (uint32_t i = 0; i < ArrayLength(rootGuids); ++i) {
@@ -1771,6 +1808,283 @@ Database::MigrateV32Up() {
   return NS_OK;
 }
 
+nsresult
+Database::MigrateV33Up() {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  nsresult rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "DROP INDEX IF EXISTS moz_places_url_uniqueindex"
+  ));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // Add an url_hash column to moz_places.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "SELECT url_hash FROM moz_places"
+  ), getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) {
+    rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+      "ALTER TABLE moz_places ADD COLUMN url_hash INTEGER DEFAULT 0 NOT NULL"
+    ));
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "UPDATE moz_places SET url_hash = hash(url) WHERE url_hash = 0"
+  ));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // Create an index on url_hash.
+  rv = mMainConn->ExecuteSimpleSQL(CREATE_IDX_MOZ_PLACES_URL_HASH);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  return NS_OK;
+}
+
+nsresult
+Database::MigrateV34Up() {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  nsresult rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "DELETE FROM moz_keywords WHERE id IN ( "
+      "SELECT id FROM moz_keywords k "
+      "WHERE NOT EXISTS (SELECT 1 FROM moz_places h WHERE k.place_id = h.id) "
+    ")"
+  ));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  return NS_OK;
+}
+
+nsresult
+Database::MigrateV35Up() {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  int64_t mobileRootId = CreateMobileRoot();
+  if (mobileRootId <= 0) return NS_ERROR_FAILURE;
+
+  // At this point, we should have no more than two folders with the mobile
+  // bookmarks anno: the new root, and the old folder if one exists. If, for
+  // some reason, we have multiple folders with the anno, we append their
+  // children to the new root.
+  nsTArray<int64_t> folderIds;
+  nsresult rv = GetItemsWithAnno(NS_LITERAL_CSTRING(MOBILE_ROOT_ANNO),
+                                 nsINavBookmarksService::TYPE_FOLDER,
+                                 folderIds);
+  if (NS_FAILED(rv)) return rv;
+
+  for (uint32_t i = 0; i < folderIds.Length(); ++i) {
+    if (folderIds[i] == mobileRootId) {
+      // Ignore the new mobile root. We'll remove this anno from the root in
+      // bug 1306445.
+      continue;
+    }
+
+    // Append the folder's children to the new root.
+    nsCOMPtr<mozIStorageStatement> moveStmt;
+    rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+      "UPDATE moz_bookmarks "
+      "SET parent = :root_id, "
+          "position = position + IFNULL("
+            "(SELECT MAX(position) + 1 FROM moz_bookmarks "
+             "WHERE parent = :root_id), 0)"
+      "WHERE parent = :folder_id"
+    ), getter_AddRefs(moveStmt));
+    if (NS_FAILED(rv)) return rv;
+    mozStorageStatementScoper moveScoper(moveStmt);
+
+    rv = moveStmt->BindInt64ByName(NS_LITERAL_CSTRING("root_id"),
+                                   mobileRootId);
+    if (NS_FAILED(rv)) return rv;
+    rv = moveStmt->BindInt64ByName(NS_LITERAL_CSTRING("folder_id"),
+                                   folderIds[i]);
+    if (NS_FAILED(rv)) return rv;
+
+    rv = moveStmt->Execute();
+    if (NS_FAILED(rv)) return rv;
+
+    // Delete the old folder.
+    rv = DeleteBookmarkItem(folderIds[i]);
+    if (NS_FAILED(rv)) return rv;
+  }
+
+  return NS_OK;
+}
+
+nsresult
+Database::GetItemsWithAnno(const nsACString& aAnnoName, int32_t aItemType,
+                           nsTArray<int64_t>& aItemIds)
+{
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "SELECT b.id FROM moz_items_annos a "
+    "JOIN moz_anno_attributes n ON n.id = a.anno_attribute_id "
+    "JOIN moz_bookmarks b ON b.id = a.item_id "
+    "WHERE n.name = :anno_name AND "
+          "b.type = :item_type"
+  ), getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) return rv;
+  mozStorageStatementScoper scoper(stmt);
+
+  rv = stmt->BindUTF8StringByName(NS_LITERAL_CSTRING("anno_name"), aAnnoName);
+  if (NS_FAILED(rv)) return rv;
+  rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("item_type"), aItemType);
+  if (NS_FAILED(rv)) return rv;
+
+  bool hasMore = false;
+  while (NS_SUCCEEDED(stmt->ExecuteStep(&hasMore)) && hasMore) {
+    int64_t itemId;
+    rv = stmt->GetInt64(0, &itemId);
+    if (NS_FAILED(rv)) return rv;
+    aItemIds.AppendElement(itemId);
+  }
+
+  return NS_OK;
+}
+
+nsresult
+Database::DeleteBookmarkItem(int32_t aItemId)
+{
+  // Delete the old bookmark.
+  nsCOMPtr<mozIStorageStatement> deleteStmt;
+  nsresult rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "DELETE FROM moz_bookmarks WHERE id = :item_id"
+  ), getter_AddRefs(deleteStmt));
+  if (NS_FAILED(rv)) return rv;
+  mozStorageStatementScoper deleteScoper(deleteStmt);
+
+  rv = deleteStmt->BindInt64ByName(NS_LITERAL_CSTRING("item_id"),
+                                   aItemId);
+  if (NS_FAILED(rv)) return rv;
+
+  rv = deleteStmt->Execute();
+  if (NS_FAILED(rv)) return rv;
+
+  // Clean up orphan annotations.
+  nsCOMPtr<mozIStorageStatement> removeAnnosStmt;
+  rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "DELETE FROM moz_items_annos WHERE item_id = :item_id"
+  ), getter_AddRefs(removeAnnosStmt));
+  if (NS_FAILED(rv)) return rv;
+  mozStorageStatementScoper removeAnnosScoper(removeAnnosStmt);
+
+  rv = removeAnnosStmt->BindInt64ByName(NS_LITERAL_CSTRING("item_id"),
+                                        aItemId);
+  if (NS_FAILED(rv)) return rv;
+
+  rv = removeAnnosStmt->Execute();
+  if (NS_FAILED(rv)) return rv;
+
+  return NS_OK;
+}
+
+int64_t
+Database::CreateMobileRoot()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  // Create the mobile root, ignoring conflicts if one already exists (for
+  // example, if the user downgraded to an earlier release channel).
+  nsCOMPtr<mozIStorageStatement> createStmt;
+  nsresult rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "INSERT OR IGNORE INTO moz_bookmarks "
+      "(type, title, dateAdded, lastModified, guid, position, parent) "
+    "SELECT :item_type, :item_title, :timestamp, :timestamp, :guid, "
+      "(SELECT COUNT(*) FROM moz_bookmarks p WHERE p.parent = b.id), b.id "
+    "FROM moz_bookmarks b WHERE b.parent = 0"
+  ), getter_AddRefs(createStmt));
+  if (NS_FAILED(rv)) return -1;
+  mozStorageStatementScoper createScoper(createStmt);
+
+  rv = createStmt->BindInt32ByName(NS_LITERAL_CSTRING("item_type"),
+                                   nsINavBookmarksService::TYPE_FOLDER);
+  if (NS_FAILED(rv)) return -1;
+  rv = createStmt->BindUTF8StringByName(NS_LITERAL_CSTRING("item_title"),
+                                        NS_LITERAL_CSTRING(MOBILE_ROOT_TITLE));
+  if (NS_FAILED(rv)) return -1;
+  rv = createStmt->BindInt64ByName(NS_LITERAL_CSTRING("timestamp"),
+                                   RoundedPRNow());
+  if (NS_FAILED(rv)) return -1;
+  rv = createStmt->BindUTF8StringByName(NS_LITERAL_CSTRING("guid"),
+                                        NS_LITERAL_CSTRING(MOBILE_ROOT_GUID));
+  if (NS_FAILED(rv)) return -1;
+
+  rv = createStmt->Execute();
+  if (NS_FAILED(rv)) return -1;
+
+  // Find the mobile root ID. We can't use the last inserted ID because the
+  // root might already exist, and we ignore on conflict.
+  nsCOMPtr<mozIStorageStatement> findIdStmt;
+  rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "SELECT id FROM moz_bookmarks WHERE guid = :guid"
+  ), getter_AddRefs(findIdStmt));
+  if (NS_FAILED(rv)) return -1;
+  mozStorageStatementScoper findIdScoper(findIdStmt);
+
+  rv = findIdStmt->BindUTF8StringByName(NS_LITERAL_CSTRING("guid"),
+                                        NS_LITERAL_CSTRING(MOBILE_ROOT_GUID));
+  if (NS_FAILED(rv)) return -1;
+
+  bool hasResult = false;
+  rv = findIdStmt->ExecuteStep(&hasResult);
+  if (NS_FAILED(rv) || !hasResult) return -1;
+
+  int64_t rootId;
+  rv = findIdStmt->GetInt64(0, &rootId);
+  if (NS_FAILED(rv)) return -1;
+
+  // Set the mobile bookmarks anno on the new root, so that Sync code on an
+  // older channel can still find it in case of a downgrade. This can be
+  // removed in bug 1306445.
+  nsCOMPtr<mozIStorageStatement> addAnnoNameStmt;
+  rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "INSERT OR IGNORE INTO moz_anno_attributes (name) VALUES (:anno_name)"
+  ), getter_AddRefs(addAnnoNameStmt));
+  if (NS_FAILED(rv)) return -1;
+  mozStorageStatementScoper addAnnoNameScoper(addAnnoNameStmt);
+
+  rv = addAnnoNameStmt->BindUTF8StringByName(
+    NS_LITERAL_CSTRING("anno_name"), NS_LITERAL_CSTRING(MOBILE_ROOT_ANNO));
+  if (NS_FAILED(rv)) return -1;
+  rv = addAnnoNameStmt->Execute();
+  if (NS_FAILED(rv)) return -1;
+
+  nsCOMPtr<mozIStorageStatement> addAnnoStmt;
+  rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "INSERT OR IGNORE INTO moz_items_annos "
+      "(id, item_id, anno_attribute_id, content, flags, "
+       "expiration, type, dateAdded, lastModified) "
+    "SELECT "
+      "(SELECT a.id FROM moz_items_annos a "
+       "WHERE a.anno_attribute_id = n.id AND "
+             "a.item_id = :root_id), "
+      ":root_id, n.id, 1, 0, :expiration, :type, :timestamp, :timestamp "
+    "FROM moz_anno_attributes n WHERE name = :anno_name"
+  ), getter_AddRefs(addAnnoStmt));
+  if (NS_FAILED(rv)) return -1;
+  mozStorageStatementScoper addAnnoScoper(addAnnoStmt);
+
+  rv = addAnnoStmt->BindInt64ByName(NS_LITERAL_CSTRING("root_id"), rootId);
+  if (NS_FAILED(rv)) return -1;
+  rv = addAnnoStmt->BindUTF8StringByName(
+    NS_LITERAL_CSTRING("anno_name"), NS_LITERAL_CSTRING(MOBILE_ROOT_ANNO));
+  if (NS_FAILED(rv)) return -1;
+  rv = addAnnoStmt->BindInt32ByName(NS_LITERAL_CSTRING("expiration"),
+                                    nsIAnnotationService::EXPIRE_NEVER);
+  if (NS_FAILED(rv)) return -1;
+  rv = addAnnoStmt->BindInt32ByName(NS_LITERAL_CSTRING("type"),
+                                    nsIAnnotationService::TYPE_INT32);
+  if (NS_FAILED(rv)) return -1;
+  rv = addAnnoStmt->BindInt32ByName(NS_LITERAL_CSTRING("timestamp"),
+                                    RoundedPRNow());
+  if (NS_FAILED(rv)) return -1;
+
+  rv = addAnnoStmt->Execute();
+  if (NS_FAILED(rv)) return -1;
+
+  return rootId;
+}
+
 void
 Database::Shutdown()
 {
@@ -1802,7 +2116,7 @@ Database::Shutdown()
     MOZ_ASSERT(NS_SUCCEEDED(rv));
     rv = stmt->ExecuteStep(&haveNullGuids);
     MOZ_ASSERT(NS_SUCCEEDED(rv));
-    MOZ_ASSERT(!haveNullGuids && "Found a page without a GUID!");
+    MOZ_ASSERT(!haveNullGuids, "Found a page without a GUID!");
 
     rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
       "SELECT 1 "
@@ -1812,7 +2126,7 @@ Database::Shutdown()
     MOZ_ASSERT(NS_SUCCEEDED(rv));
     rv = stmt->ExecuteStep(&haveNullGuids);
     MOZ_ASSERT(NS_SUCCEEDED(rv));
-    MOZ_ASSERT(!haveNullGuids && "Found a bookmark without a GUID!");
+    MOZ_ASSERT(!haveNullGuids, "Found a bookmark without a GUID!");
   }
 
   { // Sanity check for unrounded dateAdded and lastModified values (bug
@@ -1828,7 +2142,31 @@ Database::Shutdown()
     MOZ_ASSERT(NS_SUCCEEDED(rv));
     rv = stmt->ExecuteStep(&hasUnroundedDates);
     MOZ_ASSERT(NS_SUCCEEDED(rv));
-    MOZ_ASSERT(!hasUnroundedDates && "Found unrounded dates!");
+    MOZ_ASSERT(!hasUnroundedDates, "Found unrounded dates!");
+  }
+
+  { // Sanity check url_hash
+    bool hasNullHash = false;
+    nsCOMPtr<mozIStorageStatement> stmt;
+    nsresult rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+      "SELECT 1 FROM moz_places WHERE url_hash = 0"
+    ), getter_AddRefs(stmt));
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+    rv = stmt->ExecuteStep(&hasNullHash);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+    MOZ_ASSERT(!hasNullHash, "Found a place without a hash!");
+  }
+
+  { // Sanity check unique urls
+    bool hasDupeUrls = false;
+    nsCOMPtr<mozIStorageStatement> stmt;
+    nsresult rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+      "SELECT 1 FROM moz_places GROUP BY url HAVING count(*) > 1 "
+    ), getter_AddRefs(stmt));
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+    rv = stmt->ExecuteStep(&hasDupeUrls);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+    MOZ_ASSERT(!hasDupeUrls, "Found a duplicate url!");
   }
 #endif
 

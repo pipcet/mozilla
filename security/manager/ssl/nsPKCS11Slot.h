@@ -31,12 +31,17 @@ protected:
 
 private:
   mozilla::UniquePK11SlotInfo mSlot;
-  nsString mSlotDesc, mSlotManID, mSlotHWVersion, mSlotFWVersion;
+  nsCString mSlotDesc;
+  nsCString mSlotManufacturerID;
+  nsCString mSlotHWVersion;
+  nsCString mSlotFWVersion;
   int mSeries;
 
   virtual void virtualDestroyNSSReference() override;
   void destructorSafeDestroyNSSReference();
   nsresult refreshSlotInfo(const nsNSSShutDownPreventionLock& proofOfLock);
+  nsresult GetAttributeHelper(const nsACString& attribute,
+                      /*out*/ nsACString& xpcomOutParam);
 };
 
 class nsPKCS11Module : public nsIPKCS11Module,
@@ -79,24 +84,5 @@ protected:
 #define NS_PKCS11MODULEDB_CID \
 { 0xff9fbcd7, 0x9517, 0x4334, \
   { 0xb9, 0x7a, 0xce, 0xed, 0x78, 0x90, 0x99, 0x74 }}
-
-class MOZ_RAII AutoSECMODListReadLock final
-{
-public:
-  AutoSECMODListReadLock()
-    : mLock(SECMOD_GetDefaultModuleListLock())
-  {
-    MOZ_ASSERT(mLock, "Should have the default SECMOD lock");
-    SECMOD_GetReadLock(mLock);
-  }
-
-  ~AutoSECMODListReadLock()
-  {
-    SECMOD_ReleaseReadLock(mLock);
-  }
-
-private:
-  SECMODListLock* mLock;
-};
 
 #endif // nsPKCS11Slot_h

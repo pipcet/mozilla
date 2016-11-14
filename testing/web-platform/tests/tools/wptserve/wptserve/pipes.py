@@ -399,6 +399,7 @@ def template(request, content, escape_type="html"):
                      "hostname": request.url_parts.hostname,
                      "port": request.url_parts.port,
                      "path": request.url_parts.path,
+                     "pathname": request.url_parts.path,
                      "query": "?%s" % request.url_parts.query}
         elif field == "uuid()":
             value = str(uuid.uuid4())
@@ -423,7 +424,7 @@ def template(request, content, escape_type="html"):
         return escape_func(unicode(value)).encode("utf-8")
 
     template_regexp = re.compile(r"{{([^}]*)}}")
-    new_content, count = template_regexp.subn(config_replacement, content)
+    new_content = template_regexp.sub(config_replacement, content)
 
     return new_content
 

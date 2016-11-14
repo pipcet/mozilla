@@ -28,8 +28,10 @@
 #include "DisplayListClipState.h"
 #include "LayerState.h"
 #include "FrameMetrics.h"
+#include "mozilla/EnumeratedArray.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/gfx/UserData.h"
 
 #include <stdint.h>
@@ -56,9 +58,6 @@ class Layer;
 class ImageLayer;
 class ImageContainer;
 } // namespace layers
-namespace gfx {
-class VRDeviceProxy;
-} // namespace gfx
 } // namespace mozilla
 
 // A set of blend modes, that never includes OP_OVER (since it's
@@ -147,7 +146,7 @@ struct AnimatedGeometryRoot
   nsIFrame* operator ->() const { return mFrame; }
 
   void* operator new(size_t aSize,
-                     nsDisplayListBuilder* aBuilder) CPP_THROW_NEW;
+                     nsDisplayListBuilder* aBuilder);
 
   nsIFrame* mFrame;
   AnimatedGeometryRoot* mParentAGR;
@@ -248,7 +247,7 @@ public:
     mMode = nsDisplayListBuilderMode::PLUGIN_GEOMETRY;
   }
 
-  mozilla::layers::LayerManager* GetWidgetLayerManager(nsView** aView = nullptr, bool* aAllowRetaining = nullptr);
+  mozilla::layers::LayerManager* GetWidgetLayerManager(nsView** aView = nullptr);
 
   /**
    * @return true if the display is being built in order to determine which
@@ -430,11 +429,6 @@ public:
    */
   bool IsIgnoringPaintSuppression() { return mIgnoreSuppression; }
   /**
-   * @return Returns if this builder had to ignore painting suppression on some
-   * document when building the display list.
-   */
-  bool GetHadToIgnorePaintSuppression() { return mHadToIgnoreSuppression; }
-  /**
    * Call this if we're doing normal painting to the window.
    */
   void SetPaintingToWindow(bool aToWindow) { mIsPaintingToWindow = aToWindow; }
@@ -527,7 +521,7 @@ public:
    * Notify the display list builder that we're entering a presshell.
    * aReferenceFrame should be a frame in the new presshell.
    * aPointerEventsNoneDoc should be set to true if the frame generating this
-   * document is pointer-events:none without mozpasspointerevents.
+   * document is pointer-events:none.
    */
   void EnterPresShell(nsIFrame* aReferenceFrame,
                       bool aPointerEventsNoneDoc = false);
@@ -542,7 +536,7 @@ public:
   /**
    * Notify the display list builder that we're leaving a presshell.
    */
-  void LeavePresShell(nsIFrame* aReferenceFrame);
+  void LeavePresShell(nsIFrame* aReferenceFrame, nsDisplayList* aPaintedContents);
 
   /**
    * Returns true if we're currently building a display list that's
@@ -562,13 +556,11 @@ public:
   bool IsInSubdocument() { return mPresShellStates.Length() > 1; }
 
   /**
-   * Return true if we're currently building a display list for the root
-   * presshell which is the presshell of a chrome document, or if we're
-   * building the display list for a popup and have not entered a subdocument
-   * inside that popup.
+   * Return true if we're currently building a display list for the presshell
+   * of a chrome document, or if we're building the display list for a popup.
    */
-  bool IsInRootChromeDocumentOrPopup() {
-    return (mIsInChromePresContext || mIsBuildingForPopup) && !IsInSubdocument();
+  bool IsInChromeDocumentOrPopup() {
+    return mIsInChromePresContext || mIsBuildingForPopup;
   }
 
   /**
@@ -696,7 +688,7 @@ public:
                                                  nsDisplayListBuilder* aBuilder,
                                                  nsDisplayItem* aItem,
                                                  nsIFrame* aFrame,
-                                                 nsCSSProperty aProperty);
+                                                 nsCSSPropertyID aProperty);
 
   /**
    * A helper class to temporarily set the value of
@@ -719,7 +711,8 @@ public:
         mPrevDirtyRect(aBuilder->mDirtyRect),
         mPrevAGR(aBuilder->mCurrentAGR),
         mPrevIsAtRootOfPseudoStackingContext(aBuilder->mIsAtRootOfPseudoStackingContext),
-        mPrevAncestorHasApzAwareEventHandler(aBuilder->mAncestorHasApzAwareEventHandler)
+        mPrevAncestorHasApzAwareEventHandler(aBuilder->mAncestorHasApzAwareEventHandler),
+        mPrevBuildingInvisibleItems(aBuilder->mBuildingInvisibleItems)
     {
       if (aForChild->IsTransformed()) {
         aBuilder->mCurrentOffsetToReferenceFrame = nsPoint();
@@ -759,6 +752,9 @@ public:
       return *mBuilder->mCurrentAGR == mBuilder->mCurrentFrame;
 
     }
+    void RestoreBuildingInvisibleItemsValue() {
+      mBuilder->mBuildingInvisibleItems = mPrevBuildingInvisibleItems;
+    }
     ~AutoBuildingDisplayList() {
       mBuilder->mCurrentFrame = mPrevFrame;
       mBuilder->mCurrentReferenceFrame = mPrevReferenceFrame;
@@ -768,6 +764,7 @@ public:
       mBuilder->mCurrentAGR = mPrevAGR;
       mBuilder->mIsAtRootOfPseudoStackingContext = mPrevIsAtRootOfPseudoStackingContext;
       mBuilder->mAncestorHasApzAwareEventHandler = mPrevAncestorHasApzAwareEventHandler;
+      mBuilder->mBuildingInvisibleItems = mPrevBuildingInvisibleItems;
     }
   private:
     nsDisplayListBuilder* mBuilder;
@@ -780,6 +777,7 @@ public:
     AnimatedGeometryRoot* mPrevAGR;
     bool                  mPrevIsAtRootOfPseudoStackingContext;
     bool                  mPrevAncestorHasApzAwareEventHandler;
+    bool                  mPrevBuildingInvisibleItems;
   };
 
   /**
@@ -1005,8 +1003,7 @@ public:
 
   static OutOfFlowDisplayData* GetOutOfFlowData(nsIFrame* aFrame)
   {
-    return static_cast<OutOfFlowDisplayData*>(
-      aFrame->Properties().Get(OutOfFlowDisplayDataProperty()));
+    return aFrame->Properties().Get(OutOfFlowDisplayDataProperty());
   }
 
   nsPresContext* CurrentPresContext() {
@@ -1130,6 +1127,11 @@ public:
     mPreserves3DCtx.mDirtyRect = aDirtyRect;
   }
 
+  bool IsBuildingInvisibleItems() const { return mBuildingInvisibleItems; }
+  void SetBuildingInvisibleItems(bool aBuildingInvisibleItems) {
+    mBuildingInvisibleItems = aBuildingInvisibleItems;
+  }
+
 private:
   void MarkOutOfFlowFrameForDisplay(nsIFrame* aDirtyFrame, nsIFrame* aFrame,
                                     const nsRect& aDirtyRect);
@@ -1174,7 +1176,7 @@ private:
     bool          mIsBackgroundOnly;
     // This is a per-document flag turning off event handling for all content
     // in the document, and is set when we enter a subdocument for a pointer-
-    // events:none frame that doesn't have mozpasspointerevents set.
+    // events:none frame.
     bool          mInsidePointerEventsNoneDoc;
   };
 
@@ -1254,7 +1256,6 @@ private:
   bool                           mCurrentScrollbarWillHaveLayer;
   bool                           mBuildCaret;
   bool                           mIgnoreSuppression;
-  bool                           mHadToIgnoreSuppression;
   bool                           mIsAtRootOfPseudoStackingContext;
   bool                           mIncludeAllOutOfFlows;
   bool                           mDescendIntoSubdocuments;
@@ -1279,6 +1280,7 @@ private:
   bool                           mIsBuildingForPopup;
   bool                           mForceLayerForScrollParent;
   bool                           mAsyncPanZoomEnabled;
+  bool                           mBuildingInvisibleItems;
 };
 
 class nsDisplayItem;
@@ -1340,6 +1342,7 @@ public:
     , mScrollClip(nullptr)
     , mReferenceFrame(nullptr)
     , mAnimatedGeometryRoot(nullptr)
+    , mForceNotVisible(false)
 #ifdef MOZ_DUMP_PAINTING
     , mPainted(false)
 #endif
@@ -1348,7 +1351,7 @@ public:
   virtual ~nsDisplayItem() {}
 
   void* operator new(size_t aSize,
-                     nsDisplayListBuilder* aBuilder) CPP_THROW_NEW {
+                     nsDisplayListBuilder* aBuilder) {
     return aBuilder->Allocate(aSize);
   }
 
@@ -1855,7 +1858,7 @@ public:
   const DisplayItemScrollClip* ScrollClip() const { return mScrollClip; }
 
   bool BackfaceIsHidden() {
-    return mFrame->StyleDisplay()->BackfaceIsHidden();
+    return mFrame->BackfaceIsHidden();
   }
 
 protected:
@@ -1878,6 +1881,7 @@ protected:
   // of the item. Paint implementations can use this to limit their drawing.
   // Guaranteed to be contained in GetBounds().
   nsRect    mVisibleRect;
+  bool      mForceNotVisible;
 #ifdef MOZ_DUMP_PAINTING
   // True if this frame has been painted.
   bool      mPainted;
@@ -2651,6 +2655,59 @@ private:
 };
 
 /**
+ * A display item that renders a solid color over a region. This is not
+ * exposed through CSS, its only purpose is efficient invalidation of
+ * the find bar highlighter dimmer.
+ */
+class nsDisplaySolidColorRegion : public nsDisplayItem {
+  typedef mozilla::gfx::Color Color;
+
+public:
+  nsDisplaySolidColorRegion(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
+                            const nsRegion& aRegion, nscolor aColor)
+    : nsDisplayItem(aBuilder, aFrame), mRegion(aRegion), mColor(Color::FromABGR(aColor))
+  {
+    NS_ASSERTION(NS_GET_A(aColor) > 0, "Don't create invisible nsDisplaySolidColorRegions!");
+    MOZ_COUNT_CTOR(nsDisplaySolidColorRegion);
+  }
+#ifdef NS_BUILD_REFCNT_LOGGING
+  virtual ~nsDisplaySolidColorRegion() {
+    MOZ_COUNT_DTOR(nsDisplaySolidColorRegion);
+  }
+#endif
+
+  virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) override
+  {
+    return new nsDisplaySolidColorRegionGeometry(this, aBuilder, mRegion, mColor);
+  }
+
+  virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
+                                         const nsDisplayItemGeometry* aGeometry,
+                                         nsRegion* aInvalidRegion) override
+  {
+    const nsDisplaySolidColorRegionGeometry* geometry =
+      static_cast<const nsDisplaySolidColorRegionGeometry*>(aGeometry);
+    if (mColor == geometry->mColor) {
+      aInvalidRegion->Xor(geometry->mRegion, mRegion);
+    } else {
+      aInvalidRegion->Or(geometry->mRegion.GetBounds(), mRegion.GetBounds());
+    }
+  }
+
+protected:
+
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) override;
+  virtual void Paint(nsDisplayListBuilder* aBuilder, nsRenderingContext* aCtx) override;
+  virtual void WriteDebugInfo(std::stringstream& aStream) override;
+
+  NS_DISPLAY_DECL_NAME("SolidColorRegion", TYPE_SOLID_COLOR_REGION)
+
+private:
+  nsRegion mRegion;
+  Color mColor;
+};
+
+/**
  * A display item to paint one background-image for a frame. Each background
  * image layer gets its own nsDisplayBackgroundImage.
  */
@@ -2677,7 +2734,8 @@ public:
                                          nsIFrame* aFrame,
                                          const nsRect& aBackgroundRect,
                                          nsDisplayList* aList,
-                                         bool aAllowWillPaintBorderOptimization = true);
+                                         bool aAllowWillPaintBorderOptimization = true,
+                                         nsStyleContext* aStyleContext = nullptr);
 
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,
@@ -3152,6 +3210,7 @@ public:
   const nsRegion& NoActionRegion() { return mNoActionRegion; }
   const nsRegion& HorizontalPanRegion() { return mHorizontalPanRegion; }
   const nsRegion& VerticalPanRegion() { return mVerticalPanRegion; }
+  nsRegion CombinedTouchActionRegion();
 
   virtual void WriteDebugInfo(std::stringstream& aStream) override;
 
@@ -3364,7 +3423,7 @@ public:
   nsDisplayOpacity(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
                    nsDisplayList* aList,
                    const DisplayItemScrollClip* aScrollClip,
-                   bool aForEventsOnly);
+                   bool aForEventsAndPluginsOnly);
 #ifdef NS_BUILD_REFCNT_LOGGING
   virtual ~nsDisplayOpacity();
 #endif
@@ -3386,6 +3445,13 @@ public:
   {
     // We don't need to compute an invalidation region since we have LayerTreeInvalidation
   }
+  virtual bool IsInvalid(nsRect& aRect) override
+  {
+    if (mForEventsAndPluginsOnly) {
+      return false;
+    }
+    return nsDisplayWrapList::IsInvalid(aRect);
+  }
   virtual void ApplyOpacity(nsDisplayListBuilder* aBuilder,
                             float aOpacity,
                             const DisplayItemClip* aClip) override;
@@ -3397,19 +3463,9 @@ public:
 
   bool CanUseAsyncAnimations(nsDisplayListBuilder* aBuilder) override;
 
-  void SetParticipatesInPreserve3D(bool aParticipatesInPreserve3D)
-  {
-    mParticipatesInPreserve3D = aParticipatesInPreserve3D;
-  }
-
-  virtual bool ShouldBuildLayerEvenIfInvisible(nsDisplayListBuilder* aBuilder) override
-  {
-    return mParticipatesInPreserve3D;
-  }
 private:
   float mOpacity;
-  bool mForEventsOnly;
-  bool mParticipatesInPreserve3D;
+  bool mForEventsAndPluginsOnly;
 };
 
 class nsDisplayBlendMode : public nsDisplayWrapList {
@@ -3527,7 +3583,8 @@ public:
   nsDisplayOwnLayer(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
                     nsDisplayList* aList, uint32_t aFlags = 0,
                     ViewID aScrollTarget = mozilla::layers::FrameMetrics::NULL_SCROLL_ID,
-                    float aScrollbarThumbRatio = 0.0f);
+                    float aScrollbarThumbRatio = 0.0f,
+                    bool aForceActive = true);
 #ifdef NS_BUILD_REFCNT_LOGGING
   virtual ~nsDisplayOwnLayer();
 #endif
@@ -3537,10 +3594,7 @@ public:
                                              const ContainerLayerParameters& aContainerParameters) override;
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,
-                                   const ContainerLayerParameters& aParameters) override
-  {
-    return mozilla::LAYER_ACTIVE_FORCE;
-  }
+                                   const ContainerLayerParameters& aParameters) override;
   virtual bool TryMerge(nsDisplayItem* aItem) override
   {
     // Don't allow merging, each sublist must have its own layer
@@ -3555,6 +3609,7 @@ protected:
   uint32_t mFlags;
   ViewID mScrollTarget;
   float mScrollbarThumbRatio;
+  bool mForceActive;
 };
 
 /**
@@ -3781,70 +3836,145 @@ private:
   int32_t mAPD, mParentAPD;
 };
 
-/**
- * A display item to paint a stacking context with effects
- * set by the stacking context root frame's style.
- */
-class nsDisplaySVGEffects : public nsDisplayWrapList {
+class nsDisplaySVGEffects: public nsDisplayWrapList {
 public:
   nsDisplaySVGEffects(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
-                      nsDisplayList* aList, bool aOpacityItemCreated);
+                      nsDisplayList* aList, bool aHandleOpacity,
+                      const DisplayItemScrollClip* aScrollClip);
+  nsDisplaySVGEffects(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
+                      nsDisplayList* aList, bool aHandleOpacity);
 #ifdef NS_BUILD_REFCNT_LOGGING
   virtual ~nsDisplaySVGEffects();
 #endif
-  
+
   virtual nsRegion GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
                                    bool* aSnap) override;
   virtual void HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
                        HitTestState* aState,
                        nsTArray<nsIFrame*> *aOutFrames) override;
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
-                           bool* aSnap) override {
-    *aSnap = false;
-    return mEffectsBounds + ToReferenceFrame();
-  }
-  virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder) override;
-  virtual bool ComputeVisibility(nsDisplayListBuilder* aBuilder,
-                                 nsRegion* aVisibleRegion) override;
-  virtual bool TryMerge(nsDisplayItem* aItem) override;
+
   virtual bool ShouldFlattenAway(nsDisplayListBuilder* aBuilder) override {
     return false;
   }
-  NS_DISPLAY_DECL_NAME("SVGEffects", TYPE_SVG_EFFECTS)
-
-  virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
-                                   LayerManager* aManager,
-                                   const ContainerLayerParameters& aParameters) override;
- 
-  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
-                                             LayerManager* aManager,
-                                             const ContainerLayerParameters& aContainerParameters) override;
 
   gfxRect BBoxInUserSpace() const;
   gfxPoint UserSpaceOffset() const;
 
+  virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
+                                         const nsDisplayItemGeometry* aGeometry,
+                                         nsRegion* aInvalidRegion) override;
+protected:
+  bool ValidateSVGFrame();
+
+  // relative to mFrame
+  nsRect mEffectsBounds;
+  // True if we need to handle css opacity in this display item.
+  bool mHandleOpacity;
+};
+
+/**
+ * A display item to paint a stacking context with mask and clip effects
+ * set by the stacking context root frame's style.
+ */
+class nsDisplayMask : public nsDisplaySVGEffects {
+public:
+  typedef mozilla::layers::ImageLayer ImageLayer;
+  typedef class mozilla::gfx::DrawTarget DrawTarget;
+
+  nsDisplayMask(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
+                nsDisplayList* aList, bool aHandleOpacity,
+                const DisplayItemScrollClip* aScrollClip);
+#ifdef NS_BUILD_REFCNT_LOGGING
+  virtual ~nsDisplayMask();
+#endif
+
+  NS_DISPLAY_DECL_NAME("Mask", TYPE_MASK)
+
+  virtual bool TryMerge(nsDisplayItem* aItem) override;
+  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
+                                             LayerManager* aManager,
+                                             const ContainerLayerParameters& aContainerParameters) override;
+  virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
+                                   LayerManager* aManager,
+                                   const ContainerLayerParameters& aParameters) override;
+
+  virtual bool ComputeVisibility(nsDisplayListBuilder* aBuilder,
+                                 nsRegion* aVisibleRegion) override;
+
   virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) override
   {
-    return new nsDisplaySVGEffectsGeometry(this, aBuilder);
+    return new nsDisplayMaskGeometry(this, aBuilder);
   }
   virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
                                          const nsDisplayItemGeometry* aGeometry,
                                          nsRegion* aInvalidRegion) override;
+#ifdef MOZ_DUMP_PAINTING
+  void PrintEffects(nsACString& aTo);
+#endif
 
   void PaintAsLayer(nsDisplayListBuilder* aBuilder,
                     nsRenderingContext* aCtx,
                     LayerManager* aManager);
 
+  /*
+   * Paint mask onto aMaskContext in mFrame's coordinate space.
+   */
+  bool PaintMask(nsDisplayListBuilder* aBuilder, gfxContext* aMaskContext);
+
+  const nsTArray<nsRect>& GetDestRects()
+  {
+    return mDestRects;
+  }
+private:
+  // According to mask property and the capability of aManager, determine
+  // whether paint mask onto a dedicate mask layer.
+  bool ShouldPaintOnMaskLayer(LayerManager* aManager);
+
+  nsTArray<nsRect> mDestRects;
+};
+
+/**
+ * A display item to paint a stacking context with filter effects set by the
+ * stacking context root frame's style.
+ */
+class nsDisplayFilter : public nsDisplaySVGEffects {
+public:
+  nsDisplayFilter(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
+                  nsDisplayList* aList, bool aHandleOpacity);
+#ifdef NS_BUILD_REFCNT_LOGGING
+  virtual ~nsDisplayFilter();
+#endif
+
+  NS_DISPLAY_DECL_NAME("Filter", TYPE_FILTER)
+
+  virtual bool TryMerge(nsDisplayItem* aItem) override;
+  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
+                                             LayerManager* aManager,
+                                             const ContainerLayerParameters& aContainerParameters) override;
+  virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
+                                   LayerManager* aManager,
+                                   const ContainerLayerParameters& aParameters) override;
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
+                           bool* aSnap) override {
+    *aSnap = false;
+    return mEffectsBounds + ToReferenceFrame();
+  }
+  virtual bool ComputeVisibility(nsDisplayListBuilder* aBuilder,
+                                 nsRegion* aVisibleRegion) override;
+  virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) override
+  {
+    return new nsDisplayFilterGeometry(this, aBuilder);
+  }
+  virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
+                                         const nsDisplayItemGeometry* aGeometry,
+                                         nsRegion* aInvalidRegion) override;
 #ifdef MOZ_DUMP_PAINTING
   void PrintEffects(nsACString& aTo);
 #endif
 
-private:
-  // relative to mFrame
-  nsRect mEffectsBounds;
-  // True if the caller also created an nsDisplayOpacity item, and we should tell
-  // PaintFramesWithEffects that it doesn't need to handle opacity itself.
-  bool mOpacityItemCreated;
+  void PaintAsLayer(nsDisplayListBuilder* aBuilder,
+                    nsRenderingContext* aCtx,
+                    LayerManager* aManager);
 };
 
 /* A display item that applies a transformation to all of its descendant
@@ -4360,9 +4490,7 @@ public:
 
   static nsCharClipDisplayItem* CheckCast(nsDisplayItem* aItem) {
     nsDisplayItem::Type t = aItem->GetType();
-    return (t == nsDisplayItem::TYPE_TEXT ||
-            t == nsDisplayItem::TYPE_TEXT_DECORATION ||
-            t == nsDisplayItem::TYPE_TEXT_SHADOW)
+    return (t == nsDisplayItem::TYPE_TEXT)
       ? static_cast<nsCharClipDisplayItem*>(aItem) : nullptr;
   }
 
@@ -4375,29 +4503,43 @@ public:
   mutable mozilla::Maybe<bool> mIsFrameSelected;
 };
 
-/**
- * A wrapper layer that wraps its children in a container, then renders
- * everything with an appropriate VR effect based on the HMDInfo.
- */
+namespace mozilla {
 
-class nsDisplayVR : public nsDisplayOwnLayer {
-public:
-  nsDisplayVR(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
-              nsDisplayList* aList, mozilla::gfx::VRDeviceProxy* aHMD);
+class PaintTelemetry
+{
+ public:
+  enum class Metric {
+    DisplayList,
+    Layerization,
+    Rasterization,
+    COUNT,
+  };
 
-  virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
-                                   LayerManager* aManager,
-                                   const ContainerLayerParameters& aParameters) override
+  class AutoRecord
   {
-    return mozilla::LAYER_ACTIVE;
-  }
+   public:
+    explicit AutoRecord(Metric aMetric);
+    ~AutoRecord();
+   private:
+    Metric mMetric;
+    mozilla::TimeStamp mStart;
+  };
 
-  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
-                                             LayerManager* aManager,
-                                             const ContainerLayerParameters& aContainerParameters) override;
+  class AutoRecordPaint
+  {
+   public:
+    AutoRecordPaint();
+    ~AutoRecordPaint();
+   private:
+    mozilla::TimeStamp mStart;
+  };
 
-protected:
-  RefPtr<mozilla::gfx::VRDeviceProxy> mHMD;
+ private:
+  static uint32_t sPaintLevel;
+  static uint32_t sMetricLevel;
+  static mozilla::EnumeratedArray<Metric, Metric::COUNT, double> sMetrics;
 };
+
+} // namespace mozilla
 
 #endif /*NSDISPLAYLIST_H_*/

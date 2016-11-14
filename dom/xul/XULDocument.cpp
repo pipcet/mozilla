@@ -67,7 +67,7 @@
 #include "nsIParser.h"
 #include "nsCharsetSource.h"
 #include "nsIParserService.h"
-#include "mozilla/CSSStyleSheet.h"
+#include "mozilla/StyleSheetInlines.h"
 #include "mozilla/css/Loader.h"
 #include "nsIScriptError.h"
 #include "nsIStyleSheetLinkingElement.h"
@@ -94,8 +94,8 @@
 #include "nsIContentPolicy.h"
 #include "mozAutoDocUpdate.h"
 #include "xpcpublic.h"
-#include "mozilla/StyleSheetHandle.h"
-#include "mozilla/StyleSheetHandleInlines.h"
+#include "mozilla/StyleSheet.h"
+#include "mozilla/StyleSheetInlines.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -383,7 +383,6 @@ XULDocument::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
     mStillWalking = true;
     mMayStartLayout = false;
     mDocumentLoadGroup = do_GetWeakReference(aLoadGroup);
-    mFullscreenEnabled = true;
 
     mChannel = aChannel;
 
@@ -1435,7 +1434,7 @@ XULDocument::GetPopupNode(nsIDOMNode** aNode)
 
     if (node && nsContentUtils::CanCallerAccess(node)
         && GetScopeObjectOfNode(node)) {
-        node.swap(*aNode);
+        node.forget(aNode);
     }
 
     return NS_OK;
@@ -1547,7 +1546,7 @@ XULDocument::GetTooltipNode(nsIDOMNode** aNode)
     if (pm) {
         nsCOMPtr<nsIDOMNode> node = pm->GetLastTriggerTooltipNode(this);
         if (node && nsContentUtils::CanCallerAccess(node))
-            node.swap(*aNode);
+            node.forget(aNode);
     }
 
     return NS_OK;
@@ -2161,6 +2160,10 @@ XULDocument::TraceProtos(JSTracer* aTrc, uint32_t aGCNumber)
     for (i = 0; i < count; ++i) {
         mPrototypes[i]->TraceProtos(aTrc, aGCNumber);
     }
+
+    if (mCurrentPrototype) {
+        mCurrentPrototype->TraceProtos(aTrc, aGCNumber);
+    }
 }
 
 //----------------------------------------------------------------------
@@ -2535,18 +2538,13 @@ XULDocument::LoadOverlayInternal(nsIURI* aURI, bool aIsDynamic,
     *aFailureFromContent = false;
 
     if (MOZ_LOG_TEST(gXULLog, LogLevel::Debug)) {
-        nsAutoCString urlspec;
-        aURI->GetSpec(urlspec);
-        nsAutoCString parentDoc;
         nsCOMPtr<nsIURI> uri;
-        nsresult rv = mChannel->GetOriginalURI(getter_AddRefs(uri));
-        if (NS_SUCCEEDED(rv))
-            rv = uri->GetSpec(parentDoc);
-        if (!(parentDoc.get()))
-            parentDoc = "";
+        mChannel->GetOriginalURI(getter_AddRefs(uri));
 
         MOZ_LOG(gXULLog, LogLevel::Debug,
-                ("xul: %s loading overlay %s", parentDoc.get(), urlspec.get()));
+                ("xul: %s loading overlay %s",
+                 uri ? uri->GetSpecOrDefault().get() : "",
+                 aURI->GetSpecOrDefault().get()));
     }
 
     if (aIsDynamic)
@@ -2846,7 +2844,7 @@ XULDocument::ResumeWalk()
                     if (NS_SUCCEEDED(rv) && blocked)
                         return NS_OK;
                 }
-                else if (scriptproto->GetScriptObject()) {
+                else if (scriptproto->HasScriptObject()) {
                     // An inline script
                     rv = ExecuteScript(scriptproto);
                     if (NS_FAILED(rv)) return rv;
@@ -3025,8 +3023,9 @@ XULDocument::DoneWalking()
         NS_ASSERTION(mDelayFrameLoaderInitialization,
                      "mDelayFrameLoaderInitialization should be true!");
         mDelayFrameLoaderInitialization = false;
-        NS_WARN_IF_FALSE(mUpdateNestLevel == 0,
-                         "Constructing XUL document in middle of an update?");
+        NS_WARNING_ASSERTION(
+          mUpdateNestLevel == 0,
+          "Constructing XUL document in middle of an update?");
         if (mUpdateNestLevel == 0) {
             MaybeInitializeFinalizeFrameLoaders();
         }
@@ -3107,7 +3106,7 @@ XULDocument::DoneWalking()
 }
 
 NS_IMETHODIMP
-XULDocument::StyleSheetLoaded(StyleSheetHandle aSheet,
+XULDocument::StyleSheetLoaded(StyleSheet* aSheet,
                               bool aWasAlternate,
                               nsresult aStatus)
 {
@@ -3193,11 +3192,8 @@ void
 XULDocument::ReportMissingOverlay(nsIURI* aURI)
 {
     NS_PRECONDITION(aURI, "Must have a URI");
-    
-    nsAutoCString spec;
-    aURI->GetSpec(spec);
 
-    NS_ConvertUTF8toUTF16 utfSpec(spec);
+    NS_ConvertUTF8toUTF16 utfSpec(aURI->GetSpecOrDefault());
     const char16_t* params[] = { utfSpec.get() };
     nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
                                     NS_LITERAL_CSTRING("XUL Document"), this,
@@ -3214,7 +3210,7 @@ XULDocument::LoadScript(nsXULPrototypeScript* aScriptProto, bool* aBlock)
 
     bool isChromeDoc = IsChromeURI(mDocumentURI);
 
-    if (isChromeDoc && aScriptProto->GetScriptObject()) {
+    if (isChromeDoc && aScriptProto->HasScriptObject()) {
         rv = ExecuteScript(aScriptProto);
 
         // Ignore return value from execution, and don't block
@@ -3237,7 +3233,7 @@ XULDocument::LoadScript(nsXULPrototypeScript* aScriptProto, bool* aBlock)
             aScriptProto->Set(newScriptObject);
         }
 
-        if (aScriptProto->GetScriptObject()) {
+        if (aScriptProto->HasScriptObject()) {
             rv = ExecuteScript(aScriptProto);
 
             // Ignore return value from execution, and don't block
@@ -3306,9 +3302,7 @@ XULDocument::OnStreamComplete(nsIStreamLoader* aLoader,
             nsCOMPtr<nsIURI> uri;
             channel->GetURI(getter_AddRefs(uri));
             if (uri) {
-                nsAutoCString uriSpec;
-                uri->GetSpec(uriSpec);
-                printf("Failed to load %s\n", uriSpec.get());
+                printf("Failed to load %s\n", uri->GetSpecOrDefault().get());
             }
         }
     }
@@ -3359,7 +3353,7 @@ XULDocument::OnStreamComplete(nsIStreamLoader* aLoader,
             mOffThreadCompileStringLength = 0;
 
             rv = mCurrentScriptProto->Compile(srcBuf, uri, 1, this, this);
-            if (NS_SUCCEEDED(rv) && !mCurrentScriptProto->GetScriptObject()) {
+            if (NS_SUCCEEDED(rv) && !mCurrentScriptProto->HasScriptObject()) {
                 // We will be notified via OnOffThreadCompileComplete when the
                 // compile finishes. Keep the contents of the compiled script
                 // alive until the compilation finishes.
@@ -3384,7 +3378,7 @@ XULDocument::OnScriptCompileComplete(JSScript* aScript, nsresult aStatus)
 {
     // When compiling off thread the script will not have been attached to the
     // script proto yet.
-    if (aScript && !mCurrentScriptProto->GetScriptObject())
+    if (aScript && !mCurrentScriptProto->HasScriptObject())
         mCurrentScriptProto->Set(aScript);
 
     // Allow load events to be fired once off thread compilation finishes.
@@ -3437,11 +3431,11 @@ XULDocument::OnScriptCompileComplete(JSScript* aScript, nsresult aStatus)
         // (See http://bugzilla.mozilla.org/show_bug.cgi?id=98207 for
         // the true crime story.)
         bool useXULCache = nsXULPrototypeCache::GetInstance()->IsEnabled();
-  
-        if (useXULCache && IsChromeURI(mDocumentURI) && scriptProto->GetScriptObject()) {
+
+        if (useXULCache && IsChromeURI(mDocumentURI) && scriptProto->HasScriptObject()) {
+            JS::Rooted<JSScript*> script(RootingCx(), scriptProto->GetScriptObject());
             nsXULPrototypeCache::GetInstance()->PutScript(
-                               scriptProto->mSrcURI,
-                               scriptProto->GetScriptObject());
+                               scriptProto->mSrcURI, script);
         }
 
         if (mIsWritingFastLoad && mCurrentPrototype != mMasterPrototype) {
@@ -3480,7 +3474,7 @@ XULDocument::OnScriptCompileComplete(JSScript* aScript, nsresult aStatus)
         doc->mNextSrcLoadWaiter = nullptr;
 
         // Execute only if we loaded and compiled successfully, then resume
-        if (NS_SUCCEEDED(aStatus) && scriptProto->GetScriptObject()) {
+        if (NS_SUCCEEDED(aStatus) && scriptProto->HasScriptObject()) {
             doc->ExecuteScript(scriptProto);
         }
         doc->ResumeWalk();
@@ -3501,9 +3495,6 @@ XULDocument::ExecuteScript(nsXULPrototypeScript *aScript)
     rv = mScriptGlobalObject->EnsureScriptEnvironment();
     NS_ENSURE_SUCCESS(rv, rv);
 
-    JS::HandleScript scriptObject = aScript->GetScriptObject();
-    NS_ENSURE_TRUE(scriptObject, NS_ERROR_UNEXPECTED);
-
     // Execute the precompiled script with the given version
     nsAutoMicroTask mt;
 
@@ -3511,6 +3502,10 @@ XULDocument::ExecuteScript(nsXULPrototypeScript *aScript)
     // AutoEntryScript. This is Gecko specific and not in any spec.
     AutoEntryScript aes(mScriptGlobalObject, "precompiled XUL <script> element");
     JSContext* cx = aes.cx();
+
+    JS::Rooted<JSScript*> scriptObject(cx, aScript->GetScriptObject());
+    NS_ENSURE_TRUE(scriptObject, NS_ERROR_UNEXPECTED);
+
     JS::Rooted<JSObject*> baseGlobal(cx, JS::CurrentGlobalOrNull(cx));
     NS_ENSURE_TRUE(xpc::Scriptability::Get(baseGlobal).Allowed(), NS_OK);
 
@@ -3519,13 +3514,13 @@ XULDocument::ExecuteScript(nsXULPrototypeScript *aScript)
     NS_ENSURE_TRUE(global, NS_ERROR_FAILURE);
 
     JS::ExposeObjectToActiveJS(global);
-    xpc_UnmarkGrayScript(scriptObject);
     JSAutoCompartment ac(cx, global);
 
     // The script is in the compilation scope. Clone it into the target scope
     // and execute it. On failure, ~AutoScriptEntry will handle exceptions, so
     // there is no need to manually check the return value.
-    JS::CloneAndExecuteScript(cx, scriptObject);
+    JS::RootedValue rval(cx);
+    JS::CloneAndExecuteScript(cx, scriptObject, &rval);
 
     return NS_OK;
 }
@@ -3579,7 +3574,7 @@ XULDocument::CreateElementFromPrototype(nsXULPrototypeElement* aPrototype,
         if (NS_FAILED(rv)) return rv;
     }
 
-    result.swap(*aResult);
+    result.forget(aResult);
 
     return NS_OK;
 }
@@ -3735,7 +3730,7 @@ XULDocument::AddPrototypeSheets()
     for (int32_t i = 0; i < sheets.Count(); i++) {
         nsCOMPtr<nsIURI> uri = sheets[i];
 
-        StyleSheetHandle::RefPtr incompleteSheet;
+        RefPtr<StyleSheet> incompleteSheet;
         rv = CSSLoader()->LoadSheet(uri,
                                     mCurrentPrototype->DocumentPrincipal(),
                                     EmptyCString(), this,
@@ -3987,17 +3982,14 @@ XULDocument::OverlayForwardReference::~OverlayForwardReference()
         idC.AssignWithConversion(id);
 
         nsIURI *protoURI = mDocument->mCurrentPrototype->GetURI();
-        nsAutoCString urlspec;
-        protoURI->GetSpec(urlspec);
 
         nsCOMPtr<nsIURI> docURI;
-        nsAutoCString parentDoc;
-        nsresult rv = mDocument->mChannel->GetOriginalURI(getter_AddRefs(docURI));
-        if (NS_SUCCEEDED(rv))
-            docURI->GetSpec(parentDoc);
+        mDocument->mChannel->GetOriginalURI(getter_AddRefs(docURI));
+
         MOZ_LOG(gXULLog, LogLevel::Warning,
                ("xul: %s overlay failed to resolve '%s' in %s",
-                urlspec.get(), idC.get(), parentDoc.get()));
+                protoURI->GetSpecOrDefault().get(), idC.get(),
+                docURI ? docURI->GetSpecOrDefault().get() : ""));
     }
 }
 

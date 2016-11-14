@@ -7,15 +7,20 @@
 #include "mozilla/ProcessHangMonitor.h"
 #include "mozilla/ProcessHangMonitorIPC.h"
 
+#include "jsapi.h"
+#include "js/GCAPI.h"
+
 #include "mozilla/Atomics.h"
+#include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/TabParent.h"
 #include "mozilla/Monitor.h"
 #include "mozilla/plugins/PluginBridge.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 
 #include "nsIFrameLoader.h"
 #include "nsIHangReport.h"
@@ -91,13 +96,17 @@ class HangMonitorChild
 
   void ClearHang();
   void ClearHangAsync();
+  void ClearForcePaint();
 
   virtual bool RecvTerminateScript() override;
   virtual bool RecvBeginStartingDebugger() override;
   virtual bool RecvEndStartingDebugger() override;
 
+  virtual bool RecvForcePaint(const TabId& aTabId, const uint64_t& aLayerObserverEpoch) override;
+
   virtual void ActorDestroy(ActorDestroyReason aWhy) override;
 
+  void InterruptCallback();
   void Shutdown();
 
   static HangMonitorChild* Get() { return sInstance; }
@@ -108,6 +117,7 @@ class HangMonitorChild
   void ShutdownOnThread();
 
   static Atomic<HangMonitorChild*> sInstance;
+  UniquePtr<BackgroundHangMonitor> mForcePaintMonitor;
 
   const RefPtr<ProcessHangMonitor> mHangMonitor;
   Monitor mMonitor;
@@ -119,6 +129,10 @@ class HangMonitorChild
   bool mTerminateScript;
   bool mStartDebugger;
   bool mFinishedStartingDebugger;
+  bool mForcePaint;
+  TabId mForcePaintTab;
+  MOZ_INIT_OUTSIDE_CTOR uint64_t mForcePaintEpoch;
+  JSContext* mContext;
   bool mShutdownDone;
 
   // This field is only accessed on the hang thread.
@@ -162,14 +176,22 @@ public:
     mActor = nullptr;
   }
 
-  void SetHangData(const HangData& aHangData) { mHangData = aHangData; }
-  void SetBrowserDumpId(nsAutoString& aId) {
-    mBrowserDumpId = aId;
+  /**
+   * Sets the information associated with this hang: this includes the ID of
+   * the plugin which caused the hang as well as the content PID. The ID of
+   * a minidump taken during the hang can also be provided.
+   *
+   * @param aHangData The hang information
+   * @param aDumpId The ID of a minidump taken when the hang occurred
+   */
+  void SetHangData(const HangData& aHangData, const nsAString& aDumpId) {
+    mHangData = aHangData;
+    mDumpId = aDumpId;
   }
 
   void ClearHang() {
     mHangData = HangData();
-    mBrowserDumpId.Truncate();
+    mDumpId.Truncate();
   }
 
 private:
@@ -179,7 +201,7 @@ private:
   HangMonitorParent* mActor;
   ContentParent* mContentParent;
   HangData mHangData;
-  nsAutoString mBrowserDumpId;
+  nsAutoString mDumpId;
 };
 
 class HangMonitorParent
@@ -200,14 +222,27 @@ public:
 
   void Shutdown();
 
+  void ForcePaint(dom::TabParent* aTabParent, uint64_t aLayerObserverEpoch);
+
   void TerminateScript();
   void BeginStartingDebugger();
   void EndStartingDebugger();
   void CleanupPluginHang(uint32_t aPluginId, bool aRemoveFiles);
 
+  /**
+   * Update the dump for the specified plugin. This method is thread-safe and
+   * is used to replace a browser minidump with a full minidump. If aDumpId is
+   * empty this is a no-op.
+   */
+  void UpdateMinidump(uint32_t aPluginId, const nsString& aDumpId);
+
   MessageLoop* MonitorLoop() { return mHangMonitor->MonitorLoop(); }
 
- private:
+private:
+  bool TakeBrowserMinidump(const PluginHangData& aPhd, nsString& aCrashId);
+
+  void ForcePaintOnThread(TabId aTabId, uint64_t aLayerObserverEpoch);
+
   void ShutdownOnThread();
 
   const RefPtr<ProcessHangMonitor> mHangMonitor;
@@ -239,22 +274,53 @@ HangMonitorChild::HangMonitorChild(ProcessHangMonitor* aMonitor)
    mTerminateScript(false),
    mStartDebugger(false),
    mFinishedStartingDebugger(false),
+   mForcePaint(false),
    mShutdownDone(false),
    mIPCOpen(true)
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
+  mContext = danger::GetJSContext();
+  mForcePaintMonitor =
+    MakeUnique<mozilla::BackgroundHangMonitor>("Gecko_Child_ForcePaint",
+                                               128, /* ms timeout for microhangs */
+                                               8192 /* ms timeout for permahangs */,
+                                               BackgroundHangMonitor::THREAD_PRIVATE);
 }
 
 HangMonitorChild::~HangMonitorChild()
 {
-  // For some reason IPDL doesn't automatically delete the channel for a
-  // bridged protocol (bug 1090570). So we have to do it ourselves.
-  RefPtr<DeleteTask<Transport>> task = new DeleteTask<Transport>(GetTransport());
-  XRE_GetIOMessageLoop()->PostTask(task.forget());
-
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(sInstance == this);
+  mForcePaintMonitor = nullptr;
   sInstance = nullptr;
+}
+
+void
+HangMonitorChild::InterruptCallback()
+{
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+
+  bool forcePaint;
+  TabId forcePaintTab;
+  uint64_t forcePaintEpoch;
+
+  {
+    MonitorAutoLock lock(mMonitor);
+    forcePaint = mForcePaint;
+    forcePaintTab = mForcePaintTab;
+    forcePaintEpoch = mForcePaintEpoch;
+
+    mForcePaint = false;
+  }
+
+  if (forcePaint) {
+    RefPtr<TabChild> tabChild = TabChild::FindTabChild(forcePaintTab);
+    if (tabChild) {
+      JS::AutoAssertNoGC nogc(mContext);
+      JS::AutoAssertOnBarrier nobarrier(mContext);
+      tabChild->ForcePaint(forcePaintEpoch);
+    }
+  }
 }
 
 void
@@ -318,6 +384,35 @@ HangMonitorChild::RecvEndStartingDebugger()
   MonitorAutoLock lock(mMonitor);
   mFinishedStartingDebugger = true;
   return true;
+}
+
+bool
+HangMonitorChild::RecvForcePaint(const TabId& aTabId, const uint64_t& aLayerObserverEpoch)
+{
+  MOZ_RELEASE_ASSERT(MessageLoop::current() == MonitorLoop());
+
+  mForcePaintMonitor->NotifyActivity();
+
+  {
+    MonitorAutoLock lock(mMonitor);
+    mForcePaint = true;
+    mForcePaintTab = aTabId;
+    mForcePaintEpoch = aLayerObserverEpoch;
+  }
+
+  JS_RequestInterruptCallback(mContext);
+  JS::RequestGCInterruptCallback(mContext);
+
+  return true;
+}
+
+void
+HangMonitorChild::ClearForcePaint()
+{
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+  MOZ_RELEASE_ASSERT(XRE_IsContentProcess());
+
+  mForcePaintMonitor->NotifyWait();
 }
 
 void
@@ -464,11 +559,6 @@ HangMonitorParent::HangMonitorParent(ProcessHangMonitor* aMonitor)
 
 HangMonitorParent::~HangMonitorParent()
 {
-  // For some reason IPDL doesn't automatically delete the channel for a
-  // bridged protocol (bug 1090570). So we have to do it ourselves.
-  RefPtr<DeleteTask<Transport>> task = new DeleteTask<Transport>(GetTransport());
-  XRE_GetIOMessageLoop()->PostTask(task.forget());
-
 #ifdef MOZ_CRASHREPORTER
   MutexAutoLock lock(mBrowserCrashDumpHashLock);
 
@@ -519,6 +609,25 @@ HangMonitorParent::ShutdownOnThread()
 }
 
 void
+HangMonitorParent::ForcePaint(dom::TabParent* aTab, uint64_t aLayerObserverEpoch)
+{
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+  TabId id = aTab->GetTabId();
+  MonitorLoop()->PostTask(NewNonOwningRunnableMethod<TabId, uint64_t>(
+                            this, &HangMonitorParent::ForcePaintOnThread, id, aLayerObserverEpoch));
+}
+
+void
+HangMonitorParent::ForcePaintOnThread(TabId aTabId, uint64_t aLayerObserverEpoch)
+{
+  MOZ_RELEASE_ASSERT(MessageLoop::current() == MonitorLoop());
+
+  if (mIPCOpen) {
+    Unused << SendForcePaint(aTabId, aLayerObserverEpoch);
+  }
+}
+
+void
 HangMonitorParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   MOZ_RELEASE_ASSERT(MessageLoop::current() == MonitorLoop());
@@ -539,20 +648,37 @@ class HangObserverNotifier final : public Runnable
 {
 public:
   HangObserverNotifier(HangMonitoredProcess* aProcess,
+                       HangMonitorParent *aParent,
                        const HangData& aHangData,
-                       const nsString& aBrowserDumpId)
+                       const nsString& aBrowserDumpId,
+                       bool aTakeMinidump)
     : mProcess(aProcess),
+      mParent(aParent),
       mHangData(aHangData),
-      mBrowserDumpId(aBrowserDumpId)
+      mBrowserDumpId(aBrowserDumpId),
+      mTakeMinidump(aTakeMinidump)
   {}
 
   NS_IMETHOD
-  Run()
+  Run() override
   {
     // chrome process, main thread
     MOZ_RELEASE_ASSERT(NS_IsMainThread());
-    mProcess->SetHangData(mHangData);
-    mProcess->SetBrowserDumpId(mBrowserDumpId);
+
+    nsString dumpId;
+    if ((mHangData.type() == HangData::TPluginHangData) && mTakeMinidump) {
+      // We've been handed a partial minidump; complete it with plugin and
+      // content process dumps.
+      const PluginHangData& phd = mHangData.get_PluginHangData();
+      plugins::TakeFullMinidump(phd.pluginId(), phd.contentProcessId(),
+                                mBrowserDumpId, dumpId);
+      mParent->UpdateMinidump(phd.pluginId(), dumpId);
+    } else {
+      // We already have a full minidump; go ahead and use it.
+      dumpId = mBrowserDumpId;
+    }
+
+    mProcess->SetHangData(mHangData, dumpId);
 
     nsCOMPtr<nsIObserverService> observerService =
       mozilla::services::GetObserverService();
@@ -562,9 +688,39 @@ public:
 
 private:
   RefPtr<HangMonitoredProcess> mProcess;
+  HangMonitorParent* mParent;
   HangData mHangData;
   nsAutoString mBrowserDumpId;
+  bool mTakeMinidump;
 };
+
+// Take a minidump of the browser process if one wasn't already taken for the
+// plugin that caused the hang. Return false if a dump was already available or
+// true if new one has been taken.
+bool
+HangMonitorParent::TakeBrowserMinidump(const PluginHangData& aPhd,
+                                       nsString& aCrashId)
+{
+#ifdef MOZ_CRASHREPORTER
+  MutexAutoLock lock(mBrowserCrashDumpHashLock);
+  if (!mBrowserCrashDumpIds.Get(aPhd.pluginId(), &aCrashId)) {
+    nsCOMPtr<nsIFile> browserDump;
+    if (CrashReporter::TakeMinidump(getter_AddRefs(browserDump), true)) {
+      if (!CrashReporter::GetIDFromMinidump(browserDump, aCrashId)
+          || aCrashId.IsEmpty()) {
+        browserDump->Remove(false);
+        NS_WARNING("Failed to generate timely browser stack, "
+                   "this is bad for plugin hang analysis!");
+      } else {
+        mBrowserCrashDumpIds.Put(aPhd.pluginId(), aCrashId);
+        return true;
+      }
+    }
+  }
+#endif // MOZ_CRASHREPORTER
+
+  return false;
+}
 
 bool
 HangMonitorParent::RecvHangEvidence(const HangData& aHangData)
@@ -587,30 +743,17 @@ HangMonitorParent::RecvHangEvidence(const HangData& aHangData)
   // Before we wake up the browser main thread we want to take a
   // browser minidump.
   nsAutoString crashId;
-#ifdef MOZ_CRASHREPORTER
+  bool takeMinidump = false;
   if (aHangData.type() == HangData::TPluginHangData) {
-    MutexAutoLock lock(mBrowserCrashDumpHashLock);
-    const PluginHangData& phd = aHangData.get_PluginHangData();
-    if (!mBrowserCrashDumpIds.Get(phd.pluginId(), &crashId)) {
-      nsCOMPtr<nsIFile> browserDump;
-      if (CrashReporter::TakeMinidump(getter_AddRefs(browserDump), true)) {
-        if (!CrashReporter::GetIDFromMinidump(browserDump, crashId) || crashId.IsEmpty()) {
-          browserDump->Remove(false);
-          NS_WARNING("Failed to generate timely browser stack, this is bad for plugin hang analysis!");
-        } else {
-          mBrowserCrashDumpIds.Put(phd.pluginId(), crashId);
-        }
-      }
-    }
+    takeMinidump = TakeBrowserMinidump(aHangData.get_PluginHangData(), crashId);
   }
-#endif
 
   mHangMonitor->InitiateCPOWTimeout();
 
   MonitorAutoLock lock(mMonitor);
 
   nsCOMPtr<nsIRunnable> notifier =
-    new HangObserverNotifier(mProcess, aHangData, crashId);
+    new HangObserverNotifier(mProcess, this, aHangData, crashId, takeMinidump);
   NS_DispatchToMainThread(notifier);
 
   return true;
@@ -624,7 +767,7 @@ public:
   {}
 
   NS_IMETHOD
-  Run()
+  Run() override
   {
     // chrome process, main thread
     MOZ_RELEASE_ASSERT(NS_IsMainThread());
@@ -705,6 +848,17 @@ HangMonitorParent::CleanupPluginHang(uint32_t aPluginId, bool aRemoveFiles)
     CrashReporter::DeleteMinidumpFilesForID(crashId);
   }
 #endif
+}
+
+void
+HangMonitorParent::UpdateMinidump(uint32_t aPluginId, const nsString& aDumpId)
+{
+  if (aDumpId.IsEmpty()) {
+    return;
+  }
+
+  MutexAutoLock lock(mBrowserCrashDumpHashLock);
+  mBrowserCrashDumpIds.Put(aPluginId, aDumpId);
 }
 
 /* HangMonitoredProcess implementation */
@@ -861,12 +1015,11 @@ HangMonitoredProcess::TerminatePlugin()
     return NS_ERROR_UNEXPECTED;
   }
 
-  // generates a crash report that includes a browser report taken here
-  // earlier, the content process, and any plugin process(es).
+  // Use the multi-process crash report generated earlier.
   uint32_t id = mHangData.get_PluginHangData().pluginId();
   base::ProcessId contentPid = mHangData.get_PluginHangData().contentProcessId();
   plugins::TerminatePlugin(id, contentPid, NS_LITERAL_CSTRING("HangMonitor"),
-                           mBrowserDumpId);
+                           mDumpId);
 
   if (mActor) {
     mActor->CleanupPluginHang(id, false);
@@ -907,6 +1060,16 @@ HangMonitoredProcess::UserCanceled()
     mActor->CleanupPluginHang(id, true);
   }
   return NS_OK;
+}
+
+static bool
+InterruptCallback(JSContext* cx)
+{
+  if (HangMonitorChild* child = HangMonitorChild::Get()) {
+    child->InterruptCallback();
+  }
+
+  return true;
 }
 
 ProcessHangMonitor* ProcessHangMonitor::sInstance;
@@ -1044,6 +1207,10 @@ mozilla::CreateHangMonitorChild(mozilla::ipc::Transport* aTransport,
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
+  JSContext* cx = danger::GetJSContext();
+  JS_AddInterruptCallback(cx, InterruptCallback);
+  JS::AddGCInterruptCallback(cx, InterruptCallback);
+
   ProcessHangMonitor* monitor = ProcessHangMonitor::GetOrCreate();
   HangMonitorChild* child = new HangMonitorChild(monitor);
 
@@ -1090,5 +1257,26 @@ ProcessHangMonitor::ClearHang()
   MOZ_ASSERT(NS_IsMainThread());
   if (HangMonitorChild* child = HangMonitorChild::Get()) {
     child->ClearHang();
+  }
+}
+
+/* static */ void
+ProcessHangMonitor::ForcePaint(PProcessHangMonitorParent* aParent,
+                               dom::TabParent* aTabParent,
+                               uint64_t aLayerObserverEpoch)
+{
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+  auto parent = static_cast<HangMonitorParent*>(aParent);
+  parent->ForcePaint(aTabParent, aLayerObserverEpoch);
+}
+
+/* static */ void
+ProcessHangMonitor::ClearForcePaint()
+{
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+  MOZ_RELEASE_ASSERT(XRE_IsContentProcess());
+
+  if (HangMonitorChild* child = HangMonitorChild::Get()) {
+    child->ClearForcePaint();
   }
 }

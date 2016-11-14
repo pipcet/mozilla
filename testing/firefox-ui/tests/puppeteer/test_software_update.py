@@ -13,7 +13,7 @@ class TestSoftwareUpdate(FirefoxTestCase):
 
     def setUp(self):
         FirefoxTestCase.setUp(self)
-        self.software_update = SoftwareUpdate(lambda: self.marionette)
+        self.software_update = SoftwareUpdate(self.marionette)
 
         self.saved_mar_channels = self.software_update.mar_channels.channels
         self.software_update.mar_channels.channels = set(['expected', 'channels'])
@@ -38,7 +38,8 @@ class TestSoftwareUpdate(FirefoxTestCase):
         self.assertTrue(build_info['version'])
         self.assertTrue(build_info['buildid'].isdigit())
         self.assertTrue(build_info['locale'])
-        self.assertIn('force=1', build_info['url_aus'])
+        self.assertIn('force=1', build_info['update_url'])
+        self.assertIn('xml', build_info['update_snippet'])
         self.assertEqual(build_info['channel'], self.software_update.update_channel.channel)
 
     def test_force_fallback(self):
@@ -71,7 +72,7 @@ class TestUpdateChannel(FirefoxTestCase):
 
     def setUp(self):
         FirefoxTestCase.setUp(self)
-        self.software_update = SoftwareUpdate(lambda: self.marionette)
+        self.software_update = SoftwareUpdate(self.marionette)
 
         self.saved_channel = self.software_update.update_channel.default_channel
         self.software_update.update_channel.default_channel = 'expected_channel'
@@ -97,7 +98,7 @@ class TestMARChannels(FirefoxTestCase):
 
     def setUp(self):
         FirefoxTestCase.setUp(self)
-        self.software_update = SoftwareUpdate(lambda: self.marionette)
+        self.software_update = SoftwareUpdate(self.marionette)
 
         self.saved_mar_channels = self.software_update.mar_channels.channels
         self.software_update.mar_channels.channels = set(['expected', 'channels'])

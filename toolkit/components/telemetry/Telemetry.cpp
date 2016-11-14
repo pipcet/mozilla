@@ -16,7 +16,7 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MathAlgorithms.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 
 #include "base/pickle.h"
 #include "nsIComponentManager.h"
@@ -43,6 +43,7 @@
 #include "Telemetry.h"
 #include "TelemetryCommon.h"
 #include "TelemetryHistogram.h"
+#include "TelemetryScalar.h"
 #include "WebrtcTelemetry.h"
 #include "nsTHashtable.h"
 #include "nsHashKeys.h"
@@ -79,6 +80,7 @@ namespace {
 
 using namespace mozilla;
 using namespace mozilla::HangMonitor;
+using Telemetry::Common::AutoHashtable;
 
 // The maximum number of chrome hangs stacks that we're keeping.
 const size_t kMaxChromeStacksKept = 50;
@@ -699,8 +701,7 @@ public:
   typedef nsBaseHashtableET<nsCStringHashKey, StmtStats> SlowSQLEntryType;
 
   static void RecordIceCandidates(const uint32_t iceCandidateBitmask,
-                                  const bool success,
-                                  const bool loop);
+                                  const bool success);
 private:
   TelemetryImpl();
   ~TelemetryImpl();
@@ -754,10 +755,12 @@ NS_IMETHODIMP
 TelemetryImpl::CollectReports(nsIHandleReportCallback* aHandleReport,
                               nsISupports* aData, bool aAnonymize)
 {
-  return MOZ_COLLECT_REPORT(
+  MOZ_COLLECT_REPORT(
     "explicit/telemetry", KIND_HEAP, UNITS_BYTES,
     SizeOfIncludingThis(TelemetryMallocSizeOf),
     "Memory used by the telemetry system.");
+
+  return NS_OK;
 }
 
 void
@@ -837,7 +840,7 @@ public:
     mTelemetry->mCallbacks.Clear();
   }
 
-  NS_IMETHOD Run() {
+  NS_IMETHOD Run() override {
     LoadFailedLockCount(mTelemetry->mFailedLockCount);
     mTelemetry->mLastShutdownTime = 
       ReadLastShutdownDuration(mShutdownTimeFilename);
@@ -1026,27 +1029,6 @@ TelemetryImpl::InitMemoryReporter() {
   RegisterWeakMemoryReporter(this);
 }
 
-NS_IMETHODIMP
-TelemetryImpl::NewHistogram(const nsACString &name, const nsACString &expiration, uint32_t histogramType,
-                            uint32_t min, uint32_t max, uint32_t bucketCount, JSContext *cx,
-                            uint8_t optArgCount, JS::MutableHandle<JS::Value> ret)
-{
-  return TelemetryHistogram::NewHistogram(name, expiration, histogramType,
-                                          min, max, bucketCount,
-                                          cx, optArgCount, ret);
-}
-
-NS_IMETHODIMP
-TelemetryImpl::NewKeyedHistogram(const nsACString &name, const nsACString &expiration, uint32_t histogramType,
-                            uint32_t min, uint32_t max, uint32_t bucketCount, JSContext *cx,
-                            uint8_t optArgCount, JS::MutableHandle<JS::Value> ret)
-{
-  return TelemetryHistogram::NewKeyedHistogram(name, expiration, histogramType,
-                                               min, max, bucketCount,
-                                               cx, optArgCount, ret);
-}
-
-
 bool
 TelemetryImpl::ReflectSQL(const SlowSQLEntryType *entry,
                           const Stat *stat,
@@ -1090,8 +1072,7 @@ TelemetryImpl::AddSQLInfo(JSContext *cx, JS::Handle<JSObject*> rootObj, bool mai
   if (!statsObj)
     return false;
 
-  AutoHashtable<SlowSQLEntryType> &sqlMap =
-    (privateSQL ? mPrivateSQL : mSanitizedSQL);
+  AutoHashtable<SlowSQLEntryType>& sqlMap = (privateSQL ? mPrivateSQL : mSanitizedSQL);
   AutoHashtable<SlowSQLEntryType>::ReflectEntryFunc reflectFunction =
     (mainThread ? ReflectMainThreadSQL : ReflectOtherThreadsSQL);
   if (!sqlMap.ReflectIntoJS(reflectFunction, cx, statsObj)) {
@@ -1101,13 +1082,6 @@ TelemetryImpl::AddSQLInfo(JSContext *cx, JS::Handle<JSObject*> rootObj, bool mai
   return JS_DefineProperty(cx, rootObj,
                            mainThread ? "mainThread" : "otherThreads",
                            statsObj, JSPROP_ENUMERATE);
-}
-
-NS_IMETHODIMP
-TelemetryImpl::HistogramFrom(const nsACString &name, const nsACString &existing_name,
-                             JSContext *cx, JS::MutableHandle<JS::Value> ret)
-{
-  return TelemetryHistogram::HistogramFrom(name, existing_name, cx, ret);
 }
 
 NS_IMETHODIMP
@@ -1220,7 +1194,7 @@ TelemetryImpl::GetWebrtcStats(JSContext *cx, JS::MutableHandle<JS::Value> ret)
 NS_IMETHODIMP
 TelemetryImpl::GetMaximalNumberOfConcurrentThreads(uint32_t *ret)
 {
-  *ret = nsThreadManager::get()->GetHighestNumberOfThreads();
+  *ret = nsThreadManager::get().GetHighestNumberOfThreads();
   return NS_OK;
 }
 
@@ -1887,6 +1861,7 @@ TelemetryImpl::GetCanRecordBase(bool *ret) {
 NS_IMETHODIMP
 TelemetryImpl::SetCanRecordBase(bool canRecord) {
   TelemetryHistogram::SetCanRecordBase(canRecord);
+  TelemetryScalar::SetCanRecordBase(canRecord);
   return NS_OK;
 }
 
@@ -1906,6 +1881,7 @@ TelemetryImpl::GetCanRecordExtended(bool *ret) {
 NS_IMETHODIMP
 TelemetryImpl::SetCanRecordExtended(bool canRecord) {
   TelemetryHistogram::SetCanRecordExtended(canRecord);
+  TelemetryScalar::SetCanRecordExtended(canRecord);
   return NS_OK;
 }
 
@@ -1925,10 +1901,19 @@ TelemetryImpl::CreateTelemetryInstance()
 {
   MOZ_ASSERT(sTelemetry == nullptr, "CreateTelemetryInstance may only be called once, via GetService()");
 
-  // First, initialize the TelemetryHistogram global state.
-  TelemetryHistogram::InitializeGlobalState(
-                        XRE_IsParentProcess() || XRE_IsContentProcess(),
-                        XRE_IsParentProcess() || XRE_IsContentProcess());
+  bool useTelemetry = false;
+  if (XRE_IsParentProcess() ||
+      XRE_IsContentProcess() ||
+      XRE_IsGPUProcess())
+  {
+    useTelemetry = true;
+  }
+
+  // First, initialize the TelemetryHistogram and TelemetryScalar global states.
+  TelemetryHistogram::InitializeGlobalState(useTelemetry, useTelemetry);
+
+  // Only record scalars from the parent process.
+  TelemetryScalar::InitializeGlobalState(XRE_IsParentProcess(), XRE_IsParentProcess());
 
   // Now, create and initialize the Telemetry global state.
   sTelemetry = new TelemetryImpl();
@@ -1951,16 +1936,17 @@ TelemetryImpl::ShutdownTelemetry()
   ClearIOReporting();
   NS_IF_RELEASE(sTelemetry);
 
-  // Lastly, de-initialise the TelemetryHistogram global state, so as to
-  // release any heap storage that would otherwise be kept alive by it.
+  // Lastly, de-initialise the TelemetryHistogram and TelemetryScalar global states,
+  // so as to release any heap storage that would otherwise be kept alive by it.
   TelemetryHistogram::DeInitializeGlobalState();
+  TelemetryScalar::DeInitializeGlobalState();
 }
 
 void
 TelemetryImpl::StoreSlowSQL(const nsACString &sql, uint32_t delay,
                             SanitizedState state)
 {
-  AutoHashtable<SlowSQLEntryType> *slowSQLMap = nullptr;
+  AutoHashtable<SlowSQLEntryType>* slowSQLMap = nullptr;
   if (state == Sanitized)
     slowSQLMap = &(sTelemetry->mSanitizedSQL);
   else
@@ -2116,7 +2102,7 @@ struct TrackedDBEntry
   const uint32_t mNameLength;
 
   // This struct isn't meant to be used beyond the static arrays below.
-  MOZ_CONSTEXPR
+  constexpr
   TrackedDBEntry(const char* aName, uint32_t aNameLength)
     : mName(aName)
     , mNameLength(aNameLength)
@@ -2130,7 +2116,7 @@ struct TrackedDBEntry
 
 // A whitelist of database names. If the database name exactly matches one of
 // these then its SQL statements will always be recorded.
-static MOZ_CONSTEXPR_VAR TrackedDBEntry kTrackedDBs[] = {
+static constexpr TrackedDBEntry kTrackedDBs[] = {
   // IndexedDB for about:home, see aboutHome.js
   TRACKEDDB_ENTRY("818200132aebmoouht.sqlite"),
   TRACKEDDB_ENTRY("addons.sqlite"),
@@ -2223,12 +2209,12 @@ TelemetryImpl::RecordSlowStatement(const nsACString &sql,
 
 void
 TelemetryImpl::RecordIceCandidates(const uint32_t iceCandidateBitmask,
-                                   const bool success, const bool loop)
+                                   const bool success)
 {
   if (!sTelemetry || !TelemetryHistogram::CanRecordExtended())
     return;
 
-  sTelemetry->mWebrtcTelemetry.RecordIceCandidateMask(iceCandidateBitmask, success, loop);
+  sTelemetry->mWebrtcTelemetry.RecordIceCandidateMask(iceCandidateBitmask, success);
 }
 
 #if defined(MOZ_ENABLE_PROFILER_SPS)
@@ -2276,12 +2262,12 @@ NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsITelemetry, TelemetryImpl::CreateTele
 NS_DEFINE_NAMED_CID(NS_TELEMETRY_CID);
 
 const Module::CIDEntry kTelemetryCIDs[] = {
-  { &kNS_TELEMETRY_CID, false, nullptr, nsITelemetryConstructor },
+  { &kNS_TELEMETRY_CID, false, nullptr, nsITelemetryConstructor, Module::ALLOW_IN_GPU_PROCESS },
   { nullptr }
 };
 
 const Module::ContractIDEntry kTelemetryContracts[] = {
-  { "@mozilla.org/base/telemetry;1", &kNS_TELEMETRY_CID },
+  { "@mozilla.org/base/telemetry;1", &kNS_TELEMETRY_CID, Module::ALLOW_IN_GPU_PROCESS },
   { nullptr }
 };
 
@@ -2292,7 +2278,8 @@ const Module kTelemetryModule = {
   nullptr,
   nullptr,
   nullptr,
-  TelemetryImpl::ShutdownTelemetry
+  TelemetryImpl::ShutdownTelemetry,
+  Module::ALLOW_IN_GPU_PROCESS
 };
 
 NS_IMETHODIMP
@@ -2326,6 +2313,76 @@ TelemetryImpl::MsSinceProcessStart(double* aResult)
   return NS_OK;
 }
 
+// Telemetry Scalars IDL Implementation
+
+NS_IMETHODIMP
+TelemetryImpl::ScalarAdd(const nsACString& aName, JS::HandleValue aVal, JSContext* aCx)
+{
+  return TelemetryScalar::Add(aName, aVal, aCx);
+}
+
+NS_IMETHODIMP
+TelemetryImpl::ScalarSet(const nsACString& aName, JS::HandleValue aVal, JSContext* aCx)
+{
+  return TelemetryScalar::Set(aName, aVal, aCx);
+}
+
+NS_IMETHODIMP
+TelemetryImpl::ScalarSetMaximum(const nsACString& aName, JS::HandleValue aVal, JSContext* aCx)
+{
+  return TelemetryScalar::SetMaximum(aName, aVal, aCx);
+}
+
+NS_IMETHODIMP
+TelemetryImpl::SnapshotScalars(unsigned int aDataset, bool aClearScalars, JSContext* aCx,
+                               uint8_t optional_argc, JS::MutableHandleValue aResult)
+{
+  return TelemetryScalar::CreateSnapshots(aDataset, aClearScalars, aCx, optional_argc, aResult);
+}
+
+NS_IMETHODIMP
+TelemetryImpl::KeyedScalarAdd(const nsACString& aName, const nsAString& aKey,
+                              JS::HandleValue aVal, JSContext* aCx)
+{
+  return TelemetryScalar::Add(aName, aKey, aVal, aCx);
+}
+
+NS_IMETHODIMP
+TelemetryImpl::KeyedScalarSet(const nsACString& aName, const nsAString& aKey,
+                              JS::HandleValue aVal, JSContext* aCx)
+{
+  return TelemetryScalar::Set(aName, aKey, aVal, aCx);
+}
+
+NS_IMETHODIMP
+TelemetryImpl::KeyedScalarSetMaximum(const nsACString& aName, const nsAString& aKey,
+                              JS::HandleValue aVal, JSContext* aCx)
+{
+  return TelemetryScalar::SetMaximum(aName, aKey, aVal, aCx);
+}
+
+NS_IMETHODIMP
+TelemetryImpl::SnapshotKeyedScalars(unsigned int aDataset, bool aClearScalars, JSContext* aCx,
+                                    uint8_t optional_argc, JS::MutableHandleValue aResult)
+{
+  return TelemetryScalar::CreateKeyedSnapshots(aDataset, aClearScalars, aCx, optional_argc,
+                                               aResult);
+}
+
+NS_IMETHODIMP
+TelemetryImpl::ClearScalars()
+{
+  TelemetryScalar::ClearScalars();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+TelemetryImpl::FlushBatchedChildTelemetry()
+{
+  TelemetryHistogram::IPCTimerFired(nullptr, nullptr);
+  return NS_OK;
+}
+
 size_t
 TelemetryImpl::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
 {
@@ -2333,6 +2390,7 @@ TelemetryImpl::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
 
   // Ignore the hashtables in mAddonMap; they are not significant.
   n += TelemetryHistogram::GetMapShallowSizesOfExcludingThis(aMallocSizeOf);
+  n += TelemetryScalar::GetMapShallowSizesOfExcludingThis(aMallocSizeOf);
   n += mWebrtcTelemetry.SizeOfExcludingThis(aMallocSizeOf);
   { // Scope for mHashMutex lock
     MutexAutoLock lock(mHashMutex);
@@ -2355,6 +2413,7 @@ TelemetryImpl::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
   }
 
   n += TelemetryHistogram::GetHistogramSizesofIncludingThis(aMallocSizeOf);
+  n += TelemetryScalar::GetScalarSizesOfIncludingThis(aMallocSizeOf);
 
   return n;
 }
@@ -2757,6 +2816,12 @@ Accumulate(const char *name, const nsCString& key, uint32_t sample)
 }
 
 void
+AccumulateCategorical(ID id, const nsCString& label)
+{
+  TelemetryHistogram::AccumulateCategorical(id, label);
+}
+
+void
 AccumulateTimeDelta(ID aHistogram, TimeStamp start, TimeStamp end)
 {
   Accumulate(aHistogram,
@@ -2764,9 +2829,17 @@ AccumulateTimeDelta(ID aHistogram, TimeStamp start, TimeStamp end)
 }
 
 void
-ClearHistogram(ID aId)
+AccumulateChild(GeckoProcessType aProcessType,
+                const nsTArray<Accumulation>& aAccumulations)
 {
-  TelemetryHistogram::ClearHistogram(aId);
+  TelemetryHistogram::AccumulateChild(aProcessType, aAccumulations);
+}
+
+void
+AccumulateChildKeyed(GeckoProcessType aProcessType,
+                     const nsTArray<KeyedAccumulation>& aAccumulations)
+{
+  TelemetryHistogram::AccumulateChildKeyed(aProcessType, aAccumulations);
 }
 
 const char*
@@ -2797,9 +2870,9 @@ RecordSlowSQLStatement(const nsACString &statement,
 
 void
 RecordWebrtcIceCandidates(const uint32_t iceCandidateBitmask,
-                          const bool success, const bool loop)
+                          const bool success)
 {
-  TelemetryImpl::RecordIceCandidates(iceCandidateBitmask, success, loop);
+  TelemetryImpl::RecordIceCandidates(iceCandidateBitmask, success);
 }
 
 void Init()
@@ -2914,6 +2987,62 @@ void CreateStatisticsRecorder()
 void DestroyStatisticsRecorder()
 {
   TelemetryHistogram::DestroyStatisticsRecorder();
+}
+
+// Scalar API C++ Endpoints
+
+void
+ScalarAdd(mozilla::Telemetry::ScalarID aId, uint32_t aVal)
+{
+  TelemetryScalar::Add(aId, aVal);
+}
+
+void
+ScalarSet(mozilla::Telemetry::ScalarID aId, uint32_t aVal)
+{
+  TelemetryScalar::Set(aId, aVal);
+}
+
+void
+ScalarSet(mozilla::Telemetry::ScalarID aId, bool aVal)
+{
+  TelemetryScalar::Set(aId, aVal);
+}
+
+void
+ScalarSet(mozilla::Telemetry::ScalarID aId, const nsAString& aVal)
+{
+  TelemetryScalar::Set(aId, aVal);
+}
+
+void
+ScalarSetMaximum(mozilla::Telemetry::ScalarID aId, uint32_t aVal)
+{
+  TelemetryScalar::SetMaximum(aId, aVal);
+}
+
+void
+ScalarAdd(mozilla::Telemetry::ScalarID aId, const nsAString& aKey, uint32_t aVal)
+{
+  TelemetryScalar::Add(aId, aKey, aVal);
+}
+
+void
+ScalarSet(mozilla::Telemetry::ScalarID aId, const nsAString& aKey, uint32_t aVal)
+{
+  TelemetryScalar::Set(aId, aKey, aVal);
+}
+
+void
+ScalarSet(mozilla::Telemetry::ScalarID aId, const nsAString& aKey, bool aVal)
+{
+  TelemetryScalar::Set(aId, aKey, aVal);
+}
+
+void
+ScalarSetMaximum(mozilla::Telemetry::ScalarID aId, const nsAString& aKey, uint32_t aVal)
+{
+  TelemetryScalar::SetMaximum(aId, aKey, aVal);
 }
 
 } // namespace Telemetry

@@ -19,7 +19,7 @@ try {
   // process. We're used in the child process (for now), so guard against
   // this.
   Components.utils.import("resource://gre/modules/AddonManager.jsm");
-  /*globals AddonManagerPrivate*/
+  /* globals AddonManagerPrivate*/
 } catch (e) {
 }
 
@@ -31,8 +31,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "OS",
                                   "resource://gre/modules/osfile.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Task",
                                   "resource://gre/modules/Task.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "DOMApplicationRegistry",
-                                  "resource://gre/modules/Webapps.jsm");
 
 const TOOLKIT_ID                      = "toolkit@mozilla.org";
 const KEY_PROFILEDIR                  = "ProfD";
@@ -49,7 +47,6 @@ const PREF_BLOCKLIST_PINGCOUNTVERSION = "extensions.blocklist.pingCountVersion";
 const PREF_BLOCKLIST_SUPPRESSUI       = "extensions.blocklist.suppressUI";
 const PREF_ONECRL_VIA_AMO             = "security.onecrl.via.amo";
 const PREF_BLOCKLIST_UPDATE_ENABLED   = "services.blocklist.update_enabled";
-const PREF_PLUGINS_NOTIFYUSER         = "plugins.update.notifyUser";
 const PREF_GENERAL_USERAGENT_LOCALE   = "general.useragent.locale";
 const PREF_APP_DISTRIBUTION           = "distribution.id";
 const PREF_APP_DISTRIBUTION_VERSION   = "distribution.version";
@@ -867,7 +864,7 @@ Blocklist.prototype = {
     }
 
     var appFile = FileUtils.getFile(KEY_APPDIR, [FILE_BLOCKLIST]);
-    try{
+    try {
       yield this._preloadBlocklistFile(appFile.path);
       return;
     } catch (e) {
@@ -877,7 +874,7 @@ Blocklist.prototype = {
     LOG("Blocklist::_preloadBlocklist: no XML File found");
   }),
 
-  _preloadBlocklistFile: Task.async(function*(path){
+  _preloadBlocklistFile: Task.async(function*(path) {
     if (this._addonEntries) {
       // The file has been already loaded.
       return;
@@ -916,13 +913,6 @@ Blocklist.prototype = {
           continue;
         switch (element.localName) {
         case "emItems":
-          // Special case for b2g, since we don't use the addon manager.
-          if (AppConstants.MOZ_B2G) {
-            let extensions = this._processItemNodes(element.childNodes, "emItem",
-                                                    this._handleEmItemNode);
-            DOMApplicationRegistry.blockExtensions(extensions);
-            return;
-          }
           this._addonEntries = this._processItemNodes(element.childNodes, "emItem",
                                                       this._handleEmItemNode);
           break;
@@ -1174,12 +1164,11 @@ Blocklist.prototype = {
     if (AppConstants.platform == "android" ||
         AppConstants.MOZ_B2G) {
       return Ci.nsIBlocklistService.STATE_NOT_BLOCKED;
-    } else {
-      if (!this._isBlocklistLoaded())
-        this._loadBlocklist();
-      return this._getPluginBlocklistState(plugin, this._pluginEntries,
-                                           appVersion, toolkitVersion);
     }
+    if (!this._isBlocklistLoaded())
+      this._loadBlocklist();
+    return this._getPluginBlocklistState(plugin, this._pluginEntries,
+                                         appVersion, toolkitVersion);
   },
 
   /**
@@ -1385,8 +1374,15 @@ Blocklist.prototype = {
 
         // If the add-on is already disabled for some reason then don't warn
         // about it
-        if (!addon.isActive)
+        if (!addon.isActive) {
+          // But mark it as softblocked if necessary. Note that we avoid setting
+          // softDisabled at the same time as userDisabled to make it clear
+          // which was the original cause of the add-on becoming disabled in a
+          // way that the user can change.
+          if (state == Ci.nsIBlocklistService.STATE_SOFTBLOCKED && !addon.userDisabled)
+            addon.softDisabled = true;
           continue;
+        }
 
         addonList.push({
           name: addon.name,
@@ -1421,11 +1417,9 @@ Blocklist.prototype = {
             plugin.enabledState = Ci.nsIPluginTag.STATE_DISABLED;
         }
         else if (!plugin.disabled && state != Ci.nsIBlocklistService.STATE_NOT_BLOCKED) {
-          if (state == Ci.nsIBlocklistService.STATE_OUTDATED) {
-            gPref.setBoolPref(PREF_PLUGINS_NOTIFYUSER, true);
-          }
-          else if (state != Ci.nsIBlocklistService.STATE_VULNERABLE_UPDATE_AVAILABLE &&
-                   state != Ci.nsIBlocklistService.STATE_VULNERABLE_NO_UPDATE) {
+          if (state != Ci.nsIBlocklistService.STATE_OUTDATED &&
+              state != Ci.nsIBlocklistService.STATE_VULNERABLE_UPDATE_AVAILABLE &&
+              state != Ci.nsIBlocklistService.STATE_VULNERABLE_NO_UPDATE) {
             addonList.push({
               name: plugin.name,
               version: plugin.version,

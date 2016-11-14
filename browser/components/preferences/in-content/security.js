@@ -115,11 +115,10 @@ var gSecurityPane = {
       document.getElementById("savePasswords").disabled = true;
       excepts.disabled = true;
       return false;
-    } else {
-      excepts.disabled = !pref.value;
-      // don't override pref value in UI
-      return undefined;
     }
+    excepts.disabled = !pref.value;
+    // don't override pref value in UI
+    return undefined;
   },
 
   /**
@@ -128,7 +127,20 @@ var gSecurityPane = {
    */
   showPasswordExceptions: function ()
   {
-    gSubDialog.open("chrome://passwordmgr/content/passwordManagerExceptions.xul");
+    var bundlePrefs = document.getElementById("bundlePreferences");
+    var params = {
+      blockVisible: true,
+      sessionVisible: false,
+      allowVisible: false,
+      hideStatusColumn: true,
+      prefilledHost: "",
+      permissionType: "login-saving",
+      windowTitle: bundlePrefs.getString("savedLoginsExceptions_title"),
+      introText: bundlePrefs.getString("savedLoginsExceptions_desc")
+    };
+
+    gSubDialog.open("chrome://browser/content/preferences/permissions.xul",
+                    null, params);
   },
 
   /**
@@ -153,7 +165,7 @@ var gSecurityPane = {
     let blockDownloads = document.getElementById("blockDownloads");
     let blockUncommonUnwanted = document.getElementById("blockUncommonUnwanted");
 
-    let safeBrowsingPhishingPref = document.getElementById("browser.safebrowsing.enabled");
+    let safeBrowsingPhishingPref = document.getElementById("browser.safebrowsing.phishing.enabled");
     let safeBrowsingMalwarePref = document.getElementById("browser.safebrowsing.malware.enabled");
 
     let blockDownloadsPref = document.getElementById("browser.safebrowsing.downloads.enabled");

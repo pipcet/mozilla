@@ -102,9 +102,13 @@ class TabsGridLayout extends GridView
         setOnItemClickListener(new OnItemClickListener() {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
-                TabsLayoutItemView tab = (TabsLayoutItemView) view;
-                Tabs.getInstance().selectTab(tab.getTabId());
+                final TabsLayoutItemView tab = (TabsLayoutItemView) view;
+                final int tabId = tab.getTabId();
+                Tabs.getInstance().selectTab(tabId);
                 autoHidePanel();
+                Tabs.getInstance().notifyListeners(
+                        Tabs.getInstance().getTab(tabId), Tabs.TabEvents.OPENED_FROM_TABS_TRAY
+                );
             }
         });
 
@@ -290,9 +294,7 @@ class TabsGridLayout extends GridView
                         ((TabsLayoutItemView) tabView).setChecked(checked);
                     }
                     // setItemChecked doesn't exist until API 11, despite what the API docs say!
-                    if (AppConstants.Versions.feature11Plus) {
-                        setItemChecked(i, checked);
-                    }
+                    setItemChecked(i, checked);
                 }
             }
         });
@@ -573,9 +575,13 @@ class TabsGridLayout extends GridView
                     mSwipeView.setPressed(false);
 
                     if (!mSwiping) {
-                        TabsLayoutItemView item = (TabsLayoutItemView) mSwipeView;
-                        Tabs.getInstance().selectTab(item.getTabId());
+                        final TabsLayoutItemView item = (TabsLayoutItemView) mSwipeView;
+                        final int tabId = item.getTabId();
+                        Tabs.getInstance().selectTab(tabId);
                         autoHidePanel();
+                        Tabs.getInstance().notifyListeners(
+                                Tabs.getInstance().getTab(tabId), Tabs.TabEvents.OPENED_FROM_TABS_TRAY
+                        );
 
                         mVelocityTracker.recycle();
                         mVelocityTracker = null;

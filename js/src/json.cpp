@@ -128,6 +128,8 @@ Quote(JSContext* cx, StringBuffer& sb, JSString* str)
 
 namespace {
 
+using ObjectSet = GCHashSet<JSObject*, MovableCellHasher<JSObject*>, SystemAllocPolicy>;
+
 class StringifyContext
 {
   public:
@@ -137,7 +139,7 @@ class StringifyContext
       : sb(sb),
         gap(gap),
         replacer(cx, replacer),
-        stack(cx, GCHashSet<JSObject*, MovableCellHasher<JSObject*>>(cx)),
+        stack(cx),
         propertyList(propertyList),
         depth(0),
         maybeSafely(maybeSafely)
@@ -153,7 +155,7 @@ class StringifyContext
     StringBuffer& sb;
     const StringBuffer& gap;
     RootedObject replacer;
-    Rooted<GCHashSet<JSObject*, MovableCellHasher<JSObject*>>> stack;
+    Rooted<ObjectSet> stack;
     const AutoIdVector& propertyList;
     uint32_t depth;
     bool maybeSafely;
@@ -261,21 +263,21 @@ PreprocessValue(JSContext* cx, HandleObject holder, KeyType key, MutableHandleVa
     if (vp.get().isObject()) {
         RootedObject obj(cx, &vp.get().toObject());
 
-        ESClassValue cls;
+        ESClass cls;
         if (!GetBuiltinClass(cx, obj, &cls))
             return false;
 
-        if (cls == ESClass_Number) {
+        if (cls == ESClass::Number) {
             double d;
             if (!ToNumber(cx, vp, &d))
                 return false;
             vp.setNumber(d);
-        } else if (cls == ESClass_String) {
+        } else if (cls == ESClass::String) {
             JSString* str = ToStringSlow<CanGC>(cx, vp);
             if (!str)
                 return false;
             vp.setString(str);
-        } else if (cls == ESClass_Boolean) {
+        } else if (cls == ESClass::Boolean) {
             if (!Unbox(cx, obj, vp))
                 return false;
         }
@@ -307,11 +309,14 @@ class CycleDetector
     bool foundCycle(JSContext* cx) {
         auto addPtr = stack.lookupForAdd(obj_);
         if (addPtr) {
-            JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_JSON_CYCLIC_VALUE,
-                                 js_object_str);
+            JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_JSON_CYCLIC_VALUE);
             return false;
         }
-        return stack.add(addPtr, obj_);
+        if (!stack.add(addPtr, obj_)) {
+            ReportOutOfMemory(cx);
+            return false;
+        }
+        return true;
     }
 
     ~CycleDetector() {
@@ -319,7 +324,7 @@ class CycleDetector
     }
 
   private:
-    MutableHandle<GCHashSet<JSObject*, MovableCellHasher<JSObject*>>> stack;
+    MutableHandle<ObjectSet> stack;
     HandleObject obj_;
 };
 
@@ -588,7 +593,7 @@ Str(JSContext* cx, const Value& v, StringifyContext* scx)
 
 /* ES6 24.3.2. */
 bool
-js::Stringify(JSContext* cx, MutableHandleValue vp, JSObject* replacer_, Value space_,
+js::Stringify(JSContext* cx, MutableHandleValue vp, JSObject* replacer_, const Value& space_,
               StringBuffer& sb, StringifyBehavior stringifyBehavior)
 {
     RootedObject replacer(cx, replacer_);
@@ -657,11 +662,11 @@ js::Stringify(JSContext* cx, MutableHandleValue vp, JSObject* replacer_, Value s
                 } else {
                     bool shouldAdd = item.isString();
                     if (!shouldAdd) {
-                        ESClassValue cls;
+                        ESClass cls;
                         if (!GetClassOfValue(cx, item, &cls))
                             return false;
 
-                        shouldAdd = cls == ESClass_String || cls == ESClass_Number;
+                        shouldAdd = cls == ESClass::String || cls == ESClass::Number;
                     }
 
                     if (shouldAdd) {
@@ -691,16 +696,16 @@ js::Stringify(JSContext* cx, MutableHandleValue vp, JSObject* replacer_, Value s
     if (space.isObject()) {
         RootedObject spaceObj(cx, &space.toObject());
 
-        ESClassValue cls;
+        ESClass cls;
         if (!GetBuiltinClass(cx, spaceObj, &cls))
             return false;
 
-        if (cls == ESClass_Number) {
+        if (cls == ESClass::Number) {
             double d;
             if (!ToNumber(cx, space, &d))
                 return false;
             space = NumberValue(d);
-        } else if (cls == ESClass_String) {
+        } else if (cls == ESClass::String) {
             JSString* str = ToStringSlow<CanGC>(cx, space);
             if (!str)
                 return false;
@@ -982,6 +987,9 @@ js::InitJSONClass(JSContext* cx, HandleObject obj)
     }
 
     if (!JS_DefineFunctions(cx, JSON, json_static_methods))
+        return nullptr;
+
+    if (!DefineToStringTag(cx, JSON, cx->names().JSON))
         return nullptr;
 
     global->setConstructor(JSProto_JSON, ObjectValue(*JSON));

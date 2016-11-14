@@ -6,9 +6,11 @@
 
 const Services = require("Services");
 const promise = require("promise");
+const defer = require("devtools/shared/defer");
 
 // Load gDevToolsBrowser toolbox lazily as they need gDevTools to be fully initialized
 loader.lazyRequireGetter(this, "Toolbox", "devtools/client/framework/toolbox", true);
+loader.lazyRequireGetter(this, "ToolboxHostManager", "devtools/client/framework/toolbox-host-manager", true);
 loader.lazyRequireGetter(this, "gDevToolsBrowser", "devtools/client/framework/devtools-browser", true);
 
 const {defaultTools: DefaultTools, defaultThemes: DefaultThemes} =
@@ -17,6 +19,7 @@ const EventEmitter = require("devtools/shared/event-emitter");
 const {JsonView} = require("devtools/client/jsonview/main");
 const AboutDevTools = require("devtools/client/framework/about-devtools-toolbox");
 const {when: unload} = require("sdk/system/unload");
+const {Task} = require("devtools/shared/task");
 
 const FORBIDDEN_IDS = new Set(["toolbox", ""]);
 const MAX_ORDINAL = 99;
@@ -49,6 +52,10 @@ this.DevTools = function DevTools() {
 };
 
 DevTools.prototype = {
+  // The windowtype of the main window, used in various tools. This may be set
+  // to something different by other gecko apps.
+  chromeWindowType: "navigator:browser",
+
   registerDefaults() {
     // Ensure registering items in the sorted order (getDefault* functions
     // return sorted lists)
@@ -392,34 +399,26 @@ DevTools.prototype = {
    * @return {Toolbox} toolbox
    *        The toolbox that was opened
    */
-  showToolbox: function (target, toolId, hostType, hostOptions) {
-    let deferred = promise.defer();
-
+  showToolbox: Task.async(function* (target, toolId, hostType, hostOptions) {
     let toolbox = this._toolboxes.get(target);
     if (toolbox) {
 
-      let hostPromise = (hostType != null && toolbox.hostType != hostType) ?
-          toolbox.switchHost(hostType) :
-          promise.resolve(null);
-
-      if (toolId != null && toolbox.currentToolId != toolId) {
-        hostPromise = hostPromise.then(function () {
-          return toolbox.selectTool(toolId);
-        });
+      if (hostType != null && toolbox.hostType != hostType) {
+        yield toolbox.switchHost(hostType);
       }
 
-      return hostPromise.then(function () {
-        toolbox.raise();
-        return toolbox;
-      });
-    }
-    else {
-      // No toolbox for target, create one
-      toolbox = new Toolbox(target, toolId, hostType, hostOptions);
+      if (toolId != null && toolbox.currentToolId != toolId) {
+        yield toolbox.selectTool(toolId);
+      }
+
+      toolbox.raise();
+    } else {
+      let manager = new ToolboxHostManager(target, hostType, hostOptions);
+
+      toolbox = yield manager.create(toolId);
+      this._toolboxes.set(target, toolbox);
 
       this.emit("toolbox-created", toolbox);
-
-      this._toolboxes.set(target, toolbox);
 
       toolbox.once("destroy", () => {
         this.emit("toolbox-destroy", target);
@@ -430,16 +429,12 @@ DevTools.prototype = {
         this.emit("toolbox-destroyed", target);
       });
 
-      // If toolId was passed in, it will already be selected before the
-      // open promise resolves.
-      toolbox.open().then(() => {
-        deferred.resolve(toolbox);
-        this.emit("toolbox-ready", toolbox);
-      });
+      yield toolbox.open();
+      this.emit("toolbox-ready", toolbox);
     }
 
-    return deferred.promise;
-  },
+    return toolbox;
+  }),
 
   /**
    * Return the toolbox for a given target.

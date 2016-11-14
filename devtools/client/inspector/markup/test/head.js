@@ -19,9 +19,9 @@ var {ActorRegistryFront} = require("devtools/shared/fronts/actor-registry");
 SimpleTest.requestCompleteLog();
 
 // Set the testing flag on DevToolsUtils and reset it when the test ends
-DevToolsUtils.testing = true;
+flags.testing = true;
 registerCleanupFunction(() => {
-  DevToolsUtils.testing = false;
+  flags.testing = false;
 });
 
 // Clear preferences that may be set during the course of tests.
@@ -113,7 +113,7 @@ function* getFirstChildNodeValue(selector, testActor) {
  */
 function waitForChildrenUpdated({markup}) {
   info("Waiting for queued children updates to be handled");
-  let def = promise.defer();
+  let def = defer();
   markup._waitForChildren().then(() => {
     executeSoon(def.resolve);
   });
@@ -272,18 +272,6 @@ function searchUsingSelectorSearch(selector, inspector) {
 }
 
 /**
- * This shouldn't be used in the tests, but is useful when writing new tests or
- * debugging existing tests in order to introduce delays in the test steps
- * @param {Number} ms The time to wait
- * @return A promise that resolves when the time is passed
- */
-function wait(ms) {
-  let def = promise.defer();
-  setTimeout(def.resolve, ms);
-  return def.promise;
-}
-
-/**
  * Check to see if the inspector menu items for editing are disabled.
  * Things like Edit As HTML, Delete Node, etc.
  * @param {NodeFront} nodeFront
@@ -352,7 +340,7 @@ function* (nodeFront, inspector, assert = true) {
  * can be used with yield.
  */
 function promiseNextTick() {
-  let deferred = promise.defer();
+  let deferred = defer();
   executeSoon(deferred.resolve);
   return deferred.promise;
 }
@@ -389,13 +377,16 @@ function collapseSelectionAndShiftTab(inspector) {
  */
 function checkFocusedAttribute(attrName, editMode) {
   let focusedAttr = Services.focus.focusedElement;
-  is(focusedAttr ? focusedAttr.parentNode.dataset.attr : undefined,
-     attrName, attrName + " attribute editor is currently focused.");
-  is(focusedAttr ? focusedAttr.tagName : undefined,
-     editMode ? "input" : "span",
-     editMode
-     ? attrName + " is in edit mode"
-     : attrName + " is not in edit mode");
+  ok(focusedAttr, "Has a focused element");
+
+  let dataAttr = focusedAttr.parentNode.dataset.attr;
+  is(dataAttr, attrName, attrName + " attribute editor is currently focused.");
+  if (editMode) {
+    // Using a multiline editor for attributes, the focused element should be a textarea.
+    is(focusedAttr.tagName, "textarea", attrName + "is in edit mode");
+  } else {
+    is(focusedAttr.tagName, "span", attrName + "is not in edit mode");
+  }
 }
 
 /**
@@ -448,7 +439,7 @@ function createTestHTTPServer() {
   let server = new HttpServer();
 
   registerCleanupFunction(function* cleanup() {
-    let destroyed = promise.defer();
+    let destroyed = defer();
     server.stop(() => {
       destroyed.resolve();
     });
@@ -467,8 +458,8 @@ function createTestHTTPServer() {
  *
  * - moduleUrl {String}: URL of the module that contains actor implementation.
  * - prefix {String}: prefix of the actor.
- * - actorClass {ActorClass}: Constructor object for the actor.
- * - frontClass {FrontClass}: Constructor object for the front part
+ * - actorClass {ActorClassWithSpec}: Constructor object for the actor.
+ * - frontClass {FrontClassWithSpec}: Constructor object for the front part
  * of the registered actor.
  *
  * @returns {Promise} A promise that is resolved when the actor is registered.
@@ -583,4 +574,80 @@ function* simulateNodeDrop(inspector, selector) {
 function* simulateNodeDragAndDrop(inspector, selector, xOffset, yOffset) {
   yield simulateNodeDrag(inspector, selector, xOffset, yOffset);
   yield simulateNodeDrop(inspector, selector);
+}
+
+/**
+ * Waits until the element has not scrolled for 30 consecutive frames.
+ */
+function* waitForScrollStop(doc) {
+  let el = doc.documentElement;
+  let win = doc.defaultView;
+  let lastScrollTop = el.scrollTop;
+  let stopFrameCount = 0;
+  while (stopFrameCount < 30) {
+    // Wait for a frame.
+    yield new Promise(resolve => win.requestAnimationFrame(resolve));
+
+    // Check if the element has scrolled.
+    if (lastScrollTop == el.scrollTop) {
+      // No scrolling since the last frame.
+      stopFrameCount++;
+    } else {
+      // The element has scrolled. Reset the frame counter.
+      stopFrameCount = 0;
+      lastScrollTop = el.scrollTop;
+    }
+  }
+
+  return lastScrollTop;
+}
+
+/**
+ * Select a node in the inspector and try to delete it using the provided key. After that,
+ * check that the expected element is focused.
+ *
+ * @param {InspectorPanel} inspector
+ *        The current inspector-panel instance.
+ * @param {String} key
+ *        The key to simulate to delete the node
+ * @param {Object}
+ *        - {String} selector: selector of the element to delete.
+ *        - {String} focusedSelector: selector of the element that should be selected
+ *        after deleting the node.
+ *        - {String} pseudo: optional, "before" or "after" if the element focused after
+ *        deleting the node is supposed to be a before/after pseudo-element.
+ */
+function* checkDeleteAndSelection(inspector, key, {selector, focusedSelector, pseudo}) {
+  info("Test deleting node " + selector + " with " + key + ", " +
+       "expecting " + focusedSelector + " to be focused");
+
+  info("Select node " + selector + " and make sure it is focused");
+  yield selectNode(selector, inspector);
+  yield clickContainer(selector, inspector);
+
+  info("Delete the node with: " + key);
+  let mutated = inspector.once("markupmutation");
+  EventUtils.sendKey(key, inspector.panelWin);
+  yield Promise.all([mutated, inspector.once("inspector-updated")]);
+
+  let nodeFront = yield getNodeFront(focusedSelector, inspector);
+  if (pseudo) {
+    // Update the selector for logging in case of failure.
+    focusedSelector = focusedSelector + "::" + pseudo;
+    // Retrieve the :before or :after pseudo element of the nodeFront.
+    let {nodes} = yield inspector.walker.children(nodeFront);
+    nodeFront = pseudo === "before" ? nodes[0] : nodes[nodes.length - 1];
+  }
+
+  is(inspector.selection.nodeFront, nodeFront,
+     focusedSelector + " is selected after deletion");
+
+  info("Check that the node was really removed");
+  let node = yield getNodeFront(selector, inspector);
+  ok(!node, "The node can't be found in the page anymore");
+
+  info("Undo the deletion to restore the original markup");
+  yield undoChange(inspector);
+  node = yield getNodeFront(selector, inspector);
+  ok(node, "The node is back");
 }

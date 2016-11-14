@@ -20,6 +20,7 @@ import org.json.JSONObject;
 import org.mozilla.gecko.background.fxa.FxAccountUtils;
 import org.mozilla.gecko.fxa.FirefoxAccounts;
 import org.mozilla.gecko.fxa.FxAccountConstants;
+import org.mozilla.gecko.fxa.FxAccountDeviceRegistrator;
 import org.mozilla.gecko.fxa.authenticator.AndroidFxAccount;
 import org.mozilla.gecko.fxa.login.Engaged;
 import org.mozilla.gecko.fxa.login.State;
@@ -51,7 +52,7 @@ public class AccountsHelper implements NativeEventListener {
         mContext = context;
         mProfile = profile;
 
-        EventDispatcher dispatcher = EventDispatcher.getInstance();
+        EventDispatcher dispatcher = GeckoApp.getEventDispatcher();
         if (dispatcher == null) {
             Log.e(LOGTAG, "Gecko event dispatcher must not be null", new RuntimeException());
             return;
@@ -67,7 +68,7 @@ public class AccountsHelper implements NativeEventListener {
     }
 
     public synchronized void uninit() {
-        EventDispatcher dispatcher = EventDispatcher.getInstance();
+        EventDispatcher dispatcher = GeckoApp.getEventDispatcher();
         if (dispatcher == null) {
             Log.e(LOGTAG, "Gecko event dispatcher must not be null", new RuntimeException());
             return;

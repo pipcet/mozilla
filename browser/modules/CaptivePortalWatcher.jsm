@@ -12,6 +12,9 @@ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
  */
 const PORTAL_RECHECK_DELAY_MS = 150;
 
+// This is the value used to identify the captive portal notification.
+const PORTAL_NOTIFICATION_VALUE = "captive-portal-detected";
+
 this.EXPORTED_SYMBOLS = [ "CaptivePortalWatcher" ];
 
 Cu.import("resource://gre/modules/Services.jsm");
@@ -27,6 +30,9 @@ this.CaptivePortalWatcher = {
   // This holds a weak reference to the captive portal tab so that we
   // don't leak it if the user closes it.
   _captivePortalTab: null,
+
+  // This holds a weak reference to the captive portal notification.
+  _captivePortalNotification: null,
 
   _initialized: false,
 
@@ -47,10 +53,14 @@ this.CaptivePortalWatcher = {
     Services.obs.addObserver(this, "captive-portal-login-abort", false);
     Services.obs.addObserver(this, "captive-portal-login-success", false);
     this._initialized = true;
+
     if (cps.state == cps.LOCKED_PORTAL) {
       // A captive portal has already been detected.
-      this._addCaptivePortalTab();
+      this._captivePortalDetected();
+      return;
     }
+
+    cps.recheckCaptivePortal();
   },
 
   uninit() {
@@ -63,9 +73,9 @@ this.CaptivePortalWatcher = {
   },
 
   observe(subject, topic, data) {
-    switch(topic) {
+    switch (topic) {
       case "captive-portal-login":
-        this._addCaptivePortalTab();
+        this._captivePortalDetected();
         break;
       case "captive-portal-login-abort":
       case "captive-portal-login-success":
@@ -77,7 +87,7 @@ this.CaptivePortalWatcher = {
     }
   },
 
-  _addCaptivePortalTab() {
+  _captivePortalDetected() {
     if (this._waitingToAddTab) {
       return;
     }
@@ -87,16 +97,31 @@ this.CaptivePortalWatcher = {
     // tab when we regain focus. This is so that if a different application was
     // focused, when the user (re-)focuses a browser window, we open the tab
     // immediately in that window so they can login before continuing to browse.
-    if (!win || !win.document.hasFocus()) {
+    if (!win || win != Services.ww.activeWindow) {
       this._waitingToAddTab = true;
       Services.obs.addObserver(this, "xul-window-visible", false);
       return;
     }
 
-    // The browser is in use - add the tab without selecting it.
-    let tab = win.gBrowser.addTab(this.canonicalURL);
+    // The browser is in use - show a notification and add the tab without
+    // selecting it, unless the caller specifically requested selection.
+    this._ensureCaptivePortalTab(win);
+    this._showNotification(win);
+  },
+
+  _ensureCaptivePortalTab(win) {
+    let tab;
+    if (this._captivePortalTab) {
+      tab = this._captivePortalTab.get();
+    }
+
+    // If the tab is gone or going, we need to open a new one.
+    if (!tab || tab.closing || !tab.parentNode) {
+      tab = win.gBrowser.addTab(this.canonicalURL);
+    }
+
     this._captivePortalTab = Cu.getWeakReference(tab);
-    return;
+    return tab;
   },
 
   /**
@@ -110,8 +135,8 @@ this.CaptivePortalWatcher = {
     }
 
     let win = RecentWindow.getMostRecentBrowserWindow();
-    if (!win.document.hasFocus()) {
-      // The document that got focused was not in a browser window.
+    if (win != Services.ww.activeWindow) {
+      // The window that got focused was not a browser window.
       return;
     }
     Services.obs.removeObserver(this, "xul-window-visible");
@@ -131,7 +156,9 @@ this.CaptivePortalWatcher = {
         return;
       }
 
-      let tab = win.gBrowser.addTab(this.canonicalURL);
+      this._showNotification(win);
+      let tab = this._ensureCaptivePortalTab(win);
+
       // Focus the tab only if the recheck has completed, i.e. we're sure
       // that the portal is still locked. This way, if the recheck completes
       // after we add the tab and we're free of the portal, the tab contents
@@ -139,8 +166,6 @@ this.CaptivePortalWatcher = {
       if (cps.lastChecked != lastChecked) {
         win.gBrowser.selectedTab = tab;
       }
-
-      this._captivePortalTab = Cu.getWeakReference(tab);
     }, PORTAL_RECHECK_DELAY_MS);
   },
 
@@ -149,6 +174,8 @@ this.CaptivePortalWatcher = {
       Services.obs.removeObserver(this, "xul-window-visible");
       this._waitingToAddTab = false;
     }
+
+    this._removeNotification();
 
     if (!this._captivePortalTab) {
       return;
@@ -165,7 +192,7 @@ this.CaptivePortalWatcher = {
       return;
     }
 
-    let tabbrowser = tab.ownerDocument.defaultView.gBrowser;
+    let tabbrowser = tab.ownerGlobal.gBrowser;
 
     // If after the login, the captive portal has redirected to some other page,
     // leave it open if the tab has focus.
@@ -176,5 +203,82 @@ this.CaptivePortalWatcher = {
 
     // Remove the tab.
     tabbrowser.removeTab(tab);
+  },
+
+  get _productName() {
+    delete this._productName;
+    return this._productName =
+      Services.strings.createBundle("chrome://branding/locale/brand.properties")
+                      .GetStringFromName("brandShortName");
+  },
+
+  get _browserBundle() {
+    delete this._browserBundle;
+    return this._browserBundle =
+      Services.strings.createBundle("chrome://browser/locale/browser.properties");
+  },
+
+  handleEvent(aEvent) {
+    if (aEvent.type != "TabSelect" || !this._captivePortalTab || !this._captivePortalNotification) {
+      return;
+    }
+
+    let tab = this._captivePortalTab.get();
+    let n = this._captivePortalNotification.get();
+    if (!tab || !n) {
+      return;
+    }
+
+    let doc = tab.ownerDocument;
+    let button = n.querySelector("button.notification-button");
+    if (doc.defaultView.gBrowser.selectedTab == tab) {
+      button.style.visibility = "hidden";
+    } else {
+      button.style.visibility = "visible";
+    }
+  },
+
+  _showNotification(win) {
+    let buttons = [
+      {
+        label: this._browserBundle.GetStringFromName("captivePortal.showLoginPage"),
+        callback: () => {
+          win.gBrowser.selectedTab = this._ensureCaptivePortalTab(win);
+
+          // Returning true prevents the notification from closing.
+          return true;
+        },
+        isDefault: true,
+      },
+    ];
+
+    let message = this._browserBundle.formatStringFromName("captivePortal.infoMessage",
+                                                           [this._productName], 1);
+
+    let closeHandler = (aEventName) => {
+      if (aEventName != "removed") {
+        return;
+      }
+      win.gBrowser.tabContainer.removeEventListener("TabSelect", this);
+    };
+
+    let nb = win.document.getElementById("high-priority-global-notificationbox");
+    let n = nb.appendNotification(message, PORTAL_NOTIFICATION_VALUE, "",
+                                  nb.PRIORITY_INFO_MEDIUM, buttons, closeHandler);
+
+    this._captivePortalNotification = Cu.getWeakReference(n);
+
+    win.gBrowser.tabContainer.addEventListener("TabSelect", this);
+  },
+
+  _removeNotification() {
+    if (!this._captivePortalNotification)
+      return;
+    let n = this._captivePortalNotification.get();
+    this._captivePortalNotification = null;
+    if (!n || !n.parentNode) {
+      return;
+    }
+    n.close();
   },
 };

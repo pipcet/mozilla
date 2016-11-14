@@ -37,13 +37,14 @@ class TOutputGLSLBase : public TIntermTraverser
     virtual bool writeVariablePrecision(TPrecision precision) = 0;
     void writeFunctionParameters(const TIntermSequence &args);
     const TConstantUnion *writeConstantUnion(const TType &type, const TConstantUnion *pConstUnion);
-    void writeConstructorTriplet(Visit visit, const TType &type, const char *constructorBaseType);
+    void writeConstructorTriplet(Visit visit, const TType &type);
     TString getTypeName(const TType &type);
 
     void visitSymbol(TIntermSymbol *node) override;
     void visitConstantUnion(TIntermConstantUnion *node) override;
     bool visitBinary(Visit visit, TIntermBinary *node) override;
     bool visitUnary(Visit visit, TIntermUnary *node) override;
+    bool visitTernary(Visit visit, TIntermTernary *node) override;
     bool visitSelection(Visit visit, TIntermSelection *node) override;
     bool visitSwitch(Visit visit, TIntermSwitch *node) override;
     bool visitCase(Visit visit, TIntermCase *node) override;

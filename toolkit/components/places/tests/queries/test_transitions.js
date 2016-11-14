@@ -105,10 +105,10 @@ add_task(function* test_transitions()
     });
   }
 
-  //dump_table("moz_places");
-  //dump_table("moz_historyvisits");
+  // dump_table("moz_places");
+  // dump_table("moz_historyvisits");
 
-  var numSortFunc = function (a,b) { return (a - b); };
+  var numSortFunc = function (a, b) { return (a - b); };
   var arrs = testDataTyped.concat(testDataDownload).concat(testDataBookmark)
               .sort(numSortFunc);
 

@@ -40,6 +40,7 @@
 #include "MobileViewportManager.h"
 #include "ZoomConstraintsClient.h"
 
+class nsIDocShell;
 class nsRange;
 
 struct RangePaintInfo;
@@ -66,9 +67,13 @@ typedef nsClassHashtable<nsUint64HashKey, mozilla::CSSIntRegion> VisibleRegions;
 
 } // namespace mozilla
 
-// 250ms.  This is actually pref-controlled, but we use this value if we fail
+// This is actually pref-controlled, but we use this value if we fail
 // to get the pref for any reason.
+#ifdef MOZ_WIDGET_ANDROID
 #define PAINTLOCK_EVENT_DELAY 250
+#else
+#define PAINTLOCK_EVENT_DELAY 5
+#endif
 
 class PresShell final : public nsIPresShell,
                         public nsStubDocumentObserver,
@@ -81,8 +86,6 @@ class PresShell final : public nsIPresShell,
   using OnNonvisible = mozilla::OnNonvisible;
   using RawSelectionType = mozilla::RawSelectionType;
   using SelectionType = mozilla::SelectionType;
-  template <typename T> using UniquePtr = mozilla::UniquePtr<T>;
-  using VisibilityCounter = mozilla::VisibilityCounter;
   using VisibleFrames = mozilla::VisibleFrames;
   using VisibleRegions = mozilla::VisibleRegions;
 
@@ -94,7 +97,7 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS
 
-  static bool AccessibleCaretEnabled();
+  static bool AccessibleCaretEnabled(nsIDocShell* aDocShell);
 
   // BeforeAfterKeyboardEvent preference
   static bool BeforeAfterKeyboardEventEnabled();
@@ -183,12 +186,12 @@ public:
   virtual void UnsuppressPainting() override;
 
   virtual nsresult GetAgentStyleSheets(
-      nsTArray<mozilla::StyleSheetHandle::RefPtr>& aSheets) override;
+      nsTArray<RefPtr<mozilla::StyleSheet>>& aSheets) override;
   virtual nsresult SetAgentStyleSheets(
-      const nsTArray<mozilla::StyleSheetHandle::RefPtr>& aSheets) override;
+      const nsTArray<RefPtr<mozilla::StyleSheet>>& aSheets) override;
 
-  virtual nsresult AddOverrideStyleSheet(mozilla::StyleSheetHandle aSheet) override;
-  virtual nsresult RemoveOverrideStyleSheet(mozilla::StyleSheetHandle aSheet) override;
+  virtual nsresult AddOverrideStyleSheet(mozilla::StyleSheet* aSheet) override;
+  virtual nsresult RemoveOverrideStyleSheet(mozilla::StyleSheet* aSheet) override;
 
   virtual nsresult HandleEventWithTarget(
                                  mozilla::WidgetEvent* aEvent,
@@ -213,14 +216,14 @@ public:
   virtual already_AddRefed<SourceSurface>
   RenderNode(nsIDOMNode* aNode,
              nsIntRegion* aRegion,
-             nsIntPoint& aPoint,
-             nsIntRect* aScreenRect,
+             const mozilla::LayoutDeviceIntPoint aPoint,
+             mozilla::LayoutDeviceIntRect* aScreenRect,
              uint32_t aFlags) override;
 
   virtual already_AddRefed<SourceSurface>
   RenderSelection(nsISelection* aSelection,
-                  nsIntPoint& aPoint,
-                  nsIntRect* aScreenRect,
+                  const mozilla::LayoutDeviceIntPoint aPoint,
+                  mozilla::LayoutDeviceIntRect* aScreenRect,
                   uint32_t aFlags) override;
 
   virtual already_AddRefed<nsPIDOMWindowOuter> GetRootWindow() override;
@@ -240,7 +243,8 @@ public:
   virtual bool ScaleToResolution() const override;
   virtual float GetCumulativeResolution() override;
   virtual float GetCumulativeNonRootScaleResolution() override;
-  virtual void SetRestoreResolution(float aResolution) override;
+  virtual void SetRestoreResolution(float aResolution,
+                                    mozilla::LayoutDeviceIntSize aDisplaySize) override;
 
   //nsIViewObserver interface
 
@@ -369,7 +373,7 @@ public:
 
   virtual nscolor ComputeBackstopColor(nsView* aDisplayRoot) override;
 
-  virtual void SetIsActive(bool aIsActive, bool aIsHidden = true) override;
+  virtual nsresult SetIsActive(bool aIsActive) override;
 
   virtual bool GetIsViewportOverridden() override {
     return (mMobileViewportManager != nullptr);
@@ -413,8 +417,8 @@ public:
   void RebuildApproximateFrameVisibility(nsRect* aRect = nullptr,
                                          bool aRemoveOnly = false) override;
 
-  void MarkFrameVisible(nsIFrame* aFrame, VisibilityCounter aCounter) override;
-  void MarkFrameNonvisible(nsIFrame* aFrame) override;
+  void EnsureFrameInApproximatelyVisibleList(nsIFrame* aFrame) override;
+  void RemoveFrameFromApproximatelyVisibleList(nsIFrame* aFrame) override;
 
   bool AssumeAllFramesVisible() override;
 
@@ -534,7 +538,6 @@ protected:
 
   bool mCaretEnabled;
 
-  bool mIsHidden;
 #ifdef DEBUG
   nsStyleSet* CloneStyleSet(nsStyleSet* aSet);
   bool VerifyIncrementalReflow();
@@ -542,7 +545,7 @@ protected:
   void ShowEventTargetDebug();
 #endif
 
-  void RecordStyleSheetChange(mozilla::StyleSheetHandle aStyleSheet);
+  void RecordStyleSheetChange(mozilla::StyleSheet* aStyleSheet);
 
   void RemovePreferenceStyles();
 
@@ -578,8 +581,8 @@ protected:
                       nsISelection* aSelection,
                       nsIntRegion* aRegion,
                       nsRect aArea,
-                      nsIntPoint& aPoint,
-                      nsIntRect* aScreenRect,
+                      const mozilla::LayoutDeviceIntPoint aPoint,
+                      mozilla::LayoutDeviceIntRect* aScreenRect,
                       uint32_t aFlags);
 
   /**
@@ -590,9 +593,6 @@ protected:
   void AddAgentSheet(nsISupports* aSheet);
   void AddAuthorSheet(nsISupports* aSheet);
   void RemoveSheet(mozilla::SheetType aType, nsISupports* aSheet);
-
-  /// @return the LayerManager at the root of the view tree.
-  LayerManager* GetRootLayerManager();
 
   // Hide a view if it is a popup
   void HideViewIfPopup(nsView* aView);
@@ -686,6 +686,7 @@ protected:
   void ProcessSynthMouseMoveEvent(bool aFromScroll);
 
   void QueryIsActive();
+  nsresult UpdateImageLockingState();
 
   bool InZombieDocument(nsIContent *aContent);
   already_AddRefed<nsIPresShell> GetParentPresShellForEventHandling();
@@ -778,80 +779,24 @@ protected:
   void UpdateApproximateFrameVisibility();
   void DoUpdateApproximateFrameVisibility(bool aRemoveOnly);
 
-  void ClearVisibleFramesSets(Maybe<OnNonvisible> aNonvisibleAction = Nothing());
-  static void ClearVisibleFramesForUnvisitedPresShells(nsView* aView, bool aClear);
-  static void MarkFramesInListApproximatelyVisible(const nsDisplayList& aList);
+  void ClearApproximatelyVisibleFramesList(Maybe<mozilla::OnNonvisible> aNonvisibleAction
+                                             = Nothing());
+  static void ClearApproximateFrameVisibilityVisited(nsView* aView, bool aClear);
+  static void MarkFramesInListApproximatelyVisible(const nsDisplayList& aList,
+                                                   Maybe<VisibleRegions>& aVisibleRegions);
   void MarkFramesInSubtreeApproximatelyVisible(nsIFrame* aFrame,
                                                const nsRect& aRect,
+                                               Maybe<VisibleRegions>& aVisibleRegions,
                                                bool aRemoveOnly = false);
-  void UpdateFrameVisibilityOnActiveStateChange();
 
-  void InitVisibleRegionsIfVisualizationEnabled(VisibilityCounter aForCounter);
-  void AddFrameToVisibleRegions(nsIFrame* aFrame, VisibilityCounter aForCounter);
-  void NotifyCompositorOfVisibleRegionsChange();
+  void DecApproximateVisibleCount(VisibleFrames& aFrames,
+                                  Maybe<OnNonvisible> aNonvisibleAction = Nothing());
 
   nsRevocableEventPtr<nsRunnableMethod<PresShell>> mUpdateApproximateFrameVisibilityEvent;
-  nsRevocableEventPtr<nsRunnableMethod<PresShell>> mNotifyCompositorOfVisibleRegionsChangeEvent;
 
-  struct VisibleFramesContainer
-  {
-    VisibleFramesContainer() : mSuppressingVisibility(false) { }
-
-    void AddFrame(nsIFrame* aFrame, VisibilityCounter aCounter);
-    void RemoveFrame(nsIFrame* aFrame, VisibilityCounter aCounter);
-
-    bool IsVisibilitySuppressed() const { return mSuppressingVisibility; }
-    void SuppressVisibility();
-    void UnsuppressVisibility();
-
-    VisibleFrames& ForCounter(VisibilityCounter aCounter)
-    {
-      switch (aCounter)
-      {
-        case VisibilityCounter::MAY_BECOME_VISIBLE: return mApproximate;
-        case VisibilityCounter::IN_DISPLAYPORT:     return mInDisplayPort;
-      }
-      MOZ_CRASH();
-    }
-
-    // A set of frames that were visible or could be visible soon at the time
-    // that we last did an approximate frame visibility update.
-    VisibleFrames mApproximate;
-
-    // A set of frames that were visible in the displayport the last time we painted.
-    VisibleFrames mInDisplayPort;
-
-    bool mSuppressingVisibility;
-  };
-
-  VisibleFramesContainer mVisibleFrames;
-
-  struct VisibleRegionsContainer
-  {
-    VisibleRegions& ForCounter(VisibilityCounter aCounter)
-    {
-      switch (aCounter)
-      {
-        case VisibilityCounter::MAY_BECOME_VISIBLE: return mApproximate;
-        case VisibilityCounter::IN_DISPLAYPORT:     return mInDisplayPort;
-      }
-      MOZ_CRASH();
-    }
-
-    // The approximately visible regions calculated during the last update to
-    // approximate frame visibility.
-    VisibleRegions mApproximate;
-
-    // The in-displayport visible regions calculated during the last paint.
-    VisibleRegions mInDisplayPort;
-  };
-
-  // The most recent visible regions we've computed. Only non-null if the APZ
-  // minimap visibility visualization was enabled during the last visibility
-  // update.
-  UniquePtr<VisibleRegionsContainer> mVisibleRegions;
-
-  friend struct AutoUpdateVisibility;
+  // A set of frames that were visible or could be visible soon at the time
+  // that we last did an approximate frame visibility update.
+  VisibleFrames mApproximatelyVisibleFrames;
 
 
   //////////////////////////////////////////////////////////////////////////////
@@ -921,7 +866,7 @@ protected:
   mozilla::layers::ScrollableLayerGuid mMouseEventTargetGuid;
 
   // mStyleSet owns it but we maintain a ref, may be null
-  mozilla::StyleSheetHandle::RefPtr mPrefStyleSheet;
+  RefPtr<mozilla::StyleSheet> mPrefStyleSheet;
 
   // Set of frames that we should mark with NS_FRAME_HAS_DIRTY_CHILDREN after
   // we finish reflowing mCurrentReflowRoot.

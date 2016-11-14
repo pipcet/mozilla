@@ -40,7 +40,6 @@ public:
     const HANDLE mShareHandle;
 protected:
     RefPtr<IDXGIKeyedMutex> mKeyedMutex;
-    const GLuint mFence;
 
     SharedSurface_ANGLEShareHandle(GLContext* gl,
                                    GLLibraryEGL* egl,
@@ -48,8 +47,7 @@ protected:
                                    bool hasAlpha,
                                    EGLSurface pbuffer,
                                    HANDLE shareHandle,
-                                   const RefPtr<IDXGIKeyedMutex>& keyedMutex,
-                                   GLuint fence);
+                                   const RefPtr<IDXGIKeyedMutex>& keyedMutex);
 
     EGLDisplay Display();
 
@@ -82,12 +80,12 @@ protected:
 public:
     static UniquePtr<SurfaceFactory_ANGLEShareHandle> Create(GLContext* gl,
                                                              const SurfaceCaps& caps,
-                                                             const RefPtr<layers::ClientIPCAllocator>& allocator,
+                                                             const RefPtr<layers::LayersIPCChannel>& allocator,
                                                              const layers::TextureFlags& flags);
 
 protected:
     SurfaceFactory_ANGLEShareHandle(GLContext* gl, const SurfaceCaps& caps,
-                                    const RefPtr<layers::ClientIPCAllocator>& allocator,
+                                    const RefPtr<layers::LayersIPCChannel>& allocator,
                                     const layers::TextureFlags& flags, GLLibraryEGL* egl,
                                     EGLConfig config);
 

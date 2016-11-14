@@ -6,7 +6,7 @@
 
 const {interfaces: Ci, utils: Cu} = Components;
 
-const ERRORS = [
+const ERRORS = new Set([
   "ElementNotAccessibleError",
   "ElementNotVisibleError",
   "InvalidArgumentError",
@@ -27,22 +27,22 @@ const ERRORS = [
   "UnknownError",
   "UnsupportedOperationError",
   "WebDriverError",
-];
+]);
 
-this.EXPORTED_SYMBOLS = ["error"].concat(ERRORS);
+const BUILTIN_ERRORS = new Set([
+  "Error",
+  "EvalError",
+  "InternalError",
+  "RangeError",
+  "ReferenceError",
+  "SyntaxError",
+  "TypeError",
+  "URIError",
+]);
+
+this.EXPORTED_SYMBOLS = ["error"].concat(Array.from(ERRORS));
 
 this.error = {};
-
-error.BuiltinErrors = {
-  Error: 0,
-  EvalError: 1,
-  InternalError: 2,
-  RangeError: 3,
-  ReferenceError: 4,
-  SyntaxError: 5,
-  TypeError: 6,
-  URIError: 7,
-};
 
 /**
  * Checks if obj is an instance of the Error prototype in a safe manner.
@@ -61,7 +61,13 @@ error.isError = function(val) {
   } else if (val instanceof Ci.nsIException) {
     return true;
   } else {
-    return Object.getPrototypeOf(val) in error.BuiltinErrors;
+    // DOMRectList errors on string comparison
+   try {
+      let proto = Object.getPrototypeOf(val);
+      return BUILTIN_ERRORS.has(proto.toString());
+    } catch (e) {
+      return false;
+    }
   }
 };
 
@@ -70,7 +76,7 @@ error.isError = function(val) {
  */
 error.isWebDriverError = function(obj) {
   return error.isError(obj) &&
-      ("name" in obj && ERRORS.indexOf(obj.name) >= 0);
+      ("name" in obj && ERRORS.has(obj.name));
 };
 
 /**
@@ -120,6 +126,32 @@ error.stringify = function(err) {
   } catch (e) {
     return "<unprintable error>";
   }
+};
+
+/**
+ * Pretty-print values passed to template strings.
+ *
+ * Usage:
+ *
+ *     let input = {value: true};
+ *     error.pprint`Expected boolean, got ${input}`;
+ *     => "Expected boolean, got [object Object] {"value": true}"
+ */
+error.pprint = function(strings, ...values) {
+  let res = [];
+  for (let i = 0; i < strings.length; i++) {
+    res.push(strings[i]);
+    if (i < values.length) {
+      let val = values[i];
+      res.push(Object.prototype.toString.call(val));
+      let s = JSON.stringify(val);
+      if (s && s.length > 0) {
+        res.push(" ");
+        res.push(s);
+      }
+    }
+  }
+  return res.join("");
 };
 
 /**

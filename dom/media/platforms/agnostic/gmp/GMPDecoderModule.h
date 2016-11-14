@@ -33,19 +33,11 @@ public:
 
   // Decode thread.
   already_AddRefed<MediaDataDecoder>
-  CreateVideoDecoder(const VideoInfo& aConfig,
-                     layers::LayersBackend aLayersBackend,
-                     layers::ImageContainer* aImageContainer,
-                     TaskQueue* aTaskQueue,
-                     MediaDataDecoderCallback* aCallback,
-                     DecoderDoctorDiagnostics* aDiagnostics) override;
+  CreateVideoDecoder(const CreateDecoderParams& aParams) override;
 
   // Decode thread.
   already_AddRefed<MediaDataDecoder>
-  CreateAudioDecoder(const AudioInfo& aConfig,
-                     TaskQueue* aTaskQueue,
-                     MediaDataDecoderCallback* aCallback,
-                     DecoderDoctorDiagnostics* aDiagnostics) override;
+  CreateAudioDecoder(const CreateDecoderParams& aParams) override;
 
   ConversionRequired
   DecoderNeedsConversion(const TrackInfo& aConfig) const override;
@@ -54,16 +46,10 @@ public:
   SupportsMimeType(const nsACString& aMimeType,
                    DecoderDoctorDiagnostics* aDiagnostics) const override;
 
-  // Main thread only.
-  static void Init();
-
   static const Maybe<nsCString> PreferredGMP(const nsACString& aMimeType);
 
   static bool SupportsMimeType(const nsACString& aMimeType,
                                const Maybe<nsCString>& aGMP);
-
-  // Main thread only.
-  static void UpdateUsableCodecs();
 };
 
 } // namespace mozilla

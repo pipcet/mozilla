@@ -57,13 +57,16 @@ enum class OperatingSystem {
   OSX10_9,
   OSX10_10,
   OSX10_11,
+  OSX10_12,
   Android,
   Ios
 };
 
 enum VersionComparisonOp {
   DRIVER_LESS_THAN,             // driver <  version
+  DRIVER_BUILD_ID_LESS_THAN,    // driver build id <  version
   DRIVER_LESS_THAN_OR_EQUAL,    // driver <= version
+  DRIVER_BUILD_ID_LESS_THAN_OR_EQUAL, // driver build id <= version
   DRIVER_GREATER_THAN,          // driver >  version
   DRIVER_GREATER_THAN_OR_EQUAL, // driver >= version
   DRIVER_EQUAL,                 // driver == version

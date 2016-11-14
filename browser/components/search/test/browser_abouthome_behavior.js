@@ -11,6 +11,8 @@ function test() {
   // Bug 992270: Ignore uncaught about:home exceptions (related to snippets from IndexedDB)
   ignoreAllUncaughtExceptions(true);
 
+  let previouslySelectedEngine = Services.search.currentEngine;
+
   function replaceUrl(base) {
     return base;
   }
@@ -21,7 +23,6 @@ function test() {
     let engine = Services.search.getEngineByName(engine_name);
     ok(engine, engine_name + " is installed");
 
-    let previouslySelectedEngine = Services.search.currentEngine;
     Services.search.currentEngine = engine;
 
     // load about:home, but remove the listener first so it doesn't
@@ -72,13 +73,6 @@ function test() {
       searchURL: replaceUrl("https://search.yahoo.com/search?p=foo&ei=UTF-8&fr=moz35"),
       run: function () {
         verify_about_home_search("Yahoo");
-      }
-    },
-    {
-      name: "Search with eBay from about:home",
-      searchURL: replaceUrl("http://rover.ebay.com/rover/1/711-47294-18009-3/4?mfe=search&mpre=http://www.ebay.com/sch/i.html?_nkw=foo"),
-      run: function () {
-        verify_about_home_search("eBay");
       }
     },
     {
@@ -135,6 +129,7 @@ function test() {
   }
 
   registerCleanupFunction(function () {
+    Services.search.currentEngine = previouslySelectedEngine;
     gBrowser.removeProgressListener(listener);
     gBrowser.removeTab(tab);
     if (gMutationObserver)

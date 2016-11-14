@@ -47,8 +47,8 @@ public:
                         const nsDisplayListSet& aLists) override;
 
   virtual void Reflow(nsPresContext*           aPresContext,
-                      nsHTMLReflowMetrics&     aDesiredSize,
-                      const nsHTMLReflowState& aReflowState,
+                      ReflowOutput&     aDesiredSize,
+                      const ReflowInput& aReflowInput,
                       nsReflowStatus&          aStatus) override;
 
 #ifdef DEBUG_FRAME_DUMP
@@ -73,14 +73,14 @@ public:
                                     int32_t  aModType) override;
 
   virtual mozilla::LogicalSize
-  ComputeAutoSize(nsRenderingContext *aRenderingContext,
-                  mozilla::WritingMode aWritingMode,
+  ComputeAutoSize(nsRenderingContext*         aRenderingContext,
+                  mozilla::WritingMode        aWM,
                   const mozilla::LogicalSize& aCBSize,
-                  nscoord aAvailableISize,
+                  nscoord                     aAvailableISize,
                   const mozilla::LogicalSize& aMargin,
                   const mozilla::LogicalSize& aBorder,
                   const mozilla::LogicalSize& aPadding,
-                  bool aShrinkWrap) override;
+                  ComputeSizeFlags            aFlags) override;
 
   virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
   virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
@@ -158,8 +158,8 @@ private:
 
   // Helper function which reflows the anonymous div frames.
   void ReflowAnonymousContent(nsPresContext*           aPresContext,
-                              nsHTMLReflowMetrics&     aDesiredSize,
-                              const nsHTMLReflowState& aReflowState);
+                              ReflowOutput&     aDesiredSize,
+                              const ReflowInput& aReflowInput);
 
   void DoUpdateThumbPosition(nsIFrame* aThumbFrame,
                              const nsSize& aRangeSize);

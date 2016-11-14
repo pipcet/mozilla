@@ -9,11 +9,12 @@
 #include "inDOMUtils.h"
 #include "inLayoutUtils.h"
 
+#include "nsArray.h"
 #include "nsAutoPtr.h"
 #include "nsIServiceManager.h"
-#include "nsISupportsArray.h"
 #include "nsString.h"
 #include "nsIStyleSheetLinkingElement.h"
+#include "nsIContentInlines.h"
 #include "nsIDOMElement.h"
 #include "nsIDocument.h"
 #include "nsIPresShell.h"
@@ -34,7 +35,7 @@
 #include "nsIAtom.h"
 #include "nsRange.h"
 #include "nsContentList.h"
-#include "mozilla/CSSStyleSheet.h"
+#include "mozilla/StyleSheetInlines.h"
 #include "mozilla/dom/Element.h"
 #include "nsRuleWalker.h"
 #include "nsRuleProcessorData.h"
@@ -224,7 +225,7 @@ inDOMUtils::GetChildrenForNode(nsIDOMNode* aNode,
 NS_IMETHODIMP
 inDOMUtils::GetCSSStyleRules(nsIDOMElement *aElement,
                              const nsAString& aPseudo,
-                             nsISupportsArray **_retval)
+                             nsIArrayExtensions **_retval)
 {
   NS_ENSURE_ARG_POINTER(aElement);
 
@@ -246,13 +247,14 @@ inDOMUtils::GetCSSStyleRules(nsIDOMElement *aElement,
     return NS_OK;
   }
 
-  nsCOMPtr<nsISupportsArray> rules;
-  nsresult rv = NS_NewISupportsArray(getter_AddRefs(rules));
-  if (NS_FAILED(rv)) {
-    return NS_ERROR_OUT_OF_MEMORY;
+  AutoTArray<nsRuleNode*, 16> ruleNodes;
+  while (!ruleNode->IsRoot()) {
+    ruleNodes.AppendElement(ruleNode);
+    ruleNode = ruleNode->GetParent();
   }
 
-  for ( ; !ruleNode->IsRoot(); ruleNode = ruleNode->GetParent()) {
+  nsCOMPtr<nsIMutableArray> rules = nsArray::Create();
+  for (nsRuleNode* ruleNode : Reversed(ruleNodes)) {
     RefPtr<Declaration> decl = do_QueryObject(ruleNode->GetRule());
     if (decl) {
       RefPtr<mozilla::css::StyleRule> styleRule =
@@ -260,7 +262,7 @@ inDOMUtils::GetCSSStyleRules(nsIDOMElement *aElement,
       if (styleRule) {
         nsCOMPtr<nsIDOMCSSRule> domRule = styleRule->GetDOMRule();
         if (domRule) {
-          rules->InsertElementAt(domRule, 0);
+          rules->AppendElement(domRule, /*weak =*/ false);
         }
       }
     }
@@ -486,7 +488,7 @@ inDOMUtils::SelectorMatchesElement(nsIDOMElement* aElement,
 NS_IMETHODIMP
 inDOMUtils::IsInheritedProperty(const nsAString &aPropertyName, bool *_retval)
 {
-  nsCSSProperty prop = nsCSSProps::
+  nsCSSPropertyID prop = nsCSSProps::
     LookupProperty(aPropertyName, CSSEnabledState::eIgnoreEnabledState);
   if (prop == eCSSProperty_UNKNOWN) {
     *_retval = false;
@@ -531,7 +533,7 @@ inDOMUtils::GetCSSPropertyNames(uint32_t aFlags, uint32_t* aCount,
 
 #define DO_PROP(_prop)                                                      \
   PR_BEGIN_MACRO                                                            \
-    nsCSSProperty cssProp = nsCSSProperty(_prop);                           \
+    nsCSSPropertyID cssProp = nsCSSPropertyID(_prop);                           \
     if (nsCSSProps::IsEnabled(cssProp, CSSEnabledState::eForAllContent)) {  \
       props[propCount] =                                                    \
         ToNewUnicode(nsDependentCString(kCSSRawProperties[_prop]));         \
@@ -543,7 +545,7 @@ inDOMUtils::GetCSSPropertyNames(uint32_t aFlags, uint32_t* aCount,
   // we've put into props so far.
   uint32_t prop = 0, propCount = 0;
   for ( ; prop < eCSSProperty_COUNT_no_shorthands; ++prop) {
-    if (nsCSSProps::PropertyParseType(nsCSSProperty(prop)) !=
+    if (nsCSSProps::PropertyParseType(nsCSSPropertyID(prop)) !=
         CSS_PROPERTY_PARSE_INACCESSIBLE) {
       DO_PROP(prop);
     }
@@ -553,7 +555,7 @@ inDOMUtils::GetCSSPropertyNames(uint32_t aFlags, uint32_t* aCount,
     for ( ; prop < eCSSProperty_COUNT; ++prop) {
       // Some shorthands are also aliases
       if ((aFlags & INCLUDE_ALIASES) ||
-          !nsCSSProps::PropHasFlags(nsCSSProperty(prop),
+          !nsCSSProps::PropHasFlags(nsCSSPropertyID(prop),
                                     CSS_PROPERTY_IS_ALIAS)) {
         DO_PROP(prop);
       }
@@ -584,7 +586,7 @@ static void InsertNoDuplicates(nsTArray<nsString>& aArray,
   aArray.InsertElementAt(i, aString);
 }
 
-static void GetKeywordsForProperty(const nsCSSProperty aProperty,
+static void GetKeywordsForProperty(const nsCSSPropertyID aProperty,
                                    nsTArray<nsString>& aArray)
 {
   if (nsCSSProps::IsShorthand(aProperty)) {
@@ -675,7 +677,7 @@ inDOMUtils::GetSubpropertiesForCSSProperty(const nsAString& aProperty,
                                            uint32_t* aLength,
                                            char16_t*** aValues)
 {
-  nsCSSProperty propertyID =
+  nsCSSPropertyID propertyID =
     nsCSSProps::LookupProperty(aProperty, CSSEnabledState::eForAllContent);
 
   if (propertyID == eCSSProperty_UNKNOWN) {
@@ -698,7 +700,7 @@ inDOMUtils::GetSubpropertiesForCSSProperty(const nsAString& aProperty,
 
   // Count up how many subproperties we have.
   size_t subpropCount = 0;
-  for (const nsCSSProperty *props = nsCSSProps::SubpropertyEntryFor(propertyID);
+  for (const nsCSSPropertyID *props = nsCSSProps::SubpropertyEntryFor(propertyID);
        *props != eCSSProperty_UNKNOWN; ++props) {
     ++subpropCount;
   }
@@ -706,7 +708,7 @@ inDOMUtils::GetSubpropertiesForCSSProperty(const nsAString& aProperty,
   *aValues =
     static_cast<char16_t**>(moz_xmalloc(subpropCount * sizeof(char16_t*)));
   *aLength = subpropCount;
-  for (const nsCSSProperty *props = nsCSSProps::SubpropertyEntryFor(propertyID),
+  for (const nsCSSPropertyID *props = nsCSSProps::SubpropertyEntryFor(propertyID),
                            *props_start = props;
        *props != eCSSProperty_UNKNOWN; ++props) {
     (*aValues)[props-props_start] = ToNewUnicode(nsCSSProps::GetStringValue(*props));
@@ -717,7 +719,7 @@ inDOMUtils::GetSubpropertiesForCSSProperty(const nsAString& aProperty,
 NS_IMETHODIMP
 inDOMUtils::CssPropertyIsShorthand(const nsAString& aProperty, bool *_retval)
 {
-  nsCSSProperty propertyID =
+  nsCSSPropertyID propertyID =
     nsCSSProps::LookupProperty(aProperty, CSSEnabledState::eForAllContent);
   if (propertyID == eCSSProperty_UNKNOWN) {
     return NS_ERROR_FAILURE;
@@ -734,7 +736,7 @@ inDOMUtils::CssPropertyIsShorthand(const nsAString& aProperty, bool *_retval)
 // A helper function that determines whether the given property
 // supports the given type.
 static bool
-PropertySupportsVariant(nsCSSProperty aPropertyID, uint32_t aVariant)
+PropertySupportsVariant(nsCSSPropertyID aPropertyID, uint32_t aVariant)
 {
   if (nsCSSProps::IsShorthand(aPropertyID)) {
     // We need a special case for border here, because while it resets
@@ -743,7 +745,7 @@ PropertySupportsVariant(nsCSSProperty aPropertyID, uint32_t aVariant)
       return (aVariant & (VARIANT_COLOR | VARIANT_LENGTH)) != 0;
     }
 
-    for (const nsCSSProperty* props = nsCSSProps::SubpropertyEntryFor(aPropertyID);
+    for (const nsCSSPropertyID* props = nsCSSProps::SubpropertyEntryFor(aPropertyID);
          *props != eCSSProperty_UNKNOWN; ++props) {
       if (PropertySupportsVariant(*props, aVariant)) {
         return true;
@@ -823,6 +825,7 @@ PropertySupportsVariant(nsCSSProperty aPropertyID, uint32_t aVariant)
       case eCSSProperty_content:
       case eCSSProperty_cursor:
       case eCSSProperty_clip_path:
+      case eCSSProperty_shape_outside:
         supported = VARIANT_URL;
         break;
 
@@ -844,6 +847,7 @@ PropertySupportsVariant(nsCSSProperty aPropertyID, uint32_t aVariant)
       case eCSSProperty_grid_row_start:
       case eCSSProperty_grid_row_end:
       case eCSSProperty_font_weight:
+      case eCSSProperty_initial_letter:
         supported = VARIANT_NUMBER;
         break;
 
@@ -862,7 +866,7 @@ NS_IMETHODIMP
 inDOMUtils::CssPropertySupportsType(const nsAString& aProperty, uint32_t aType,
                                     bool *_retval)
 {
-  nsCSSProperty propertyID =
+  nsCSSPropertyID propertyID =
     nsCSSProps::LookupProperty(aProperty, CSSEnabledState::eForAllContent);
   if (propertyID == eCSSProperty_UNKNOWN) {
     return NS_ERROR_FAILURE;
@@ -923,7 +927,7 @@ inDOMUtils::GetCSSValuesForProperty(const nsAString& aProperty,
                                     uint32_t* aLength,
                                     char16_t*** aValues)
 {
-  nsCSSProperty propertyID = nsCSSProps::
+  nsCSSPropertyID propertyID = nsCSSProps::
     LookupProperty(aProperty, CSSEnabledState::eForAllContent);
   if (propertyID == eCSSProperty_UNKNOWN) {
     return NS_ERROR_FAILURE;
@@ -1058,7 +1062,7 @@ inDOMUtils::CssPropertyIsValid(const nsAString& aPropertyName,
                                const nsAString& aPropertyValue,
                                bool *_retval)
 {
-  nsCSSProperty propertyID = nsCSSProps::
+  nsCSSPropertyID propertyID = nsCSSProps::
     LookupProperty(aPropertyName, CSSEnabledState::eIgnoreEnabledState);
 
   if (propertyID == eCSSProperty_UNKNOWN) {
@@ -1216,9 +1220,10 @@ GetStatesForPseudoClass(const nsAString& aStatePseudo)
   CSSPseudoClassType type = nsCSSPseudoClasses::
     GetPseudoType(atom, CSSEnabledState::eIgnoreEnabledState);
 
-  // Ignore :moz-any-link so we don't give the element simultaneous
+  // Ignore :any-link so we don't give the element simultaneous
   // visited and unvisited style state
-  if (type == CSSPseudoClassType::mozAnyLink) {
+  if (type == CSSPseudoClassType::anyLink ||
+      type == CSSPseudoClassType::mozAnyLink) {
     return EventStates();
   }
   // Our array above is long enough that indexing into it with

@@ -587,7 +587,8 @@ HTMLSelectElement::Add(nsGenericHTMLElement& aElement,
 
   // If the before parameter is not null, we are equivalent to the
   // insertBefore method on the parent of before.
-  parent->InsertBefore(aElement, aBefore, aError);
+  nsCOMPtr<nsINode> refNode = aBefore;
+  parent->InsertBefore(aElement, refNode, aError);
 }
 
 NS_IMETHODIMP
@@ -614,7 +615,6 @@ HTMLSelectElement::Add(nsIDOMHTMLElement* aElement,
   }
 
   nsCOMPtr<nsISupports> supports;
-  nsCOMPtr<nsIDOMHTMLElement> beforeElement;
 
   // whether aBefore is nsIDOMHTMLElement...
   if (NS_SUCCEEDED(aBefore->GetAsISupports(getter_AddRefs(supports)))) {
@@ -1413,7 +1413,7 @@ HTMLSelectElement::GetAttributeChangeHint(const nsIAtom* aAttribute,
       nsGenericHTMLFormElementWithState::GetAttributeChangeHint(aAttribute, aModType);
   if (aAttribute == nsGkAtoms::multiple ||
       aAttribute == nsGkAtoms::size) {
-    retval |= NS_STYLE_HINT_FRAMECHANGE;
+    retval |= nsChangeHint_ReconstructFrame;
   }
   return retval;
 }
@@ -1882,6 +1882,28 @@ HTMLSelectElement::UpdateSelectedOptions()
 {
   if (mSelectedOptions) {
     mSelectedOptions->SetDirty();
+  }
+}
+
+bool
+HTMLSelectElement::OpenInParentProcess()
+{
+  nsIFormControlFrame* formControlFrame = GetFormControlFrame(false);
+  nsIComboboxControlFrame* comboFrame = do_QueryFrame(formControlFrame);
+  if (comboFrame) {
+    return comboFrame->IsOpenInParentProcess();
+  }
+
+  return false;
+}
+
+void
+HTMLSelectElement::SetOpenInParentProcess(bool aVal)
+{
+  nsIFormControlFrame* formControlFrame = GetFormControlFrame(false);
+  nsIComboboxControlFrame* comboFrame = do_QueryFrame(formControlFrame);
+  if (comboFrame) {
+    comboFrame->SetOpenInParentProcess(aVal);
   }
 }
 

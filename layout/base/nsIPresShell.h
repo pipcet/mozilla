@@ -25,7 +25,7 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/StyleSetHandle.h"
-#include "mozilla/StyleSheetHandle.h"
+#include "mozilla/StyleSheet.h"
 #include "mozilla/WeakPtr.h"
 #include "gfxPoint.h"
 #include "nsTHashtable.h"
@@ -46,9 +46,10 @@
 #include "nsRefPtrHashtable.h"
 #include "nsClassHashtable.h"
 #include "nsPresArena.h"
+#include "nsIImageLoadingContent.h"
 #include "nsMargin.h"
 #include "nsFrameState.h"
-#include "Visibility.h"
+#include "Units.h"
 
 #ifdef MOZ_B2G
 #include "nsIHardwareKeyHandler.h"
@@ -185,7 +186,6 @@ public:
 protected:
   typedef mozilla::layers::LayerManager LayerManager;
   typedef mozilla::gfx::SourceSurface SourceSurface;
-  using VisibilityCounter = mozilla::VisibilityCounter;
 
   enum eRenderFlag {
     STATE_IGNORING_VIEWPORT_SCROLLING = 0x1,
@@ -960,23 +960,23 @@ public:
    * Get the set of agent style sheets for this presentation
    */
   virtual nsresult GetAgentStyleSheets(
-      nsTArray<mozilla::StyleSheetHandle::RefPtr>& aSheets) = 0;
+      nsTArray<RefPtr<mozilla::StyleSheet>>& aSheets) = 0;
 
   /**
    * Replace the set of agent style sheets
    */
   virtual nsresult SetAgentStyleSheets(
-      const nsTArray<mozilla::StyleSheetHandle::RefPtr>& aSheets) = 0;
+      const nsTArray<RefPtr<mozilla::StyleSheet>>& aSheets) = 0;
 
   /**
    * Add an override style sheet for this presentation
    */
-  virtual nsresult AddOverrideStyleSheet(mozilla::StyleSheetHandle aSheet) = 0;
+  virtual nsresult AddOverrideStyleSheet(mozilla::StyleSheet* aSheet) = 0;
 
   /**
    * Remove an override style sheet
    */
-  virtual nsresult RemoveOverrideStyleSheet(mozilla::StyleSheetHandle aSheet) = 0;
+  virtual nsresult RemoveOverrideStyleSheet(mozilla::StyleSheet* aSheet) = 0;
 
   /**
    * Reconstruct frames for all elements in the document
@@ -1127,8 +1127,8 @@ public:
   virtual already_AddRefed<mozilla::gfx::SourceSurface>
   RenderNode(nsIDOMNode* aNode,
              nsIntRegion* aRegion,
-             nsIntPoint& aPoint,
-             nsIntRect* aScreenRect,
+             const mozilla::LayoutDeviceIntPoint aPoint,
+             mozilla::LayoutDeviceIntRect* aScreenRect,
              uint32_t aFlags) = 0;
 
   /**
@@ -1149,8 +1149,8 @@ public:
    */
   virtual already_AddRefed<mozilla::gfx::SourceSurface>
   RenderSelection(nsISelection* aSelection,
-                  nsIntPoint& aPoint,
-                  nsIntRect* aScreenRect,
+                  const mozilla::LayoutDeviceIntPoint aPoint,
+                  mozilla::LayoutDeviceIntRect* aScreenRect,
                   uint32_t aFlags) = 0;
 
   void AddWeakFrameInternal(nsWeakFrame* aWeakFrame);
@@ -1250,7 +1250,7 @@ public:
     return mObservesMutationsForPrint;
   }
 
-  virtual void SetIsActive(bool aIsActive, bool aIsHidden = true) = 0;
+  virtual nsresult SetIsActive(bool aIsActive) = 0;
 
   bool IsActive()
   {
@@ -1260,18 +1260,18 @@ public:
   // mouse capturing
   static CapturingContentInfo gCaptureInfo;
 
-  struct PointerCaptureInfo
+  class PointerCaptureInfo final
   {
+  public:
     nsCOMPtr<nsIContent> mPendingContent;
     nsCOMPtr<nsIContent> mOverrideContent;
-    bool                 mReleaseContent;
-    bool                 mPrimaryState;
 
-    explicit PointerCaptureInfo(nsIContent* aPendingContent, bool aPrimaryState) :
-      mPendingContent(aPendingContent), mReleaseContent(false), mPrimaryState(aPrimaryState)
+    explicit PointerCaptureInfo(nsIContent* aPendingContent)
+      : mPendingContent(aPendingContent)
     {
       MOZ_COUNT_CTOR(PointerCaptureInfo);
     }
+
     ~PointerCaptureInfo()
     {
       MOZ_COUNT_DTOR(PointerCaptureInfo);
@@ -1283,44 +1283,49 @@ public:
     }
   };
 
-  // Keeps a map between pointerId and element that currently capturing pointer
-  // with such pointerId. If pointerId is absent in this map then nobody is
-  // capturing it. Additionally keep information about pending capturing content.
-  // Additionally keep information about primaryState of pointer event.
-  static nsClassHashtable<nsUint32HashKey, PointerCaptureInfo>* gPointerCaptureList;
-
-  struct PointerInfo
+  class PointerInfo final
   {
-    bool      mActiveState;
-    uint16_t  mPointerType;
-    bool      mPrimaryState;
-    PointerInfo(bool aActiveState, uint16_t aPointerType, bool aPrimaryState) :
-      mActiveState(aActiveState), mPointerType(aPointerType), mPrimaryState(aPrimaryState) {}
+  public:
+    uint16_t mPointerType;
+    bool mActiveState;
+    bool mPrimaryState;
+    explicit PointerInfo(bool aActiveState, uint16_t aPointerType,
+                         bool aPrimaryState)
+      : mPointerType(aPointerType)
+      , mActiveState(aActiveState)
+      , mPrimaryState(aPrimaryState)
+    {
+    }
   };
-  // Keeps information about pointers such as pointerId, activeState, pointerType, primaryState
-  static nsClassHashtable<nsUint32HashKey, PointerInfo>* gActivePointersIds;
 
   static void DispatchGotOrLostPointerCaptureEvent(bool aIsGotCapture,
                                                    uint32_t aPointerId,
                                                    uint16_t aPointerType,
                                                    bool aIsPrimary,
                                                    nsIContent* aCaptureTarget);
-  static void SetPointerCapturingContent(uint32_t aPointerId, nsIContent* aContent);
+  static PointerCaptureInfo* GetPointerCaptureInfo(uint32_t aPointerId);
+  static void SetPointerCapturingContent(uint32_t aPointerId,
+                                         nsIContent* aContent);
   static void ReleasePointerCapturingContent(uint32_t aPointerId);
   static nsIContent* GetPointerCapturingContent(uint32_t aPointerId);
 
-  // CheckPointerCaptureState checks cases, when got/lostpointercapture events should be fired.
-  // Function returns true, if any of events was fired; false, if no one event was fired.
-  static bool CheckPointerCaptureState(uint32_t aPointerId);
+  // CheckPointerCaptureState checks cases, when got/lostpointercapture events
+  // should be fired.
+  static void CheckPointerCaptureState(uint32_t aPointerId,
+                                       uint16_t aPointerType, bool aIsPrimary);
 
-  // GetPointerInfo returns true if pointer with aPointerId is situated in device, false otherwise.
-  // aActiveState is additional information, which shows state of pointer like button state for mouse.
+  // GetPointerInfo returns true if pointer with aPointerId is situated in
+  // device, false otherwise.
+  // aActiveState is additional information, which shows state of pointer like
+  // button state for mouse.
   static bool GetPointerInfo(uint32_t aPointerId, bool& aActiveState);
 
-  // GetPointerType returns pointer type like mouse, pen or touch for pointer event with pointerId
+  // GetPointerType returns pointer type like mouse, pen or touch for pointer
+  // event with pointerId
   static uint16_t GetPointerType(uint32_t aPointerId);
 
-  // GetPointerPrimaryState returns state of attribute isPrimary for pointer event with pointerId
+  // GetPointerPrimaryState returns state of attribute isPrimary for pointer
+  // event with pointerId
   static bool GetPointerPrimaryState(uint32_t aPointerId);
 
   /**
@@ -1446,7 +1451,8 @@ public:
    * Used by session restore code to restore a resolution before the first
    * paint.
    */
-  virtual void SetRestoreResolution(float aResolution) = 0;
+  virtual void SetRestoreResolution(float aResolution,
+                                    mozilla::LayoutDeviceIntSize aDisplaySize) = 0;
 
   /**
    * Returns whether we are in a DrawWindow() call that used the
@@ -1607,12 +1613,11 @@ public:
   virtual void RebuildApproximateFrameVisibility(nsRect* aRect = nullptr,
                                                  bool aRemoveOnly = false) = 0;
 
-  /// Adds @aFrame to the visible frames set specified by @aCounter.
-  /// VisibilityCounter::MAY_BECOME_VISIBLE is not a valid argument.
-  virtual void MarkFrameVisible(nsIFrame* aFrame, VisibilityCounter aCounter) = 0;
+  /// Ensures @aFrame is in the list of approximately visible frames.
+  virtual void EnsureFrameInApproximatelyVisibleList(nsIFrame* aFrame) = 0;
 
-  /// Marks @aFrame nonvisible and removes it from all sets of visible frames.
-  virtual void MarkFrameNonvisible(nsIFrame* aFrame) = 0;
+  /// Removes @aFrame from the list of approximately visible frames if present.
+  virtual void RemoveFrameFromApproximatelyVisibleList(nsIFrame* aFrame) = 0;
 
   /// Whether we should assume all frames are visible.
   virtual bool AssumeAllFramesVisible() = 0;

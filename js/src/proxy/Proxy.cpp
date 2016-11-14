@@ -34,8 +34,7 @@ js::AutoEnterPolicy::reportErrorIfExceptionIsNotPending(JSContext* cx, jsid id)
         return;
 
     if (JSID_IS_VOID(id)) {
-        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr,
-                             JSMSG_OBJECT_ACCESS_DENIED);
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_OBJECT_ACCESS_DENIED);
     } else {
         RootedValue idVal(cx, IdToValue(id));
         JSString* str = ValueToSource(cx, idVal);
@@ -271,7 +270,7 @@ Proxy::hasOwn(JSContext* cx, HandleObject proxy, HandleId id, bool* bp)
 }
 
 static Value
-ValueToWindowProxyIfWindow(Value v)
+ValueToWindowProxyIfWindow(const Value& v)
 {
     if (v.isObject())
         return ObjectValue(*ToWindowProxyIfWindow(&v.toObject()));
@@ -444,15 +443,16 @@ Proxy::hasInstance(JSContext* cx, HandleObject proxy, MutableHandleValue v, bool
 }
 
 bool
-Proxy::getBuiltinClass(JSContext* cx, HandleObject proxy, ESClassValue* classValue)
+Proxy::getBuiltinClass(JSContext* cx, HandleObject proxy, ESClass* cls)
 {
     JS_CHECK_RECURSION(cx, return false);
-    return proxy->as<ProxyObject>().handler()->getBuiltinClass(cx, proxy, classValue);
+    return proxy->as<ProxyObject>().handler()->getBuiltinClass(cx, proxy, cls);
 }
 
 bool
 Proxy::isArray(JSContext* cx, HandleObject proxy, JS::IsArrayAnswer* answer)
 {
+    JS_CHECK_RECURSION(cx, return false);
     return proxy->as<ProxyObject>().handler()->isArray(cx, proxy, answer);
 }
 
@@ -616,7 +616,7 @@ ProxyObject::trace(JSTracer* trc, JSObject* obj)
 {
     ProxyObject* proxy = &obj->as<ProxyObject>();
 
-    TraceEdge(trc, &proxy->shape, "ProxyObject_shape");
+    TraceEdge(trc, &proxy->shape_, "ProxyObject_shape");
 
 #ifdef DEBUG
     if (trc->runtime()->gc.isStrictProxyCheckingEnabled() && proxy->is<WrapperObject>()) {
@@ -774,8 +774,9 @@ js::NewProxyObject(JSContext* cx, const BaseProxyHandler* handler, HandleValue p
 }
 
 void
-ProxyObject::renew(JSContext* cx, const BaseProxyHandler* handler, Value priv)
+ProxyObject::renew(JSContext* cx, const BaseProxyHandler* handler, const Value& priv)
 {
+    MOZ_ASSERT(!IsInsideNursery(this));
     MOZ_ASSERT_IF(IsCrossCompartmentWrapper(this), IsDeadProxyObject(this));
     MOZ_ASSERT(getClass() == &ProxyObject::proxyClass);
     MOZ_ASSERT(!IsWindowProxy(this));

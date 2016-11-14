@@ -43,6 +43,11 @@ enum PhysicalAxis {
   eAxisHorizontal    = 0x1
 };
 
+inline LogicalAxis GetOrthogonalAxis(LogicalAxis aAxis)
+{
+  return aAxis == eLogicalAxisBlock ? eLogicalAxisInline : eLogicalAxisBlock;
+}
+
 inline bool IsInline(LogicalSide aSide) { return aSide & 0x2; }
 inline bool IsBlock(LogicalSide aSide) { return !IsInline(aSide); }
 inline bool IsEnd(LogicalSide aSide) { return aSide & 0x1; }
@@ -585,6 +590,35 @@ public:
   bool IsOrthogonalTo(const WritingMode& aOther) const
   {
     return IsVertical() != aOther.IsVertical();
+  }
+
+  /**
+   * Returns true if this WritingMode's aLogicalAxis has the same physical
+   * start side as the parallel axis of WritingMode |aOther|.
+   *
+   * @param aLogicalAxis The axis to compare from this WritingMode.
+   * @param aOther The other WritingMode (from which we'll choose the axis
+   *               that's parallel to this WritingMode's aLogicalAxis, for
+   *               comparison).
+   */
+  bool ParallelAxisStartsOnSameSide(LogicalAxis aLogicalAxis,
+                                    const WritingMode& aOther) const
+  {
+    Side myStartSide =
+      this->PhysicalSide(MakeLogicalSide(aLogicalAxis,
+                                         eLogicalEdgeStart));
+
+    // Figure out which of aOther's axes is parallel to |this| WritingMode's
+    // aLogicalAxis, and get its physical start side as well.
+    LogicalAxis otherWMAxis = aOther.IsOrthogonalTo(*this) ?
+      GetOrthogonalAxis(aLogicalAxis) : aLogicalAxis;
+    Side otherWMStartSide =
+      aOther.PhysicalSide(MakeLogicalSide(otherWMAxis,
+                                          eLogicalEdgeStart));
+
+    NS_ASSERTION(myStartSide % 2 == otherWMStartSide % 2,
+                 "Should end up with sides in the same physical axis");
+    return myStartSide == otherWMStartSide;
   }
 
   uint8_t GetBits() const { return mWritingMode; }
@@ -2001,26 +2035,28 @@ nsStylePosition::MaxBSizeDependsOnContainer(mozilla::WritingMode aWM) const
                           : MaxHeightDependsOnContainer();
 }
 
-inline uint8_t
+inline mozilla::StyleFloat
 nsStyleDisplay::PhysicalFloats(mozilla::WritingMode aWM) const
 {
-  if (mFloat == NS_STYLE_FLOAT_INLINE_START) {
-    return aWM.IsBidiLTR() ? NS_STYLE_FLOAT_LEFT : NS_STYLE_FLOAT_RIGHT;
+  using StyleFloat = mozilla::StyleFloat;
+  if (mFloat == StyleFloat::InlineStart) {
+    return aWM.IsBidiLTR() ? StyleFloat::Left : StyleFloat::Right;
   }
-  if (mFloat == NS_STYLE_FLOAT_INLINE_END) {
-    return aWM.IsBidiLTR() ? NS_STYLE_FLOAT_RIGHT : NS_STYLE_FLOAT_LEFT;
+  if (mFloat == StyleFloat::InlineEnd) {
+    return aWM.IsBidiLTR() ? StyleFloat::Right : StyleFloat::Left;
   }
   return mFloat;
 }
 
-inline uint8_t
+inline mozilla::StyleClear
 nsStyleDisplay::PhysicalBreakType(mozilla::WritingMode aWM) const
 {
-  if (mBreakType == NS_STYLE_CLEAR_INLINE_START) {
-    return aWM.IsBidiLTR() ? NS_STYLE_CLEAR_LEFT : NS_STYLE_CLEAR_RIGHT;
+  using StyleClear = mozilla::StyleClear;
+  if (mBreakType == StyleClear::InlineStart) {
+    return aWM.IsBidiLTR() ? StyleClear::Left : StyleClear::Right;
   }
-  if (mBreakType == NS_STYLE_CLEAR_INLINE_END) {
-    return aWM.IsBidiLTR() ? NS_STYLE_CLEAR_RIGHT : NS_STYLE_CLEAR_LEFT;
+  if (mBreakType == StyleClear::InlineEnd) {
+    return aWM.IsBidiLTR() ? StyleClear::Right : StyleClear::Left;
   }
   return mBreakType;
 }

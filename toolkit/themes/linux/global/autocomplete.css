@@ -48,13 +48,11 @@ textbox:not(.padded) .textbox-input-box {
 panel[type="autocomplete"],
 panel[type="autocomplete-richlistbox"],
 .autocomplete-history-popup {
-  border-width: 1px;
-  -moz-border-top-colors: ThreeDDarkShadow;
-  -moz-border-right-colors: ThreeDDarkShadow;
-  -moz-border-bottom-colors: ThreeDDarkShadow;
-  -moz-border-left-colors: ThreeDDarkShadow;
+  border: 1px solid ThreeDShadow;
   padding: 0;
+  color: -moz-FieldText;
   background-color: -moz-Field;
+  -moz-appearance: none;
 }
 
 .autocomplete-history-popup {
@@ -67,7 +65,6 @@ panel[type="autocomplete-richlistbox"],
   -moz-appearance: none !important;
   border: none !important;
   background-color: transparent !important;
-  color: MenuText;
 }
 
 .autocomplete-treecol {
@@ -105,10 +102,6 @@ treechildren.autocomplete-treebody::-moz-tree-cell-text(selected) {
   -moz-appearance: none;
   margin: 1px;
   background-color: transparent;
-}
-
-.autocomplete-richlistitem {
-  color: MenuText;
 }
 
 .autocomplete-richlistitem[selected] {

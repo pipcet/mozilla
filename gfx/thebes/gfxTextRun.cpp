@@ -10,7 +10,7 @@
 #include "gfxUserFontSet.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PathHelpers.h"
-#include "mozilla/Snprintf.h"
+#include "mozilla/Sprintf.h"
 #include "nsGkAtoms.h"
 #include "nsILanguageAtomService.h"
 #include "nsServiceManagerUtils.h"
@@ -131,7 +131,7 @@ gfxTextRun::AllocateStorageForTextRun(size_t aSize, uint32_t aLength)
     return storage;
 }
 
-UniquePtr<gfxTextRun>
+already_AddRefed<gfxTextRun>
 gfxTextRun::Create(const gfxTextRunFactory::Parameters *aParams,
                    uint32_t aLength, gfxFontGroup *aFontGroup, uint32_t aFlags)
 {
@@ -140,8 +140,9 @@ gfxTextRun::Create(const gfxTextRunFactory::Parameters *aParams,
         return nullptr;
     }
 
-    return UniquePtr<gfxTextRun>(new (storage) gfxTextRun(aParams, aLength,
-                                                          aFontGroup, aFlags));
+    RefPtr<gfxTextRun> result = new (storage) gfxTextRun(aParams, aLength,
+                                                         aFontGroup, aFlags);
+    return result.forget();
 }
 
 gfxTextRun::gfxTextRun(const gfxTextRunFactory::Parameters *aParams,
@@ -156,7 +157,7 @@ gfxTextRun::gfxTextRun(const gfxTextRunFactory::Parameters *aParams,
     MOZ_COUNT_CTOR(gfxTextRun);
     NS_ADDREF(mFontGroup);
 
-#ifndef RELEASE_BUILD
+#ifndef RELEASE_OR_BETA
     gfxTextPerfMetrics *tp = aFontGroup->GetTextPerfMetrics();
     if (tp) {
         tp->current.textrunConst++;
@@ -190,7 +191,7 @@ gfxTextRun::~gfxTextRun()
     // been told to release its reference to the group, so we mustn't do that
     // again here.
     if (!mReleasedFontGroup) {
-#ifndef RELEASE_BUILD
+#ifndef RELEASE_OR_BETA
         gfxTextPerfMetrics *tp = mFontGroup->GetTextPerfMetrics();
         if (tp) {
             tp->current.textrunDestr++;
@@ -211,34 +212,40 @@ gfxTextRun::ReleaseFontGroup()
 }
 
 bool
-gfxTextRun::SetPotentialLineBreaks(Range aRange, uint8_t *aBreakBefore)
+gfxTextRun::SetPotentialLineBreaks(Range aRange, const uint8_t* aBreakBefore)
 {
     NS_ASSERTION(aRange.end <= GetLength(), "Overflow");
 
     uint32_t changed = 0;
-    uint32_t i;
-    CompressedGlyph *charGlyphs = mCharacterGlyphs + aRange.start;
-    for (i = 0; i < aRange.Length(); ++i) {
-        uint8_t canBreak = aBreakBefore[i];
-        if (canBreak && !charGlyphs[i].IsClusterStart()) {
-            // This can happen ... there is no guarantee that our linebreaking rules
-            // align with the platform's idea of what constitutes a cluster.
-            canBreak = CompressedGlyph::FLAG_BREAK_TYPE_NONE;
+    CompressedGlyph* cg = mCharacterGlyphs + aRange.start;
+    const CompressedGlyph* const end = cg + aRange.Length();
+    while (cg < end) {
+        uint8_t canBreak = *aBreakBefore++;
+        if (canBreak && !cg->IsClusterStart()) {
+            // XXX If we replace the line-breaker with one based more closely
+            // on UAX#14 (e.g. using ICU), this may not be needed any more.
+            // Avoid possible breaks inside a cluster, EXCEPT when the previous
+            // character was a space (compare UAX#14 rules LB9, LB10).
+            if (cg == mCharacterGlyphs || !(cg - 1)->CharIsSpace()) {
+                canBreak = CompressedGlyph::FLAG_BREAK_TYPE_NONE;
+            }
         }
-        changed |= charGlyphs[i].SetCanBreakBefore(canBreak);
+        changed |= cg->SetCanBreakBefore(canBreak);
+        ++cg;
     }
     return changed != 0;
 }
 
 gfxTextRun::LigatureData
-gfxTextRun::ComputeLigatureData(Range aPartRange, PropertyProvider *aProvider)
+gfxTextRun::ComputeLigatureData(Range aPartRange,
+                                PropertyProvider *aProvider) const
 {
     NS_ASSERTION(aPartRange.start < aPartRange.end,
                  "Computing ligature data for empty range");
     NS_ASSERTION(aPartRange.end <= GetLength(), "Character length overflow");
   
     LigatureData result;
-    CompressedGlyph *charGlyphs = mCharacterGlyphs;
+    const CompressedGlyph *charGlyphs = mCharacterGlyphs;
 
     uint32_t i;
     for (i = aPartRange.start; !charGlyphs[i].IsLigatureGroupStart(); --i) {
@@ -313,7 +320,7 @@ gfxTextRun::ComputeLigatureData(Range aPartRange, PropertyProvider *aProvider)
 
 gfxFloat
 gfxTextRun::ComputePartialLigatureWidth(Range aPartRange,
-                                        PropertyProvider *aProvider)
+                                        PropertyProvider *aProvider) const
 {
     if (aPartRange.start >= aPartRange.end)
         return 0;
@@ -322,7 +329,7 @@ gfxTextRun::ComputePartialLigatureWidth(Range aPartRange,
 }
 
 int32_t
-gfxTextRun::GetAdvanceForGlyphs(Range aRange)
+gfxTextRun::GetAdvanceForGlyphs(Range aRange) const
 {
     int32_t advance = 0;
     for (auto i = aRange.start; i < aRange.end; ++i) {
@@ -332,7 +339,7 @@ gfxTextRun::GetAdvanceForGlyphs(Range aRange)
 }
 
 static void
-GetAdjustedSpacing(gfxTextRun *aTextRun, gfxTextRun::Range aRange,
+GetAdjustedSpacing(const gfxTextRun *aTextRun, gfxTextRun::Range aRange,
                    gfxTextRun::PropertyProvider *aProvider,
                    gfxTextRun::PropertyProvider::Spacing *aSpacing)
 {
@@ -363,7 +370,8 @@ GetAdjustedSpacing(gfxTextRun *aTextRun, gfxTextRun::Range aRange,
 bool
 gfxTextRun::GetAdjustedSpacingArray(Range aRange, PropertyProvider *aProvider,
                                     Range aSpacingRange,
-                                    nsTArray<PropertyProvider::Spacing> *aSpacing)
+                                    nsTArray<PropertyProvider::Spacing>*
+                                        aSpacing) const
 {
     if (!aProvider || !(mFlags & gfxTextRunFactory::TEXT_ENABLE_SPACING))
         return false;
@@ -379,12 +387,12 @@ gfxTextRun::GetAdjustedSpacingArray(Range aRange, PropertyProvider *aProvider,
 }
 
 void
-gfxTextRun::ShrinkToLigatureBoundaries(Range* aRange)
+gfxTextRun::ShrinkToLigatureBoundaries(Range* aRange) const
 {
     if (aRange->start >= aRange->end)
         return;
   
-    CompressedGlyph *charGlyphs = mCharacterGlyphs;
+    const CompressedGlyph *charGlyphs = mCharacterGlyphs;
 
     while (aRange->start < aRange->end &&
            !charGlyphs[aRange->start].IsLigatureGroupStart()) {
@@ -401,7 +409,7 @@ gfxTextRun::ShrinkToLigatureBoundaries(Range* aRange)
 void
 gfxTextRun::DrawGlyphs(gfxFont *aFont, Range aRange, gfxPoint *aPt,
                        PropertyProvider *aProvider, Range aSpacingRange,
-                       TextRunDrawParams& aParams, uint16_t aOrientation)
+                       TextRunDrawParams& aParams, uint16_t aOrientation) const
 {
     AutoTArray<PropertyProvider::Spacing,200> spacingBuffer;
     bool haveSpacing = GetAdjustedSpacingArray(aRange, aProvider,
@@ -437,7 +445,8 @@ ClipPartialLigature(const gfxTextRun* aTextRun,
 void
 gfxTextRun::DrawPartialLigature(gfxFont *aFont, Range aRange,
                                 gfxPoint *aPt, PropertyProvider *aProvider,
-                                TextRunDrawParams& aParams, uint16_t aOrientation)
+                                TextRunDrawParams& aParams,
+                                uint16_t aOrientation) const
 {
     if (aRange.start >= aRange.end) {
         return;
@@ -495,7 +504,7 @@ gfxTextRun::DrawPartialLigature(gfxFont *aFont, Range aRange,
 // check whether the text run needs to be explicitly composited in order to
 // support opacity.
 static bool
-HasSyntheticBoldOrColor(gfxTextRun *aRun, gfxTextRun::Range aRange)
+HasSyntheticBoldOrColor(const gfxTextRun *aRun, gfxTextRun::Range aRange)
 {
     gfxTextRun::GlyphRunIterator iter(aRun, aRange);
     while (iter.NextRun()) {
@@ -565,7 +574,7 @@ struct BufferAlphaColor {
 };
 
 void
-gfxTextRun::Draw(Range aRange, gfxPoint aPt, const DrawParams& aParams)
+gfxTextRun::Draw(Range aRange, gfxPoint aPt, const DrawParams& aParams) const
 {
     NS_ASSERTION(aRange.end <= GetLength(), "Substring out of range");
     NS_ASSERTION(aParams.drawMode == DrawMode::GLYPH_PATH ||
@@ -626,8 +635,10 @@ gfxTextRun::Draw(Range aRange, gfxPoint aPt, const DrawParams& aParams)
     params.isVerticalRun = IsVertical();
     params.isRTL = IsRightToLeft();
     params.direction = direction;
-    params.textStrokeWidth = aParams.textStrokeWidth;
+    params.strokeOpts = aParams.strokeOpts;
     params.textStrokeColor = aParams.textStrokeColor;
+    params.textStrokePattern = aParams.textStrokePattern;
+    params.drawOpts = aParams.drawOpts;
     params.drawMode = aParams.drawMode;
     params.callbacks = aParams.callbacks;
     params.runContextPaint = aParams.contextPaint;
@@ -689,7 +700,7 @@ gfxTextRun::Draw(Range aRange, gfxPoint aPt, const DrawParams& aParams)
 void
 gfxTextRun::DrawEmphasisMarks(gfxContext *aContext, gfxTextRun* aMark,
                               gfxFloat aMarkAdvance, gfxPoint aPt,
-                              Range aRange, PropertyProvider* aProvider)
+                              Range aRange, PropertyProvider* aProvider) const
 {
     MOZ_ASSERT(aRange.end <= GetLength());
 
@@ -733,7 +744,7 @@ gfxTextRun::AccumulateMetricsForRun(gfxFont *aFont, Range aRange,
                                     PropertyProvider *aProvider,
                                     Range aSpacingRange,
                                     uint16_t aOrientation,
-                                    Metrics *aMetrics)
+                                    Metrics *aMetrics) const
 {
     AutoTArray<PropertyProvider::Spacing,200> spacingBuffer;
     bool haveSpacing = GetAdjustedSpacingArray(aRange, aProvider,
@@ -748,7 +759,8 @@ gfxTextRun::AccumulateMetricsForRun(gfxFont *aFont, Range aRange,
 void
 gfxTextRun::AccumulatePartialLigatureMetrics(gfxFont *aFont, Range aRange,
     gfxFont::BoundingBoxType aBoundingBoxType, DrawTarget* aRefDrawTarget,
-    PropertyProvider *aProvider, uint16_t aOrientation, Metrics *aMetrics)
+    PropertyProvider *aProvider, uint16_t aOrientation,
+    Metrics *aMetrics) const
 {
     if (aRange.start >= aRange.end)
         return;
@@ -786,7 +798,7 @@ gfxTextRun::Metrics
 gfxTextRun::MeasureText(Range aRange,
                         gfxFont::BoundingBoxType aBoundingBoxType,
                         DrawTarget* aRefDrawTarget,
-                        PropertyProvider *aProvider)
+                        PropertyProvider *aProvider) const
 {
     NS_ASSERTION(aRange.end <= GetLength(), "Substring out of range");
 
@@ -831,6 +843,7 @@ gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
                                 PropertyProvider *aProvider,
                                 SuppressBreak aSuppressBreak,
                                 gfxFloat *aTrimWhitespace,
+                                bool aWhitespaceCanHang,
                                 Metrics *aMetrics,
                                 gfxFont::BoundingBoxType aBoundingBoxType,
                                 DrawTarget* aRefDrawTarget,
@@ -861,7 +874,7 @@ gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
 
     gfxFloat width = 0;
     gfxFloat advance = 0;
-    // The number of space characters that can be trimmed
+    // The number of space characters that can be trimmed or hang at a soft-wrap
     uint32_t trimmableChars = 0;
     // The amount of space removed by ignoring trimmableChars
     gfxFloat trimmableAdvance = 0;
@@ -944,7 +957,7 @@ gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
         }
         
         advance += charAdvance;
-        if (aTrimWhitespace) {
+        if (aTrimWhitespace || aWhitespaceCanHang) {
             if (mCharacterGlyphs[i].CharIsSpace()) {
                 ++trimmableChars;
                 trimmableAdvance += charAdvance;
@@ -978,13 +991,25 @@ gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
 
     if (aMetrics) {
         auto fitEnd = aStart + charsFit;
-        *aMetrics = MeasureText(Range(aStart, fitEnd), aBoundingBoxType,
-                                aRefDrawTarget, aProvider);
-        if (trimmableChars) {
-            Metrics trimMetrics =
+        // Initially, measure everything, so that our bounding box includes
+        // any trimmable or hanging whitespace.
+        *aMetrics = MeasureText(Range(aStart, fitEnd),
+                                aBoundingBoxType, aRefDrawTarget,
+                                aProvider);
+        if (aTrimWhitespace || aWhitespaceCanHang) {
+            // Measure trailing whitespace that is to be trimmed/hung.
+            Metrics trimOrHangMetrics =
                 MeasureText(Range(fitEnd - trimmableChars, fitEnd),
-                            aBoundingBoxType, aRefDrawTarget, aProvider);
-            aMetrics->mAdvanceWidth -= trimMetrics.mAdvanceWidth;
+                            aBoundingBoxType, aRefDrawTarget,
+                            aProvider);
+            if (aTrimWhitespace) {
+                aMetrics->mAdvanceWidth -= trimOrHangMetrics.mAdvanceWidth;
+            } else if (aMetrics->mAdvanceWidth > aWidth) {
+                // Restrict width of hanging whitespace so it doesn't overflow.
+                aMetrics->mAdvanceWidth =
+                    std::max(aWidth, aMetrics->mAdvanceWidth -
+                                     trimOrHangMetrics.mAdvanceWidth);
+            }
         }
     }
     if (aTrimWhitespace) {
@@ -1006,7 +1031,7 @@ gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
 
 gfxFloat
 gfxTextRun::GetAdvanceWidth(Range aRange, PropertyProvider *aProvider,
-                            PropertyProvider::Spacing* aSpacing)
+                            PropertyProvider::Spacing* aSpacing) const
 {
     NS_ASSERTION(aRange.end <= GetLength(), "Substring out of range");
 
@@ -1059,7 +1084,7 @@ gfxTextRun::SetLineBreaks(Range aRange,
 }
 
 uint32_t
-gfxTextRun::FindFirstGlyphRunContaining(uint32_t aOffset)
+gfxTextRun::FindFirstGlyphRunContaining(uint32_t aOffset) const
 {
     NS_ASSERTION(aOffset <= GetLength(), "Bad offset looking for glyphrun");
     NS_ASSERTION(GetLength() == 0 || mGlyphRuns.Length() > 0,
@@ -1204,7 +1229,7 @@ gfxTextRun::SanitizeGlyphRuns()
 }
 
 uint32_t
-gfxTextRun::CountMissingGlyphs()
+gfxTextRun::CountMissingGlyphs() const
 {
     uint32_t i;
     uint32_t count = 0;
@@ -1286,7 +1311,7 @@ gfxTextRun::CopyGlyphDataFrom(gfxTextRun *aSource, Range aRange, uint32_t aDest)
     // Copy glyph runs
     GlyphRunIterator iter(aSource, aRange);
 #ifdef DEBUG
-    GlyphRun *prevRun = nullptr;
+    const GlyphRun *prevRun = nullptr;
 #endif
     while (iter.NextRun()) {
         gfxFont *font = iter.GetGlyphRun()->mFont;
@@ -1309,10 +1334,12 @@ gfxTextRun::CopyGlyphDataFrom(gfxTextRun *aSource, Range aRange, uint32_t aDest)
         // This means the rendering of the cluster will probably not be very good,
         // but it's the best we can do for now if the specified font only covered the
         // initial base character and not its applied marks.
-        NS_WARN_IF_FALSE(aSource->IsClusterStart(start),
-                         "Started font run in the middle of a cluster");
-        NS_WARN_IF_FALSE(end == aSource->GetLength() || aSource->IsClusterStart(end),
-                         "Ended font run in the middle of a cluster");
+        NS_WARNING_ASSERTION(
+          aSource->IsClusterStart(start),
+          "Started font run in the middle of a cluster");
+        NS_WARNING_ASSERTION(
+          end == aSource->GetLength() || aSource->IsClusterStart(end),
+          "Ended font run in the middle of a cluster");
 
         nsresult rv = AddGlyphRun(font, iter.GetGlyphRun()->mMatchType,
                                   start - aRange.start + aDest, false,
@@ -1470,59 +1497,6 @@ gfxTextRun::FetchGlyphExtents(DrawTarget* aRefDrawTarget)
 }
 
 
-gfxTextRun::ClusterIterator::ClusterIterator(gfxTextRun *aTextRun)
-    : mTextRun(aTextRun), mCurrentChar(uint32_t(-1))
-{
-}
-
-void
-gfxTextRun::ClusterIterator::Reset()
-{
-    mCurrentChar = uint32_t(-1);
-}
-
-bool
-gfxTextRun::ClusterIterator::NextCluster()
-{
-    uint32_t len = mTextRun->GetLength();
-    while (++mCurrentChar < len) {
-        if (mTextRun->IsClusterStart(mCurrentChar)) {
-            return true;
-        }
-    }
-
-    mCurrentChar = uint32_t(-1);
-    return false;
-}
-
-gfxTextRun::Range
-gfxTextRun::ClusterIterator::ClusterRange() const
-{
-    if (mCurrentChar == uint32_t(-1)) {
-        return Range(0, 0);
-    }
-
-    uint32_t i = mCurrentChar,
-             len = mTextRun->GetLength();
-    while (++i < len) {
-        if (mTextRun->IsClusterStart(i)) {
-            break;
-        }
-    }
-
-    return Range(mCurrentChar, i);
-}
-
-gfxFloat
-gfxTextRun::ClusterIterator::ClusterAdvance(PropertyProvider *aProvider) const
-{
-    if (mCurrentChar == uint32_t(-1)) {
-        return 0;
-    }
-
-    return mTextRun->GetAdvanceWidth(ClusterRange(), aProvider);
-}
-
 size_t
 gfxTextRun::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf)
 {
@@ -1606,8 +1580,6 @@ gfxFontGroup::BuildFontList()
 #if defined(MOZ_WIDGET_GTK)
     // xxx - eliminate this once gfxPangoFontGroup is no longer needed
     enumerateFonts = gfxPlatformGtk::UseFcFontList();
-#elif defined(MOZ_WIDGET_QT)
-    enumerateFonts = false;
 #endif
     if (!enumerateFonts) {
         return;
@@ -1870,8 +1842,8 @@ gfxFontGroup::GetDefaultFont()
         char msg[256]; // CHECK buffer length if revising message below
         nsAutoString familiesString;
         mFamilyList.ToString(familiesString);
-        snprintf_literal(msg, "unable to find a usable font (%.220s)",
-                         NS_ConvertUTF16toUTF8(familiesString).get());
+        SprintfLiteral(msg, "unable to find a usable font (%.220s)",
+                       NS_ConvertUTF16toUTF8(familiesString).get());
         NS_RUNTIMEABORT(msg);
     }
 
@@ -1926,7 +1898,7 @@ gfxFontGroup::GetFirstMathFont()
     uint32_t count = mFonts.Length();
     for (uint32_t i = 0; i < count; ++i) {
         gfxFont* font = GetFontAt(i);
-        if (font && font->GetFontEntry()->TryGetMathTable()) {
+        if (font && font->TryGetMathTable()) {
             return font;
         }
     }
@@ -1964,19 +1936,19 @@ gfxFontGroup::IsInvalidChar(char16_t ch)
             IsBidiControl(ch));
 }
 
-UniquePtr<gfxTextRun>
+already_AddRefed<gfxTextRun>
 gfxFontGroup::MakeEmptyTextRun(const Parameters *aParams, uint32_t aFlags)
 {
     aFlags |= TEXT_IS_8BIT | TEXT_IS_ASCII | TEXT_IS_PERSISTENT;
     return gfxTextRun::Create(aParams, 0, this, aFlags);
 }
 
-UniquePtr<gfxTextRun>
+already_AddRefed<gfxTextRun>
 gfxFontGroup::MakeSpaceTextRun(const Parameters *aParams, uint32_t aFlags)
 {
     aFlags |= TEXT_IS_8BIT | TEXT_IS_ASCII | TEXT_IS_PERSISTENT;
 
-    UniquePtr<gfxTextRun> textRun =
+    RefPtr<gfxTextRun> textRun =
         gfxTextRun::Create(aParams, 1, this, aFlags);
     if (!textRun) {
         return nullptr;
@@ -2018,14 +1990,14 @@ gfxFontGroup::MakeSpaceTextRun(const Parameters *aParams, uint32_t aFlags)
     // Note that the gfxGlyphExtents glyph bounds storage for the font will
     // always contain an entry for the font's space glyph, so we don't have
     // to call FetchGlyphExtents here.
-    return textRun;
+    return textRun.forget();
 }
 
-UniquePtr<gfxTextRun>
+already_AddRefed<gfxTextRun>
 gfxFontGroup::MakeBlankTextRun(uint32_t aLength,
                                const Parameters *aParams, uint32_t aFlags)
 {
-    UniquePtr<gfxTextRun> textRun =
+    RefPtr<gfxTextRun> textRun =
         gfxTextRun::Create(aParams, aLength, this, aFlags);
     if (!textRun) {
         return nullptr;
@@ -2037,10 +2009,10 @@ gfxFontGroup::MakeBlankTextRun(uint32_t aLength,
     }
     textRun->AddGlyphRun(GetFirstValidFont(), gfxTextRange::kFontGroup, 0, false,
                          orientation);
-    return textRun;
+    return textRun.forget();
 }
 
-UniquePtr<gfxTextRun>
+already_AddRefed<gfxTextRun>
 gfxFontGroup::MakeHyphenTextRun(DrawTarget* aDrawTarget,
                                 uint32_t aAppUnitsPerDevUnit)
 {
@@ -2065,7 +2037,7 @@ gfxFontGroup::GetHyphenWidth(gfxTextRun::PropertyProvider *aProvider)
     if (mHyphenWidth < 0) {
         RefPtr<DrawTarget> dt(aProvider->GetDrawTarget());
         if (dt) {
-            UniquePtr<gfxTextRun>
+            RefPtr<gfxTextRun>
                 hyphRun(MakeHyphenTextRun(dt,
                                           aProvider->GetAppUnitsPerDevUnit()));
             mHyphenWidth = hyphRun.get() ? hyphRun->GetAdvanceWidth() : 0;
@@ -2074,7 +2046,7 @@ gfxFontGroup::GetHyphenWidth(gfxTextRun::PropertyProvider *aProvider)
     return mHyphenWidth;
 }
 
-UniquePtr<gfxTextRun>
+already_AddRefed<gfxTextRun>
 gfxFontGroup::MakeTextRun(const uint8_t *aString, uint32_t aLength,
                           const Parameters *aParams, uint32_t aFlags,
                           gfxMissingFontRecorder *aMFR)
@@ -2096,8 +2068,8 @@ gfxFontGroup::MakeTextRun(const uint8_t *aString, uint32_t aLength,
         return MakeBlankTextRun(aLength, aParams, aFlags);
     }
 
-    UniquePtr<gfxTextRun> textRun = gfxTextRun::Create(aParams, aLength,
-                                                       this, aFlags);
+    RefPtr<gfxTextRun> textRun = gfxTextRun::Create(aParams, aLength, this,
+                                                    aFlags);
     if (!textRun) {
         return nullptr;
     }
@@ -2106,10 +2078,10 @@ gfxFontGroup::MakeTextRun(const uint8_t *aString, uint32_t aLength,
 
     textRun->FetchGlyphExtents(aParams->mDrawTarget);
 
-    return textRun;
+    return textRun.forget();
 }
 
-UniquePtr<gfxTextRun>
+already_AddRefed<gfxTextRun>
 gfxFontGroup::MakeTextRun(const char16_t *aString, uint32_t aLength,
                           const Parameters *aParams, uint32_t aFlags,
                           gfxMissingFontRecorder *aMFR)
@@ -2125,8 +2097,8 @@ gfxFontGroup::MakeTextRun(const char16_t *aString, uint32_t aLength,
         return MakeBlankTextRun(aLength, aParams, aFlags);
     }
 
-    UniquePtr<gfxTextRun> textRun = gfxTextRun::Create(aParams, aLength,
-                                                       this, aFlags);
+    RefPtr<gfxTextRun> textRun = gfxTextRun::Create(aParams, aLength, this,
+                                                    aFlags);
     if (!textRun) {
         return nullptr;
     }
@@ -2135,7 +2107,7 @@ gfxFontGroup::MakeTextRun(const char16_t *aString, uint32_t aLength,
 
     textRun->FetchGlyphExtents(aParams->mDrawTarget);
 
-    return textRun;
+    return textRun.forget();
 }
 
 template<typename T>
@@ -2855,11 +2827,6 @@ gfxFontGroup::FindFontForChar(uint32_t aCh, uint32_t aPrevCh, uint32_t aNextCh,
         return ret.forget();
     }
 
-    // never fall back for characters from unknown scripts
-    if (aRunScript == Script::UNKNOWN) {
-        return nullptr;
-    }
-
     // for known "space" characters, don't do a full system-fallback search;
     // we'll synthesize appropriate-width spaces instead of missing-glyph boxes
     if (GetGeneralCategory(aCh) ==
@@ -2940,7 +2907,7 @@ void gfxFontGroup::ComputeRanges(nsTArray<gfxTextRange>& aRanges,
             FindFontForChar(ch, prevCh, nextCh, aRunScript, prevFont,
                             &matchType);
 
-#ifndef RELEASE_BUILD
+#ifndef RELEASE_OR_BETA
         if (MOZ_UNLIKELY(mTextPerf)) {
             if (matchType == gfxTextRange::kPrefsFallback) {
                 mTextPerf->current.fallbackPrefs++;
@@ -2999,7 +2966,7 @@ void gfxFontGroup::ComputeRanges(nsTArray<gfxTextRange>& aRanges,
 
     aRanges[lastRangeIndex].end = aLength;
 
-#ifndef RELEASE_BUILD
+#ifndef RELEASE_OR_BETA
     LogModule* log = mStyle.systemFont
                    ? gfxPlatform::GetLog(eGfxLog_textrunui)
                    : gfxPlatform::GetLog(eGfxLog_textrun);
@@ -3078,16 +3045,12 @@ gfxFontGroup::UpdateUserFonts()
     if (mCurrGeneration < GetRebuildGeneration()) {
         // fonts in userfont set changed, need to redo the fontlist
         mFonts.Clear();
-        mUnderlineOffset = UNDERLINE_OFFSET_NOT_SET;
-        mSkipDrawing = false;
+        ClearCachedData();
         BuildFontList();
         mCurrGeneration = GetGeneration();
-        mCachedEllipsisTextRun = nullptr;
     } else if (mCurrGeneration != GetGeneration()) {
         // load state change occurred, verify load state and validity of fonts
-        mSkipDrawing = false;
-        mUnderlineOffset = UNDERLINE_OFFSET_NOT_SET;
-        mCachedEllipsisTextRun = nullptr;
+        ClearCachedData();
 
         uint32_t len = mFonts.Length();
         for (uint32_t i = 0; i < len; i++) {

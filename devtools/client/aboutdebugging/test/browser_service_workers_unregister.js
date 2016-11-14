@@ -1,8 +1,6 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-/* eslint-disable mozilla/no-cpows-in-tests */
-
 "use strict";
 
 // Test that clicking on the unregister link in the Service Worker details works
@@ -12,9 +10,7 @@
 
 // Service workers can't be loaded from chrome://, but http:// is ok with
 // dom.serviceWorkers.testing.enabled turned on.
-const HTTP_ROOT = CHROME_ROOT.replace(
-  "chrome://mochitests/content/", "http://mochi.test:8888/");
-const SCOPE = HTTP_ROOT + "service-workers/";
+const SCOPE = URL_ROOT + "service-workers/";
 const SERVICE_WORKER = SCOPE + "empty-sw.js";
 const TAB_URL = SCOPE + "empty-sw.html";
 
@@ -24,6 +20,7 @@ add_task(function* () {
     let options = { "set": [
       // Accept workers from mochitest's http.
       ["dom.serviceWorkers.testing.enabled", true],
+      ["dom.ipc.processCount", 1],
     ]};
     SpecialPowers.pushPrefEnv(options, done);
   });
@@ -42,6 +39,8 @@ add_task(function* () {
 
   // Check that the service worker appears in the UI.
   assertHasTarget(true, document, "service-workers", SERVICE_WORKER);
+
+  yield waitForServiceWorkerActivation(SERVICE_WORKER, document);
 
   info("Ensure that the registration resolved before trying to interact with " +
     "the service worker.");

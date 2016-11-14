@@ -1,4 +1,4 @@
-# -*- Mode: python; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 40 -*-
+# -*- Mode: python; indent-tabs-mode: nil; tab-width: 40 -*-
 # vim: set filetype=python:
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -33,13 +33,14 @@ EXPORTS.mozilla.gfx += [
     'JobScheduler_posix.h',
     'JobScheduler_win32.h',
     'Logging.h',
+    'LoggingConstants.h',
     'Matrix.h',
     'MatrixFwd.h',
     'NumericTools.h',
     'PathHelpers.h',
     'PatternHelpers.h',
     'Point.h',
-    'Preferences.h',
+    'Polygon.h',
     'Quaternion.h',
     'RecordedEvent.h',
     'RecordingTypes.h',
@@ -51,6 +52,7 @@ EXPORTS.mozilla.gfx += [
     'SourceSurfaceRawData.h',
     'StackArray.h',
     'Tools.h',
+    'Triangle.h',
     'Types.h',
     'UserData.h',
 ]
@@ -62,10 +64,9 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('cocoa', 'uikit'):
         'MacIOSurface.h',
     ]
     UNIFIED_SOURCES += [
-        'DrawTargetCG.cpp',
+        'NativeFontResourceMac.cpp',
         'PathCG.cpp',
         'ScaledFontMac.cpp',
-        'SourceSurfaceCG.cpp',
     ]
 elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     SOURCES += [
@@ -88,6 +89,11 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] != 'windows':
         'JobScheduler_posix.cpp',
     ]
 
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('gtk2', 'gtk3'):
+    SOURCES += [
+        'ScaledFontFontconfig.cpp',
+    ]
+
 if CONFIG['MOZ_ENABLE_SKIA']:
     UNIFIED_SOURCES += [
         'convolver.cpp',
@@ -105,7 +111,6 @@ if CONFIG['MOZ_ENABLE_SKIA']:
         SOURCES['SourceSurfaceSkia.cpp'].flags += ['-Wno-implicit-fallthrough']
     EXPORTS.mozilla.gfx += [
         'HelpersSkia.h',
-        'RefPtrSkia.h',
     ]
 
 # Are we targeting x86 or x64?  If so, build SSE2 files.
@@ -161,7 +166,6 @@ UNIFIED_SOURCES += [
     'PathCairo.cpp',
     'PathHelpers.cpp',
     'PathRecording.cpp',
-    'Preferences.cpp',
     'Quaternion.cpp',
     'RecordedEvent.cpp',
     'Scale.cpp',
@@ -194,7 +198,7 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
 
 if CONFIG['CPU_ARCH'] == 'arm' and CONFIG['BUILD_ARM_NEON']:
     SOURCES += ['BlurNEON.cpp']
-    SOURCES['BlurNEON.cpp'].flags += ['-mfpu=neon']
+    SOURCES['BlurNEON.cpp'].flags += CONFIG['NEON_FLAGS']
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
@@ -203,12 +207,24 @@ FINAL_LIBRARY = 'xul'
 for var in ('USE_CAIRO', 'MOZ2D_HAS_MOZ_CAIRO'):
     DEFINES[var] = True
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gtk2', 'gtk3', 'gonk', 'qt'):
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gtk2', 'gtk3'):
     DEFINES['MOZ_ENABLE_FREETYPE'] = True
 
 CXXFLAGS += CONFIG['MOZ_CAIRO_CFLAGS']
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gtk2', 'gtk3', 'gonk', 'qt'):
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gtk2', 'gtk3'):
     CXXFLAGS += CONFIG['CAIRO_FT_CFLAGS']
 
 LOCAL_INCLUDES += CONFIG['SKIA_INCLUDES']
+
+if CONFIG['MOZ_ENABLE_SKIA']:
+    LOCAL_INCLUDES += [
+        '/gfx/skia/skia/include/private',
+        '/gfx/skia/skia/src/core',
+        '/gfx/skia/skia/src/image',
+    ]
+if CONFIG['MOZ_ENABLE_SKIA_GPU']:
+    LOCAL_INCLUDES += [
+        '/gfx/skia/skia/src/gpu',
+    ]
+

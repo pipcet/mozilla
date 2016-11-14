@@ -146,6 +146,8 @@ CSS_STATE_PSEUDO_CLASS(link, ":link", 0, "", NS_EVENT_STATE_UNVISITED)
 // what matches :link or :visited
 CSS_STATE_PSEUDO_CLASS(mozAnyLink, ":-moz-any-link", 0, "",
                        NS_EVENT_STATE_VISITED | NS_EVENT_STATE_UNVISITED)
+CSS_STATE_PSEUDO_CLASS(anyLink, ":any-link", 0, "",
+                       NS_EVENT_STATE_VISITED | NS_EVENT_STATE_UNVISITED)
 CSS_STATE_PSEUDO_CLASS(visited, ":visited", 0, "", NS_EVENT_STATE_VISITED)
 
 CSS_STATE_PSEUDO_CLASS(active, ":active", 0, "", NS_EVENT_STATE_ACTIVE)
@@ -153,6 +155,7 @@ CSS_STATE_PSEUDO_CLASS(checked, ":checked", 0, "", NS_EVENT_STATE_CHECKED)
 CSS_STATE_PSEUDO_CLASS(disabled, ":disabled", 0, "", NS_EVENT_STATE_DISABLED)
 CSS_STATE_PSEUDO_CLASS(enabled, ":enabled", 0, "", NS_EVENT_STATE_ENABLED)
 CSS_STATE_PSEUDO_CLASS(focus, ":focus", 0, "", NS_EVENT_STATE_FOCUS)
+CSS_STATE_PSEUDO_CLASS(focusWithin, ":focus-within", 0, "", NS_EVENT_STATE_FOCUS_WITHIN)
 CSS_STATE_PSEUDO_CLASS(hover, ":hover", 0, "", NS_EVENT_STATE_HOVER)
 CSS_STATE_PSEUDO_CLASS(mozDragOver, ":-moz-drag-over", 0, "", NS_EVENT_STATE_DRAGOVER)
 CSS_STATE_PSEUDO_CLASS(target, ":target", 0, "", NS_EVENT_STATE_URLTARGET)
@@ -161,6 +164,8 @@ CSS_STATE_PSEUDO_CLASS(indeterminate, ":indeterminate", 0, "",
 
 CSS_STATE_PSEUDO_CLASS(mozDevtoolsHighlighted, ":-moz-devtools-highlighted", 0, "",
                        NS_EVENT_STATE_DEVTOOLS_HIGHLIGHTED)
+CSS_STATE_PSEUDO_CLASS(mozStyleeditorTransitioning, ":-moz-styleeditor-transitioning", 0, "",
+                       NS_EVENT_STATE_STYLEEDITOR_TRANSITIONING)
 
 // Matches the element which is being displayed full-screen, and
 // any containing frames.
@@ -169,10 +174,6 @@ CSS_STATE_PSEUDO_CLASS(fullscreen, ":fullscreen",
                        "full-screen-api.unprefix.enabled",
                        NS_EVENT_STATE_FULL_SCREEN)
 CSS_STATE_PSEUDO_CLASS(mozFullScreen, ":-moz-full-screen", 0, "", NS_EVENT_STATE_FULL_SCREEN)
-
-// Matches any element which is an ancestor of the DOM full-screen element,
-// or an ancestor of a containing frame of the full-screen element.
-CSS_STATE_PSEUDO_CLASS(mozFullScreenAncestor, ":-moz-full-screen-ancestor", 0, "", NS_EVENT_STATE_FULL_SCREEN_ANCESTOR)
 
 // Matches if the element is focused and should show a focus ring
 CSS_STATE_PSEUDO_CLASS(mozFocusRing, ":-moz-focusring", 0, "", NS_EVENT_STATE_FOCUSRING)
@@ -187,12 +188,6 @@ CSS_STATE_PSEUDO_CLASS(mozUserDisabled, ":-moz-user-disabled",
 CSS_STATE_PSEUDO_CLASS(mozSuppressed, ":-moz-suppressed",
                        CSS_PSEUDO_CLASS_ENABLED_IN_UA_SHEETS_AND_CHROME, "",
                        NS_EVENT_STATE_SUPPRESSED)
-CSS_STATE_PSEUDO_CLASS(mozTypeUnsupported, ":-moz-type-unsupported",
-                       CSS_PSEUDO_CLASS_ENABLED_IN_UA_SHEETS_AND_CHROME, "",
-                       NS_EVENT_STATE_TYPE_UNSUPPORTED)
-CSS_STATE_PSEUDO_CLASS(mozTypeUnsupportedPlatform, ":-moz-type-unsupported-platform",
-                       CSS_PSEUDO_CLASS_ENABLED_IN_UA_SHEETS_AND_CHROME, "",
-                       NS_EVENT_STATE_TYPE_UNSUPPORTED_PLATFORM)
 CSS_STATE_PSEUDO_CLASS(mozHandlerClickToPlay, ":-moz-handler-clicktoplay",
                        CSS_PSEUDO_CLASS_ENABLED_IN_UA_SHEETS_AND_CHROME, "",
                        NS_EVENT_STATE_TYPE_CLICK_TO_PLAY)
@@ -225,6 +220,8 @@ CSS_STATE_PSEUDO_CLASS(invalid, ":invalid", 0, "", NS_EVENT_STATE_INVALID)
 CSS_STATE_PSEUDO_CLASS(inRange, ":in-range", 0, "", NS_EVENT_STATE_INRANGE)
 CSS_STATE_PSEUDO_CLASS(outOfRange, ":out-of-range", 0, "", NS_EVENT_STATE_OUTOFRANGE)
 CSS_STATE_PSEUDO_CLASS(defaultPseudo, ":default", 0, "", NS_EVENT_STATE_DEFAULT)
+CSS_STATE_PSEUDO_CLASS(placeholderShown, ":placeholder-shown", 0, "",
+                       NS_EVENT_STATE_PLACEHOLDERSHOWN)
 CSS_STATE_PSEUDO_CLASS(mozReadOnly, ":-moz-read-only", 0, "",
                        NS_EVENT_STATE_MOZ_READONLY)
 CSS_STATE_PSEUDO_CLASS(mozReadWrite, ":-moz-read-write", 0, "",

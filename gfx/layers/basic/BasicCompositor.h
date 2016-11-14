@@ -41,7 +41,7 @@ public:
 class BasicCompositor : public Compositor
 {
 public:
-  explicit BasicCompositor(CompositorBridgeParent* aParent, widget::CompositorWidgetProxy *aWidget);
+  explicit BasicCompositor(CompositorBridgeParent* aParent, widget::CompositorWidget* aWidget);
 
 protected:
   virtual ~BasicCompositor();
@@ -50,7 +50,7 @@ public:
 
   virtual BasicCompositor* AsBasicCompositor() override { return this; }
 
-  virtual bool Initialize() override;
+  virtual bool Initialize(nsCString* const out_failureReason) override;
 
   virtual void DetachWidget() override;
 
@@ -74,6 +74,9 @@ public:
 
   virtual already_AddRefed<DataTextureSource>
   CreateDataTextureSourceAround(gfx::DataSourceSurface* aSurface) override;
+
+  virtual already_AddRefed<DataTextureSource>
+  CreateDataTextureSourceAroundYCbCr(TextureHost* aTexture) override;
 
   virtual bool SupportsEffect(EffectTypes aEffect) override;
 
@@ -125,7 +128,18 @@ public:
 
   gfx::DrawTarget *GetDrawTarget() { return mDrawTarget; }
 
+  virtual bool IsPendingComposite() override
+  {
+    return mIsPendingEndRemoteDrawing;
+  }
+
+  virtual void FinishPendingComposite() override;
+
 private:
+
+  void TryToEndRemoteDrawing(bool aForceToEnd = false);
+
+  bool NeedsToDeferEndRemoteDrawing();
 
   // The final destination surface
   RefPtr<gfx::DrawTarget> mDrawTarget;
@@ -137,6 +151,7 @@ private:
   bool mDidExternalComposition;
 
   uint32_t mMaxTextureSize;
+  bool mIsPendingEndRemoteDrawing;
 };
 
 BasicCompositor* AssertBasicCompositor(Compositor* aCompositor);

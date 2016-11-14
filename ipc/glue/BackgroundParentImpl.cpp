@@ -18,8 +18,13 @@
 #include "mozilla/dom/DOMTypes.h"
 #include "mozilla/dom/FileSystemBase.h"
 #include "mozilla/dom/FileSystemRequestParent.h"
-#include "mozilla/dom/NuwaParent.h"
+#ifdef MOZ_GAMEPAD
+#include "mozilla/dom/GamepadEventChannelParent.h"
+#include "mozilla/dom/GamepadTestChannelParent.h"
+#endif
 #include "mozilla/dom/PBlobParent.h"
+#include "mozilla/dom/PGamepadEventChannelParent.h"
+#include "mozilla/dom/PGamepadTestChannelParent.h"
 #include "mozilla/dom/MessagePortParent.h"
 #include "mozilla/dom/ServiceWorkerRegistrar.h"
 #include "mozilla/dom/asmjscache/AsmJSCache.h"
@@ -60,9 +65,7 @@ using mozilla::dom::cache::PCacheStreamControlParent;
 using mozilla::dom::FileSystemBase;
 using mozilla::dom::FileSystemRequestParent;
 using mozilla::dom::MessagePortParent;
-using mozilla::dom::NuwaParent;
 using mozilla::dom::PMessagePortParent;
-using mozilla::dom::PNuwaParent;
 using mozilla::dom::UDPSocketParent;
 
 namespace {
@@ -291,24 +294,6 @@ BackgroundParentImpl::DeallocPFileDescriptorSetParent(
   return true;
 }
 
-PNuwaParent*
-BackgroundParentImpl::AllocPNuwaParent()
-{
-  return mozilla::dom::NuwaParent::Alloc();
-}
-
-bool
-BackgroundParentImpl::RecvPNuwaConstructor(PNuwaParent* aActor)
-{
-  return mozilla::dom::NuwaParent::ActorConstructed(aActor);
-}
-
-bool
-BackgroundParentImpl::DeallocPNuwaParent(PNuwaParent *aActor)
-{
-  return mozilla::dom::NuwaParent::Dealloc(aActor);
-}
-
 PSendStreamParent*
 BackgroundParentImpl::AllocPSendStreamParent()
 {
@@ -391,8 +376,8 @@ public:
     AssertIsOnBackgroundThread();
   }
 
-  NS_IMETHODIMP
-  Run()
+  NS_IMETHOD
+  Run() override
   {
     AssertIsInMainProcess();
 
@@ -518,7 +503,7 @@ public:
     MOZ_ASSERT(mContentParent);
   }
 
-  NS_IMETHODIMP Run()
+  NS_IMETHOD Run() override
   {
     MOZ_ASSERT(NS_IsMainThread());
 
@@ -527,15 +512,13 @@ public:
     nsCOMPtr<nsIPrincipal> principal = PrincipalInfoToPrincipal(mPrincipalInfo);
     AssertAppPrincipal(mContentParent, principal);
 
-    bool isNullPrincipal;
-    nsresult rv = principal->GetIsNullPrincipal(&isNullPrincipal);
-    if (NS_WARN_IF(NS_FAILED(rv)) || isNullPrincipal) {
+    if (principal->GetIsNullPrincipal()) {
       mContentParent->KillHard("BroadcastChannel killed: no null principal.");
       return NS_OK;
     }
 
     nsAutoCString origin;
-    rv = principal->GetOrigin(origin);
+    nsresult rv = principal->GetOrigin(origin);
     if (NS_FAILED(rv)) {
       mContentParent->KillHard("BroadcastChannel killed: principal::GetOrigin failed.");
       return NS_OK;
@@ -913,6 +896,55 @@ BackgroundParentImpl::DeallocPFileSystemRequestParent(
 
   RefPtr<FileSystemRequestParent> parent =
     dont_AddRef(static_cast<FileSystemRequestParent*>(aDoomed));
+  return true;
+}
+
+// Gamepad API Background IPC
+dom::PGamepadEventChannelParent*
+BackgroundParentImpl::AllocPGamepadEventChannelParent()
+{
+#ifdef MOZ_GAMEPAD
+  RefPtr<dom::GamepadEventChannelParent> parent =
+    new dom::GamepadEventChannelParent();
+
+  return parent.forget().take();
+#else
+  return nullptr;
+#endif
+}
+
+bool
+BackgroundParentImpl::DeallocPGamepadEventChannelParent(dom::PGamepadEventChannelParent *aActor)
+{
+#ifdef MOZ_GAMEPAD
+  MOZ_ASSERT(aActor);
+  RefPtr<dom::GamepadEventChannelParent> parent =
+    dont_AddRef(static_cast<dom::GamepadEventChannelParent*>(aActor));
+#endif
+  return true;
+}
+
+dom::PGamepadTestChannelParent*
+BackgroundParentImpl::AllocPGamepadTestChannelParent()
+{
+#ifdef MOZ_GAMEPAD
+  RefPtr<dom::GamepadTestChannelParent> parent =
+    new dom::GamepadTestChannelParent();
+
+  return parent.forget().take();
+#else
+  return nullptr;
+#endif
+}
+
+bool
+BackgroundParentImpl::DeallocPGamepadTestChannelParent(dom::PGamepadTestChannelParent *aActor)
+{
+#ifdef MOZ_GAMEPAD
+  MOZ_ASSERT(aActor);
+  RefPtr<dom::GamepadTestChannelParent> parent =
+    dont_AddRef(static_cast<dom::GamepadTestChannelParent*>(aActor));
+#endif
   return true;
 }
 

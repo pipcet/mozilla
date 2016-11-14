@@ -10,7 +10,6 @@ define(function (require, exports, module) {
   // Dependencies
   const React = require("devtools/client/shared/vendor/react");
   const { createFactories } = require("./rep-utils");
-  const { ObjectBox } = createFactories(require("./object-box"));
   const { Caption } = createFactories(require("./caption"));
   const { PropRep } = createFactories(require("./prop-rep"));
   // Shortcuts
@@ -27,22 +26,20 @@ define(function (require, exports, module) {
       mode: React.PropTypes.string,
     },
 
-    getTitle: function () {
-      return "Object";
-    },
-
-    longPropIterator: function (object) {
-      try {
-        return this.propIterator(object, 100);
-      } catch (err) {
-        console.error(err);
+    getTitle: function (object) {
+      let className = object && object.class ? object.class : "Object";
+      if (this.props.objectLink) {
+        return this.props.objectLink({
+          object: object
+        }, className);
       }
-      return [];
+      return className;
     },
 
-    shortPropIterator: function (object) {
+    safePropIterator: function (object, max) {
+      max = (typeof max === "undefined") ? 3 : max;
       try {
-        return this.propIterator(object, 3);
+        return this.propIterator(object, max);
       } catch (err) {
         console.error(err);
       }
@@ -66,7 +63,7 @@ define(function (require, exports, module) {
 
       if (props.length <= max) {
         // There are not enough props yet (or at least, not enough props to
-        // be able to know whether we should print "more..." or not).
+        // be able to know whether we should print "more…" or not).
         // Let's display also empty members and functions.
         props = props.concat(this.getProps(object, max, (t, value) => {
           return !isInterestingProp(t, value);
@@ -75,9 +72,12 @@ define(function (require, exports, module) {
 
       if (props.length > max) {
         props.pop();
+        let objectLink = this.props.objectLink || span;
+
         props.push(Caption({
-          key: "more",
-          object: "more...",
+          object: objectLink({
+            object: object
+          }, (Object.keys(object).length - max) + " more…")
         }));
       } else if (props.length > 0) {
         // Remove the last comma.
@@ -96,7 +96,8 @@ define(function (require, exports, module) {
         return props;
       }
 
-      let mode = this.props.mode;
+      // Hardcode tiny mode to avoid recursive handling.
+      let mode = "tiny";
 
       try {
         for (let name in object) {
@@ -114,7 +115,6 @@ define(function (require, exports, module) {
           let t = typeof value;
           if (filter(t, value)) {
             props.push(PropRep({
-              key: name,
               mode: mode,
               name: name,
               object: value,
@@ -132,22 +132,29 @@ define(function (require, exports, module) {
 
     render: function () {
       let object = this.props.object;
-      let props = this.shortPropIterator(object);
+      let props = this.safePropIterator(object);
+      let objectLink = this.props.objectLink || span;
 
       if (this.props.mode == "tiny" || !props.length) {
         return (
-          ObjectBox({className: "object"},
-            span({className: "objectTitle"}, this.getTitle())
+          span({className: "objectBox objectBox-object"},
+            objectLink({className: "objectTitle"}, this.getTitle(object))
           )
         );
       }
 
       return (
-        ObjectBox({className: "object"},
-          span({className: "objectTitle"}, this.getTitle()),
-          span({className: "objectLeftBrace", role: "presentation"}, "{"),
-          props,
-          span({className: "objectRightBrace"}, "}")
+        span({className: "objectBox objectBox-object"},
+          this.getTitle(object),
+          objectLink({
+            className: "objectLeftBrace",
+            object: object
+          }, " { "),
+          ...props,
+          objectLink({
+            className: "objectRightBrace",
+            object: object
+          }, " }")
         )
       );
     },
@@ -155,6 +162,7 @@ define(function (require, exports, module) {
   function supportsObject(object, type) {
     return true;
   }
+
   // Exports from this module
   exports.Obj = {
     rep: Obj,

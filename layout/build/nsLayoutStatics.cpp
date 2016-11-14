@@ -23,7 +23,6 @@
 #include "nsCSSRendering.h"
 #include "mozilla/dom/Attr.h"
 #include "nsDOMClassInfo.h"
-#include "nsEditorEventListener.h"
 #include "mozilla/EventListenerManager.h"
 #include "nsFrame.h"
 #include "nsGlobalWindow.h"
@@ -84,7 +83,6 @@
 #include "nsMenuBarListener.h"
 #endif
 
-#include "nsHTMLEditor.h"
 #include "nsTextServicesDocument.h"
 
 #ifdef MOZ_WEBSPEECH
@@ -118,24 +116,18 @@ using namespace mozilla::system;
 #include "nsPermissionManager.h"
 #include "nsCookieService.h"
 #include "nsApplicationCacheService.h"
+#include "mozilla/dom/CustomElementRegistry.h"
 #include "mozilla/dom/time/DateCacheCleaner.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/IMEStateManager.h"
-#include "nsDocument.h"
 #include "mozilla/dom/HTMLVideoElement.h"
-#include "CameraPreferences.h"
 #include "TouchManager.h"
 #include "MediaDecoder.h"
 #include "MediaPrefs.h"
-#include "mozilla/layers/CompositorLRU.h"
 #include "mozilla/dom/devicestorage/DeviceStorageStatics.h"
 #include "mozilla/ServoBindings.h"
 #include "mozilla/StaticPresData.h"
 #include "mozilla/dom/WebIDLGlobalNameHash.h"
-
-#ifdef MOZ_B2G_BT
-#include "mozilla/dom/BluetoothUUID.h"
-#endif
 
 using namespace mozilla;
 using namespace mozilla::net;
@@ -163,6 +155,7 @@ nsLayoutStatics::Initialize()
   nsCSSPseudoClasses::AddRefAtoms();
   nsCSSPseudoElements::AddRefAtoms();
   nsCSSKeywords::AddRefTable();
+  nsCSSProps::AddRefAtoms();
   nsCSSProps::AddRefTable();
   nsColorNames::AddRefTable();
   nsGkAtoms::AddRefAtoms();
@@ -297,8 +290,6 @@ nsLayoutStatics::Initialize()
 
   CounterStyleManager::InitializeBuiltinCounterStyles();
 
-  CameraPreferences::Initialize();
-
   IMEStateManager::Init();
 
   ServiceWorkerRegistrar::Initialize();
@@ -309,18 +300,20 @@ nsLayoutStatics::Initialize()
 #endif
 
   MediaDecoder::InitStatics();
-  MediaPrefs::GetSingleton();
 
   PromiseDebugging::Init();
-
-  layers::CompositorLRU::Init();
 
   mozilla::dom::devicestorage::DeviceStorageStatics::Initialize();
 
   mozilla::dom::WebCryptoThreadPool::Initialize();
 
-#ifdef MOZ_STYLO
-  Servo_Initialize();
+  // NB: We initialize servo in nsAppRunner.cpp, because we need to do it after
+  // creating the hidden DOM window to support some current stylo hacks. We
+  // should move initialization back here once those go away.
+
+#ifndef MOZ_WIDGET_ANDROID
+  // On Android, we instantiate it when constructing AndroidBridge.
+  MediaPrefs::GetSingleton();
 #endif
 
   return NS_OK;
@@ -391,6 +384,7 @@ nsLayoutStatics::Shutdown()
   nsAutoCopyListener::Shutdown();
   FrameLayerBuilder::Shutdown();
 
+
 #ifdef MOZ_ANDROID_OMX
   AndroidMediaPluginHost::Shutdown();
 #endif
@@ -434,15 +428,9 @@ nsLayoutStatics::Shutdown()
 
   DisplayItemClip::Shutdown();
 
-  nsDocument::XPCOMShutdown();
+  CustomElementRegistry::XPCOMShutdown();
 
   CacheObserver::Shutdown();
 
-  CameraPreferences::Shutdown();
-
   PromiseDebugging::Shutdown();
-
-#ifdef MOZ_B2G_BT
-  BluetoothUUID::HandleShutdown();
-#endif
 }

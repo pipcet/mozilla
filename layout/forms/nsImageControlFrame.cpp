@@ -31,8 +31,8 @@ public:
   NS_DECL_FRAMEARENA_HELPERS
 
   virtual void Reflow(nsPresContext*           aPresContext,
-                          nsHTMLReflowMetrics&     aDesiredSize,
-                          const nsHTMLReflowState& aReflowState,
+                          ReflowOutput&     aDesiredSize,
+                          const ReflowInput& aReflowInput,
                           nsReflowStatus&          aStatus) override;
 
   virtual nsresult HandleEvent(nsPresContext* aPresContext,
@@ -126,16 +126,16 @@ nsImageControlFrame::GetType() const
 
 void
 nsImageControlFrame::Reflow(nsPresContext*           aPresContext,
-                            nsHTMLReflowMetrics&     aDesiredSize,
-                            const nsHTMLReflowState& aReflowState,
+                            ReflowOutput&     aDesiredSize,
+                            const ReflowInput& aReflowInput,
                             nsReflowStatus&          aStatus)
 {
   DO_GLOBAL_REFLOW_COUNT("nsImageControlFrame");
-  DISPLAY_REFLOW(aPresContext, this, aReflowState, aDesiredSize, aStatus);
+  DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
   if (!GetPrevInFlow() && (mState & NS_FRAME_FIRST_REFLOW)) {
     nsFormControlFrame::RegUnRegAccessKey(this, true);
   }
-  return nsImageFrame::Reflow(aPresContext, aDesiredSize, aReflowState, aStatus);
+  return nsImageFrame::Reflow(aPresContext, aDesiredSize, aReflowInput, aStatus);
 }
 
 nsresult
@@ -152,9 +152,10 @@ nsImageControlFrame::HandleEvent(nsPresContext* aPresContext,
 
   // do we have user-input style?
   const nsStyleUserInterface* uiStyle = StyleUserInterface();
-  if (uiStyle->mUserInput == NS_STYLE_USER_INPUT_NONE || uiStyle->mUserInput == NS_STYLE_USER_INPUT_DISABLED)
+  if (uiStyle->mUserInput == StyleUserInput::None ||
+      uiStyle->mUserInput == StyleUserInput::Disabled) {
     return nsFrame::HandleEvent(aPresContext, aEvent, aEventStatus);
-
+  }
   if (mContent->HasAttr(kNameSpaceID_None, nsGkAtoms::disabled)) { // XXX cache disabled
     return NS_OK;
   }

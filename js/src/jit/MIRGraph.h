@@ -108,6 +108,7 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     // its slots and stack depth are initialized from |pred|.
     static MBasicBlock* New(MIRGraph& graph, BytecodeAnalysis* analysis, const CompileInfo& info,
                             MBasicBlock* pred, BytecodeSite* site, Kind kind);
+    static MBasicBlock* New(MIRGraph& graph, const CompileInfo& info, MBasicBlock* pred, Kind kind);
     static MBasicBlock* NewPopN(MIRGraph& graph, const CompileInfo& info,
                                 MBasicBlock* pred, BytecodeSite* site, Kind kind, uint32_t popn);
     static MBasicBlock* NewWithResumePoint(MIRGraph& graph, const CompileInfo& info,
@@ -119,8 +120,6 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     static MBasicBlock* NewSplitEdge(MIRGraph& graph, const CompileInfo& info,
                                      MBasicBlock* pred, size_t predEdgeIdx,
                                      MBasicBlock* succ);
-    static MBasicBlock* NewAsmJS(MIRGraph& graph, const CompileInfo& info,
-                                 MBasicBlock* pred, Kind kind);
 
     bool dominates(const MBasicBlock* other) const {
         return other->domIndex() - domIndex() < numDominated();
@@ -150,7 +149,7 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     // Gets the instruction associated with various slot types.
     MDefinition* peek(int32_t depth);
 
-    MDefinition* scopeChain();
+    MDefinition* environmentChain();
     MDefinition* argumentsObject();
 
     // Increase the number of slots available
@@ -187,7 +186,7 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     void pushArg(uint32_t arg);
     void pushLocal(uint32_t local);
     void pushSlot(uint32_t slot);
-    void setScopeChain(MDefinition* ins);
+    void setEnvironmentChain(MDefinition* ins);
     void setArgumentsObject(MDefinition* ins);
 
     // Returns the top of the stack, then decrements the virtual stack pointer.
@@ -255,8 +254,8 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     // Sets a back edge. This places phi nodes and rewrites instructions within
     // the current loop as necessary. If the backedge introduces new types for
     // phis at the loop header, returns a disabling abort.
-    MOZ_MUST_USE AbortReason setBackedge(MBasicBlock* block);
-    MOZ_MUST_USE bool setBackedgeAsmJS(MBasicBlock* block);
+    MOZ_MUST_USE AbortReason setBackedge(TempAllocator& alloc, MBasicBlock* block);
+    MOZ_MUST_USE bool setBackedgeWasm(MBasicBlock* block);
 
     // Resets a LOOP_HEADER block to a NORMAL block.  This is needed when
     // optimizations remove the backedge.
@@ -271,10 +270,11 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     void inheritPhis(MBasicBlock* header);
 
     // Propagates backedge slots into phis operands of the loop header.
-    MOZ_MUST_USE bool inheritPhisFromBackedge(MBasicBlock* backedge, bool* hadTypeChange);
+    MOZ_MUST_USE bool inheritPhisFromBackedge(TempAllocator& alloc, MBasicBlock* backedge,
+                                              bool* hadTypeChange);
 
     // Compute the types for phis in this block according to their inputs.
-    MOZ_MUST_USE bool specializePhis();
+    MOZ_MUST_USE bool specializePhis(TempAllocator& alloc);
 
     void insertBefore(MInstruction* at, MInstruction* ins);
     void insertAfter(MInstruction* at, MInstruction* ins);
@@ -657,6 +657,36 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     InlineScriptTree* trackedTree() const {
         return trackedSite_ ? trackedSite_->tree() : nullptr;
     }
+
+    // This class is used for reverting the graph within IonBuilder.
+    class BackupPoint {
+        friend MBasicBlock;
+
+        MBasicBlock* current_;
+        MBasicBlock* lastBlock_;
+        MInstruction* lastIns_;
+        uint32_t stackPosition_;
+        FixedList<MDefinition*> slots_;
+#ifdef DEBUG
+        // The following fields should remain identical during IonBuilder
+        // construction, these are used for assertions.
+        MPhi* lastPhi_;
+        uintptr_t predecessorsCheckSum_;
+        HashNumber instructionsCheckSum_;
+        uint32_t id_;
+        MResumePoint* callerResumePoint_;
+        MResumePoint* entryResumePoint_;
+
+        size_t computePredecessorsCheckSum(MBasicBlock* block);
+        HashNumber computeInstructionsCheckSum(MBasicBlock* block);
+#endif
+      public:
+        explicit BackupPoint(MBasicBlock* current);
+        MOZ_MUST_USE bool init(TempAllocator& alloc);
+        MBasicBlock* restore();
+    };
+
+    friend BackupPoint;
 
   private:
     MIRGraph& graph_;

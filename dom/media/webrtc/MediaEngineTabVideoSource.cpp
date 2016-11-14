@@ -119,14 +119,25 @@ MediaEngineTabVideoSource::InitRunnable::Run()
   return NS_OK;
 }
 
-void
-MediaEngineTabVideoSource::GetName(nsAString_internal& aName)
+nsresult
+MediaEngineTabVideoSource::DestroyRunnable::Run()
 {
-  aName.AssignLiteral(MOZ_UTF16("&getUserMedia.videoSource.tabShare;"));
+  MOZ_ASSERT(NS_IsMainThread());
+
+  mVideoSource->mWindow = nullptr;
+  mVideoSource->mTabSource = nullptr;
+
+  return NS_OK;
 }
 
 void
-MediaEngineTabVideoSource::GetUUID(nsACString_internal& aUuid)
+MediaEngineTabVideoSource::GetName(nsAString_internal& aName) const
+{
+  aName.AssignLiteral(u"&getUserMedia.videoSource.tabShare;");
+}
+
+void
+MediaEngineTabVideoSource::GetUUID(nsACString_internal& aUuid) const
 {
   aUuid.AssignLiteral("tab");
 }
@@ -139,22 +150,34 @@ nsresult
 MediaEngineTabVideoSource::Allocate(const dom::MediaTrackConstraints& aConstraints,
                                     const MediaEnginePrefs& aPrefs,
                                     const nsString& aDeviceId,
-                                    const nsACString& aOrigin)
+                                    const nsACString& aOrigin,
+                                    AllocationHandle** aOutHandle,
+                                    const char** aOutBadConstraint)
 {
   // windowId is not a proper constraint, so just read it.
   // It has no well-defined behavior in advanced, so ignore it there.
 
   mWindowId = aConstraints.mBrowserWindow.WasPassed() ?
               aConstraints.mBrowserWindow.Value() : -1;
+  *aOutHandle = nullptr;
 
-  return Restart(aConstraints, aPrefs, aDeviceId);
+  {
+    MonitorAutoLock mon(mMonitor);
+    mState = kAllocated;
+  }
+
+  return Restart(nullptr, aConstraints, aPrefs, aDeviceId, aOutBadConstraint);
 }
 
 nsresult
-MediaEngineTabVideoSource::Restart(const dom::MediaTrackConstraints& aConstraints,
+MediaEngineTabVideoSource::Restart(AllocationHandle* aHandle,
+                                   const dom::MediaTrackConstraints& aConstraints,
                                    const mozilla::MediaEnginePrefs& aPrefs,
-                                   const nsString& aDeviceId)
+                                   const nsString& aDeviceId,
+                                   const char** aOutBadConstraint)
 {
+  MOZ_ASSERT(!aHandle);
+
   // scrollWithPage is not proper a constraint, so just read it.
   // It has no well-defined behavior in advanced, so ignore it there.
 
@@ -178,8 +201,15 @@ MediaEngineTabVideoSource::Restart(const dom::MediaTrackConstraints& aConstraint
 }
 
 nsresult
-MediaEngineTabVideoSource::Deallocate()
+MediaEngineTabVideoSource::Deallocate(AllocationHandle* aHandle)
 {
+  MOZ_ASSERT(!aHandle);
+  NS_DispatchToMainThread(do_AddRef(new DestroyRunnable(this)));
+
+  {
+    MonitorAutoLock mon(mMonitor);
+    mState = kReleased;
+  }
   return NS_OK;
 }
 
@@ -195,6 +225,11 @@ MediaEngineTabVideoSource::Start(SourceMediaStream* aStream, TrackID aID,
   NS_DispatchToMainThread(runnable);
   aStream->AddTrack(aID, 0, new VideoSegment());
 
+  {
+    MonitorAutoLock mon(mMonitor);
+    mState = kStarted;
+  }
+
   return NS_OK;
 }
 
@@ -206,6 +241,9 @@ MediaEngineTabVideoSource::NotifyPull(MediaStreamGraph*,
 {
   VideoSegment segment;
   MonitorAutoLock mon(mMonitor);
+  if (mState != kStarted) {
+    return;
+  }
 
   // Note: we're not giving up mImage here
   RefPtr<layers::SourceSurfaceImage> image = mImage;
@@ -328,7 +366,8 @@ MediaEngineTabVideoSource::Draw() {
 }
 
 nsresult
-MediaEngineTabVideoSource::Stop(mozilla::SourceMediaStream*, mozilla::TrackID)
+MediaEngineTabVideoSource::Stop(mozilla::SourceMediaStream* aSource,
+                                mozilla::TrackID aID)
 {
   // If mBlackedoutWindow is true, we may be running
   // despite mWindow == nullptr.
@@ -337,6 +376,12 @@ MediaEngineTabVideoSource::Stop(mozilla::SourceMediaStream*, mozilla::TrackID)
   }
 
   NS_DispatchToMainThread(new StopRunnable(this));
+
+  {
+    MonitorAutoLock mon(mMonitor);
+    mState = kStopped;
+    aSource->EndTrack(aID);
+  }
   return NS_OK;
 }
 

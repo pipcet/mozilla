@@ -94,9 +94,9 @@ public:
     void OnSocketReady(nsresult condition); 
 
 private:
-    static NS_METHOD WriteFromSegments(nsIInputStream *, void *,
-                                       const char *, uint32_t offset,
-                                       uint32_t count, uint32_t *countRead);
+    static nsresult WriteFromSegments(nsIInputStream *, void *,
+                                      const char *, uint32_t offset,
+                                      uint32_t count, uint32_t *countRead);
 
     nsSocketTransport                *mTransport;
     ThreadSafeAutoRefCnt              mWriterRefCnt;
@@ -302,6 +302,12 @@ private:
     bool mProxyTransparentResolvesHost;
     bool mHttpsProxy;
     uint32_t     mConnectionFlags;
+
+    // This is only non-empty when "privacy.firstparty.isolate" is enabled.
+    // It is used to create sockets. It's the only way to carry it down to NSPR
+    // layers which are final consumers.  It must be set before the socket
+    // transport is built.
+    nsCString    mFirstPartyDomain;
     
     uint16_t         SocketPort() { return (!mProxyHost.IsEmpty() && !mProxyTransparent) ? mProxyPort : mPort; }
     const nsCString &SocketHost() { return (!mProxyHost.IsEmpty() && !mProxyTransparent) ? mProxyHost : mHost; }

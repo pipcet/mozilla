@@ -12,7 +12,6 @@
 
 #include "nsQueryObject.h"
 #include "nsIServiceManager.h"
-#include "nsIPrintOptions.h"
 #include "nsPrintSettingsX.h"
 
 // This must be the last include:
@@ -146,7 +145,7 @@ already_AddRefed<PrintTarget> nsDeviceContextSpecX::MakePrintTarget()
     GetPaperRect(&top, &left, &bottom, &right);
     const double width = right - left;
     const double height = bottom - top;
-    IntSize size(floor(width), floor(height));
+    IntSize size = IntSize::Floor(width, height);
 
     CGContextRef context;
     ::PMSessionGetCGGraphicsContext(mPrintSession, &context);

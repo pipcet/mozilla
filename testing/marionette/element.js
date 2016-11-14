@@ -287,55 +287,109 @@ function find_(container, strategy, selector, searchFn, opts) {
         `Given ${strategy} expression "${selector}" is invalid: ${e}`);
   }
 
-  if (element.isElementCollection(res)) {
-    return res;
-  } else if (res) {
+  if (res) {
+    if (opts.all) {
+      return res;
+    }
     return [res];
   }
   return [];
 }
 
 /**
- * Find a value by XPATH
+ * Find a single element by XPath expression.
  *
- * @param nsIDOMElement root
- *        Document root
- * @param string value
- *        XPATH search string
- * @param nsIDOMElement node
- *        start node
+ * @param {DOMElement} root
+ *     Document root
+ * @param {DOMElement} startNode
+ *     Where in the DOM hiearchy to begin searching.
+ * @param {string} expr
+ *     XPath search expression.
  *
- * @return nsIDOMElement
- *        returns the found element
+ * @return {DOMElement}
+ *     First element matching expression.
  */
-function findByXPath(root, value, node) {
-  return root.evaluate(value, node, null,
-          Ci.nsIDOMXPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-}
+element.findByXPath = function(root, startNode, expr) {
+  let iter = root.evaluate(expr, startNode, null,
+      Ci.nsIDOMXPathResult.FIRST_ORDERED_NODE_TYPE, null)
+  return iter.singleNodeValue;
+};
 
 /**
- * Find values by XPATH
+ * Find elements by XPath expression.
  *
- * @param nsIDOMElement root
- *        Document root
- * @param string value
- *        XPATH search string
- * @param nsIDOMElement node
- *        start node
+ * @param {DOMElement} root
+ *     Document root.
+ * @param {DOMElement} startNode
+ *     Where in the DOM hierarchy to begin searching.
+ * @param {string} expr
+ *     XPath search expression.
  *
- * @return object
- *        returns a list of found nsIDOMElements
+ * @return {Array.<DOMElement>}
+ *     Sequence of found elements matching expression.
  */
-function findByXPathAll(root, value, node) {
-  let values = root.evaluate(value, node, null,
-                    Ci.nsIDOMXPathResult.ORDERED_NODE_ITERATOR_TYPE, null);
-  let elements = [];
-  let element = values.iterateNext();
-  while (element) {
-    elements.push(element);
-    element = values.iterateNext();
+element.findByXPathAll = function(root, startNode, expr) {
+  let rv = [];
+  let iter = root.evaluate(expr, startNode, null,
+      Ci.nsIDOMXPathResult.ORDERED_NODE_ITERATOR_TYPE, null);
+  let el = iter.iterateNext();
+  while (el) {
+    rv.push(el);
+    el = iter.iterateNext();
   }
-  return elements;
+  return rv;
+};
+
+/**
+ * Find all hyperlinks dscendant of |node| which link text is |s|.
+ *
+ * @param {DOMElement} node
+ *     Where in the DOM hierarchy to being searching.
+ * @param {string} s
+ *     Link text to search for.
+ *
+ * @return {Array.<DOMAnchorElement>}
+ *     Sequence of link elements which text is |s|.
+ */
+element.findByLinkText = function(node, s) {
+  return filterLinks(node, link => link.text.trim() === s);
+};
+
+/**
+ * Find all hyperlinks descendant of |node| which link text contains |s|.
+ *
+ * @param {DOMElement} node
+ *     Where in the DOM hierachy to begin searching.
+ * @param {string} s
+ *     Link text to search for.
+ *
+ * @return {Array.<DOMAnchorElement>}
+ *     Sequence of link elements which text containins |s|.
+ */
+element.findByPartialLinkText = function(node, s) {
+  return filterLinks(node, link => link.text.indexOf(s) != -1);
+};
+
+/**
+ * Filters all hyperlinks that are descendant of |node| by |predicate|.
+ *
+ * @param {DOMElement} node
+ *     Where in the DOM hierarchy to begin searching.
+ * @param {function(DOMAnchorElement): boolean} predicate
+ *     Function that determines if given link should be included in
+ *     return value or filtered away.
+ *
+ * @return {Array.<DOMAnchorElement>}
+ *     Sequence of link elements matching |predicate|.
+ */
+function filterLinks(node, predicate) {
+  let rv = [];
+  for (let link of node.getElementsByTagName("a")) {
+    if (predicate(link)) {
+      rv.push(link);
+    }
+  }
+  return rv;
 }
 
 /**
@@ -364,13 +418,13 @@ function findElement(using, value, rootNode, startNode) {
       if (startNode.getElementById) {
         return startNode.getElementById(value);
       }
-      return findByXPath(rootNode, `.//*[@id="${value}"]`, startNode);
+      return element.findByXPath(rootNode, startNode, `.//*[@id="${value}"]`);
 
     case element.Strategy.Name:
       if (startNode.getElementsByName) {
         return startNode.getElementsByName(value)[0];
       }
-      return findByXPath(rootNode, `.//*[@name="${value}"]`, startNode);
+      return element.findByXPath(rootNode, startNode, `.//*[@name="${value}"]`);
 
     case element.Strategy.ClassName:
       // works for >= Firefox 3
@@ -381,24 +435,23 @@ function findElement(using, value, rootNode, startNode) {
       return startNode.getElementsByTagName(value)[0];
 
     case element.Strategy.XPath:
-      return  findByXPath(rootNode, value, startNode);
+      return  element.findByXPath(rootNode, startNode, value);
 
-    // TODO(ato): Rewrite this, it's hairy:
     case element.Strategy.LinkText:
-    case element.Strategy.PartialLinkText:
-      let el;
-      let allLinks = startNode.getElementsByTagName("A");
-      for (let i = 0; i < allLinks.length && !el; i++) {
-        let text = allLinks[i].text;
-        if (using == element.Strategy.PartialLinkText) {
-          if (text.indexOf(value) != -1) {
-            el = allLinks[i];
-          }
-        } else if (text == value) {
-          el = allLinks[i];
+      for (let link of startNode.getElementsByTagName("a")) {
+        if (link.text.trim() === value) {
+          return link;
         }
       }
-      return el;
+      break;
+
+    case element.Strategy.PartialLinkText:
+      for (let link of startNode.getElementsByTagName("a")) {
+        if (link.text.indexOf(value) != -1) {
+          return link;
+        }
+      }
+      break;
 
     case element.Strategy.Selector:
       try {
@@ -446,13 +499,13 @@ function findElements(using, value, rootNode, startNode) {
 
     // fall through
     case element.Strategy.XPath:
-      return findByXPathAll(rootNode, value, startNode);
+      return element.findByXPathAll(rootNode, startNode, value);
 
     case element.Strategy.Name:
       if (startNode.getElementsByName) {
         return startNode.getElementsByName(value);
       }
-      return findByXPathAll(rootNode, `.//*[@name="${value}"]`, startNode);
+      return element.findByXPathAll(rootNode, startNode, `.//*[@name="${value}"]`);
 
     case element.Strategy.ClassName:
       return startNode.getElementsByClassName(value);
@@ -461,20 +514,10 @@ function findElements(using, value, rootNode, startNode) {
       return startNode.getElementsByTagName(value);
 
     case element.Strategy.LinkText:
+      return element.findByLinkText(startNode, value);
+
     case element.Strategy.PartialLinkText:
-      let els = [];
-      let allLinks = startNode.getElementsByTagName("A");
-      for (let i = 0; i < allLinks.length; i++) {
-        let text = allLinks[i].text;
-        if (using == element.Strategy.PartialLinkText) {
-          if (text.indexOf(value) != -1) {
-            els.push(allLinks[i]);
-          }
-        } else if (text == value) {
-          els.push(allLinks[i]);
-        }
-      }
-      return els;
+      return element.findByPartialLinkText(startNode, value);
 
     case element.Strategy.Selector:
       return startNode.querySelectorAll(value);
@@ -535,14 +578,22 @@ function implicitlyWaitFor(func, timeout, interval = 100) {
         reject(e);
       }
 
-      // empty arrays evaluate to true in JS,
-      // so we must first ascertan if the result is a collection
-      //
-      // we also return immediately if timeout is 0,
-      // allowing |func| to be evaluated at least once
-      let col = element.isElementCollection(res);
-      if (((col && res.length > 0 ) || (!col && !!res)) ||
-          (startTime == endTime || new Date().getTime() >= endTime)) {
+      if (
+        // collections that might contain web elements
+        // should be checked until they are not empty
+        (element.isCollection(res) && res.length > 0)
+
+        // !![] (ensuring boolean type on empty array) always returns true
+        // and we can only use it on non-collections
+        || (!element.isCollection(res) && !!res)
+
+        // return immediately if timeout is 0,
+        // allowing |func| to be evaluted at least once
+        || startTime == endTime
+
+        // return if timeout has elapsed
+        || new Date().getTime() >= endTime
+      ) {
         resolve(res);
       }
     };
@@ -563,19 +614,22 @@ function implicitlyWaitFor(func, timeout, interval = 100) {
   });
 }
 
-element.isElementCollection = function(seq) {
-  if (seq === null) {
-    return false;
+/** Determines if |obj| is an HTML or JS collection. */
+element.isCollection = function(seq) {
+  switch (Object.prototype.toString.call(seq)) {
+    case "[object Arguments]":
+    case "[object Array]":
+    case "[object FileList]":
+    case "[object HTMLAllCollection]":
+    case "[object HTMLCollection]":
+    case "[object HTMLFormControlsCollection]":
+    case "[object HTMLOptionsCollection]":
+    case "[object NodeList]":
+      return true;
+
+    default:
+      return false;
   }
-
-  const arrayLike = {
-    "[object Array]": 0,
-    "[object HTMLCollection]": 1,
-    "[object NodeList]": 2,
-  };
-
-  let typ = Object.prototype.toString.call(seq);
-  return typ in arrayLike;
 };
 
 element.makeWebElement = function(uuid) {
@@ -583,6 +637,19 @@ element.makeWebElement = function(uuid) {
     [element.Key]: uuid,
     [element.LegacyKey]: uuid,
   };
+};
+
+/**
+ * Checks if |ref| has either |element.Key| or |element.LegacyKey| as properties.
+ *
+ * @param {?} ref
+ *     Object that represents a web element reference.
+ * @return {boolean}
+ *     True if |ref| has either expected property.
+ */
+element.isWebElementReference = function(ref) {
+  let properties = Object.getOwnPropertyNames(ref);
+  return properties.includes(element.Key) || properties.includes(element.LegacyKey);
 };
 
 element.generateUUID = function() {
@@ -664,43 +731,40 @@ element.fromJson = function(
  *     web elements.
  */
 element.toJson = function(obj, seenEls) {
-  switch (typeof obj) {
-    case "undefined":
-      return null;
+  let t = Object.prototype.toString.call(obj);
 
-    case "boolean":
-    case "number":
-    case "string":
-      return obj;
+  // null
+  if (t == "[object Undefined]" || t == "[object Null]") {
+    return null;
+  }
 
-    case "object":
-      if (obj === null) {
-        return obj;
+  // literals
+  else if (t == "[object Boolean]" || t == "[object Number]" || t == "[object String]") {
+    return obj;
+  }
+
+  // Array, NodeList, HTMLCollection, et al.
+  else if (element.isCollection(obj)) {
+    return [...obj].map(el => element.toJson(el, seenEls));
+  }
+
+  // HTMLElement
+  else if ("nodeType" in obj && obj.nodeType == 1) {
+    let uuid = seenEls.add(obj);
+    return element.makeWebElement(uuid);
+  }
+
+  // arbitrary objects + files
+  else {
+    let rv = {};
+    for (let prop in obj) {
+      try {
+        rv[prop] = element.toJson(obj[prop], seenEls);
+      } catch (e if (e.result == Cr.NS_ERROR_NOT_IMPLEMENTED)) {
+        logger.debug(`Skipping ${prop}: ${e.message}`);
       }
-
-      // NodeList, HTMLCollection
-      else if (element.isElementCollection(obj)) {
-        return [...obj].map(el => element.toJson(el, seenEls));
-      }
-
-      // DOM element
-      else if (obj.nodeType == 1) {
-        let uuid = seenEls.add(obj);
-        return {[element.Key]: uuid, [element.LegacyKey]: uuid};
-      }
-
-      // arbitrary objects
-      else {
-        let rv = {};
-        for (let prop in obj) {
-          try {
-            rv[prop] = element.toJson(obj[prop], seenEls);
-          } catch (e if (e.result == Cr.NS_ERROR_NOT_IMPLEMENTED)) {
-            logger.debug(`Skipping ${prop}: ${e.message}`);
-          }
-        }
-        return rv;
-      }
+    }
+    return rv;
   }
 };
 

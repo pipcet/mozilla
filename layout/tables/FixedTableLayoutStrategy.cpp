@@ -69,9 +69,8 @@ FixedTableLayoutStrategy::GetMinISize(nsRenderingContext* aRenderingContext)
     nscoord spacing = mTableFrame->GetColSpacing(col);
     const nsStyleCoord *styleISize = &colFrame->StylePosition()->ISize(wm);
     if (styleISize->ConvertsToLength()) {
-      result += nsLayoutUtils::ComputeISizeValue(aRenderingContext,
-                                                 colFrame, 0, 0, 0,
-                                                 *styleISize);
+      result += colFrame->ComputeISizeValue(aRenderingContext,
+                                            0, 0, 0, *styleISize);
     } else if (styleISize->GetUnit() == eStyleUnit_Percent) {
       // do nothing
     } else {
@@ -153,9 +152,9 @@ AllocateUnassigned(nscoord aUnassignedSpace, float aShare)
 }
 
 /* virtual */ void
-FixedTableLayoutStrategy::ComputeColumnISizes(const nsHTMLReflowState& aReflowState)
+FixedTableLayoutStrategy::ComputeColumnISizes(const ReflowInput& aReflowInput)
 {
-  nscoord tableISize = aReflowState.ComputedISize();
+  nscoord tableISize = aReflowInput.ComputedISize();
 
   if (mLastCalcISize == tableISize) {
     return;
@@ -213,9 +212,8 @@ FixedTableLayoutStrategy::ComputeColumnISizes(const nsHTMLReflowState& aReflowSt
     const nsStyleCoord *styleISize = &colFrame->StylePosition()->ISize(wm);
     nscoord colISize;
     if (styleISize->ConvertsToLength()) {
-      colISize = nsLayoutUtils::ComputeISizeValue(aReflowState.rendContext,
-                                                  colFrame, 0, 0, 0,
-                                                  *styleISize);
+      colISize = colFrame->ComputeISizeValue(aReflowInput.mRenderingContext,
+                                             0, 0, 0, *styleISize);
       specTotal += colISize;
     } else if (styleISize->GetUnit() == eStyleUnit_Percent) {
       float pct = styleISize->GetPercentValue();
@@ -247,7 +245,7 @@ FixedTableLayoutStrategy::ComputeColumnISizes(const nsHTMLReflowState& aReflowSt
           // MIN_ISIZE for symmetry with GetMinISize above, just in case
           // there is a difference.
           colISize =
-            nsLayoutUtils::IntrinsicForContainer(aReflowState.rendContext,
+            nsLayoutUtils::IntrinsicForContainer(aReflowInput.mRenderingContext,
                                                  cellFrame,
                                                  nsLayoutUtils::MIN_ISIZE);
         } else if (styleISize->GetUnit() == eStyleUnit_Percent) {

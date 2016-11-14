@@ -21,11 +21,10 @@
 #include "nsIForcePendingChannel.h"
 #include "mozilla/ipc/InputStreamUtils.h"
 #include "mozilla/ipc/URIUtils.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "SerializedLoadContext.h"
 #include "nsIContentPolicy.h"
 #include "mozilla/ipc/BackgroundUtils.h"
-#include "nsIOService.h"
 #include "mozilla/LoadInfo.h"
 
 using namespace mozilla::dom;
@@ -57,17 +56,12 @@ FTPChannelParent::FTPChannelParent(const PBrowserOrId& aIframeEmbedding,
     mTabParent = static_cast<dom::TabParent*>(aIframeEmbedding.get_PBrowserParent());
   }
 
-  mObserver = new OfflineObserver(this);
-
   mEventQ = new ChannelEventQueue(static_cast<nsIParentChannel*>(this));
 }
 
 FTPChannelParent::~FTPChannelParent()
 {
   gFtpHandler->Release();
-  if (mObserver) {
-    mObserver->RemoveObserver();
-  }
 }
 
 void
@@ -126,36 +120,31 @@ FTPChannelParent::DoAsyncOpen(const URIParams& aURI,
                               const OptionalInputStreamParams& aUploadStream,
                               const OptionalLoadInfoArgs& aLoadInfoArgs)
 {
+  nsresult rv;
+
   nsCOMPtr<nsIURI> uri = DeserializeURI(aURI);
   if (!uri)
       return false;
 
 #ifdef DEBUG
-  nsCString uriSpec;
-  uri->GetSpec(uriSpec);
   LOG(("FTPChannelParent DoAsyncOpen [this=%p uri=%s]\n",
-       this, uriSpec.get()));
+       this, uri->GetSpecOrDefault().get()));
 #endif
 
-  bool app_offline = false;
-  uint32_t appId = GetAppId();
-  if (appId != NECKO_UNKNOWN_APP_ID &&
-      appId != NECKO_NO_APP_ID) {
-    gIOService->IsAppOffline(appId, &app_offline);
-    LOG(("FTP app id %u is offline %d\n", appId, app_offline));
-  }
-
-  if (app_offline)
-    return SendFailedAsyncOpen(NS_ERROR_OFFLINE);
-
-  nsresult rv;
   nsCOMPtr<nsIIOService> ios(do_GetIOService(&rv));
-  if (NS_FAILED(rv))
+  if (NS_FAILED(rv)) {
     return SendFailedAsyncOpen(rv);
+  }
 
   nsCOMPtr<nsILoadInfo> loadInfo;
   rv = mozilla::ipc::LoadInfoArgsToLoadInfo(aLoadInfoArgs,
                                             getter_AddRefs(loadInfo));
+  if (NS_FAILED(rv)) {
+    return SendFailedAsyncOpen(rv);
+  }
+
+  NeckoOriginAttributes attrs;
+  rv = loadInfo->GetOriginAttributes(&attrs);
   if (NS_FAILED(rv)) {
     return SendFailedAsyncOpen(rv);
   }
@@ -797,7 +786,7 @@ public:
     MOZ_RELEASE_ASSERT(aChannelParent);
     MOZ_RELEASE_ASSERT(NS_FAILED(aErrorCode));
   }
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     mChannelParent->NotifyDiversionFailed(mErrorCode, mSkipResume);
     return NS_OK;
@@ -868,25 +857,6 @@ FTPChannelParent::NotifyDiversionFailed(nsresult aErrorCode,
   if (!mIPCClosed) {
     Unused << SendDeleteSelf();
   }
-}
-
-void
-FTPChannelParent::OfflineDisconnect()
-{
-  if (mChannel) {
-    mChannel->Cancel(NS_ERROR_OFFLINE);
-  }
-  mStatus = NS_ERROR_OFFLINE;
-}
-
-uint32_t
-FTPChannelParent::GetAppId()
-{
-  uint32_t appId = NECKO_UNKNOWN_APP_ID;
-  if (mLoadContext) {
-    mLoadContext->GetAppId(&appId);
-  }
-  return appId;
 }
 
 //-----------------------------------------------------------------------------

@@ -66,7 +66,7 @@ class TestProxy(MarionetteTestCase):
                             {
                                 "proxy":{
                                     "proxyType": "pac",
-                                    "pacUrl": url,
+                                    "proxyAutoconfigUrl": url,
                                 }
                             }
                         }
@@ -75,12 +75,12 @@ class TestProxy(MarionetteTestCase):
         with self.marionette.using_context('chrome'):
             result = self.marionette.execute_script("""return {
                 "proxyType" : Services.prefs.getIntPref('network.proxy.type'),
-                "pacUrl" : Services.prefs.getCharPref('network.proxy.autoconfig_url'),
+                "proxyAutoconfigUrl" : Services.prefs.getCharPref('network.proxy.autoconfig_url'),
                 }
             """)
 
         self.assertEqual(result["proxyType"], 2)
-        self.assertEqual(result["pacUrl"], url, 'pacUrl was not set')
+        self.assertEqual(result["proxyAutoconfigUrl"], url, 'proxyAutoconfigUrl was not set')
 
     def test_that_we_can_set_a_manual_proxy(self):
         port = 4444
@@ -206,7 +206,7 @@ class TestProxy(MarionetteTestCase):
 
         self.assertEqual(result["proxyType"], 1)
         self.assertNotEqual(result["httpProxy"], url,
-                            'httpProxy was set. %s' % result["httpProxy"])
+                            'httpProxy was set. {}'.format(result["httpProxy"]))
         self.assertNotEqual(result["httpProxyPort"], port, 'httpProxyPort was set')
         self.assertNotEqual(result["sslProxy"], url, 'sslProxy url was set')
         self.assertNotEqual(result["sslProxyPort"], port, 'sslProxyPort was set')
@@ -225,7 +225,7 @@ class TestProxy(MarionetteTestCase):
             self.marionette.start_session(capabilities)
             self.fail("We should have started a session because proxy should be a dict")
         except InvalidArgumentException as e:
-            assert e.msg == "Value of 'proxy' should be an object"
+            assert e.message == "Value of 'proxy' should be an object"
 
     def test_proxy_is_passed_in_with_no_proxy_doesnt_set_it(self):
         capabilities = {"requiredCapabilities":

@@ -4,12 +4,12 @@
  * This program is made available under an ISC-style license.  See the
  * accompanying file LICENSE for details.
  */
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif // NOMINMAX
 
 #ifdef NDEBUG
 #undef NDEBUG
-#endif
-#ifndef CUBEB_GECKO_BUILD
-#include "config.h"
 #endif
 #include "cubeb_resampler_internal.h"
 #include <assert.h>
@@ -283,7 +283,7 @@ uint32_t fill_with_sine(float * buf, uint32_t rate, uint32_t channels,
   return initial_phase;
 }
 
-long data_cb(cubeb_stream * stm, void * user_ptr,
+long data_cb(cubeb_stream * /*stm*/, void * user_ptr,
              const void * input_buffer, void * output_buffer, long frame_count)
 {
   osc_state * state = reinterpret_cast<osc_state*>(user_ptr);
@@ -464,7 +464,7 @@ void test_delay_line()
   }
 }
 
-long test_output_only_noop_data_cb(cubeb_stream * stm, void * user_ptr,
+long test_output_only_noop_data_cb(cubeb_stream * /*stm*/, void * /*user_ptr*/,
                                    const void * input_buffer,
                                    void * output_buffer, long frame_count)
 {
@@ -500,7 +500,7 @@ void test_output_only_noop()
   cubeb_resampler_destroy(resampler);
 }
 
-long test_drain_data_cb(cubeb_stream * stm, void * user_ptr,
+long test_drain_data_cb(cubeb_stream * /*stm*/, void * /*user_ptr*/,
                         const void * input_buffer,
                         void * output_buffer, long frame_count)
 {

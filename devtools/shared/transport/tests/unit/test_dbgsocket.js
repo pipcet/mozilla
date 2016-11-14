@@ -45,7 +45,13 @@ function* test_socket_conn()
     host: "127.0.0.1",
     port: gPort
   });
-  let closedDeferred = promise.defer();
+
+  // Assert that connection settings are available on transport object
+  let settings = transport.connectionSettings;
+  do_check_eq(settings.host, "127.0.0.1");
+  do_check_eq(settings.port, gPort);
+
+  let closedDeferred = defer();
   transport.hooks = {
     onPacket: function (aPacket) {
       this.onPacket = function (aPacket) {

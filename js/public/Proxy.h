@@ -189,7 +189,7 @@ class JS_FRIEND_API(BaseProxyHandler)
     bool mHasSecurityPolicy;
 
   public:
-    explicit MOZ_CONSTEXPR BaseProxyHandler(const void* aFamily, bool aHasPrototype = false,
+    explicit constexpr BaseProxyHandler(const void* aFamily, bool aHasPrototype = false,
                                             bool aHasSecurityPolicy = false)
       : mFamily(aFamily),
         mHasPrototype(aHasPrototype),
@@ -211,12 +211,20 @@ class JS_FRIEND_API(BaseProxyHandler)
         return offsetof(BaseProxyHandler, mFamily);
     }
 
-    virtual bool finalizeInBackground(Value priv) const {
+    virtual bool finalizeInBackground(const Value& priv) const {
         /*
          * Called on creation of a proxy to determine whether its finalize
          * method can be finalized on the background thread.
          */
         return true;
+    }
+
+    virtual bool canNurseryAllocate() const {
+        /*
+         * Nursery allocation is allowed if and only if it is safe to not
+         * run |finalize| when the ProxyObject dies.
+         */
+        return false;
     }
 
     /* Policy enforcement methods.
@@ -316,7 +324,7 @@ class JS_FRIEND_API(BaseProxyHandler)
                             const CallArgs& args) const;
     virtual bool hasInstance(JSContext* cx, HandleObject proxy, MutableHandleValue v, bool* bp) const;
     virtual bool getBuiltinClass(JSContext* cx, HandleObject proxy,
-                                 ESClassValue* classValue) const;
+                                 ESClass* cls) const;
     virtual bool isArray(JSContext* cx, HandleObject proxy, JS::IsArrayAnswer* answer) const;
     virtual const char* className(JSContext* cx, HandleObject proxy) const;
     virtual JSString* fun_toString(JSContext* cx, HandleObject proxy, unsigned indent) const;
@@ -526,7 +534,7 @@ NewProxyObject(JSContext* cx, const BaseProxyHandler* handler, HandleValue priv,
                JSObject* proto, const ProxyOptions& options = ProxyOptions());
 
 JSObject*
-RenewProxyObject(JSContext* cx, JSObject* obj, BaseProxyHandler* handler, Value priv);
+RenewProxyObject(JSContext* cx, JSObject* obj, BaseProxyHandler* handler, const Value& priv);
 
 class JS_FRIEND_API(AutoEnterPolicy)
 {

@@ -15,6 +15,7 @@
 #include "chrome/common/ipc_message_utils.h"
 #include "gfxPoint.h"
 #include "gfxRect.h"
+#include "gfxTelemetry.h"
 #include "gfxTypes.h"
 #include "ipc/IPCMessageUtils.h"
 #include "mozilla/gfx/Matrix.h"
@@ -219,6 +220,22 @@ struct ParamTraits<mozilla::layers::LayersBackend>
              mozilla::layers::LayersBackend,
              mozilla::layers::LayersBackend::LAYERS_NONE,
              mozilla::layers::LayersBackend::LAYERS_LAST>
+{};
+
+template <>
+struct ParamTraits<mozilla::gfx::BackendType>
+  : public ContiguousEnumSerializer<
+             mozilla::gfx::BackendType,
+             mozilla::gfx::BackendType::NONE,
+             mozilla::gfx::BackendType::BACKEND_LAST>
+{};
+
+template <>
+struct ParamTraits<mozilla::gfx::FeatureStatus>
+  : public ContiguousEnumSerializer<
+             mozilla::gfx::FeatureStatus,
+             mozilla::gfx::FeatureStatus::Unused,
+             mozilla::gfx::FeatureStatus::LAST>
 {};
 
 template <>
@@ -859,6 +876,14 @@ struct ParamTraits<mozilla::layers::ScrollMetadata>
 };
 
 template<>
+struct ParamTraits<GeckoProcessType>
+  : public ContiguousEnumSerializer<
+             GeckoProcessType,
+             GeckoProcessType_Default,
+             GeckoProcessType_End>
+{};
+
+template<>
 struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
 {
   typedef mozilla::layers::TextureFactoryIdentifier paramType;
@@ -866,18 +891,22 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
   static void Write(Message* aMsg, const paramType& aParam)
   {
     WriteParam(aMsg, aParam.mParentBackend);
+    WriteParam(aMsg, aParam.mParentProcessType);
     WriteParam(aMsg, aParam.mMaxTextureSize);
     WriteParam(aMsg, aParam.mSupportsTextureBlitting);
     WriteParam(aMsg, aParam.mSupportsPartialUploads);
+    WriteParam(aMsg, aParam.mSupportsComponentAlpha);
     WriteParam(aMsg, aParam.mSyncHandle);
   }
 
   static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
   {
     bool result = ReadParam(aMsg, aIter, &aResult->mParentBackend) &&
+                  ReadParam(aMsg, aIter, &aResult->mParentProcessType) &&
                   ReadParam(aMsg, aIter, &aResult->mMaxTextureSize) &&
                   ReadParam(aMsg, aIter, &aResult->mSupportsTextureBlitting) &&
                   ReadParam(aMsg, aIter, &aResult->mSupportsPartialUploads) &&
+                  ReadParam(aMsg, aIter, &aResult->mSupportsComponentAlpha) &&
                   ReadParam(aMsg, aIter, &aResult->mSyncHandle);
     return result;
   }
@@ -923,6 +952,14 @@ struct ParamTraits<mozilla::StereoMode>
              mozilla::StereoMode,
              mozilla::StereoMode::MONO,
              mozilla::StereoMode::MAX>
+{};
+
+template <>
+struct ParamTraits<mozilla::YUVColorSpace>
+  : public ContiguousEnumSerializer<
+             mozilla::YUVColorSpace,
+             mozilla::YUVColorSpace::BT601,
+             mozilla::YUVColorSpace::UNKNOWN>
 {};
 
 template <>
@@ -1170,14 +1207,24 @@ struct ParamTraits<mozilla::gfx::FilterDescription>
   }
 };
 
+typedef mozilla::layers::GeckoContentController::TapType TapType;
+
+template <>
+struct ParamTraits<TapType>
+  : public ContiguousEnumSerializer<
+             TapType,
+             TapType::eSingleTap,
+             TapType::eSentinel>
+{};
+
 typedef mozilla::layers::GeckoContentController::APZStateChange APZStateChange;
 
 template <>
 struct ParamTraits<APZStateChange>
   : public ContiguousEnumSerializer<
              APZStateChange,
-             APZStateChange::TransformBegin,
-             APZStateChange::APZStateChangeSentinel>
+             APZStateChange::eTransformBegin,
+             APZStateChange::eSentinel>
 {};
 
 template<>

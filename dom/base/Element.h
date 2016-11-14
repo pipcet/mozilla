@@ -39,6 +39,7 @@
 #include "mozilla/dom/ElementBinding.h"
 #include "mozilla/dom/Nullable.h"
 #include "Units.h"
+#include "DOMIntersectionObserver.h"
 
 class nsIFrame;
 class nsIDOMMozNamedAttrMap;
@@ -53,12 +54,15 @@ class nsGlobalWindow;
 class nsICSSDeclaration;
 class nsISMILAttr;
 class nsDocument;
+class nsDOMStringMap;
 
 namespace mozilla {
+class DeclarationBlock;
 namespace dom {
   struct AnimationFilter;
   struct ScrollIntoViewOptions;
   struct ScrollToOptions;
+  class DOMIntersectionObserver;
   class ElementOrCSSPseudoElement;
   class UnrestrictedDoubleOrKeyframeAnimationOptions;
 } // namespace dom
@@ -75,27 +79,27 @@ NS_GetContentList(nsINode* aRootNode,
 // Element-specific flags
 enum {
   // Set if the element has a pending style change.
-  ELEMENT_HAS_PENDING_RESTYLE =                 ELEMENT_FLAG_BIT(0),
+  ELEMENT_HAS_PENDING_RESTYLE =                 NODE_SHARED_RESTYLE_BIT_1,
 
   // Set if the element is a potential restyle root (that is, has a style
   // change pending _and_ that style change will attempt to restyle
   // descendants).
-  ELEMENT_IS_POTENTIAL_RESTYLE_ROOT =           ELEMENT_FLAG_BIT(1),
+  ELEMENT_IS_POTENTIAL_RESTYLE_ROOT =           NODE_SHARED_RESTYLE_BIT_2,
 
   // Set if the element has a pending animation-only style change as
   // part of an animation-only style update (where we update styles from
   // animation to the current refresh tick, but leave everything else as
   // it was).
-  ELEMENT_HAS_PENDING_ANIMATION_ONLY_RESTYLE =  ELEMENT_FLAG_BIT(2),
+  ELEMENT_HAS_PENDING_ANIMATION_ONLY_RESTYLE =  ELEMENT_FLAG_BIT(0),
 
   // Set if the element is a potential animation-only restyle root (that
   // is, has an animation-only style change pending _and_ that style
   // change will attempt to restyle descendants).
-  ELEMENT_IS_POTENTIAL_ANIMATION_ONLY_RESTYLE_ROOT = ELEMENT_FLAG_BIT(3),
+  ELEMENT_IS_POTENTIAL_ANIMATION_ONLY_RESTYLE_ROOT = ELEMENT_FLAG_BIT(1),
 
   // Set if this element has a pending restyle with an eRestyle_SomeDescendants
   // restyle hint.
-  ELEMENT_IS_CONDITIONAL_RESTYLE_ANCESTOR = ELEMENT_FLAG_BIT(4),
+  ELEMENT_IS_CONDITIONAL_RESTYLE_ANCESTOR = ELEMENT_FLAG_BIT(2),
 
   // Just the HAS_PENDING bits, for convenience
   ELEMENT_PENDING_RESTYLE_FLAGS =
@@ -113,10 +117,10 @@ enum {
                               ELEMENT_IS_CONDITIONAL_RESTYLE_ANCESTOR,
 
   // Set if this element is marked as 'scrollgrab' (see bug 912666)
-  ELEMENT_HAS_SCROLLGRAB = ELEMENT_FLAG_BIT(5),
+  ELEMENT_HAS_SCROLLGRAB = ELEMENT_FLAG_BIT(3),
 
   // Remaining bits are for subclasses
-  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 6
+  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 4
 };
 
 #undef ELEMENT_FLAG_BIT
@@ -135,11 +139,12 @@ class EventStateManager;
 namespace dom {
 
 class Animation;
+class CustomElementRegistry;
 class Link;
-class UndoManager;
 class DOMRect;
 class DOMRectList;
 class DestinationInsertionPointList;
+class Grid;
 
 // IID for the dom::Element interface
 #define NS_ELEMENT_IID \
@@ -192,14 +197,30 @@ public:
    */
   void UpdateLinkState(EventStates aState);
 
-  /**
-   * Returns true if this element is either a full-screen element or an
-   * ancestor of the full-screen element.
-   */
-  bool IsFullScreenAncestor() const {
-    return mState.HasAtLeastOneOfStates(NS_EVENT_STATE_FULL_SCREEN_ANCESTOR |
-                                        NS_EVENT_STATE_FULL_SCREEN);
+  virtual int32_t TabIndexDefault()
+  {
+    return -1;
   }
+
+  /**
+   * Get tabIndex of this element. If not found, return TabIndexDefault.
+   */
+  int32_t TabIndex();
+
+  /**
+   * Set tabIndex value to this element.
+   */
+  void SetTabIndex(int32_t aTabIndex, mozilla::ErrorResult& aError);
+
+  /**
+   * Make focus on this element.
+   */
+  virtual void Focus(mozilla::ErrorResult& aError);
+
+  /**
+   * Show blur and clear focus.
+   */
+  virtual void Blur(mozilla::ErrorResult& aError);
 
   /**
    * The style state of this element. This is the real state of the element
@@ -236,13 +257,13 @@ public:
   /**
    * Get the inline style declaration, if any, for this element.
    */
-  virtual css::Declaration* GetInlineStyleDeclaration();
+  virtual DeclarationBlock* GetInlineStyleDeclaration();
 
   /**
    * Set the inline style declaration for this element. This will send
    * an appropriate AttributeChanged notification if aNotify is true.
    */
-  virtual nsresult SetInlineStyleDeclaration(css::Declaration* aDeclaration,
+  virtual nsresult SetInlineStyleDeclaration(DeclarationBlock* aDeclaration,
                                              const nsAString* aSerialized,
                                              bool aNotify);
 
@@ -250,15 +271,15 @@ public:
    * Get the SMIL override style declaration for this element. If the
    * rule hasn't been created, this method simply returns null.
    */
-  virtual css::Declaration* GetSMILOverrideStyleDeclaration();
+  virtual DeclarationBlock* GetSMILOverrideStyleDeclaration();
 
   /**
    * Set the SMIL override style declaration for this element. If
    * aNotify is true, this method will notify the document's pres
    * context, so that the style changes will be noticed.
    */
-  virtual nsresult SetSMILOverrideStyleDeclaration(css::Declaration* aDeclaration,
-                                                   bool aNotify);
+  virtual nsresult SetSMILOverrideStyleDeclaration(
+    DeclarationBlock* aDeclaration, bool aNotify);
 
   /**
    * Returns a new nsISMILAttr that allows the caller to animate the given
@@ -406,7 +427,9 @@ private:
   friend class mozilla::EventStateManager;
   friend class ::nsGlobalWindow;
   friend class ::nsFocusManager;
-  friend class ::nsDocument;
+
+  // Allow CusomtElementRegistry to call AddStates.
+  friend class CustomElementRegistry;
 
   // Also need to allow Link to call UpdateLinkState.
   friend class Link;
@@ -517,6 +540,7 @@ public:
   virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
                              bool aNotify) override;
   virtual const nsAttrName* GetAttrNameAt(uint32_t aIndex) const override;
+  virtual BorrowedAttrInfo GetAttrInfoAt(uint32_t aIndex) const override;
   virtual uint32_t GetAttrCount() const override;
   virtual bool IsNodeOfType(uint32_t aFlags) const override;
 
@@ -726,17 +750,18 @@ public:
       aError.Throw(NS_ERROR_DOM_INVALID_POINTER_ERR);
       return;
     }
-    nsIPresShell::PointerCaptureInfo* pointerCaptureInfo = nullptr;
-    if (nsIPresShell::gPointerCaptureList->Get(aPointerId, &pointerCaptureInfo) && pointerCaptureInfo) {
-      // Call ReleasePointerCapture only on correct element
-      // (on element that have status pointer capture override
-      // or on element that have status pending pointer capture)
-      if (pointerCaptureInfo->mOverrideContent == this) {
-        nsIPresShell::ReleasePointerCapturingContent(aPointerId);
-      } else if (pointerCaptureInfo->mPendingContent == this) {
-        nsIPresShell::ReleasePointerCapturingContent(aPointerId);
-      }
+    if (HasPointerCapture(aPointerId)) {
+      nsIPresShell::ReleasePointerCapturingContent(aPointerId);
     }
+  }
+  bool HasPointerCapture(long aPointerId)
+  {
+    nsIPresShell::PointerCaptureInfo* pointerCaptureInfo =
+      nsIPresShell::GetPointerCaptureInfo(aPointerId);
+    if (pointerCaptureInfo && pointerCaptureInfo->mPendingContent == this) {
+      return true;
+    }
+    return false;
   }
   void SetCapture(bool aRetargetToElement)
   {
@@ -755,10 +780,8 @@ public:
     }
   }
 
-  // aCx == nullptr is allowed only if aOptions.isNullOrUndefined()
-  void RequestFullscreen(JSContext* aCx, JS::Handle<JS::Value> aOptions,
-                         ErrorResult& aError);
-  void MozRequestPointerLock();
+  void RequestFullscreen(ErrorResult& aError);
+  void RequestPointerLock();
   Attr* GetAttributeNode(const nsAString& aName);
   already_AddRefed<Attr> SetAttributeNode(Attr& aNewAttr,
                                           ErrorResult& aError);
@@ -774,6 +797,12 @@ public:
 
   already_AddRefed<ShadowRoot> CreateShadowRoot(ErrorResult& aError);
   already_AddRefed<DestinationInsertionPointList> GetDestinationInsertionPoints();
+
+  ShadowRoot *FastGetShadowRoot() const
+  {
+    nsDOMSlots* slots = GetExistingDOMSlots();
+    return slots ? slots->mShadowRoot.get() : nullptr;
+  }
 
   void ScrollIntoView();
   void ScrollIntoView(bool aTop);
@@ -839,19 +868,7 @@ public:
            0;
   }
 
-  virtual already_AddRefed<UndoManager> GetUndoManager()
-  {
-    return nullptr;
-  }
-
-  virtual bool UndoScope()
-  {
-    return false;
-  }
-
-  virtual void SetUndoScope(bool aUndoScope, ErrorResult& aError)
-  {
-  }
+  void GetGridFragments(nsTArray<RefPtr<Grid>>& aResult);
 
   already_AddRefed<Animation>
   Animate(JSContext* aContext,
@@ -869,6 +886,8 @@ public:
           ErrorResult& aError);
 
   // Note: GetAnimations will flush style while GetAnimationsUnsorted won't.
+  // Callers must keep this element alive because flushing style may destroy
+  // this element.
   void GetAnimations(const AnimationFilter& filter,
                      nsTArray<RefPtr<Animation>>& aAnimations);
   static void GetAnimationsUnsorted(Element* aElement,
@@ -944,23 +963,14 @@ public:
   // Work around silly C++ name hiding stuff
   nsIFrame* GetPrimaryFrame() const { return nsIContent::GetPrimaryFrame(); }
 
-  /**
-   * Struct that stores info on an attribute.  The name and value must
-   * either both be null or both be non-null.
-   */
-  struct nsAttrInfo {
-    nsAttrInfo(const nsAttrName* aName, const nsAttrValue* aValue) :
-      mName(aName), mValue(aValue) {}
-    nsAttrInfo(const nsAttrInfo& aOther) :
-      mName(aOther.mName), mValue(aOther.mValue) {}
-
-    const nsAttrName* mName;
-    const nsAttrValue* mValue;
-  };
-
   const nsAttrValue* GetParsedAttr(nsIAtom* aAttr) const
   {
     return mAttrsAndChildren.GetAttr(aAttr);
+  }
+
+  const nsAttrValue* GetParsedAttr(nsIAtom* aAttr, int32_t aNameSpaceID) const
+  {
+    return mAttrsAndChildren.GetAttr(aAttr, aNameSpaceID);
   }
 
   /**
@@ -987,9 +997,9 @@ public:
    * is, this should only be called from methods that only care about attrs
    * that effectively live in mAttrsAndChildren.
    */
-  virtual nsAttrInfo GetAttrInfo(int32_t aNamespaceID, nsIAtom* aName) const;
+  virtual BorrowedAttrInfo GetAttrInfo(int32_t aNamespaceID, nsIAtom* aName) const;
 
-  virtual void NodeInfoChanged(mozilla::dom::NodeInfo* aOldNodeInfo)
+  virtual void NodeInfoChanged()
   {
   }
 
@@ -1130,6 +1140,20 @@ public:
   float FontSizeInflation();
 
   net::ReferrerPolicy GetReferrerPolicyAsEnum();
+
+  /*
+   * Helpers for .dataset.  This is implemented on Element, though only some
+   * sorts of elements expose it to JS as a .dataset property
+   */
+  // Getter, to be called from bindings.
+  already_AddRefed<nsDOMStringMap> Dataset();
+  // Callback for destructor of dataset to ensure to null out our weak pointer
+  // to it.
+  void ClearDataset();
+
+  void RegisterIntersectionObserver(DOMIntersectionObserver* aObserver);
+  void UnregisterIntersectionObserver(DOMIntersectionObserver* aObserver);
+  bool UpdateIntersectionObservation(DOMIntersectionObserver* aObserver, int32_t threshold);
 
 protected:
   /*
@@ -1344,6 +1368,8 @@ protected:
   nsDOMTokenList* GetTokenList(nsIAtom* aAtom,
                                const DOMTokenListSupportedTokenArray aSupportedTokens = nullptr);
 
+  nsTArray<nsDOMSlots::IntersectionObserverRegistration>* RegisteredIntersectionObservers();
+
 private:
   /**
    * Get this element's client area rect in app units.
@@ -1449,6 +1475,13 @@ inline const mozilla::dom::Element* nsINode::AsElement() const
 {
   MOZ_ASSERT(IsElement());
   return static_cast<const mozilla::dom::Element*>(this);
+}
+
+inline void nsINode::UnsetRestyleFlagsIfGecko()
+{
+  if (IsElement() && !IsStyledByServo()) {
+    UnsetFlags(ELEMENT_ALL_RESTYLE_FLAGS);
+  }
 }
 
 /**
@@ -1850,12 +1883,12 @@ NS_IMETHOD ReleaseCapture(void) final override                                \
 NS_IMETHOD MozRequestFullScreen(void) final override                          \
 {                                                                             \
   mozilla::ErrorResult rv;                                                    \
-  Element::RequestFullscreen(nullptr, JS::UndefinedHandleValue, rv);          \
+  Element::RequestFullscreen(rv);                                    \
   return rv.StealNSResult();                                                  \
 }                                                                             \
 NS_IMETHOD MozRequestPointerLock(void) final override                         \
 {                                                                             \
-  Element::MozRequestPointerLock();                                           \
+  Element::RequestPointerLock();                                              \
   return NS_OK;                                                               \
 }                                                                             \
 using nsINode::QuerySelector;                                                 \

@@ -42,21 +42,34 @@ class RuntimeService final : public nsIObserver
   struct WorkerDomainInfo
   {
     nsCString mDomain;
-    nsTArray<WorkerPrivate*> mWorkers;
-    nsTArray<WorkerPrivate*> mServiceWorkers;
+    nsTArray<WorkerPrivate*> mActiveWorkers;
+    nsTArray<WorkerPrivate*> mActiveServiceWorkers;
+    nsTArray<WorkerPrivate*> mQueuedWorkers;
     nsClassHashtable<nsCStringHashKey, SharedWorkerInfo> mSharedWorkerInfos;
     uint32_t mChildWorkerCount;
 
     WorkerDomainInfo()
-    : mWorkers(1), mChildWorkerCount(0)
+    : mActiveWorkers(1), mChildWorkerCount(0)
     { }
+
+    uint32_t
+    ActiveWorkerCount() const
+    {
+      return mActiveWorkers.Length() +
+             mChildWorkerCount;
+    }
+
+    uint32_t
+    ActiveServiceWorkerCount() const
+    {
+      return mActiveServiceWorkers.Length();
+    }
 
     bool
     HasNoWorkers() const
     {
-      return mWorkers.IsEmpty() &&
-             mServiceWorkers.IsEmpty() &&
-             !mChildWorkerCount;
+      return ActiveWorkerCount() == 0 &&
+             ActiveServiceWorkerCount() == 0;
     }
   };
 
@@ -168,10 +181,10 @@ public:
   }
 
   static void
-  SetDefaultRuntimeOptions(const JS::RuntimeOptions& aRuntimeOptions)
+  SetDefaultContextOptions(const JS::ContextOptions& aContextOptions)
   {
     AssertIsOnMainThread();
-    sDefaultJSSettings.runtimeOptions = aRuntimeOptions;
+    sDefaultJSSettings.contextOptions = aContextOptions;
   }
 
   void
@@ -184,7 +197,7 @@ public:
   UpdatePlatformOverridePreference(const nsAString& aValue);
 
   void
-  UpdateAllWorkerRuntimeOptions();
+  UpdateAllWorkerContextOptions();
 
   void
   UpdateAllWorkerLanguages(const nsTArray<nsString>& aLanguages);
@@ -201,18 +214,6 @@ public:
 
   void
   UpdateAllWorkerMemoryParameter(JSGCParamKey aKey, uint32_t aValue);
-
-  static uint32_t
-  GetContentCloseHandlerTimeoutSeconds()
-  {
-    return sDefaultJSSettings.content.maxScriptRuntime;
-  }
-
-  static uint32_t
-  GetChromeCloseHandlerTimeoutSeconds()
-  {
-    return sDefaultJSSettings.chrome.maxScriptRuntime;
-  }
 
 #ifdef JS_GC_ZEAL
   static void

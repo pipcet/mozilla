@@ -16,14 +16,10 @@ config = {
         "branch": "default",
         "dest": "tools",
     }, {
-        "vcs": "hgtool",
+        "vcs": "hg",
         "repo": "https://hg.mozilla.org/projects/jamun",
-        "revision": "default",
+        "branch": "%(revision)s",
         "dest": "jamun",
-    }, {
-        "vcs": "hgtool",
-        "repo": "https://hg.mozilla.org/build/compare-locales",
-        "revision": "RELEASE_AUTOMATION"
     }],
     # purge options
     'purge_minsize': 12,

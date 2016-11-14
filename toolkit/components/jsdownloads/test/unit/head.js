@@ -9,8 +9,7 @@
 
 "use strict";
 
-////////////////////////////////////////////////////////////////////////////////
-//// Globals
+// Globals
 
 var Cc = Components.classes;
 var Ci = Components.interfaces;
@@ -73,10 +72,10 @@ const TEST_REFERRER_URL = "http://www.example.com/referrer.html";
 const TEST_DATA_SHORT = "This test string is downloaded.";
 // Generate using gzipCompressString in TelemetryController.jsm.
 const TEST_DATA_SHORT_GZIP_ENCODED_FIRST = [
- 31,139,8,0,0,0,0,0,0,3,11,201,200,44,86,40,73,45,46,81,40,46,41,202,204
+ 31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 11, 201, 200, 44, 86, 40, 73, 45, 46, 81, 40, 46, 41, 202, 204
 ];
 const TEST_DATA_SHORT_GZIP_ENCODED_SECOND = [
-  75,87,0,114,83,242,203,243,114,242,19,83,82,83,244,0,151,222,109,43,31,0,0,0
+  75, 87, 0, 114, 83, 242, 203, 243, 114, 242, 19, 83, 82, 83, 244, 0, 151, 222, 109, 43, 31, 0, 0, 0
 ];
 const TEST_DATA_SHORT_GZIP_ENCODED =
   TEST_DATA_SHORT_GZIP_ENCODED_FIRST.concat(TEST_DATA_SHORT_GZIP_ENCODED_SECOND);
@@ -90,8 +89,7 @@ function run_test()
   run_next_test();
 }
 
-////////////////////////////////////////////////////////////////////////////////
-//// Support functions
+// Support functions
 
 /**
  * HttpServer object initialized before tests start.
@@ -420,9 +418,9 @@ function promiseStartExternalHelperAppServiceDownload(aSourceUrl) {
 
       onStartRequest: function (aRequest, aContext)
       {
-        let channel = aRequest.QueryInterface(Ci.nsIChannel);
+        let requestChannel = aRequest.QueryInterface(Ci.nsIChannel);
         this.contentListener = gExternalHelperAppService.doContent(
-                                     channel.contentType, aRequest, null, true);
+                                     requestChannel.contentType, aRequest, null, true);
         this.contentListener.onStartRequest(aRequest, aContext);
       },
 
@@ -676,8 +674,7 @@ function isValidDate(aDate) {
  */
 var gMostRecentFirstBytePos;
 
-////////////////////////////////////////////////////////////////////////////////
-//// Initialization functions common to all tests
+// Initialization functions common to all tests
 
 add_task(function test_common_initialize()
 {
@@ -822,11 +819,6 @@ add_task(function test_common_initialize()
       return super._getDirectory(this._allowDirectories ? name : "TmpD");
     },
   }));
-
-  // Get a reference to nsIComponentRegistrar, and ensure that is is freed
-  // before the XPCOM shutdown.
-  let registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
-  do_register_cleanup(() => registrar = null);
 
   // Make sure that downloads started using nsIExternalHelperAppService are
   // saved to disk without asking for a destination interactively.

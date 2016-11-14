@@ -1,8 +1,10 @@
 package org.mozilla.gecko.prompts;
 
+import org.json.JSONException;
 import org.mozilla.gecko.IntentHelper;
-import org.mozilla.gecko.gfx.BitmapUtils;
 import org.mozilla.gecko.GeckoAppShell;
+import org.mozilla.gecko.ThumbnailHelper;
+import org.mozilla.gecko.util.ResourceDrawableUtils;
 import org.mozilla.gecko.widget.GeckoActionProvider;
 
 import org.json.JSONArray;
@@ -57,12 +59,19 @@ public class PromptListItem {
 
         final String iconStr = aObject.optString("icon");
         if (iconStr != null) {
-            BitmapUtils.getDrawable(context, iconStr, new BitmapUtils.BitmapLoader() {
+            final ResourceDrawableUtils.BitmapLoader loader = new ResourceDrawableUtils.BitmapLoader() {
                     @Override
                     public void onBitmapFound(Drawable d) {
                         mIcon = d;
                     }
-                });
+                };
+
+            if (iconStr.startsWith("thumbnail:")) {
+                final int id = Integer.parseInt(iconStr.substring(10), 10);
+                ThumbnailHelper.getInstance().getAndProcessThumbnailFor(id, loader);
+            } else {
+                ResourceDrawableUtils.getDrawable(context, iconStr, loader);
+            }
         }
     }
 
@@ -111,7 +120,7 @@ public class PromptListItem {
             try {
                 PromptListItem item = new PromptListItem(items.getJSONObject(i));
                 list.add(item);
-            } catch (Exception ex) { }
+            } catch (JSONException ex) { }
         }
 
         return list.toArray(new PromptListItem[length]);

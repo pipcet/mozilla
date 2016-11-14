@@ -211,7 +211,8 @@ nsMenuBarListener::KeyPress(nsIDOMEvent* aKeyEvent)
     // the mozaccesskeynotfound event before handling accesskeys.
     WidgetKeyboardEvent* nativeKeyEvent =
       aKeyEvent->WidgetEventPtr()->AsKeyboardEvent();
-    if (nativeKeyEvent && nativeKeyEvent->mAccessKeyForwardedToChild) {
+    if (!nativeKeyEvent ||
+        (nativeKeyEvent && nativeKeyEvent->mAccessKeyForwardedToChild)) {
       return NS_OK;
     }
 
@@ -404,6 +405,17 @@ nsMenuBarListener::MouseDown(nsIDOMEvent* aMouseEvent)
 }
 
 ////////////////////////////////////////////////////////////////////////
+
+nsresult
+nsMenuBarListener::Fullscreen(nsIDOMEvent* aEvent)
+{
+  if (mMenuBarFrame->IsActive()) {
+    ToggleMenuActiveState();
+  }
+  return NS_OK;
+}
+
+////////////////////////////////////////////////////////////////////////
 nsresult
 nsMenuBarListener::HandleEvent(nsIDOMEvent* aEvent)
 {
@@ -432,6 +444,9 @@ nsMenuBarListener::HandleEvent(nsIDOMEvent* aEvent)
   }
   if (eventType.EqualsLiteral("mousedown")) {
     return MouseDown(aEvent);
+  }
+  if (eventType.EqualsLiteral("MozDOMFullscreen:Entered")) {
+    return Fullscreen(aEvent);
   }
 
   NS_ABORT();

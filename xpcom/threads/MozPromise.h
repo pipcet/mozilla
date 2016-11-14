@@ -14,6 +14,7 @@
 #include "mozilla/Mutex.h"
 #include "mozilla/Monitor.h"
 #include "mozilla/Tuple.h"
+#include "mozilla/TypeTraits.h"
 
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
@@ -317,7 +318,7 @@ protected:
         }
       }
 
-      NS_IMETHODIMP Run()
+      NS_IMETHOD Run() override
       {
         PROMISE_LOG("ResolveOrRejectRunnable::Run() [this=%p]", this);
         mThenValue->DoResolveOrReject(mPromise->Value());
@@ -955,7 +956,7 @@ public:
   ProxyRunnable(typename PromiseType::Private* aProxyPromise, MethodCall<PromiseType, ThisType, ArgTypes...>* aMethodCall)
     : mProxyPromise(aProxyPromise), mMethodCall(aMethodCall) {}
 
-  NS_IMETHODIMP Run()
+  NS_IMETHOD Run() override
   {
     RefPtr<PromiseType> p = mMethodCall->Invoke();
     mMethodCall = nullptr;
@@ -968,6 +969,23 @@ private:
   nsAutoPtr<MethodCall<PromiseType, ThisType, ArgTypes...>> mMethodCall;
 };
 
+constexpr bool Any()
+{
+  return false;
+}
+
+template <typename T1>
+constexpr bool Any(T1 a)
+{
+  return static_cast<bool>(a);
+}
+
+template <typename T1, typename... Ts>
+constexpr bool Any(T1 a, Ts... aOthers)
+{
+  return a || Any(aOthers...);
+}
+
 } // namespace detail
 
 template<typename PromiseType, typename ThisType, typename ...ArgTypes, typename ...ActualArgTypes>
@@ -975,6 +993,8 @@ static RefPtr<PromiseType>
 InvokeAsync(AbstractThread* aTarget, ThisType* aThisVal, const char* aCallerName,
             RefPtr<PromiseType>(ThisType::*aMethod)(ArgTypes...), ActualArgTypes&&... aArgs)
 {
+  static_assert(!detail::Any(IsReference<ArgTypes>::value...),
+                "Cannot pass reference types through InvokeAsync, see bug 1313497 if you require it");
   typedef detail::MethodCall<PromiseType, ThisType, ArgTypes...> MethodCallType;
   typedef detail::ProxyRunnable<PromiseType, ThisType, ArgTypes...> ProxyRunnableType;
 

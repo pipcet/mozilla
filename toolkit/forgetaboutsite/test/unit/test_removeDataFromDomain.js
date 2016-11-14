@@ -9,8 +9,7 @@
  * to remove all traces of visiting a site.
  */
 
-////////////////////////////////////////////////////////////////////////////////
-//// Globals
+// Globals
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
@@ -36,8 +35,7 @@ const PERMISSION_VALUE = Ci.nsIPermissionManager.ALLOW_ACTION;
 
 const PREFERENCE_NAME = "test-pref";
 
-////////////////////////////////////////////////////////////////////////////////
-//// Utility Functions
+// Utility Functions
 
 /**
  * Creates an nsIURI object for the given string representation of a URI.
@@ -66,7 +64,7 @@ function uri(aURIString)
 function promiseIsURIVisited(aURI)
 {
   let deferred = Promise.defer();
-  PlacesUtils.asyncHistory.isURIVisited(aURI, function(aURI, aIsVisited) {
+  PlacesUtils.asyncHistory.isURIVisited(aURI, function(unused, aIsVisited) {
     deferred.resolve(aIsVisited);
   });
 
@@ -250,8 +248,7 @@ function preference_exists(aURI)
   return deferred.promise;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-//// Test Functions
+// Test Functions
 
 // History
 function* test_history_cleared_with_direct_match()
@@ -359,7 +356,7 @@ function test_login_manager_logins_cleared_with_subdomain()
   check_login_exists(TEST_HOST, false);
 }
 
-function tets_login_manager_logins_not_cleared_with_uri_contains_domain()
+function test_login_manager_logins_not_cleared_with_uri_contains_domain()
 {
   const TEST_HOST = "http://ilovemozilla.org";
   add_login(TEST_HOST);
@@ -462,6 +459,22 @@ function* test_content_preferences_not_cleared_with_uri_contains_domain()
   do_check_false(yield preference_exists(TEST_URI));
 }
 
+function push_registration_exists(aURL, ps)
+{
+  return new Promise(resolve => {
+    let ssm = Cc["@mozilla.org/scriptsecuritymanager;1"]
+                .getService(Ci.nsIScriptSecurityManager);
+    let principal = ssm.createCodebasePrincipalFromOrigin(aURL);
+    return ps.getSubscription(aURL, principal, (status, record) => {
+      if (!Components.isSuccessCode(status)) {
+        resolve(false);
+      } else {
+        resolve(!!record);
+      }
+    });
+  });
+}
+
 // Push
 function* test_push_cleared()
 {
@@ -469,7 +482,7 @@ function* test_push_cleared()
   try {
     ps = Cc["@mozilla.org/push/Service;1"].
            getService(Ci.nsIPushService);
-  } catch(e) {
+  } catch (e) {
     // No push service, skip test.
     return;
   }
@@ -482,28 +495,12 @@ function* test_push_cleared()
 
   let db = PushServiceWebSocket.newPushDB();
 
-  function push_registration_exists(aURL, ps)
-  {
-    return new Promise(resolve => {
-      let ssm = Cc["@mozilla.org/scriptsecuritymanager;1"]
-                  .getService(Ci.nsIScriptSecurityManager);
-      let principal = ssm.createCodebasePrincipalFromOrigin(aURL);
-      return ps.getSubscription(aURL, principal, (status, record) => {
-        if (!Components.isSuccessCode(status)) {
-          resolve(false);
-        } else {
-          resolve(!!record);
-        }
-      });
-    });
-  }
-
   try {
     PushService.init({
       serverURI: "wss://push.example.org/",
       db,
-      makeWebSocket(uri) {
-        return new MockWebSocket(uri, {
+      makeWebSocket(uriObj) {
+        return new MockWebSocket(uriObj, {
           onHello(request) {
             this.serverSendMsg(JSON.stringify({
               messageType: 'hello',
@@ -619,7 +616,7 @@ var tests = [
   test_login_manager_disabled_hosts_not_cleared_with_uri_contains_domain,
   test_login_manager_logins_cleared_with_direct_match,
   test_login_manager_logins_cleared_with_subdomain,
-  tets_login_manager_logins_not_cleared_with_uri_contains_domain,
+  test_login_manager_logins_not_cleared_with_uri_contains_domain,
 
   // Permission Manager
   test_permission_manager_cleared_with_direct_match,

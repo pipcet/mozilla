@@ -12,8 +12,9 @@
 #include "mozilla/net/ReferrerPolicy.h"
 
 nsDocShellLoadInfo::nsDocShellLoadInfo()
-  : mInheritOwner(false)
-  , mOwnerIsExplicit(false)
+  : mLoadReplace(false)
+  , mInheritPrincipal(false)
+  , mPrincipalIsExplicit(false)
   , mSendReferrer(true)
   , mReferrerPolicy(mozilla::net::RP_Default)
   , mLoadType(nsIDocShellLoadInfo::loadNormal)
@@ -68,49 +69,60 @@ nsDocShellLoadInfo::SetOriginalURI(nsIURI* aOriginalURI)
 }
 
 NS_IMETHODIMP
-nsDocShellLoadInfo::GetOwner(nsISupports** aOwner)
+nsDocShellLoadInfo::GetLoadReplace(bool* aLoadReplace)
 {
-  NS_ENSURE_ARG_POINTER(aOwner);
-
-  *aOwner = mOwner;
-  NS_IF_ADDREF(*aOwner);
+  *aLoadReplace = mLoadReplace;
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsDocShellLoadInfo::SetOwner(nsISupports* aOwner)
+nsDocShellLoadInfo::SetLoadReplace(bool aLoadReplace)
 {
-  mOwner = aOwner;
+  mLoadReplace = aLoadReplace;
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsDocShellLoadInfo::GetInheritOwner(bool* aInheritOwner)
+nsDocShellLoadInfo::GetTriggeringPrincipal(nsIPrincipal** aTriggeringPrincipal)
 {
-  NS_ENSURE_ARG_POINTER(aInheritOwner);
-
-  *aInheritOwner = mInheritOwner;
+  NS_ENSURE_ARG_POINTER(aTriggeringPrincipal);
+  NS_IF_ADDREF(*aTriggeringPrincipal = mTriggeringPrincipal);
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsDocShellLoadInfo::SetInheritOwner(bool aInheritOwner)
+nsDocShellLoadInfo::SetTriggeringPrincipal(nsIPrincipal* aTriggeringPrincipal)
 {
-  mInheritOwner = aInheritOwner;
+  mTriggeringPrincipal = aTriggeringPrincipal;
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsDocShellLoadInfo::GetOwnerIsExplicit(bool* aOwnerIsExplicit)
+nsDocShellLoadInfo::GetInheritPrincipal(bool* aInheritPrincipal)
 {
-  *aOwnerIsExplicit = mOwnerIsExplicit;
+  NS_ENSURE_ARG_POINTER(aInheritPrincipal);
+  *aInheritPrincipal = mInheritPrincipal;
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsDocShellLoadInfo::SetOwnerIsExplicit(bool aOwnerIsExplicit)
+nsDocShellLoadInfo::SetInheritPrincipal(bool aInheritPrincipal)
 {
-  mOwnerIsExplicit = aOwnerIsExplicit;
+  mInheritPrincipal = aInheritPrincipal;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDocShellLoadInfo::GetPrincipalIsExplicit(bool* aPrincipalIsExplicit)
+{
+  *aPrincipalIsExplicit = mPrincipalIsExplicit;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDocShellLoadInfo::SetPrincipalIsExplicit(bool aPrincipalIsExplicit)
+{
+  mPrincipalIsExplicit = aPrincipalIsExplicit;
   return NS_OK;
 }
 

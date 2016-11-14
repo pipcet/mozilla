@@ -11,7 +11,6 @@
 #include "mozilla/ipc/URIUtils.h"
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "SerializedLoadContext.h"
-#include "nsIOService.h"
 #include "mozilla/net/NeckoCommon.h"
 #include "mozilla/net/WebSocketChannel.h"
 
@@ -35,14 +34,10 @@ WebSocketChannelParent::WebSocketChannelParent(nsIAuthPromptProvider* aAuthProvi
 {
   // Websocket channels can't have a private browsing override
   MOZ_ASSERT_IF(!aLoadContext, aOverrideStatus == kPBOverride_Unset);
-  mObserver = new OfflineObserver(this);
 }
 
 WebSocketChannelParent::~WebSocketChannelParent()
 {
-  if (mObserver) {
-    mObserver->RemoveObserver();
-  }
 }
 //-----------------------------------------------------------------------------
 // WebSocketChannelParent::PWebSocketChannelParent
@@ -77,14 +72,9 @@ WebSocketChannelParent::RecvAsyncOpen(const OptionalURIParams& aURI,
   nsCOMPtr<nsIURI> uri;
   nsCOMPtr<nsILoadInfo> loadInfo;
 
-  bool appOffline = false;
-  uint32_t appId = GetAppId();
-  if (appId != NECKO_UNKNOWN_APP_ID &&
-      appId != NECKO_NO_APP_ID) {
-    gIOService->IsAppOffline(appId, &appOffline);
-    if (appOffline) {
-      goto fail;
-    }
+  rv = LoadInfoArgsToLoadInfo(aLoadInfoArgs, getter_AddRefs(loadInfo));
+  if (NS_FAILED(rv)) {
+    goto fail;
   }
 
   if (aSecure) {
@@ -101,10 +91,6 @@ WebSocketChannelParent::RecvAsyncOpen(const OptionalURIParams& aURI,
   if (NS_WARN_IF(NS_FAILED(rv))) {
     goto fail;
   }
-
-  rv = LoadInfoArgsToLoadInfo(aLoadInfoArgs, getter_AddRefs(loadInfo));
-  if (NS_FAILED(rv))
-    goto fail;
 
   rv = mChannel->SetLoadInfo(loadInfo);
   if (NS_FAILED(rv)) {
@@ -314,25 +300,6 @@ WebSocketChannelParent::GetInterface(const nsIID & iid, void **result)
   }
 
   return QueryInterface(iid, result);
-}
-
-void
-WebSocketChannelParent::OfflineDisconnect()
-{
-  if (mChannel) {
-    mChannel->Close(nsIWebSocketChannel::CLOSE_GOING_AWAY,
-                    nsCString("App is offline"));
-  }
-}
-
-uint32_t
-WebSocketChannelParent::GetAppId()
-{
-  uint32_t appId = NECKO_UNKNOWN_APP_ID;
-  if (mLoadContext) {
-    mLoadContext->GetAppId(&appId);
-  }
-  return appId;
 }
 
 } // namespace net

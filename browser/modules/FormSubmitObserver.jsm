@@ -107,7 +107,7 @@ FormSubmitObserver.prototype =
     // Insure that this is the FormSubmitObserver associated with the
     // element / window this notification is about.
     let element = aInvalidElements.queryElementAt(0, Ci.nsISupports);
-    if (this._content != element.ownerDocument.defaultView.top.document.defaultView) {
+    if (this._content != element.ownerGlobal.top.document.defaultView) {
       return;
     }
 
@@ -195,13 +195,12 @@ FormSubmitObserver.prototype =
     // We want to show the popup at the middle of checkbox and radio buttons
     // and where the content begin for the other elements.
     let offset = 0;
-    let position = "";
 
     if (aElement.tagName == 'INPUT' &&
         (aElement.type == 'radio' || aElement.type == 'checkbox')) {
       panelData.position = "bottomcenter topleft";
     } else {
-      let win = aElement.ownerDocument.defaultView;
+      let win = aElement.ownerGlobal;
       let style = win.getComputedStyle(aElement, null);
       if (style.direction == 'rtl') {
         offset = parseInt(style.paddingRight) + parseInt(style.borderRightWidth);

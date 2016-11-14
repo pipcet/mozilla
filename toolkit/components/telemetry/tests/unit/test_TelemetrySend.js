@@ -69,14 +69,13 @@ var checkPingsSaved = Task.async(function* (pingIds) {
   return allFound;
 });
 
-function run_test() {
+add_task(function* test_setup() {
   // Trigger a proper telemetry init.
   do_get_profile(true);
   // Make sure we don't generate unexpected pings due to pref changes.
-  setEmptyPrefWatchlist();
+  yield setEmptyPrefWatchlist();
   Services.prefs.setBoolPref(PREF_TELEMETRY_ENABLED, true);
-  run_next_test();
-}
+});
 
 // Test the ping sending logic.
 add_task(function* test_sendPendingPings() {
@@ -178,7 +177,7 @@ add_task(function* test_sendPendingPings() {
 });
 
 add_task(function* test_sendDateHeader() {
-  let now = fakeNow(new Date(Date.UTC(2011, 1, 1, 11, 0, 0)));
+  fakeNow(new Date(Date.UTC(2011, 1, 1, 11, 0, 0)));
   yield TelemetrySend.reset();
 
   let pingId = yield TelemetryController.submitExternalPing("test-send-date-header", {});
@@ -256,7 +255,7 @@ add_task(function* test_discardBigPings() {
   const TEST_PING_TYPE = "test-ping-type";
 
   // Generate a 2MB string and create an oversized payload.
-  const OVERSIZED_PAYLOAD = generateRandomString(2 * 1024 * 1024);
+  const OVERSIZED_PAYLOAD = {"data": generateRandomString(2 * 1024 * 1024)};
 
   // Reset the histograms.
   Telemetry.getHistogramById("TELEMETRY_PING_SIZE_EXCEEDED_SEND").clear();

@@ -12,7 +12,6 @@
 #include "base/waitable_event.h"
 #include "chrome/common/child_process_host.h"
 
-#include "mozilla/Atomics.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/ipc/FileDescriptor.h"
 #include "mozilla/Monitor.h"
@@ -93,14 +92,8 @@ public:
 
   virtual bool CanShutdown() { return true; }
 
-  virtual void OnWaitableEventSignaled(base::WaitableEvent *event);
-
   IPC::Channel* GetChannel() {
     return channelp();
-  }
-
-  base::WaitableEvent* GetShutDownEvent() {
-    return GetProcessEvent();
   }
 
   // Returns a "borrowed" handle to the child process - the handle returned
@@ -127,14 +120,6 @@ public:
 
   // For bug 943174: Skip the EnsureProcessTerminated call in the destructor.
   void SetAlreadyDead();
-
-  // This associates an actor telling the process host to stay alive at least
-  // until DissociateActor has been called.
-  void AssociateActor() { mAssociatedActors++; }
-
-  // This gets called when actors get destroyed and will schedule the object
-  // for deletion when all actors have cleared their associations.
-  void DissociateActor();
 
   static void EnableSameExecutableForContentProc() { sRunSelfAsContentProc = true; }
 
@@ -183,14 +168,12 @@ protected:
   base::file_handle_mapping_vector mFileMap;
 #endif
 
-  base::WaitableEventWatcher::Delegate* mDelegate;
-
   ProcessHandle mChildProcessHandle;
 #if defined(OS_MACOSX)
   task_t mChildTask;
 #endif
 
-  void OpenPrivilegedHandle(base::ProcessId aPid);
+  bool OpenPrivilegedHandle(base::ProcessId aPid);
 
 private:
   DISALLOW_EVIL_CONSTRUCTORS(GeckoChildProcessHost);
@@ -202,7 +185,12 @@ private:
   bool RunPerformAsyncLaunch(StringVector aExtraOpts=StringVector(),
                              base::ProcessArchitecture aArch=base::GetCurrentProcessArchitecture());
 
-  static void GetPathToBinary(FilePath& exePath, GeckoProcessType processType);
+  enum class BinaryPathType {
+    Self,
+    PluginContainer
+  };
+
+  static BinaryPathType GetPathToBinary(FilePath& exePath, GeckoProcessType processType);
 
   // The buffer is passed to preserve its lifetime until we are done
   // with launching the sub-process.
@@ -218,10 +206,6 @@ private:
   // FIXME/cjones: this strongly indicates bad design.  Shame on us.
   std::queue<IPC::Message> mQueue;
 
-  // This tracks how many actors are associated with this process that require
-  // it to stay alive and have not yet been destroyed.
-  Atomic<int32_t> mAssociatedActors;
-
   // Remember original env values so we can restore it (there is no other
   // simple way how to change environment of a child process than to modify
   // the current environment).
@@ -232,28 +216,6 @@ private:
 
   static bool sRunSelfAsContentProc;
 };
-
-#ifdef MOZ_NUWA_PROCESS
-class GeckoExistingProcessHost final : public GeckoChildProcessHost
-{
-public:
-  GeckoExistingProcessHost(GeckoProcessType aProcessType,
-                           base::ProcessHandle aProcess,
-                           const FileDescriptor& aFileDescriptor,
-                           ChildPrivileges aPrivileges=base::PRIVILEGES_DEFAULT);
-
-  ~GeckoExistingProcessHost();
-
-  virtual bool PerformAsyncLaunch(StringVector aExtraOpts=StringVector(),
-          base::ProcessArchitecture aArch=base::GetCurrentProcessArchitecture()) override;
-
-  virtual void InitializeChannel() override;
-
-private:
-  base::ProcessHandle mExistingProcessHandle;
-  mozilla::ipc::FileDescriptor mExistingFileDescriptor;
-};
-#endif /* MOZ_NUWA_PROCESS */
 
 } /* namespace ipc */
 } /* namespace mozilla */

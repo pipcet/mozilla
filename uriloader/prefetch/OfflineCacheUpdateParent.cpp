@@ -9,7 +9,7 @@
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/dom/TabParent.h"
 #include "mozilla/ipc/URIUtils.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "nsContentUtils.h"
 #include "nsOfflineCacheUpdate.h"
 #include "nsIApplicationCache.h"
@@ -217,12 +217,6 @@ OfflineCacheUpdateParent::GetTopFrameElement(nsIDOMElement** aElement)
 
 NS_IMETHODIMP
 OfflineCacheUpdateParent::GetNestedFrameId(uint64_t* aId)
-{
-    return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
-OfflineCacheUpdateParent::IsAppOfType(uint32_t appType, bool *_retval)
 {
     return NS_ERROR_NOT_IMPLEMENTED;
 }

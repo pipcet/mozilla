@@ -96,6 +96,7 @@ struct ArgumentsData
 // number of arguments that can be supplied to Function.prototype.apply.
 // This value also bounds the number of elements parsed in an array
 // initializer.
+// NB: keep this in sync with the copy in builtin/SelfHostingDefines.h.
 static const unsigned ARGS_LENGTH_MAX = 500 * 1000;
 
 /*
@@ -360,7 +361,7 @@ class ArgumentsObject : public NativeObject
         return getFixedSlotOffset(INITIAL_LENGTH_SLOT);
     }
 
-    static Value MagicScopeSlotValue(uint32_t slot) {
+    static Value MagicEnvSlotValue(uint32_t slot) {
         // When forwarding slots to a backing CallObject, the slot numbers are
         // stored as uint32 magic values. This raises an ambiguity if we have
         // also copied JS_OPTIMIZED_OUT magic from a JIT frame or

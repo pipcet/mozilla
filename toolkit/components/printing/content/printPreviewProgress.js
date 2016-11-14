@@ -92,7 +92,7 @@ function onLoad() {
     return;
   }
 
-  dialog         = new Object;
+  dialog         = {};
   dialog.strings = new Array;
   dialog.title   = document.getElementById("dialog.title");
   dialog.titleLabel = document.getElementById("dialog.titleLabel");
@@ -101,9 +101,8 @@ function onLoad() {
 
   // set our web progress listener on the helper app launcher
   printProgress.registerListener(progressListener);
-  moveToAlertPosition();
 
-  //We need to delay the set title else dom will overwrite it
+  // We need to delay the set title else dom will overwrite it
   window.setTimeout(doneIniting, 100);
 }
 
@@ -115,7 +114,7 @@ function onUnload()
     printProgress.unregisterListener(progressListener);
     printProgress = null;
   }
-  catch(e) {}
+  catch (e) {}
 }
 
 function getString (stringId) {
@@ -142,7 +141,7 @@ function onCancel ()
   try {
     printProgress.processCanceledByUser = true;
   }
-  catch(e) {return true;}
+  catch (e) { return true; }
 
   // don't Close up dialog by returning false, the backend will close the dialog when everything will be aborted.
   return false;

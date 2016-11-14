@@ -1,4 +1,4 @@
-# -*- Mode: python; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 40 -*-
+# -*- Mode: python; indent-tabs-mode: nil; tab-width: 40 -*-
 # vim: set filetype=python:
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -11,7 +11,7 @@ if CONFIG['OS_TARGET'] != 'WINNT' and CONFIG['MOZ_WIDGET_TOOLKIT'] != 'gonk':
         'multi_tcp_socket_unittest.cpp',
         'nrappkit_unittest.cpp',
         'proxy_tunnel_socket_unittest.cpp',
-        'rlogringbuffer_unittest.cpp',
+        'rlogconnector_unittest.cpp',
         'runnable_utils_unittest.cpp',
         'simpletokenbucket_unittest.cpp',
         'sockettransportservice_unittest.cpp',

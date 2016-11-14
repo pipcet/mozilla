@@ -26,6 +26,30 @@ MacroAssembler::move64(Imm64 imm, Register64 dest)
     movePtr(ImmWord(imm.value), dest.reg);
 }
 
+void
+MacroAssembler::moveFloat32ToGPR(FloatRegister src, Register dest)
+{
+    MOZ_CRASH("NYI: moveFloat32ToGPR");
+}
+
+void
+MacroAssembler::moveGPRToFloat32(Register src, FloatRegister dest)
+{
+    MOZ_CRASH("NYI: moveGPRToFloat32");
+}
+
+void
+MacroAssembler::move8SignExtend(Register src, Register dest)
+{
+    MOZ_CRASH("NYI: move8SignExtend");
+}
+
+void
+MacroAssembler::move16SignExtend(Register src, Register dest)
+{
+    MOZ_CRASH("NYI: move16SignExtend");
+}
+
 // ===============================================================
 // Logical instructions
 
@@ -96,6 +120,12 @@ MacroAssembler::and64(Imm64 imm, Register64 dest)
 }
 
 void
+MacroAssembler::and64(Register64 src, Register64 dest)
+{
+    MOZ_CRASH("NYI: and64");
+}
+
+void
 MacroAssembler::or64(Imm64 imm, Register64 dest)
 {
     vixl::UseScratchRegisterScope temps(this);
@@ -158,6 +188,12 @@ void
 MacroAssembler::xor64(Register64 src, Register64 dest)
 {
     xorPtr(src.reg, dest.reg);
+}
+
+void
+MacroAssembler::xor32(Register src, Register dest)
+{
+    Eor(ARMRegister(dest, 32), ARMRegister(dest, 32), Operand(ARMRegister(src, 32)));
 }
 
 void
@@ -277,6 +313,12 @@ MacroAssembler::addDouble(FloatRegister src, FloatRegister dest)
 }
 
 void
+MacroAssembler::addFloat32(FloatRegister src, FloatRegister dest)
+{
+    fadd(ARMFPRegister(dest, 32), ARMFPRegister(dest, 32), ARMFPRegister(src, 32));
+}
+
+void
 MacroAssembler::sub32(Imm32 imm, Register dest)
 {
     Sub(ARMRegister(dest, 32), ARMRegister(dest, 32), Operand(imm.value));
@@ -334,9 +376,27 @@ MacroAssembler::subPtr(const Address& addr, Register dest)
 }
 
 void
+MacroAssembler::sub64(Register64 src, Register64 dest)
+{
+    MOZ_CRASH("NYI: sub64");
+}
+
+void
 MacroAssembler::subDouble(FloatRegister src, FloatRegister dest)
 {
     fsub(ARMFPRegister(dest, 64), ARMFPRegister(dest, 64), ARMFPRegister(src, 64));
+}
+
+void
+MacroAssembler::subFloat32(FloatRegister src, FloatRegister dest)
+{
+    fsub(ARMFPRegister(dest, 32), ARMFPRegister(dest, 32), ARMFPRegister(src, 32));
+}
+
+void
+MacroAssembler::mul32(Register rhs, Register srcDest)
+{
+    MOZ_CRASH("NYI - mul32");
 }
 
 void
@@ -365,11 +425,23 @@ MacroAssembler::mul64(Imm64 imm, const Register64& dest)
 }
 
 void
+MacroAssembler::mul64(const Register64& src, const Register64& dest, const Register temp)
+{
+    MOZ_CRASH("NYI: mul64");
+}
+
+void
 MacroAssembler::mulBy3(Register src, Register dest)
 {
     ARMRegister xdest(dest, 64);
     ARMRegister xsrc(src, 64);
     Add(xdest, xsrc, Operand(xsrc, vixl::LSL, 1));
+}
+
+void
+MacroAssembler::mulFloat32(FloatRegister src, FloatRegister dest)
+{
+    fmul(ARMFPRegister(dest, 32), ARMFPRegister(dest, 32), ARMFPRegister(src, 32));
 }
 
 void
@@ -388,6 +460,24 @@ MacroAssembler::mulDoublePtr(ImmPtr imm, Register temp, FloatRegister dest)
     const ARMFPRegister scratchDouble = temps.AcquireD();
     Ldr(scratchDouble, MemOperand(Address(scratch, 0)));
     fmul(ARMFPRegister(dest, 64), ARMFPRegister(dest, 64), scratchDouble);
+}
+
+void
+MacroAssembler::quotient32(Register rhs, Register srcDest, bool isUnsigned)
+{
+    MOZ_CRASH("NYI - quotient32");
+}
+
+void
+MacroAssembler::remainder32(Register rhs, Register srcDest, bool isUnsigned)
+{
+    MOZ_CRASH("NYI - remainder32");
+}
+
+void
+MacroAssembler::divFloat32(FloatRegister src, FloatRegister dest)
+{
+    fdiv(ARMFPRegister(dest, 32), ARMFPRegister(dest, 32), ARMFPRegister(src, 32));
 }
 
 void
@@ -427,73 +517,265 @@ MacroAssembler::negateDouble(FloatRegister reg)
     fneg(ARMFPRegister(reg, 64), ARMFPRegister(reg, 64));
 }
 
+void
+MacroAssembler::absFloat32(FloatRegister src, FloatRegister dest)
+{
+    MOZ_CRASH("NYI - absFloat32");
+}
+
+void
+MacroAssembler::absDouble(FloatRegister src, FloatRegister dest)
+{
+    MOZ_CRASH("NYI - absDouble");
+}
+
+void
+MacroAssembler::sqrtFloat32(FloatRegister src, FloatRegister dest)
+{
+    MOZ_CRASH("NYI - sqrtFloat32");
+}
+
+void
+MacroAssembler::sqrtDouble(FloatRegister src, FloatRegister dest)
+{
+    MOZ_CRASH("NYI - sqrtDouble");
+}
+
+void
+MacroAssembler::minFloat32(FloatRegister other, FloatRegister srcDest, bool handleNaN)
+{
+    MOZ_CRASH("NYI - minFloat32");
+}
+
+void
+MacroAssembler::minDouble(FloatRegister other, FloatRegister srcDest, bool handleNaN)
+{
+    MOZ_CRASH("NYI - minDouble");
+}
+
+void
+MacroAssembler::maxFloat32(FloatRegister other, FloatRegister srcDest, bool handleNaN)
+{
+    MOZ_CRASH("NYI - maxFloat32");
+}
+
+void
+MacroAssembler::maxDouble(FloatRegister other, FloatRegister srcDest, bool handleNaN)
+{
+    MOZ_CRASH("NYI - maxDouble");
+}
+
 // ===============================================================
 // Shift functions
 
 void
 MacroAssembler::lshiftPtr(Imm32 imm, Register dest)
 {
+    MOZ_ASSERT(0 <= imm.value && imm.value < 64);
     Lsl(ARMRegister(dest, 64), ARMRegister(dest, 64), imm.value);
 }
 
 void
 MacroAssembler::lshift64(Imm32 imm, Register64 dest)
 {
+    MOZ_ASSERT(0 <= imm.value && imm.value < 64);
     lshiftPtr(imm, dest.reg);
+}
+
+void
+MacroAssembler::lshift64(Register shift, Register64 srcDest)
+{
+    MOZ_CRASH("NYI: lshift64");
+}
+
+void
+MacroAssembler::lshift32(Register shift, Register dest)
+{
+    Lsl(ARMRegister(dest, 32), ARMRegister(dest, 32), ARMRegister(shift, 32));
+}
+
+void
+MacroAssembler::lshift32(Imm32 imm, Register dest)
+{
+    MOZ_ASSERT(0 <= imm.value && imm.value < 32);
+    Lsl(ARMRegister(dest, 32), ARMRegister(dest, 32), imm.value);
 }
 
 void
 MacroAssembler::rshiftPtr(Imm32 imm, Register dest)
 {
+    MOZ_ASSERT(0 <= imm.value && imm.value < 64);
     Lsr(ARMRegister(dest, 64), ARMRegister(dest, 64), imm.value);
 }
 
 void
 MacroAssembler::rshiftPtr(Imm32 imm, Register src, Register dest)
 {
+    MOZ_ASSERT(0 <= imm.value && imm.value < 64);
     Lsr(ARMRegister(dest, 64), ARMRegister(src, 64), imm.value);
+}
+
+void
+MacroAssembler::rshift32(Register shift, Register dest)
+{
+    Lsr(ARMRegister(dest, 32), ARMRegister(dest, 32), ARMRegister(shift, 32));
+}
+
+void
+MacroAssembler::rshift32(Imm32 imm, Register dest)
+{
+    MOZ_ASSERT(0 <= imm.value && imm.value < 32);
+    Lsr(ARMRegister(dest, 32), ARMRegister(dest, 32), imm.value);
 }
 
 void
 MacroAssembler::rshiftPtrArithmetic(Imm32 imm, Register dest)
 {
+    MOZ_ASSERT(0 <= imm.value && imm.value < 64);
     Asr(ARMRegister(dest, 64), ARMRegister(dest, 64), imm.value);
+}
+
+void
+MacroAssembler::rshift32Arithmetic(Register shift, Register dest)
+{
+    Asr(ARMRegister(dest, 32), ARMRegister(dest, 32), ARMRegister(shift, 32));
+}
+
+void
+MacroAssembler::rshift32Arithmetic(Imm32 imm, Register dest)
+{
+    MOZ_ASSERT(0 <= imm.value && imm.value < 32);
+    Asr(ARMRegister(dest, 32), ARMRegister(dest, 32), imm.value);
 }
 
 void
 MacroAssembler::rshift64(Imm32 imm, Register64 dest)
 {
+    MOZ_ASSERT(0 <= imm.value && imm.value < 64);
     rshiftPtr(imm, dest.reg);
+}
+
+void
+MacroAssembler::rshift64(Register shift, Register64 srcDest)
+{
+    MOZ_CRASH("NYI: rshift64");
+}
+
+void
+MacroAssembler::rshift64Arithmetic(Imm32 imm, Register64 dest)
+{
+    MOZ_CRASH("NYI: rshift64Arithmetic");
+}
+
+void
+MacroAssembler::rshift64Arithmetic(Register shift, Register64 srcDest)
+{
+    MOZ_CRASH("NYI: rshift64Arithmetic");
+}
+
+// ===============================================================
+// Condition functions
+
+template <typename T1, typename T2>
+void
+MacroAssembler::cmp32Set(Condition cond, T1 lhs, T2 rhs, Register dest)
+{
+    cmp32(lhs, rhs);
+    emitSet(cond, dest);
+}
+
+template <typename T1, typename T2>
+void
+MacroAssembler::cmpPtrSet(Condition cond, T1 lhs, T2 rhs, Register dest)
+{
+    cmpPtr(lhs, rhs);
+    emitSet(cond, dest);
 }
 
 // ===============================================================
 // Rotation functions
+
 void
 MacroAssembler::rotateLeft(Imm32 count, Register input, Register dest)
 {
-    MOZ_CRASH("NYI");
+    MOZ_CRASH("NYI: rotateLeft by immediate");
 }
+
 void
 MacroAssembler::rotateLeft(Register count, Register input, Register dest)
 {
-    MOZ_CRASH("NYI");
+    MOZ_CRASH("NYI: rotateLeft by register");
 }
+
 void
 MacroAssembler::rotateRight(Imm32 count, Register input, Register dest)
 {
-    MOZ_CRASH("NYI");
+    MOZ_CRASH("NYI: rotateRight by immediate");
 }
+
 void
 MacroAssembler::rotateRight(Register count, Register input, Register dest)
 {
-    MOZ_CRASH("NYI");
+    MOZ_CRASH("NYI: rotateRight by register");
+}
+
+void
+MacroAssembler::rotateLeft64(Register count, Register64 input, Register64 dest, Register temp)
+{
+    MOZ_CRASH("NYI: rotateLeft64");
+}
+
+void
+MacroAssembler::rotateRight64(Register count, Register64 input, Register64 dest, Register temp)
+{
+    MOZ_CRASH("NYI: rotateRight64");
+}
+
+// ===============================================================
+// Bit counting functions
+
+void
+MacroAssembler::clz32(Register src, Register dest, bool knownNotZero)
+{
+    MOZ_CRASH("NYI: clz32");
+}
+
+void
+MacroAssembler::ctz32(Register src, Register dest, bool knownNotZero)
+{
+    MOZ_CRASH("NYI: ctz32");
+}
+
+void
+MacroAssembler::clz64(Register64 src, Register dest)
+{
+    MOZ_CRASH("NYI: clz64");
+}
+
+void
+MacroAssembler::ctz64(Register64 src, Register dest)
+{
+    MOZ_CRASH("NYI: ctz64");
+}
+
+void
+MacroAssembler::popcnt32(Register src, Register dest, Register temp)
+{
+    MOZ_CRASH("NYI: popcnt32");
+}
+
+void
+MacroAssembler::popcnt64(Register64 src, Register64 dest, Register temp)
+{
+    MOZ_CRASH("NYI: popcnt64");
 }
 
 // ===============================================================
 // Branch functions
 
+template <class L>
 void
-MacroAssembler::branch32(Condition cond, Register lhs, Register rhs, Label* label)
+MacroAssembler::branch32(Condition cond, Register lhs, Register rhs, L label)
 {
     cmp32(lhs, rhs);
     B(label, cond);
@@ -567,6 +849,12 @@ MacroAssembler::branch32(Condition cond, wasm::SymbolicAddress lhs, Imm32 rhs, L
 }
 
 void
+MacroAssembler::branch64(Condition cond, Register64 lhs, Imm64 val, Label* success, Label* fail)
+{
+    MOZ_CRASH("NYI: branch64 reg-imm");
+}
+
+void
 MacroAssembler::branch64(Condition cond, const Address& lhs, Imm64 val, Label* label)
 {
     MOZ_ASSERT(cond == Assembler::NotEqual,
@@ -625,8 +913,9 @@ MacroAssembler::branchPtr(Condition cond, Register lhs, ImmWord rhs, Label* labe
     B(label, cond);
 }
 
+template <class L>
 void
-MacroAssembler::branchPtr(Condition cond, const Address& lhs, Register rhs, Label* label)
+MacroAssembler::branchPtr(Condition cond, const Address& lhs, Register rhs, L label)
 {
     vixl::UseScratchRegisterScope temps(this);
     const Register scratch = temps.AcquireX().asUnsized();
@@ -758,7 +1047,7 @@ MacroAssembler::branchFloat(DoubleCondition cond, FloatRegister lhs, FloatRegist
 }
 
 void
-MacroAssembler::branchTruncateFloat32(FloatRegister src, Register dest, Label* fail)
+MacroAssembler::branchTruncateFloat32MaybeModUint32(FloatRegister src, Register dest, Label* fail)
 {
     vixl::UseScratchRegisterScope temps(this);
     const ARMRegister scratch64 = temps.AcquireX();
@@ -773,6 +1062,12 @@ MacroAssembler::branchTruncateFloat32(FloatRegister src, Register dest, Label* f
     Cmn(scratch64, 3);
     B(fail, Assembler::Above);
     And(dest64, dest64, Operand(0xffffffff));
+}
+
+void
+MacroAssembler::branchTruncateFloat32ToInt32(FloatRegister src, Register dest, Label* fail)
+{
+    convertFloat32ToInt32(src, dest, fail);
 }
 
 void
@@ -799,7 +1094,7 @@ MacroAssembler::branchDouble(DoubleCondition cond, FloatRegister lhs, FloatRegis
 }
 
 void
-MacroAssembler::branchTruncateDouble(FloatRegister src, Register dest, Label* fail)
+MacroAssembler::branchTruncateDoubleMaybeModUint32(FloatRegister src, Register dest, Label* fail)
 {
     vixl::UseScratchRegisterScope temps(this);
     const ARMRegister scratch64 = temps.AcquireX();
@@ -817,12 +1112,18 @@ MacroAssembler::branchTruncateDouble(FloatRegister src, Register dest, Label* fa
     And(dest64, dest64, Operand(0xffffffff));
 }
 
-template <typename T>
 void
-MacroAssembler::branchAdd32(Condition cond, T src, Register dest, Label* label)
+MacroAssembler::branchTruncateDoubleToInt32(FloatRegister src, Register dest, Label* fail)
+{
+    convertDoubleToInt32(src, dest, fail);
+}
+
+template <typename T, typename L>
+void
+MacroAssembler::branchAdd32(Condition cond, T src, Register dest, L label)
 {
     adds32(src, dest);
-    branch(cond, label);
+    B(label, cond);
 }
 
 template <typename T>
@@ -882,8 +1183,9 @@ MacroAssembler::branchTest32(Condition cond, const AbsoluteAddress& lhs, Imm32 r
     branchTest32(cond, scratch, rhs, label);
 }
 
+template <class L>
 void
-MacroAssembler::branchTestPtr(Condition cond, Register lhs, Register rhs, Label* label)
+MacroAssembler::branchTestPtr(Condition cond, Register lhs, Register rhs, L label)
 {
     Tst(ARMRegister(lhs, 64), Operand(ARMRegister(rhs, 64)));
     B(label, cond);
@@ -906,9 +1208,10 @@ MacroAssembler::branchTestPtr(Condition cond, const Address& lhs, Imm32 rhs, Lab
     branchTestPtr(cond, scratch, rhs, label);
 }
 
+template <class L>
 void
 MacroAssembler::branchTest64(Condition cond, Register64 lhs, Register64 rhs, Register temp,
-                             Label* label)
+                             L label)
 {
     branchTestPtr(cond, lhs.reg, rhs.reg, label);
 }
@@ -1329,6 +1632,45 @@ MacroAssembler::storeFloat32x3(FloatRegister src, const Address& dest)
 }
 void
 MacroAssembler::storeFloat32x3(FloatRegister src, const BaseIndex& dest)
+{
+    MOZ_CRASH("NYI");
+}
+
+void
+MacroAssembler::memoryBarrier(MemoryBarrierBits barrier)
+{
+    MOZ_CRASH("NYI");
+}
+
+// ===============================================================
+// Clamping functions.
+
+void
+MacroAssembler::clampIntToUint8(Register reg)
+{
+    vixl::UseScratchRegisterScope temps(this);
+    const ARMRegister scratch32 = temps.AcquireW();
+    const ARMRegister reg32(reg, 32);
+    MOZ_ASSERT(!scratch32.Is(reg32));
+
+    Cmp(reg32, Operand(reg32, vixl::UXTB));
+    Csel(reg32, reg32, vixl::wzr, Assembler::GreaterThanOrEqual);
+    Mov(scratch32, Operand(0xff));
+    Csel(reg32, reg32, scratch32, Assembler::LessThanOrEqual);
+}
+
+// ========================================================================
+// wasm support
+
+template <class L>
+void
+MacroAssembler::wasmBoundsCheck(Condition cond, Register index, L label)
+{
+    MOZ_CRASH("NYI");
+}
+
+void
+MacroAssembler::wasmPatchBoundsCheck(uint8_t* patchAt, uint32_t limit)
 {
     MOZ_CRASH("NYI");
 }

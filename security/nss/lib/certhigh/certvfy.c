@@ -12,9 +12,13 @@
 #include "certdb.h"
 #include "certi.h"
 #include "cryptohi.h"
+
+#ifndef NSS_DISABLE_LIBPKIX
 #include "pkix.h"
-/*#include "pkix_sample_modules.h" */
 #include "pkix_pl_cert.h"
+#else
+#include "nss.h"
+#endif /* NSS_DISABLE_LIBPKIX */
 
 #include "nsspki.h"
 #include "pkitm.h"
@@ -1113,7 +1117,7 @@ cert_CheckLeafTrust(CERTCertificate *cert, SECCertUsage certUsage,
                     *trusted = PR_TRUE;
                     return SECSuccess;
                 }
-                /* fall through to test distrust */
+            /* fall through to test distrust */
             case certUsageAnyCA:
             case certUsageUserCertImport:
                 /* do we distrust these certs explicitly */
@@ -1133,7 +1137,7 @@ cert_CheckLeafTrust(CERTCertificate *cert, SECCertUsage certUsage,
                         return SECFailure;
                     }
                 }
-                /* fall through */
+            /* fall through */
             case certUsageProtectedObjectSigner:
                 flags = trust.objectSigningFlags;
                 if (flags & CERTDB_TERMINAL_RECORD) { /* the trust record is
