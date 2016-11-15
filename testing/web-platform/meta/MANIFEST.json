@@ -14916,6 +14916,10 @@
         "url": "/cssom-view/elementsFromPoint.html"
       },
       {
+        "path": "cssom-view/mouseEvent.html",
+        "url": "/cssom-view/mouseEvent.html"
+      },
+      {
         "path": "cssom-view/negativeMargins.html",
         "url": "/cssom-view/negativeMargins.html"
       },
@@ -38615,6 +38619,18 @@
             "path": "WebCryptoAPI/generateKey/successes_RSASSA-PKCS1-v1_5.worker.js",
             "timeout": "long",
             "url": "/WebCryptoAPI/generateKey/successes_RSASSA-PKCS1-v1_5.worker"
+          }
+        ],
+        "fetch/api/redirect/redirect-referrer-worker.html": [
+          {
+            "path": "fetch/api/redirect/redirect-referrer-worker.html",
+            "url": "/fetch/api/redirect/redirect-referrer-worker.html"
+          }
+        ],
+        "fetch/api/redirect/redirect-referrer.html": [
+          {
+            "path": "fetch/api/redirect/redirect-referrer.html",
+            "url": "/fetch/api/redirect/redirect-referrer.html"
           }
         ],
         "html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/resume-timer-on-history-back.html": [
