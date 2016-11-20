@@ -9,6 +9,7 @@ addons:
             - autoconf2.64
             - automake
             - clang
+            - gcc-6
             - libtool
             - m4
             - texinfo
@@ -17,6 +18,6 @@ addons:
             - libmpc-dev
             - yasm
 script:
-    - (cd js/src; autoconf2.13)
+    - (cd js/src; CC=gcc-6 CXX=g++-6 autoconf2.13)
     - mkdir mybuild
     - (cd mybuild; ../js/src/configure --disable-debug --disable-tests --without-system-zlib; make)
