@@ -10,13 +10,25 @@
  *          promisePopupShown promisePopupHidden
  *          openContextMenu closeContextMenu
  *          openExtensionContextMenu closeExtensionContextMenu
+ *          openActionContextMenu openActionSubmenu closeActionContextMenu
  *          imageBuffer getListStyleImage getPanelForNode
  *          awaitExtensionPanel awaitPopupResize
  *          promiseContentDimensions alterContent
  */
 
-var {AppConstants} = Cu.import("resource://gre/modules/AppConstants.jsm");
-var {CustomizableUI} = Cu.import("resource:///modules/CustomizableUI.jsm");
+const {AppConstants} = Cu.import("resource://gre/modules/AppConstants.jsm");
+const {CustomizableUI} = Cu.import("resource:///modules/CustomizableUI.jsm");
+
+// We run tests under two different configurations, from browser.ini and
+// browser-remote.ini. When running from browser-remote.ini, the tests are
+// copied to the sub-directory "test-oop-extensions", which we detect here, and
+// use to select our configuration.
+if (gTestPath.includes("test-oop-extensions")) {
+  SpecialPowers.pushPrefEnv({set: [
+    ["dom.ipc.processCount", 1],
+    ["extensions.webextensions.remote", true],
+  ]});
+}
 
 // Bug 1239884: Our tests occasionally hit a long GC pause at unpredictable
 // times in debug builds, which results in intermittent timeouts. Until we have
@@ -132,7 +144,7 @@ function getPanelForNode(node) {
 
 var awaitBrowserLoaded = browser => ContentTask.spawn(browser, null, () => {
   if (content.document.readyState !== "complete") {
-    return ContentTaskUtils.waitForEvent(content, "load").then(() => {});
+    return ContentTaskUtils.waitForEvent(this, "load", true).then(() => {});
   }
 });
 
@@ -144,7 +156,7 @@ var awaitExtensionPanel = Task.async(function* (extension, win = window, awaitLo
   yield Promise.all([
     promisePopupShown(getPanelForNode(browser)),
 
-    awaitLoad && awaitBrowserLoaded(browser),
+    awaitLoad && awaitBrowserLoaded(browser, awaitLoad),
   ]);
 
   return browser;
@@ -227,6 +239,38 @@ function* closeExtensionContextMenu(itemToSelect) {
   let popupHiddenPromise = BrowserTestUtils.waitForEvent(contentAreaContextMenu, "popuphidden");
   EventUtils.synthesizeMouseAtCenter(itemToSelect, {});
   yield popupHiddenPromise;
+}
+
+function* openActionContextMenu(extension, kind, win = window) {
+  const menu = win.document.getElementById("toolbar-context-menu");
+  const id = `${makeWidgetId(extension.id)}-${kind}-action`;
+  const button = win.document.getElementById(id);
+  SetPageProxyState("valid");
+
+  const shown = BrowserTestUtils.waitForEvent(menu, "popupshown");
+  EventUtils.synthesizeMouseAtCenter(button, {type: "contextmenu"}, win);
+  yield shown;
+
+  return menu;
+}
+
+function* openActionSubmenu(submenuItem, win = window) {
+  const submenu = submenuItem.firstChild;
+  const shown = BrowserTestUtils.waitForEvent(submenu, "popupshown");
+  EventUtils.synthesizeMouseAtCenter(submenuItem, {}, win);
+  yield shown;
+  return submenu;
+}
+
+function closeActionContextMenu(itemToSelect, win = window) {
+  const menu = win.document.getElementById("toolbar-context-menu");
+  const hidden = BrowserTestUtils.waitForEvent(menu, "popuphidden");
+  if (itemToSelect) {
+    EventUtils.synthesizeMouseAtCenter(itemToSelect, {}, win);
+  } else {
+    menu.hidePopup();
+  }
+  return hidden;
 }
 
 function getPageActionPopup(extension, win = window) {

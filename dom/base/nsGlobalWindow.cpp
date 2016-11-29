@@ -315,12 +315,14 @@ static int32_t gMinTimeoutValue;
 static int32_t gMinBackgroundTimeoutValue;
 inline int32_t
 nsGlobalWindow::DOMMinTimeoutValue() const {
+  // First apply any back pressure delay that might be in effect.
+  int32_t value = std::max(mBackPressureDelayMS, 0);
   // Don't use the background timeout value when there are audio contexts
   // present, so that baackground audio can keep running smoothly. (bug 1181073)
   bool isBackground = mAudioContexts.IsEmpty() &&
     (!mOuterWindow || mOuterWindow->IsBackground());
   return
-    std::max(isBackground ? gMinBackgroundTimeoutValue : gMinTimeoutValue, 0);
+    std::max(isBackground ? gMinBackgroundTimeoutValue : gMinTimeoutValue, value);
 }
 
 // The number of nested timeouts before we start clamping. HTML5 says 1, WebKit
@@ -506,7 +508,7 @@ public:
   }
 
 private:
-  ~nsGlobalWindowObserver() {}
+  ~nsGlobalWindowObserver() = default;
 
   // This reference is non-owning and safe because it's cleared by
   // nsGlobalWindow::CleanUp().
@@ -719,77 +721,77 @@ class nsOuterWindowProxy : public js::Wrapper
 public:
   constexpr nsOuterWindowProxy() : js::Wrapper(0) { }
 
-  virtual bool finalizeInBackground(const JS::Value& priv) const override {
+  bool finalizeInBackground(const JS::Value& priv) const override {
     return false;
   }
 
   // Standard internal methods
-  virtual bool getOwnPropertyDescriptor(JSContext* cx,
-                                        JS::Handle<JSObject*> proxy,
-                                        JS::Handle<jsid> id,
-                                        JS::MutableHandle<JS::PropertyDescriptor> desc)
-                                        const override;
-  virtual bool defineProperty(JSContext* cx,
-                              JS::Handle<JSObject*> proxy,
-                              JS::Handle<jsid> id,
-                              JS::Handle<JS::PropertyDescriptor> desc,
-                              JS::ObjectOpResult &result) const override;
-  virtual bool ownPropertyKeys(JSContext *cx,
-                               JS::Handle<JSObject*> proxy,
-                               JS::AutoIdVector &props) const override;
-  virtual bool delete_(JSContext *cx, JS::Handle<JSObject*> proxy,
+  bool getOwnPropertyDescriptor(JSContext* cx,
+                                JS::Handle<JSObject*> proxy,
+                                JS::Handle<jsid> id,
+                                JS::MutableHandle<JS::PropertyDescriptor> desc)
+                                const override;
+  bool defineProperty(JSContext* cx,
+                      JS::Handle<JSObject*> proxy,
+                      JS::Handle<jsid> id,
+                      JS::Handle<JS::PropertyDescriptor> desc,
+                      JS::ObjectOpResult &result) const override;
+  bool ownPropertyKeys(JSContext *cx,
+                       JS::Handle<JSObject*> proxy,
+                       JS::AutoIdVector &props) const override;
+  bool delete_(JSContext *cx, JS::Handle<JSObject*> proxy,
                        JS::Handle<jsid> id,
                        JS::ObjectOpResult &result) const override;
 
-  virtual bool getPrototypeIfOrdinary(JSContext* cx,
-                                      JS::Handle<JSObject*> proxy,
-                                      bool* isOrdinary,
-                                      JS::MutableHandle<JSObject*> protop) const override;
+  bool getPrototypeIfOrdinary(JSContext* cx,
+                              JS::Handle<JSObject*> proxy,
+                              bool* isOrdinary,
+                              JS::MutableHandle<JSObject*> protop) const override;
 
-  virtual bool enumerate(JSContext *cx, JS::Handle<JSObject*> proxy,
-                         JS::MutableHandle<JSObject*> vp) const override;
-  virtual bool preventExtensions(JSContext* cx,
-                                 JS::Handle<JSObject*> proxy,
-                                 JS::ObjectOpResult& result) const override;
-  virtual bool isExtensible(JSContext *cx, JS::Handle<JSObject*> proxy, bool *extensible)
-                            const override;
-  virtual bool has(JSContext *cx, JS::Handle<JSObject*> proxy,
-                   JS::Handle<jsid> id, bool *bp) const override;
-  virtual bool get(JSContext *cx, JS::Handle<JSObject*> proxy,
-                   JS::Handle<JS::Value> receiver,
-                   JS::Handle<jsid> id,
-                   JS::MutableHandle<JS::Value> vp) const override;
-  virtual bool set(JSContext *cx, JS::Handle<JSObject*> proxy,
-                   JS::Handle<jsid> id, JS::Handle<JS::Value> v,
-                   JS::Handle<JS::Value> receiver,
-                   JS::ObjectOpResult &result) const override;
+  bool enumerate(JSContext *cx, JS::Handle<JSObject*> proxy,
+                 JS::MutableHandle<JSObject*> vp) const override;
+  bool preventExtensions(JSContext* cx,
+                         JS::Handle<JSObject*> proxy,
+                         JS::ObjectOpResult& result) const override;
+  bool isExtensible(JSContext *cx, JS::Handle<JSObject*> proxy, bool *extensible)
+                    const override;
+  bool has(JSContext *cx, JS::Handle<JSObject*> proxy,
+           JS::Handle<jsid> id, bool *bp) const override;
+  bool get(JSContext *cx, JS::Handle<JSObject*> proxy,
+           JS::Handle<JS::Value> receiver,
+           JS::Handle<jsid> id,
+           JS::MutableHandle<JS::Value> vp) const override;
+  bool set(JSContext *cx, JS::Handle<JSObject*> proxy,
+           JS::Handle<jsid> id, JS::Handle<JS::Value> v,
+           JS::Handle<JS::Value> receiver,
+           JS::ObjectOpResult &result) const override;
 
   // SpiderMonkey extensions
-  virtual bool getPropertyDescriptor(JSContext* cx,
-                                     JS::Handle<JSObject*> proxy,
-                                     JS::Handle<jsid> id,
-                                     JS::MutableHandle<JS::PropertyDescriptor> desc)
-                                     const override;
-  virtual bool hasOwn(JSContext *cx, JS::Handle<JSObject*> proxy,
-                      JS::Handle<jsid> id, bool *bp) const override;
-  virtual bool getOwnEnumerablePropertyKeys(JSContext *cx, JS::Handle<JSObject*> proxy,
-                                            JS::AutoIdVector &props) const override;
-  virtual const char *className(JSContext *cx,
-                                JS::Handle<JSObject*> wrapper) const override;
+  bool getPropertyDescriptor(JSContext* cx,
+                             JS::Handle<JSObject*> proxy,
+                             JS::Handle<jsid> id,
+                             JS::MutableHandle<JS::PropertyDescriptor> desc)
+                             const override;
+  bool hasOwn(JSContext *cx, JS::Handle<JSObject*> proxy,
+              JS::Handle<jsid> id, bool *bp) const override;
+  bool getOwnEnumerablePropertyKeys(JSContext *cx, JS::Handle<JSObject*> proxy,
+                                    JS::AutoIdVector &props) const override;
+  const char *className(JSContext *cx,
+                        JS::Handle<JSObject*> wrapper) const override;
 
-  virtual void finalize(JSFreeOp *fop, JSObject *proxy) const override;
+  void finalize(JSFreeOp *fop, JSObject *proxy) const override;
 
-  virtual bool isCallable(JSObject *obj) const override {
+  bool isCallable(JSObject *obj) const override {
     return false;
   }
-  virtual bool isConstructor(JSObject *obj) const override {
+  bool isConstructor(JSObject *obj) const override {
     return false;
   }
 
-  virtual bool watch(JSContext *cx, JS::Handle<JSObject*> proxy,
-                     JS::Handle<jsid> id, JS::Handle<JSObject*> callable) const override;
-  virtual bool unwatch(JSContext *cx, JS::Handle<JSObject*> proxy,
-                       JS::Handle<jsid> id) const override;
+  bool watch(JSContext *cx, JS::Handle<JSObject*> proxy,
+             JS::Handle<jsid> id, JS::Handle<JSObject*> callable) const override;
+  bool unwatch(JSContext *cx, JS::Handle<JSObject*> proxy,
+               JS::Handle<jsid> id) const override;
 
   static void ObjectMoved(JSObject *obj, const JSObject *old);
 
@@ -1189,7 +1191,7 @@ class nsChromeOuterWindowProxy : public nsOuterWindowProxy
 public:
   constexpr nsChromeOuterWindowProxy() : nsOuterWindowProxy() { }
 
-  virtual const char *className(JSContext *cx, JS::Handle<JSObject*> wrapper) const override;
+  const char *className(JSContext *cx, JS::Handle<JSObject*> wrapper) const override;
 
   static const nsChromeOuterWindowProxy singleton;
 };
@@ -1265,6 +1267,7 @@ nsGlobalWindow::nsGlobalWindow(nsGlobalWindow *aOuterWindow)
     mTimeoutFiringDepth(0),
     mSuspendDepth(0),
     mFreezeDepth(0),
+    mBackPressureDelayMS(0),
     mFocusMethod(0),
     mSerial(0),
     mIdleCallbackTimeoutCounter(1),
@@ -1305,9 +1308,10 @@ nsGlobalWindow::nsGlobalWindow(nsGlobalWindow *aOuterWindow)
         os->AddObserver(mObserver, NS_IOSERVICE_OFFLINE_STATUS_TOPIC,
                         false);
 
-        // Watch for dom-storage2-changed so we can fire storage
-        // events. Use a strong reference.
+        // Watch for dom-storage2-changed and dom-private-storage2-changed so we
+        // can fire storage events. Use a strong reference.
         os->AddObserver(mObserver, "dom-storage2-changed", false);
+        os->AddObserver(mObserver, "dom-private-storage2-changed", false);
       }
 
       Preferences::AddStrongObserver(mObserver, "intl.accept_languages");
@@ -1608,6 +1612,7 @@ nsGlobalWindow::CleanUp()
     if (os) {
       os->RemoveObserver(mObserver, NS_IOSERVICE_OFFLINE_STATUS_TOPIC);
       os->RemoveObserver(mObserver, "dom-storage2-changed");
+      os->RemoveObserver(mObserver, "dom-private-storage2-changed");
     }
 
 #ifdef MOZ_B2G
@@ -3312,9 +3317,10 @@ nsGlobalWindow::WillHandleEvent(EventChainPostVisitor& aVisitor)
 }
 
 nsresult
-nsGlobalWindow::PreHandleEvent(EventChainPreVisitor& aVisitor)
+nsGlobalWindow::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
-  NS_PRECONDITION(IsInnerWindow(), "PreHandleEvent is used on outer window!?");
+  NS_PRECONDITION(IsInnerWindow(),
+                  "GetEventTargetParent is used on outer window!?");
   EventMessage msg = aVisitor.mEvent->mMessage;
 
   aVisitor.mCanHandle = true;
@@ -3547,7 +3553,7 @@ nsGlobalWindow::PostHandleEvent(EventChainPostVisitor& aVisitor)
   } else if (aVisitor.mEvent->mMessage == eLoad &&
              aVisitor.mEvent->IsTrusted()) {
     // This is page load event since load events don't propagate to |window|.
-    // @see nsDocument::PreHandleEvent.
+    // @see nsDocument::GetEventTargetParent.
     mIsDocumentLoaded = true;
 
     nsCOMPtr<Element> element = GetOuterWindow()->GetFrameElementInternal();
@@ -3642,45 +3648,111 @@ nsGlobalWindow::DefineArgumentsProperty(nsIArray *aArguments)
   return ctx->SetProperty(obj, "arguments", aArguments);
 }
 
+namespace {
+
+// The number of queued runnables within the TabGroup ThrottledEventQueue
+// at which to begin applying back pressure to the window.
+const uint32_t kThrottledEventQueueBackPressure = 5000;
+
+// The amount of delay to apply to timers when back pressure is triggered.
+// As the length of the ThrottledEventQueue grows delay is increased.  The
+// delay is scaled such that every kThrottledEventQueueBackPressure runnables
+// in the queue equates to an additional kBackPressureDelayMS.
+const double kBackPressureDelayMS = 500;
+
+// Convert a ThrottledEventQueue length to a timer delay in milliseconds.
+// This will return a value between kBackPressureDelayMS and INT32_MAX.
+int32_t
+CalculateNewBackPressureDelayMS(uint32_t aBacklogDepth)
+{
+  // The calculations here assume we are only operating while in back
+  // pressure conditions.
+  MOZ_ASSERT(aBacklogDepth >= kThrottledEventQueueBackPressure);
+  double multiplier = static_cast<double>(aBacklogDepth) /
+                      static_cast<double>(kThrottledEventQueueBackPressure);
+  double value = kBackPressureDelayMS * multiplier;
+  if (value > INT32_MAX) {
+    value = INT32_MAX;
+  }
+  return static_cast<int32_t>(value);
+}
+
+} // anonymous namespace
+
 void
 nsGlobalWindow::MaybeApplyBackPressure()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  // If we are already suspended, then we don't need to apply back
-  // pressure for ThrottledEventQueue reasons.  This also avoids repeatedly
-  // calling SuspendTimeout() if this routine is executed many times
-  // before dropping below the backpressure threshold.
-  if (IsSuspended()) {
+  // If we are already in back pressure then we don't need to apply back
+  // pressure again.  We also shouldn't need to apply back pressure while
+  // the window is suspended.
+  if (mBackPressureDelayMS > 0 || IsSuspended()) {
     return;
   }
 
-  RefPtr<ThrottledEventQueue> taskQueue = TabGroup()->GetThrottledEventQueue();
-  if (!taskQueue) {
+  RefPtr<ThrottledEventQueue> queue = TabGroup()->GetThrottledEventQueue();
+  if (!queue) {
     return;
   }
 
-  // Only stop the window if it has greatly fallen behind the main thread.
-  // This is a somewhat arbitrary threshold chosen such that it should
+  // Only begin back pressure if the window has greatly fallen behind the main
+  // thread.  This is a somewhat arbitrary threshold chosen such that it should
   // rarely fire under normaly circumstances.  Its low enough, though,
-  // that we should avoid hitting an OOM from the backed up runnables in
-  // the queue.
-  static const uint32_t kThrottledEventQueueBackPressure = 5000;
-  if (taskQueue->Length() < kThrottledEventQueueBackPressure) {
+  // that we should have time to slow new runnables from being added before an
+  // OOM occurs.
+  if (queue->Length() < kThrottledEventQueueBackPressure) {
     return;
   }
 
-  // First attempt to queue a runnable to resume running timeouts.  We do
-  // this first in order to verify we can dispatch successfully.
-  nsCOMPtr<nsIRunnable> r = NewRunnableMethod(this, &nsGlobalWindow::Resume);
-  nsresult rv = taskQueue->Dispatch(r.forget(), NS_DISPATCH_NORMAL);
+  // First attempt to dispatch a runnable to update our back pressure state.  We
+  // do this first in order to verify we can dispatch successfully before
+  // entering the back pressure state.
+  nsCOMPtr<nsIRunnable> r =
+    NewRunnableMethod(this, &nsGlobalWindow::CancelOrUpdateBackPressure);
+  nsresult rv = queue->Dispatch(r.forget(), NS_DISPATCH_NORMAL);
   NS_ENSURE_SUCCESS_VOID(rv);
 
-  // Since the resume is dispatched we can go ahead and suspend the window
-  // now.  Once the task queue drains the resume will automatically get
-  // executed balancing this suspend.
-  // TODO: Consider suppressing event handling as well.
-  Suspend();
+  // Since the callback was scheduled successfully we can now persist the
+  // backpressure value.
+  mBackPressureDelayMS = CalculateNewBackPressureDelayMS(queue->Length());
+}
+
+void
+nsGlobalWindow::CancelOrUpdateBackPressure()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(mBackPressureDelayMS > 0);
+
+  // First, check to see if we are still in back pressure.  If we've dropped
+  // below the threshold we can simply drop our back pressure delay.  We
+  // must also reset timers to remove the old back pressure delay in order to
+  // avoid out-of-order timer execution.
+  RefPtr<ThrottledEventQueue> queue = TabGroup()->GetThrottledEventQueue();
+  if (!queue || queue->Length() < kThrottledEventQueueBackPressure) {
+    int32_t oldBackPressureDelayMS = mBackPressureDelayMS;
+    mBackPressureDelayMS = 0;
+    ResetTimersForThrottleReduction(oldBackPressureDelayMS);
+    return;
+  }
+
+  // Otherwise we are still in back pressure mode.
+
+  // Re-calculate the back pressure delay.
+  int32_t oldBackPressureDelayMS = mBackPressureDelayMS;
+  mBackPressureDelayMS = CalculateNewBackPressureDelayMS(queue->Length());
+
+  // If the back pressure delay has gone down we must reset any existing
+  // timers to use the new value.  Otherwise we run the risk of executing
+  // timer callbacks out-of-order.
+  if (mBackPressureDelayMS < oldBackPressureDelayMS) {
+    ResetTimersForThrottleReduction(oldBackPressureDelayMS);
+  }
+
+  // Dispatch another runnable to update the back pressure state again.
+  nsCOMPtr<nsIRunnable> r =
+    NewRunnableMethod(this, &nsGlobalWindow::CancelOrUpdateBackPressure);
+  MOZ_ALWAYS_SUCCEEDS(queue->Dispatch(r.forget(), NS_DISPATCH_NORMAL));
 }
 
 //*****************************************************************************
@@ -4200,7 +4272,7 @@ nsGlobalWindow::GetParentOuter()
   }
 
   nsCOMPtr<nsPIDOMWindowOuter> parent;
-  if (mDocShell->GetIsMozBrowserOrApp()) {
+  if (mDocShell->GetIsMozBrowser()) {
     parent = AsOuter();
   } else {
     parent = GetParent();
@@ -4258,7 +4330,7 @@ nsGlobalWindow::GetParent()
   }
 
   nsCOMPtr<nsIDocShell> parent;
-  mDocShell->GetSameTypeParentIgnoreBrowserAndAppBoundaries(getter_AddRefs(parent));
+  mDocShell->GetSameTypeParentIgnoreBrowserBoundaries(getter_AddRefs(parent));
 
   if (parent) {
     nsCOMPtr<nsPIDOMWindowOuter> win = parent->GetWindow();
@@ -4377,9 +4449,9 @@ nsGlobalWindow::GetContentInternal(ErrorResult& aError, bool aUnprivilegedCaller
     return domWindow.forget();
   }
 
-  // If we're contained in <iframe mozbrowser> or <iframe mozapp>, then
-  // GetContent is the same as window.top.
-  if (mDocShell && mDocShell->GetIsInMozBrowserOrApp()) {
+  // If we're contained in <iframe mozbrowser>, then GetContent is the same as
+  // window.top.
+  if (mDocShell && mDocShell->GetIsInMozBrowser()) {
     return GetTopOuter();
   }
 
@@ -6338,7 +6410,7 @@ public:
   NS_IMETHOD Run() override;
 
 private:
-  virtual ~FullscreenTransitionTask()
+  ~FullscreenTransitionTask() override
   {
     MOZ_COUNT_DTOR(FullscreenTransitionTask);
   }
@@ -6390,7 +6462,7 @@ private:
       : mTask(aTask) { }
 
   private:
-    ~Observer() {}
+    ~Observer() = default;
 
     RefPtr<FullscreenTransitionTask> mTask;
   };
@@ -7700,7 +7772,7 @@ nsGlobalWindow::ResizeToOuter(int32_t aWidth, int32_t aHeight, ErrorResult& aErr
    * If caller is a browser-element then dispatch a resize event to
    * the embedder.
    */
-  if (mDocShell && mDocShell->GetIsMozBrowserOrApp()) {
+  if (mDocShell && mDocShell->GetIsMozBrowser()) {
     CSSIntSize size(aWidth, aHeight);
     if (!DispatchResizeEvent(size)) {
       // The embedder chose to prevent the default action for this
@@ -7750,7 +7822,7 @@ nsGlobalWindow::ResizeByOuter(int32_t aWidthDif, int32_t aHeightDif,
    * If caller is a browser-element then dispatch a resize event to
    * parent.
    */
-  if (mDocShell && mDocShell->GetIsMozBrowserOrApp()) {
+  if (mDocShell && mDocShell->GetIsMozBrowser()) {
     CSSIntSize size;
     if (NS_FAILED(GetInnerSize(size))) {
       return;
@@ -8556,9 +8628,9 @@ nsGlobalWindow::PostMessageMozOuter(JSContext* aCx, JS::Handle<JS::Value> aMessa
 
         nsContentUtils::LogSimpleConsoleError(
           NS_ConvertUTF8toUTF16(nsPrintfCString(
-            "Attempting to post a message to window with url \"%s\" and "
-            "origin \"%s\" from a system principal scope with mismatched "
-            "origin \"%s\".",
+            R"(Attempting to post a message to window with url "%s" and )"
+            R"(origin "%s" from a system principal scope with mismatched )"
+            R"(origin "%s".)",
             targetURL.get(), targetOrigin.get(), sourceOrigin.get())),
           "DOM");
 
@@ -8719,7 +8791,7 @@ nsGlobalWindow::CloseOuter(bool aTrustedCaller)
   MOZ_RELEASE_ASSERT(IsOuterWindow());
 
   if (!mDocShell || IsInModalState() ||
-      (IsFrame() && !mDocShell->GetIsMozBrowserOrApp())) {
+      (IsFrame() && !mDocShell->GetIsMozBrowser())) {
     // window.close() is called on a frame in a frameset, on a window
     // that's already closed, or on a window for which there's
     // currently a modal dialog open. Ignore such calls.
@@ -8740,14 +8812,13 @@ nsGlobalWindow::CloseOuter(bool aTrustedCaller)
     return;
   }
 
-  // Don't allow scripts from content to close non-app or non-neterror
-  // windows that were not opened by script.
+  // Don't allow scripts from content to close non-neterror windows that
+  // were not opened by script.
   nsAutoString url;
   nsresult rv = mDoc->GetURL(url);
   NS_ENSURE_SUCCESS_VOID(rv);
 
-  if (!mDocShell->GetIsApp() &&
-      !StringBeginsWith(url, NS_LITERAL_STRING("about:neterror")) &&
+  if (!StringBeginsWith(url, NS_LITERAL_STRING("about:neterror")) &&
       !mHadOriginalOpener && !aTrustedCaller) {
     bool allowClose = mAllowScriptsToClose ||
       Preferences::GetBool("dom.allow_scripts_to_close_windows", true);
@@ -9062,9 +9133,9 @@ nsGlobalWindow::NotifyDOMWindowDestroyed(nsGlobalWindow* aWindow) {
 // with principals that are either the system principal or an expanded principal.
 // This may not return true for all non-web-content compartments.
 struct BrowserCompartmentMatcher : public js::CompartmentFilter {
-  virtual bool match(JSCompartment* c) const override
+  bool match(JSCompartment* aC) const override
   {
-    nsCOMPtr<nsIPrincipal> pc = nsJSPrincipals::get(JS_GetCompartmentPrincipals(c));
+    nsCOMPtr<nsIPrincipal> pc = nsJSPrincipals::get(JS_GetCompartmentPrincipals(aC));
     return nsContentUtils::IsSystemOrExpandedPrincipal(pc);
   }
 };
@@ -9195,7 +9266,7 @@ nsGlobalWindow::GetFrameElementOuter(nsIPrincipal& aSubjectPrincipal)
 {
   MOZ_RELEASE_ASSERT(IsOuterWindow());
 
-  if (!mDocShell || mDocShell->GetIsMozBrowserOrApp()) {
+  if (!mDocShell || mDocShell->GetIsMozBrowser()) {
     return nullptr;
   }
 
@@ -9230,7 +9301,7 @@ nsGlobalWindow::GetRealFrameElementOuter()
   }
 
   nsCOMPtr<nsIDocShell> parent;
-  mDocShell->GetSameTypeParentIgnoreBrowserAndAppBoundaries(getter_AddRefs(parent));
+  mDocShell->GetSameTypeParentIgnoreBrowserBoundaries(getter_AddRefs(parent));
 
   if (!parent || parent == mDocShell) {
     // We're at a chrome boundary, don't expose the chrome iframe
@@ -10070,7 +10141,7 @@ void nsGlobalWindow::SetIsBackground(bool aIsBackground)
   bool resetTimers = (!aIsBackground && AsOuter()->IsBackground());
   nsPIDOMWindow::SetIsBackground(aIsBackground);
   if (resetTimers) {
-    ResetTimersForNonBackgroundWindow();
+    ResetTimersForThrottleReduction(gMinBackgroundTimeoutValue);
   }
 
   if (!aIsBackground) {
@@ -11606,7 +11677,9 @@ nsGlobalWindow::Observe(nsISupports* aSubject, const char* aTopic,
     return NS_OK;
   }
 
-  if (!nsCRT::strcmp(aTopic, "dom-storage2-changed")) {
+  bool isPrivateBrowsing = IsPrivateBrowsing();
+  if ((!nsCRT::strcmp(aTopic, "dom-storage2-changed") && !isPrivateBrowsing) ||
+      (!nsCRT::strcmp(aTopic, "dom-private-storage2-changed") && isPrivateBrowsing)) {
     if (!IsInnerWindow() || !AsInner()->IsCurrentInnerWindow()) {
       return NS_OK;
     }
@@ -11641,9 +11714,7 @@ nsGlobalWindow::Observe(nsISupports* aSubject, const char* aTopic,
       return rv;
     }
 
-    if ((privateBrowsingId > 0) != IsPrivateBrowsing()) {
-      return NS_OK;
-    }
+    MOZ_ASSERT((privateBrowsingId > 0) == isPrivateBrowsing);
 
     switch (changingStorage->GetType())
     {
@@ -12210,6 +12281,7 @@ nsGlobalWindow::FireDelayedDOMEvents()
 
   for (uint32_t i = 0, len = mPendingStorageEvents.Length(); i < len; ++i) {
     Observe(mPendingStorageEvents[i], "dom-storage2-changed", nullptr);
+    Observe(mPendingStorageEvents[i], "dom-private-storage2-changed", nullptr);
   }
 
   if (mApplicationCache) {
@@ -12338,13 +12410,6 @@ nsGlobalWindow::OpenInternal(const nsAString& aUrl, const nsAString& aName,
 
   NS_ASSERTION(mDocShell, "Must have docshell here");
 
-  // Popups from apps are never blocked.
-  bool isApp = false;
-  if (mDoc) {
-    isApp = mDoc->NodePrincipal()->GetAppStatus() >=
-              nsIPrincipal::APP_STATUS_INSTALLED;
-  }
-
   bool forceNoOpener = aForceNoOpener;
   if (!forceNoOpener) {
     // Unlike other window flags, "noopener" comes from splitting on commas with
@@ -12364,7 +12429,7 @@ nsGlobalWindow::OpenInternal(const nsAString& aUrl, const nsAString& aName,
   // But note that if you change this to GetEntryGlobal(), say, then
   // OnLinkClickEvent::Run will need a full-blown AutoEntryScript.
   const bool checkForPopup = !nsContentUtils::LegacyIsCallerChromeOrNativeCode() &&
-    !isApp && !aDialog && !WindowExists(aName, forceNoOpener, !aCalledNoScript);
+    !aDialog && !WindowExists(aName, forceNoOpener, !aCalledNoScript);
 
   // Note: it's very important that this be an nsXPIDLCString, since we want
   // .get() on it to return nullptr until we write stuff to it.  The window
@@ -12667,7 +12732,8 @@ nsGlobalWindow::SetTimeoutOrInterval(nsITimeoutHandler* aHandler,
   // Now clamp the actual interval we will use for the timer based on
   uint32_t nestingLevel = sNestingLevel + 1;
   uint32_t realInterval = interval;
-  if (aIsInterval || nestingLevel >= DOM_CLAMP_TIMEOUT_NESTING_LEVEL) {
+  if (aIsInterval || nestingLevel >= DOM_CLAMP_TIMEOUT_NESTING_LEVEL ||
+      mBackPressureDelayMS > 0) {
     // Don't allow timeouts less than DOMMinTimeoutValue() from
     // now...
     realInterval = std::max(realInterval, uint32_t(DOMMinTimeoutValue()));
@@ -13093,7 +13159,7 @@ nsGlobalWindow::RunTimeout(Timeout* aTimeout)
 
   last_insertion_point = mTimeoutInsertionPoint;
   // If we ever start setting mTimeoutInsertionPoint to a non-dummy timeout,
-  // the logic in ResetTimersForNonBackgroundWindow will need to change.
+  // the logic in ResetTimersForThrottleReduction will need to change.
   mTimeoutInsertionPoint = dummy_timeout;
 
   for (Timeout* timeout = mTimeouts.getFirst();
@@ -13206,10 +13272,11 @@ nsGlobalWindow::ClearTimeoutOrInterval(int32_t aTimerId, Timeout::Reason aReason
   }
 }
 
-nsresult nsGlobalWindow::ResetTimersForNonBackgroundWindow()
+nsresult nsGlobalWindow::ResetTimersForThrottleReduction(int32_t aPreviousThrottleDelayMS)
 {
-  FORWARD_TO_INNER(ResetTimersForNonBackgroundWindow, (),
+  FORWARD_TO_INNER(ResetTimersForThrottleReduction, (aPreviousThrottleDelayMS),
                    NS_ERROR_NOT_INITIALIZED);
+  MOZ_ASSERT(aPreviousThrottleDelayMS > 0);
 
   if (IsFrozen() || IsSuspended()) {
     return NS_OK;
@@ -13236,14 +13303,14 @@ nsresult nsGlobalWindow::ResetTimersForNonBackgroundWindow()
     }
 
     if (timeout->mWhen - now >
-        TimeDuration::FromMilliseconds(gMinBackgroundTimeoutValue)) {
+        TimeDuration::FromMilliseconds(aPreviousThrottleDelayMS)) {
       // No need to loop further.  Timeouts are sorted in mWhen order
       // and the ones after this point were all set up for at least
       // gMinBackgroundTimeoutValue ms and hence were not clamped.
       break;
     }
 
-    /* We switched from background. Re-init the timer appropriately */
+    // We reduced our throttled delay. Re-init the timer appropriately.
     // Compute the interval the timer should have had if it had not been set in a
     // background window
     TimeDuration interval =
@@ -14839,7 +14906,6 @@ nsGlobalWindow::TabGroupOuter()
 {
   MOZ_RELEASE_ASSERT(IsOuterWindow());
 
-  // This method is valid both on inner and outer windows, which is a
   // Outer windows lazily join TabGroups when requested. This is usually done
   // because a document is getting its NodePrincipal, and asking for the
   // TabGroup to determine its DocGroup.
@@ -14939,6 +15005,29 @@ nsPIDOMWindow<T>::GetDocGroup()
     return doc->GetDocGroup();
   }
   return nullptr;
+}
+
+nsresult
+nsGlobalWindow::Dispatch(const char* aName,
+                         TaskCategory aCategory,
+                         already_AddRefed<nsIRunnable>&& aRunnable)
+{
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+  if (GetDocGroup()) {
+    return GetDocGroup()->Dispatch(aName, aCategory, Move(aRunnable));
+  }
+  return DispatcherTrait::Dispatch(aName, aCategory, Move(aRunnable));
+}
+
+already_AddRefed<nsIEventTarget>
+nsGlobalWindow::CreateEventTarget(const char* aName,
+                                  TaskCategory aCategory)
+{
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+  if (GetDocGroup()) {
+    return GetDocGroup()->CreateEventTarget(aName, aCategory);
+  }
+  return DispatcherTrait::CreateEventTarget(aName, aCategory);
 }
 
 nsGlobalWindow::TemporarilyDisableDialogs::TemporarilyDisableDialogs(

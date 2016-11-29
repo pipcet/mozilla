@@ -467,7 +467,8 @@ IonBuilder::canInlineTarget(JSFunction* target, CallInfo& callInfo)
     // Allow constructing lazy scripts when performing the definite properties
     // analysis, as baseline has not been used to warm the caller up yet.
     if (target->isInterpreted() && info().analysisMode() == Analysis_DefiniteProperties) {
-        RootedScript script(analysisContext, target->getOrCreateScript(analysisContext));
+        RootedFunction fun(analysisContext, target);
+        RootedScript script(analysisContext, JSFunction::getOrCreateScript(analysisContext, fun));
         if (!script)
             return InliningDecision_Error;
 
@@ -5090,11 +5091,12 @@ IonBuilder::jsop_pow()
     if (!arithTrySharedStub(&emitted, JSOP_POW, base, exponent) || emitted)
         return emitted;
 
-    // For now, use MIRType::Double, as a safe cover-all. See bug 1188079.
-    MPow* pow = MPow::New(alloc(), base, exponent, MIRType::Double);
+    // For now, use MIRType::None as a safe cover-all. See bug 1188079.
+    MPow* pow = MPow::New(alloc(), base, exponent, MIRType::None);
     current->add(pow);
     current->push(pow);
-    return true;
+    MOZ_ASSERT(pow->isEffectful());
+    return resumeAfter(pow);
 }
 
 bool
@@ -5255,8 +5257,13 @@ IonBuilder::inlineScriptedCall(CallInfo& callInfo, JSFunction* target)
         // the inlining was aborted for a non-exception reason.
         if (inlineBuilder.abortReason_ == AbortReason_Disable) {
             calleeScript->setUninlineable();
-            current = backup.restore();
-            return InliningStatus_NotInlined;
+            if (!JitOptions.disableInlineBacktracking) {
+                current = backup.restore();
+                return InliningStatus_NotInlined;
+            }
+            abortReason_ = AbortReason_Inlining;
+        } else if (inlineBuilder.abortReason_ == AbortReason_Inlining) {
+            abortReason_ = AbortReason_Inlining;
         } else if (inlineBuilder.abortReason_ == AbortReason_Alloc) {
             abortReason_ = AbortReason_Alloc;
         } else if (inlineBuilder.abortReason_ == AbortReason_PreliminaryObjects) {
@@ -5285,8 +5292,12 @@ IonBuilder::inlineScriptedCall(CallInfo& callInfo, JSFunction* target)
     if (returns.empty()) {
         // Inlining of functions that have no exit is not supported.
         calleeScript->setUninlineable();
-        current = backup.restore();
-        return InliningStatus_NotInlined;
+        if (!JitOptions.disableInlineBacktracking) {
+            current = backup.restore();
+            return InliningStatus_NotInlined;
+        }
+        abortReason_ = AbortReason_Inlining;
+        return InliningStatus_Error;
     }
     MDefinition* retvalDefn = patchInlinedReturns(callInfo, returns, returnBlock);
     if (!retvalDefn)
@@ -12159,7 +12170,7 @@ IonBuilder::addShapeGuardsForGetterSetter(MDefinition* obj, JSObject* holder, Sh
 
 bool
 IonBuilder::getPropTryCommonGetter(bool* emitted, MDefinition* obj, PropertyName* name,
-                                   TemporaryTypeSet* types)
+                                   TemporaryTypeSet* types, bool innerized)
 {
     MOZ_ASSERT(*emitted == false);
 
@@ -12170,7 +12181,7 @@ IonBuilder::getPropTryCommonGetter(bool* emitted, MDefinition* obj, PropertyName
     bool isOwnProperty = false;
     BaselineInspector::ReceiverVector receivers(alloc());
     BaselineInspector::ObjectGroupVector convertUnboxedGroups(alloc());
-    if (!inspector->commonGetPropFunction(pc, &foundProto, &lastProperty, &commonGetter,
+    if (!inspector->commonGetPropFunction(pc, innerized, &foundProto, &lastProperty, &commonGetter,
                                           &globalShape, &isOwnProperty,
                                           receivers, convertUnboxedGroups))
     {
@@ -12651,8 +12662,11 @@ IonBuilder::getPropTryInnerize(bool* emitted, MDefinition* obj, PropertyName* na
             return *emitted;
 
         trackOptimizationAttempt(TrackedStrategy::GetProp_CommonGetter);
-        if (!getPropTryCommonGetter(emitted, inner, name, types) || *emitted)
+        if (!getPropTryCommonGetter(emitted, inner, name, types, /* innerized = */true) ||
+            *emitted)
+        {
             return *emitted;
+        }
     }
 
     // Passing the inner object to GetProperty IC is safe, see the

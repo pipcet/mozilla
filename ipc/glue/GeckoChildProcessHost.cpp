@@ -23,7 +23,7 @@
 #include "prenv.h"
 #include "nsXPCOMPrivate.h"
 
-#if defined(XP_MACOSX) && defined(MOZ_CONTENT_SANDBOX)
+#if defined(MOZ_CONTENT_SANDBOX)
 #include "nsAppDirectoryServiceDefs.h"
 #endif
 
@@ -107,6 +107,34 @@ GeckoChildProcessHost::GeckoChildProcessHost(GeckoProcessType aProcessType,
 #endif
 {
     MOZ_COUNT_CTOR(GeckoChildProcessHost);
+
+#if defined(OS_WIN) && defined(MOZ_CONTENT_SANDBOX)
+    // Add $PROFILE/chrome to the white list because it may located on network
+    // drive.
+    if (mProcessType == GeckoProcessType_Content) {
+        nsCOMPtr<nsIProperties> directoryService(do_GetService(NS_DIRECTORY_SERVICE_CONTRACTID));
+        NS_ASSERTION(directoryService, "Expected XPCOM to be available");
+        if (directoryService) {
+            // Full path to the profile dir
+            nsCOMPtr<nsIFile> profileDir;
+            nsresult rv = directoryService->Get(NS_APP_USER_PROFILE_50_DIR,
+                                                NS_GET_IID(nsIFile),
+                                                getter_AddRefs(profileDir));
+            if (NS_SUCCEEDED(rv)) {
+                profileDir->Append(NS_LITERAL_STRING("chrome"));
+                profileDir->Append(NS_LITERAL_STRING("*"));
+                nsAutoCString path;
+                MOZ_ALWAYS_SUCCEEDS(profileDir->GetNativePath(path));
+                std::wstring wpath = UTF8ToWide(path.get());
+                // If the patch starts with "\\\\", it is a UNC path.
+                if (wpath.find(L"\\\\") == 0) {
+                    wpath.insert(1, L"??\\UNC");
+                }
+                mAllowedFilesRead.push_back(wpath);
+            }
+        }
+    }
+#endif
 }
 
 GeckoChildProcessHost::~GeckoChildProcessHost()
@@ -733,7 +761,8 @@ GeckoChildProcessHost::PerformAsyncLaunchInternal(std::vector<std::string>& aExt
 #if defined(OS_LINUX) || defined(OS_MACOSX) || defined(OS_BSD)
   base::environment_map newEnvVars;
   ChildPrivileges privs = mPrivileges;
-  if (privs == base::PRIVILEGES_DEFAULT) {
+  if (privs == base::PRIVILEGES_DEFAULT ||
+      privs == base::PRIVILEGES_FILEREAD) {
     privs = DefaultChildPrivileges();
   }
 
@@ -939,12 +968,12 @@ GeckoChildProcessHost::PerformAsyncLaunchInternal(std::vector<std::string>& aExt
   if (child_message.GetTranslatedPort(2) == MACH_PORT_NULL) {
     CHROMIUM_LOG(ERROR) << "parent GetTranslatedPort(2) failed.";
   }
-  MachPortSender* parent_recv_port_memory_ack = new MachPortSender(child_message.GetTranslatedPort(2));
+  auto* parent_recv_port_memory_ack = new MachPortSender(child_message.GetTranslatedPort(2));
 
   if (child_message.GetTranslatedPort(3) == MACH_PORT_NULL) {
     CHROMIUM_LOG(ERROR) << "parent GetTranslatedPort(3) failed.";
   }
-  MachPortSender* parent_send_port_memory = new MachPortSender(child_message.GetTranslatedPort(3));
+  auto* parent_send_port_memory = new MachPortSender(child_message.GetTranslatedPort(3));
 
   MachSendMessage parent_message(/* id= */0);
   if (!parent_message.AddDescriptor(MachMsgPortDescriptor(bootstrap_port))) {
@@ -952,13 +981,13 @@ GeckoChildProcessHost::PerformAsyncLaunchInternal(std::vector<std::string>& aExt
     return false;
   }
 
-  ReceivePort* parent_recv_port_memory = new ReceivePort();
+  auto* parent_recv_port_memory = new ReceivePort();
   if (!parent_message.AddDescriptor(MachMsgPortDescriptor(parent_recv_port_memory->GetPort()))) {
     CHROMIUM_LOG(ERROR) << "parent AddDescriptor(" << parent_recv_port_memory->GetPort() << ") failed.";
     return false;
   }
 
-  ReceivePort* parent_send_port_memory_ack = new ReceivePort();
+  auto* parent_send_port_memory_ack = new ReceivePort();
   if (!parent_message.AddDescriptor(MachMsgPortDescriptor(parent_send_port_memory_ack->GetPort()))) {
     CHROMIUM_LOG(ERROR) << "parent AddDescriptor(" << parent_send_port_memory_ack->GetPort() << ") failed.";
     return false;
@@ -1026,7 +1055,8 @@ GeckoChildProcessHost::PerformAsyncLaunchInternal(std::vector<std::string>& aExt
         // For now we treat every failure as fatal in SetSecurityLevelForContentProcess
         // and just crash there right away. Should this change in the future then we
         // should also handle the error here.
-        mSandboxBroker.SetSecurityLevelForContentProcess(mSandboxLevel);
+        mSandboxBroker.SetSecurityLevelForContentProcess(mSandboxLevel,
+                                                         mPrivileges);
         shouldSandboxCurrentProcess = true;
         AddContentSandboxAllowedFiles(mSandboxLevel, mAllowedFilesRead);
       }

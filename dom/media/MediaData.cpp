@@ -330,8 +330,7 @@ VideoData::CreateAndCopyData(const VideoInfo& aInfo,
   if (!v->mImage) {
     return nullptr;
   }
-  NS_ASSERTION(v->mImage->GetFormat() == ImageFormat::PLANAR_YCBCR ||
-               v->mImage->GetFormat() == ImageFormat::GRALLOC_PLANAR_YCBCR,
+  NS_ASSERTION(v->mImage->GetFormat() == ImageFormat::PLANAR_YCBCR,
                "Wrong format?");
   PlanarYCbCrImage* videoImage = v->mImage->AsPlanarYCbCrImage();
   MOZ_ASSERT(videoImage);
@@ -393,6 +392,15 @@ MediaRawData::MediaRawData(const uint8_t* aData, size_t aSize)
 {
 }
 
+MediaRawData::MediaRawData(const uint8_t* aData, size_t aSize,
+                           const uint8_t* aAlphaData, size_t aAlphaSize)
+  : MediaData(RAW_DATA, 0)
+  , mCrypto(mCryptoInternal)
+  , mBuffer(aData, aSize)
+  , mAlphaBuffer(aAlphaData, aAlphaSize)
+{
+}
+
 already_AddRefed<MediaRawData>
 MediaRawData::Clone() const
 {
@@ -407,6 +415,9 @@ MediaRawData::Clone() const
   s->mTrackInfo = mTrackInfo;
   s->mEOS = mEOS;
   if (!s->mBuffer.Append(mBuffer.Data(), mBuffer.Length())) {
+    return nullptr;
+  }
+  if (!s->mAlphaBuffer.Append(mAlphaBuffer.Data(), mAlphaBuffer.Length())) {
     return nullptr;
   }
   return s.forget();

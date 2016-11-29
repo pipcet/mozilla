@@ -465,6 +465,8 @@ FunctionBox::FunctionBox(ExclusiveContext* cx, LifoAlloc& alloc, ObjectBox* trac
     usesApply(false),
     usesThis(false),
     usesReturn(false),
+    hasRest_(false),
+    isExprBody_(false),
     funCxFlags()
 {
     // Functions created at parse time may be set singleton after parsing and
@@ -477,7 +479,6 @@ void
 FunctionBox::initFromLazyFunction()
 {
     JSFunction* fun = function();
-    length = fun->nargs() - fun->hasRest();
     if (fun->lazyScript()->isDerivedClassConstructor())
         setDerivedClassConstructor();
     if (fun->lazyScript()->needsHomeObject())
@@ -492,8 +493,6 @@ FunctionBox::initStandaloneFunction(Scope* enclosingScope)
     // Standalone functions are Function or Generator constructors and are
     // always scoped to the global.
     MOZ_ASSERT(enclosingScope->is<GlobalScope>());
-    JSFunction* fun = function();
-    length = fun->nargs() - fun->hasRest();
     enclosingScope_ = enclosingScope;
     allowNewTarget_ = true;
     thisBinding_ = ThisBinding::Function;
@@ -856,7 +855,7 @@ Parser<ParseHandler>::trace(JSTracer* trc)
 }
 
 void
-MarkParser(JSTracer* trc, AutoGCRooter* parser)
+TraceParser(JSTracer* trc, AutoGCRooter* parser)
 {
     static_cast<Parser<FullParseHandler>*>(parser)->trace(trc);
 }
@@ -2160,7 +2159,7 @@ Parser<ParseHandler>::declareDotGeneratorName()
 
 template <typename ParseHandler>
 bool
-Parser<ParseHandler>::finishFunctionScopes()
+Parser<ParseHandler>::finishFunctionScopes(bool isStandaloneFunction)
 {
     FunctionBox* funbox = pc->functionBox();
 
@@ -2169,7 +2168,7 @@ Parser<ParseHandler>::finishFunctionScopes()
             return false;
     }
 
-    if (funbox->function()->isNamedLambda()) {
+    if (funbox->function()->isNamedLambda() && !isStandaloneFunction) {
         if (!propagateFreeNamesAndMarkClosedOverBindings(pc->namedLambdaScope()))
             return false;
     }
@@ -2179,9 +2178,9 @@ Parser<ParseHandler>::finishFunctionScopes()
 
 template <>
 bool
-Parser<FullParseHandler>::finishFunction()
+Parser<FullParseHandler>::finishFunction(bool isStandaloneFunction /* = false */)
 {
-    if (!finishFunctionScopes())
+    if (!finishFunctionScopes(isStandaloneFunction))
         return false;
 
     FunctionBox* funbox = pc->functionBox();
@@ -2202,7 +2201,7 @@ Parser<FullParseHandler>::finishFunction()
         funbox->functionScopeBindings().set(*bindings);
     }
 
-    if (funbox->function()->isNamedLambda()) {
+    if (funbox->function()->isNamedLambda() && !isStandaloneFunction) {
         Maybe<LexicalScope::Data*> bindings = newLexicalScopeData(pc->namedLambdaScope());
         if (!bindings)
             return false;
@@ -2214,14 +2213,14 @@ Parser<FullParseHandler>::finishFunction()
 
 template <>
 bool
-Parser<SyntaxParseHandler>::finishFunction()
+Parser<SyntaxParseHandler>::finishFunction(bool isStandaloneFunction /* = false */)
 {
     // The LazyScript for a lazily parsed function needs to know its set of
     // free variables and inner functions so that when it is fully parsed, we
     // can skip over any already syntax parsed inner functions and still
     // retain correct scope information.
 
-    if (!finishFunctionScopes())
+    if (!finishFunctionScopes(isStandaloneFunction))
         return false;
 
     // There are too many bindings or inner functions to be saved into the
@@ -2248,6 +2247,10 @@ Parser<SyntaxParseHandler>::finishFunction()
         lazy->setStrict();
     lazy->setGeneratorKind(funbox->generatorKind());
     lazy->setAsyncKind(funbox->asyncKind());
+    if (funbox->hasRest())
+        lazy->setHasRest();
+    if (funbox->isExprBody())
+        lazy->setIsExprBody();
     if (funbox->isLikelyConstructorWrapper())
         lazy->setLikelyConstructorWrapper();
     if (funbox->isDerivedClassConstructor())
@@ -2279,13 +2282,13 @@ GetYieldHandling(GeneratorKind generatorKind, FunctionAsyncKind asyncKind)
 
 template <>
 ParseNode*
-Parser<FullParseHandler>::standaloneFunctionBody(HandleFunction fun,
-                                                 HandleScope enclosingScope,
-                                                 Handle<PropertyNameVector> formals,
-                                                 GeneratorKind generatorKind,
-                                                 FunctionAsyncKind asyncKind,
-                                                 Directives inheritedDirectives,
-                                                 Directives* newDirectives)
+Parser<FullParseHandler>::standaloneFunction(HandleFunction fun,
+                                             HandleScope enclosingScope,
+                                             Maybe<uint32_t> parameterListEnd,
+                                             GeneratorKind generatorKind,
+                                             FunctionAsyncKind asyncKind,
+                                             Directives inheritedDirectives,
+                                             Directives* newDirectives)
 {
     MOZ_ASSERT(checkOptionsCalled);
 
@@ -2308,25 +2311,14 @@ Parser<FullParseHandler>::standaloneFunctionBody(HandleFunction fun,
     if (!funpc.init())
         return null();
     funpc.setIsStandaloneFunctionBody();
-    funpc.functionScope().useAsVarScope(&funpc);
-
-    if (formals.length() >= ARGNO_LIMIT) {
-        error(JSMSG_TOO_MANY_FUN_ARGS);
-        return null();
-    }
-
-    bool duplicatedParam = false;
-    for (uint32_t i = 0; i < formals.length(); i++) {
-        if (!notePositionalFormalParameter(fn, formals[i], false, &duplicatedParam))
-            return null();
-    }
-    funbox->hasDuplicateParameters = duplicatedParam;
 
     YieldHandling yieldHandling = GetYieldHandling(generatorKind, asyncKind);
     AutoAwaitIsKeyword awaitIsKeyword(&tokenStream, asyncKind == AsyncFunction);
-    ParseNode* pn = functionBody(InAllowed, yieldHandling, Statement, StatementListBody);
-    if (!pn)
+    if (!functionFormalParametersAndBody(InAllowed, yieldHandling, fn, Statement,
+                                         parameterListEnd, /* isStandaloneFunction = */ true))
+    {
         return null();
+    }
 
     TokenKind tt;
     if (!tokenStream.getToken(&tt, TokenStream::Operand))
@@ -2336,15 +2328,7 @@ Parser<FullParseHandler>::standaloneFunctionBody(HandleFunction fun,
         return null();
     }
 
-    if (!FoldConstants(context, &pn, this))
-        return null();
-
-    fn->pn_pos.end = pos().end;
-
-    MOZ_ASSERT(fn->pn_body->isKind(PNK_PARAMSBODY));
-    fn->pn_body->append(pn);
-
-    if (!finishFunction())
+    if (!FoldConstants(context, &fn, this))
         return null();
 
     return fn;
@@ -2609,39 +2593,62 @@ Parser<ParseHandler>::newFunction(HandleAtom atom, FunctionSyntaxKind kind,
 
 /*
  * WARNING: Do not call this function directly.
- * Call either MatchOrInsertSemicolonAfterExpression or
- * MatchOrInsertSemicolonAfterNonExpression instead, depending on context.
+ * Call either matchOrInsertSemicolonAfterExpression or
+ * matchOrInsertSemicolonAfterNonExpression instead, depending on context.
  */
-static bool
-MatchOrInsertSemicolonHelper(TokenStream& ts, TokenStream::Modifier modifier)
+template <typename ParseHandler>
+bool
+Parser<ParseHandler>::matchOrInsertSemicolonHelper(TokenStream::Modifier modifier)
 {
     TokenKind tt = TOK_EOF;
-    if (!ts.peekTokenSameLine(&tt, modifier))
+    if (!tokenStream.peekTokenSameLine(&tt, modifier))
         return false;
     if (tt != TOK_EOF && tt != TOK_EOL && tt != TOK_SEMI && tt != TOK_RC) {
+        /*
+         * When current token is `await` and it's outside of async function,
+         * it's possibly intended to be an await expression.
+         *
+         *   await f();
+         *        ^
+         *        |
+         *        tried to insert semicolon here
+         *
+         * Detect this situation and throw an understandable error.  Otherwise
+         * we'd throw a confusing "missing ; before statement" error.
+         */
+        if (!pc->isAsync() &&
+            tokenStream.currentToken().type == TOK_NAME &&
+            tokenStream.currentName() == context->names().await)
+        {
+            error(JSMSG_AWAIT_OUTSIDE_ASYNC);
+            return false;
+        }
+
         /* Advance the scanner for proper error location reporting. */
-        ts.consumeKnownToken(tt, modifier);
-        ts.reportError(JSMSG_SEMI_BEFORE_STMNT);
+        tokenStream.consumeKnownToken(tt, modifier);
+        error(JSMSG_SEMI_BEFORE_STMNT);
         return false;
     }
     bool matched;
-    if (!ts.matchToken(&matched, TOK_SEMI, modifier))
+    if (!tokenStream.matchToken(&matched, TOK_SEMI, modifier))
         return false;
     if (!matched && modifier == TokenStream::None)
-        ts.addModifierException(TokenStream::OperandIsNone);
+        tokenStream.addModifierException(TokenStream::OperandIsNone);
     return true;
 }
 
-static bool
-MatchOrInsertSemicolonAfterExpression(TokenStream& ts)
+template <typename ParseHandler>
+bool
+Parser<ParseHandler>::matchOrInsertSemicolonAfterExpression()
 {
-    return MatchOrInsertSemicolonHelper(ts, TokenStream::None);
+    return matchOrInsertSemicolonHelper(TokenStream::None);
 }
 
-static bool
-MatchOrInsertSemicolonAfterNonExpression(TokenStream& ts)
+template <typename ParseHandler>
+bool
+Parser<ParseHandler>::matchOrInsertSemicolonAfterNonExpression()
 {
-    return MatchOrInsertSemicolonHelper(ts, TokenStream::Operand);
+    return matchOrInsertSemicolonHelper(TokenStream::Operand);
 }
 
 template <typename ParseHandler>
@@ -2807,7 +2814,7 @@ Parser<ParseHandler>::functionArguments(YieldHandling yieldHandling, FunctionSyn
                 }
 
                 hasRest = true;
-                funbox->function()->setHasRest();
+                funbox->setHasRest();
 
                 if (!tokenStream.getToken(&tt))
                     return false;
@@ -2985,6 +2992,8 @@ Parser<FullParseHandler>::skipLazyInnerFunction(ParseNode* pn, FunctionSyntaxKin
     LazyScript* lazy = fun->lazyScript();
     if (lazy->needsHomeObject())
         funbox->setNeedsHomeObject();
+    if (lazy->isExprBody())
+        funbox->setIsExprBody();
 
     PropagateTransitiveParseFlags(lazy, pc->sc());
 
@@ -2997,10 +3006,15 @@ Parser<FullParseHandler>::skipLazyInnerFunction(ParseNode* pn, FunctionSyntaxKin
     if (!tokenStream.advance(fun->lazyScript()->end() - userbufBase))
         return false;
 
-    if (kind == Statement && fun->isExprBody()) {
-        if (!MatchOrInsertSemicolonAfterExpression(tokenStream))
+#if JS_HAS_EXPR_CLOSURES
+    // Only expression closure can be Statement kind.
+    // If we remove expression closure, we can remove isExprBody flag from
+    // LazyScript and JSScript.
+    if (kind == Statement && funbox->isExprBody()) {
+        if (!matchOrInsertSemicolonAfterExpression())
             return false;
     }
+#endif
 
     return true;
 }
@@ -3373,7 +3387,9 @@ template <typename ParseHandler>
 bool
 Parser<ParseHandler>::functionFormalParametersAndBody(InHandling inHandling,
                                                       YieldHandling yieldHandling,
-                                                      Node pn, FunctionSyntaxKind kind)
+                                                      Node pn, FunctionSyntaxKind kind,
+                                                      Maybe<uint32_t> parameterListEnd /* = Nothing() */,
+                                                      bool isStandaloneFunction /* = false */)
 {
     // Given a properly initialized parse context, try to parse an actual
     // function without concern for conversion to strict mode, use of lazy
@@ -3405,6 +3421,13 @@ Parser<ParseHandler>::functionFormalParametersAndBody(InHandling inHandling,
         }
     }
 
+    // When parsing something for new Function() we have to make sure to
+    // only treat a certain part of the source as a parameter list.
+    if (parameterListEnd.isSome() && parameterListEnd.value() != pos().begin) {
+        error(JSMSG_UNEXPECTED_PARAMLIST_END);
+        return false;
+    }
+
     // Parse the function body.
     FunctionBodyType bodyType = StatementListBody;
     TokenKind tt;
@@ -3431,9 +3454,7 @@ Parser<ParseHandler>::functionFormalParametersAndBody(InHandling inHandling,
 
         tokenStream.ungetToken();
         bodyType = ExpressionBody;
-#if JS_HAS_EXPR_CLOSURES
-        fun->setIsExprBody();
-#endif
+        funbox->setIsExprBody();
     }
 
     // Arrow function parameters inherit yieldHandling from the enclosing
@@ -3460,7 +3481,7 @@ Parser<ParseHandler>::functionFormalParametersAndBody(InHandling inHandling,
             error(JSMSG_CURLY_AFTER_BODY);
             return false;
         }
-        funbox->bufEnd = pos().begin + 1;
+        funbox->bufEnd = pos().end;
     } else {
 #if !JS_HAS_EXPR_CLOSURES
         MOZ_ASSERT(kind == Arrow);
@@ -3468,14 +3489,14 @@ Parser<ParseHandler>::functionFormalParametersAndBody(InHandling inHandling,
         if (tokenStream.hadError())
             return false;
         funbox->bufEnd = pos().end;
-        if (kind == Statement && !MatchOrInsertSemicolonAfterExpression(tokenStream))
+        if (kind == Statement && !matchOrInsertSemicolonAfterExpression())
             return false;
     }
 
     if (IsMethodDefinitionKind(kind) && pc->superScopeNeedsHomeObject())
         funbox->setNeedsHomeObject();
 
-    if (!finishFunction())
+    if (!finishFunction(isStandaloneFunction))
         return false;
 
     handler.setEndPosition(body, pos().begin);
@@ -4004,19 +4025,6 @@ Parser<ParseHandler>::PossibleError::transferErrorsTo(PossibleError* other)
     transferErrorTo(ErrorKind::Expression, other);
 }
 
-template <typename ParseHandler>
-bool
-Parser<ParseHandler>::checkAssignmentToCall(Node target, unsigned msg)
-{
-    MOZ_ASSERT(handler.isFunctionCall(target));
-
-    // Assignment to function calls is forbidden in ES6.  We're still somewhat
-    // concerned about sites using this in dead code, so forbid it only in
-    // strict mode code (or if the werror option has been set), and otherwise
-    // warn.
-    return reportWithNode(ParseStrictError, pc->sc()->strict(), target, msg);
-}
-
 template <>
 bool
 Parser<FullParseHandler>::checkDestructuringName(ParseNode* expr, Maybe<DeclarationKind> maybeDecl)
@@ -4046,34 +4054,35 @@ Parser<FullParseHandler>::checkDestructuringName(ParseNode* expr, Maybe<Declarat
     }
 
     // Otherwise this is an expression in destructuring outside a declaration.
-    if (!reportIfNotValidSimpleAssignmentTarget(expr, KeyedDestructuringAssignment))
-        return false;
-
-    MOZ_ASSERT(!handler.isFunctionCall(expr),
-               "function calls shouldn't be considered valid targets in "
-               "destructuring patterns");
-
     if (handler.isNameAnyParentheses(expr)) {
-        // The arguments/eval identifiers are simple in non-strict mode code.
-        // Warn to discourage their use nonetheless.
-        return reportIfArgumentsEvalTarget(expr);
+        if (const char* chars = handler.nameIsArgumentsEvalAnyParentheses(expr, context)) {
+            if (!reportWithNode(ParseStrictError, pc->sc()->strict(), expr,
+                                JSMSG_BAD_STRICT_ASSIGN, chars))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
-    // Nothing further to do for property accesses.
-    MOZ_ASSERT(handler.isPropertyAccess(expr));
-    return true;
+    if (handler.isPropertyAccess(expr))
+        return true;
+
+    reportWithNode(ParseError, pc->sc()->strict(), expr, JSMSG_BAD_DESTRUCT_TARGET);
+    return false;
 }
 
 template <>
 bool
 Parser<FullParseHandler>::checkDestructuringPattern(ParseNode* pattern,
-                                                    Maybe<DeclarationKind> maybeDecl,
+                                                    const Maybe<DeclarationKind>& maybeDecl,
                                                     PossibleError* possibleError /* = nullptr */);
 
 template <>
 bool
 Parser<FullParseHandler>::checkDestructuringObject(ParseNode* objectPattern,
-                                                   Maybe<DeclarationKind> maybeDecl)
+                                                   const Maybe<DeclarationKind>& maybeDecl)
 {
     MOZ_ASSERT(objectPattern->isKind(PNK_OBJECT));
 
@@ -4108,7 +4117,7 @@ Parser<FullParseHandler>::checkDestructuringObject(ParseNode* objectPattern,
 template <>
 bool
 Parser<FullParseHandler>::checkDestructuringArray(ParseNode* arrayPattern,
-                                                  Maybe<DeclarationKind> maybeDecl)
+                                                  const Maybe<DeclarationKind>& maybeDecl)
 {
     MOZ_ASSERT(arrayPattern->isKind(PNK_ARRAY));
 
@@ -4178,7 +4187,7 @@ Parser<FullParseHandler>::checkDestructuringArray(ParseNode* arrayPattern,
 template <>
 bool
 Parser<FullParseHandler>::checkDestructuringPattern(ParseNode* pattern,
-                                                    Maybe<DeclarationKind> maybeDecl,
+                                                    const Maybe<DeclarationKind>& maybeDecl,
                                                     PossibleError* possibleError /* = nullptr */)
 {
     if (pattern->isKind(PNK_ARRAYCOMP)) {
@@ -4200,7 +4209,7 @@ Parser<FullParseHandler>::checkDestructuringPattern(ParseNode* pattern,
 template <>
 bool
 Parser<SyntaxParseHandler>::checkDestructuringPattern(Node pattern,
-                                                      Maybe<DeclarationKind> maybeDecl,
+                                                      const Maybe<DeclarationKind>& maybeDecl,
                                                       PossibleError* possibleError /* = nullptr */)
 {
     return abortIfSyntaxParser();
@@ -4587,7 +4596,7 @@ Parser<ParseHandler>::lexicalDeclaration(YieldHandling yieldHandling, bool isCon
      * See 8.1.1.1.6 and the note in 13.2.1.
      */
     Node decl = declarationList(yieldHandling, isConst ? PNK_CONST : PNK_LET);
-    if (!decl || !MatchOrInsertSemicolonAfterExpression(tokenStream))
+    if (!decl || !matchOrInsertSemicolonAfterExpression())
         return null();
 
     return decl;
@@ -4828,7 +4837,7 @@ Parser<FullParseHandler>::importDeclaration()
     if (!moduleSpec)
         return null();
 
-    if (!MatchOrInsertSemicolonAfterNonExpression(tokenStream))
+    if (!matchOrInsertSemicolonAfterNonExpression())
         return null();
 
     ParseNode* node =
@@ -4971,7 +4980,7 @@ Parser<FullParseHandler>::exportDeclaration()
         //   export { x }   // ExportDeclaration, terminated by ASI
         //   fro\u006D      // ExpressionStatement, the name "from"
         //
-        // In that case let MatchOrInsertSemicolonAfterNonExpression sort out
+        // In that case let matchOrInsertSemicolonAfterNonExpression sort out
         // ASI or any necessary error.
         TokenKind tt;
         if (!tokenStream.getToken(&tt, TokenStream::Operand))
@@ -4987,7 +4996,7 @@ Parser<FullParseHandler>::exportDeclaration()
             if (!moduleSpec)
                 return null();
 
-            if (!MatchOrInsertSemicolonAfterNonExpression(tokenStream))
+            if (!matchOrInsertSemicolonAfterNonExpression())
                 return null();
 
             ParseNode* node = handler.newExportFromDeclaration(begin, kid, moduleSpec);
@@ -4999,7 +5008,7 @@ Parser<FullParseHandler>::exportDeclaration()
 
         tokenStream.ungetToken();
 
-        if (!MatchOrInsertSemicolonAfterNonExpression(tokenStream))
+        if (!matchOrInsertSemicolonAfterNonExpression())
             return null();
         break;
       }
@@ -5033,7 +5042,7 @@ Parser<FullParseHandler>::exportDeclaration()
         if (!moduleSpec)
             return null();
 
-        if (!MatchOrInsertSemicolonAfterNonExpression(tokenStream))
+        if (!matchOrInsertSemicolonAfterNonExpression())
             return null();
 
         ParseNode* node = handler.newExportFromDeclaration(begin, kid, moduleSpec);
@@ -5069,7 +5078,7 @@ Parser<FullParseHandler>::exportDeclaration()
         kid = declarationList(YieldIsName, PNK_VAR);
         if (!kid)
             return null();
-        if (!MatchOrInsertSemicolonAfterExpression(tokenStream))
+        if (!matchOrInsertSemicolonAfterExpression())
             return null();
         if (!checkExportedNamesForDeclaration(kid))
             return null();
@@ -5122,7 +5131,7 @@ Parser<FullParseHandler>::exportDeclaration()
             kid = assignExpr(InAllowed, YieldIsKeyword, TripledotProhibited);
             if (!kid)
                 return null();
-            if (!MatchOrInsertSemicolonAfterExpression(tokenStream))
+            if (!matchOrInsertSemicolonAfterExpression())
                 return null();
             break;
           }
@@ -5187,7 +5196,7 @@ Parser<ParseHandler>::expressionStatement(YieldHandling yieldHandling, InvokedPr
                        /* possibleError = */ nullptr, invoked);
     if (!pnexpr)
         return null();
-    if (!MatchOrInsertSemicolonAfterExpression(tokenStream))
+    if (!matchOrInsertSemicolonAfterExpression())
         return null();
     return handler.newExprStatement(pnexpr, pos().end);
 }
@@ -5200,33 +5209,74 @@ Parser<ParseHandler>::consequentOrAlternative(YieldHandling yieldHandling)
     if (!tokenStream.peekToken(&next, TokenStream::Operand))
         return null();
 
-    if (next == TOK_FUNCTION) {
-        // Annex B.3.4 says that unbraced function declarations under if/else
-        // in non-strict code act as if they were braced. That is,
-        // |if (x) function f() {}| is parsed as |if (x) { function f() {} }|.
-        if (!pc->sc()->strict()) {
-            tokenStream.consumeKnownToken(next, TokenStream::Operand);
+    // Annex B.3.4 says that unbraced FunctionDeclarations under if/else in
+    // non-strict code act as if they were braced: |if (x) function f() {}|
+    // parses as |if (x) { function f() {} }|.
+    //
+    // Careful!  FunctionDeclaration doesn't include generators or async
+    // functions.
+    if (next == TOK_NAME &&
+        !tokenStream.nextNameContainsEscape() &&
+        tokenStream.nextName() == context->names().async)
+    {
+        tokenStream.consumeKnownToken(next, TokenStream::Operand);
 
-            ParseContext::Statement stmt(pc, StatementKind::Block);
-            ParseContext::Scope scope(this);
-            if (!scope.init(pc))
-                return null();
+        // Peek only on the same line: ExpressionStatement's lookahead
+        // restriction is phrased as
+        //
+        //   [lookahead ∉ { {, function, async [no LineTerminator here] function, class, let [ }]
+        //
+        // meaning that code like this is valid:
+        //
+        //   if (true)
+        //     async       // ASI opportunity
+        //   function clownshoes() {}
+        TokenKind maybeFunction;
+        if (!tokenStream.peekTokenSameLine(&maybeFunction))
+            return null();
 
-            TokenPos funcPos = pos();
-            Node fun = functionStmt(yieldHandling, NameRequired);
-            if (!fun)
-                return null();
-
-            Node block = handler.newStatementList(funcPos);
-            if (!block)
-                return null();
-
-            handler.addStatementToList(block, fun);
-            return finishLexicalScope(scope, block);
+        if (maybeFunction == TOK_FUNCTION) {
+            error(JSMSG_FORBIDDEN_AS_STATEMENT, "async function declarations");
+            return null();
         }
 
-        // Function declarations are a syntax error in strict mode code.
-        // Parser::statement reports that error.
+        // Otherwise this |async| begins an ExpressionStatement.
+        tokenStream.ungetToken();
+    } else if (next == TOK_FUNCTION) {
+        tokenStream.consumeKnownToken(next, TokenStream::Operand);
+
+        // Parser::statement would handle this, but as this function handles
+        // every other error case, it seems best to handle this.
+        if (pc->sc()->strict()) {
+            error(JSMSG_FORBIDDEN_AS_STATEMENT, "function declarations");
+            return null();
+        }
+
+        TokenKind maybeStar;
+        if (!tokenStream.peekToken(&maybeStar))
+            return null();
+
+        if (maybeStar == TOK_MUL) {
+            error(JSMSG_FORBIDDEN_AS_STATEMENT, "generator declarations");
+            return null();
+        }
+
+        ParseContext::Statement stmt(pc, StatementKind::Block);
+        ParseContext::Scope scope(this);
+        if (!scope.init(pc))
+            return null();
+
+        TokenPos funcPos = pos();
+        Node fun = functionStmt(yieldHandling, NameRequired);
+        if (!fun)
+            return null();
+
+        Node block = handler.newStatementList(funcPos);
+        if (!block)
+            return null();
+
+        handler.addStatementToList(block, fun);
+        return finishLexicalScope(scope, block);
     }
 
     return statement(yieldHandling);
@@ -5838,7 +5888,7 @@ Parser<ParseHandler>::continueStatement(YieldHandling yieldHandling)
         return null();
     }
 
-    if (!MatchOrInsertSemicolonAfterNonExpression(tokenStream))
+    if (!matchOrInsertSemicolonAfterNonExpression())
         return null();
 
     return handler.newContinueStatement(label, TokenPos(begin, pos().end));
@@ -5878,7 +5928,7 @@ Parser<ParseHandler>::breakStatement(YieldHandling yieldHandling)
         }
     }
 
-    if (!MatchOrInsertSemicolonAfterNonExpression(tokenStream))
+    if (!matchOrInsertSemicolonAfterNonExpression())
         return null();
 
     return handler.newBreakStatement(label, TokenPos(begin, pos().end));
@@ -5918,10 +5968,10 @@ Parser<ParseHandler>::returnStatement(YieldHandling yieldHandling)
     }
 
     if (exprNode) {
-        if (!MatchOrInsertSemicolonAfterExpression(tokenStream))
+        if (!matchOrInsertSemicolonAfterExpression())
             return null();
     } else {
-        if (!MatchOrInsertSemicolonAfterNonExpression(tokenStream))
+        if (!matchOrInsertSemicolonAfterNonExpression())
             return null();
     }
 
@@ -6041,7 +6091,7 @@ Parser<ParseHandler>::yieldExpression(InHandling inHandling)
 
         if (pc->funHasReturnExpr
 #if JS_HAS_EXPR_CLOSURES
-            || pc->functionBox()->function()->isExprBody()
+            || pc->functionBox()->isExprBody()
 #endif
             )
         {
@@ -6219,7 +6269,7 @@ Parser<ParseHandler>::throwStatement(YieldHandling yieldHandling)
     if (!throwExpr)
         return null();
 
-    if (!MatchOrInsertSemicolonAfterExpression(tokenStream))
+    if (!matchOrInsertSemicolonAfterExpression())
         return null();
 
     return handler.newThrowStatement(throwExpr, TokenPos(begin, pos().end));
@@ -6446,7 +6496,7 @@ Parser<ParseHandler>::debuggerStatement()
 {
     TokenPos p;
     p.begin = pos().begin;
-    if (!MatchOrInsertSemicolonAfterNonExpression(tokenStream))
+    if (!matchOrInsertSemicolonAfterNonExpression())
         return null();
     p.end = pos().end;
 
@@ -6753,7 +6803,7 @@ Parser<ParseHandler>::variableStatement(YieldHandling yieldHandling)
     Node vars = declarationList(yieldHandling, PNK_VAR);
     if (!vars)
         return null();
-    if (!MatchOrInsertSemicolonAfterExpression(tokenStream))
+    if (!matchOrInsertSemicolonAfterExpression())
         return null();
     return vars;
 }
@@ -7729,83 +7779,29 @@ Parser<ParseHandler>::isValidSimpleAssignmentTarget(Node node,
 
 template <typename ParseHandler>
 bool
-Parser<ParseHandler>::reportIfArgumentsEvalTarget(Node nameNode)
+Parser<ParseHandler>::checkIncDecOperand(Node operand, uint32_t operandOffset)
 {
-    const char* chars = handler.nameIsArgumentsEvalAnyParentheses(nameNode, context);
-    if (!chars)
-        return true;
-
-    bool strict = pc->sc()->strict();
-    if (!reportWithNode(ParseStrictError, strict, nameNode, JSMSG_BAD_STRICT_ASSIGN, chars))
+    if (handler.isNameAnyParentheses(operand)) {
+        if (const char* chars = handler.nameIsArgumentsEvalAnyParentheses(operand, context)) {
+            if (!strictModeErrorAt(operandOffset, JSMSG_BAD_STRICT_ASSIGN, chars))
+                return false;
+        }
+    } else if (handler.isPropertyAccess(operand)) {
+        // Permitted: no additional testing/fixup needed.
+    } else if (handler.isFunctionCall(operand)) {
+        // Assignment to function calls is forbidden in ES6.  We're still
+        // somewhat concerned about sites using this in dead code, so forbid it
+        // only in strict mode code (or if the werror option has been set), and
+        // otherwise warn.
+        if (!strictModeErrorAt(operandOffset, JSMSG_BAD_INCOP_OPERAND))
+            return false;
+    } else {
+        errorAt(operandOffset, JSMSG_BAD_INCOP_OPERAND);
         return false;
-
-    MOZ_ASSERT(!strict,
-               "an error should have been reported if this was strict mode "
-               "code");
-    return true;
-}
-
-template <typename ParseHandler>
-bool
-Parser<ParseHandler>::reportIfNotValidSimpleAssignmentTarget(Node target, AssignmentFlavor flavor)
-{
-    FunctionCallBehavior behavior = flavor == KeyedDestructuringAssignment
-                                    ? ForbidAssignmentToFunctionCalls
-                                    : PermitAssignmentToFunctionCalls;
-    if (isValidSimpleAssignmentTarget(target, behavior))
-        return true;
-
-    if (handler.isNameAnyParentheses(target)) {
-        // Use a special error if the target is arguments/eval.  This ensures
-        // targeting these names is consistently a SyntaxError (which error numbers
-        // below don't guarantee) while giving us a nicer error message.
-        if (!reportIfArgumentsEvalTarget(target))
-            return false;
     }
 
-    unsigned errnum = 0;
-    const char* extra = nullptr;
-
-    switch (flavor) {
-      case IncrementAssignment:
-        errnum = JSMSG_BAD_OPERAND;
-        extra = "increment";
-        break;
-
-      case DecrementAssignment:
-        errnum = JSMSG_BAD_OPERAND;
-        extra = "decrement";
-        break;
-
-      case KeyedDestructuringAssignment:
-        errnum = JSMSG_BAD_DESTRUCT_TARGET;
-        break;
-    }
-
-    reportWithNode(ParseError, pc->sc()->strict(), target, errnum, extra);
-    return false;
-}
-
-template <typename ParseHandler>
-bool
-Parser<ParseHandler>::checkAndMarkAsIncOperand(Node target, AssignmentFlavor flavor)
-{
-    MOZ_ASSERT(flavor == IncrementAssignment || flavor == DecrementAssignment);
-
-    // Check.
-    if (!reportIfNotValidSimpleAssignmentTarget(target, flavor))
-        return false;
-
-    // Mark.
-    if (handler.isNameAnyParentheses(target)) {
-        // Assignment to arguments/eval is allowed outside strict mode code,
-        // but it's dodgy.  Report a strict warning (error, if werror was set).
-        if (!reportIfArgumentsEvalTarget(target))
-            return false;
-    } else if (handler.isFunctionCall(target)) {
-        if (!checkAssignmentToCall(target, JSMSG_BAD_INCOP_OPERAND))
-            return false;
-    }
+    MOZ_ASSERT(isValidSimpleAssignmentTarget(operand, PermitAssignmentToFunctionCalls),
+               "inconsistent increment/decrement operand validation");
     return true;
 }
 
@@ -7869,15 +7865,14 @@ Parser<ParseHandler>::unaryExpr(YieldHandling yieldHandling, TripledotHandling t
         TokenKind tt2;
         if (!tokenStream.getToken(&tt2, TokenStream::Operand))
             return null();
-        Node pn2 = memberExpr(yieldHandling, TripledotProhibited, tt2);
-        if (!pn2)
+
+        uint32_t operandOffset = pos().begin;
+        Node operand = memberExpr(yieldHandling, TripledotProhibited, tt2);
+        if (!operand || !checkIncDecOperand(operand, operandOffset))
             return null();
-        AssignmentFlavor flavor = (tt == TOK_INC) ? IncrementAssignment : DecrementAssignment;
-        if (!checkAndMarkAsIncOperand(pn2, flavor))
-            return null();
+
         return handler.newUpdate((tt == TOK_INC) ? PNK_PREINCREMENT : PNK_PREDECREMENT,
-                                 begin,
-                                 pn2);
+                                 begin, operand);
       }
 
       case TOK_DELETE: {
@@ -7924,24 +7919,23 @@ Parser<ParseHandler>::unaryExpr(YieldHandling yieldHandling, TripledotHandling t
       }
 
       default: {
-        Node pn = memberExpr(yieldHandling, tripledotHandling, tt, /* allowCallSyntax = */ true,
-                             possibleError, invoked);
-        if (!pn)
+        Node expr = memberExpr(yieldHandling, tripledotHandling, tt, /* allowCallSyntax = */ true,
+                               possibleError, invoked);
+        if (!expr)
             return null();
 
         /* Don't look across a newline boundary for a postfix incop. */
         if (!tokenStream.peekTokenSameLine(&tt))
             return null();
-        if (tt == TOK_INC || tt == TOK_DEC) {
-            tokenStream.consumeKnownToken(tt);
-            AssignmentFlavor flavor = (tt == TOK_INC) ? IncrementAssignment : DecrementAssignment;
-            if (!checkAndMarkAsIncOperand(pn, flavor))
-                return null();
-            return handler.newUpdate((tt == TOK_INC) ? PNK_POSTINCREMENT : PNK_POSTDECREMENT,
-                                     begin,
-                                     pn);
-        }
-        return pn;
+
+        if (tt != TOK_INC && tt != TOK_DEC)
+            return expr;
+
+        tokenStream.consumeKnownToken(tt);
+        if (!checkIncDecOperand(expr, begin))
+            return null();
+        return handler.newUpdate((tt == TOK_INC) ? PNK_POSTINCREMENT : PNK_POSTDECREMENT,
+                                 begin, expr);
       }
     }
 }

@@ -5,9 +5,6 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 TEST_DIRS += [
-    'component',
-    'bug656331_component',
-    'component_no_aslr',
     'gtest',
 ]
 
@@ -25,6 +22,8 @@ SimplePrograms([
     'TestQuickReturn',
     'TestUnicodeArguments',
 ])
+
+USE_LIBS += ['mfbt']
 
 XPCSHELL_TESTS_MANIFESTS += ['unit/xpcshell.ini']
 

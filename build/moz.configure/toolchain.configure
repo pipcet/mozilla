@@ -116,11 +116,29 @@ def ccache(value):
 
 ccache = check_prog('CCACHE', progs=(), input=ccache)
 
+# Distinguish ccache from sccache.
 @depends_if(ccache)
-def using_ccache(ccache):
+def ccache_is_sccache(ccache):
+    return check_cmd_output(ccache, '--version').startswith('sccache')
+
+@depends(ccache, ccache_is_sccache)
+def using_ccache(ccache, ccache_is_sccache):
+    return ccache and not ccache_is_sccache
+
+@depends_if(ccache, ccache_is_sccache)
+def using_sccache(ccache, ccache_is_sccache):
     return True
 
 set_config('MOZ_USING_CCACHE', using_ccache)
+set_config('MOZ_USING_SCCACHE', using_sccache)
+
+option(env='SCCACHE_VERBOSE_STATS', help='Print verbose sccache stats after build')
+
+@depends(using_sccache, 'SCCACHE_VERBOSE_STATS')
+def sccache_verbose_stats(using_sccache, verbose_stats):
+    return using_sccache and bool(verbose_stats)
+
+set_config('SCCACHE_VERBOSE_STATS', sccache_verbose_stats)
 
 @depends('--with-compiler-wrapper', ccache)
 @imports(_from='mozbuild.shellutil', _import='split', _as='shell_split')
@@ -838,6 +856,27 @@ def debug_flags(env_debug_flags, enable_debug_flags, default_debug_flags):
 
 set_config('MOZ_DEBUG_FLAGS', debug_flags)
 add_old_configure_assignment('MOZ_DEBUG_FLAGS', debug_flags)
+
+@depends(c_compiler)
+def color_cflags(info):
+    # We could test compiling with flags. By why incur the overhead when
+    # color support should always be present in a specific toolchain
+    # version?
+
+    # Code for auto-adding this flag to compiler invocations needs to
+    # determine if an existing flag isn't already present. That is likely
+    # using exact string matching on the returned value. So if the return
+    # value changes to e.g. "<x>=always", exact string match may fail and
+    # multiple color flags could be added. So examine downstream consumers
+    # before adding flags to return values.
+    if info.type == 'gcc' and info.version >= '4.9.0':
+        return '-fdiagnostics-color'
+    elif info.type == 'clang':
+        return '-fcolor-diagnostics'
+    else:
+        return ''
+
+set_config('COLOR_CFLAGS', color_cflags)
 
 # Some standard library headers (notably bionic on Android) declare standard
 # functions (e.g. getchar()) and also #define macros for those standard

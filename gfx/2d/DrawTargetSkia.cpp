@@ -193,8 +193,7 @@ VerifyRGBXCorners(uint8_t* aData, const IntSize &aSize, const int32_t aStride, S
   const int middle = aStride * middleRowHeight + middleRowWidth;
 
   const int offsets[] = { topLeft, topRight, bottomRight, bottomLeft, middle };
-  for (size_t i = 0; i < MOZ_ARRAY_LENGTH(offsets); i++) {
-    int offset = offsets[i];
+  for (int offset : offsets) {
     if (aData[offset + kARGBAlphaOffset] != 0xFF) {
         int row = offset / aStride;
         int column = (offset % aStride) / pixelSize;
@@ -375,7 +374,7 @@ SkImageIsMask(const sk_sp<SkImage>& aImage)
 }
 
 static bool
-ExtractAlphaBitmap(sk_sp<SkImage> aImage, SkBitmap* aResultBitmap)
+ExtractAlphaBitmap(const sk_sp<SkImage>& aImage, SkBitmap* aResultBitmap)
 {
   SkImageInfo info = SkImageInfo::MakeA8(aImage->width(), aImage->height());
   SkBitmap bitmap;
@@ -706,9 +705,11 @@ DrawTargetSkia::DrawSurfaceWithShadow(SourceSurface *aSurface,
     mCanvas->drawImage(image, shadowDest.x, shadowDest.y, &shadowPaint);
   }
 
-  // Composite the original image after the shadow
-  auto dest = IntPoint::Round(aDest);
-  mCanvas->drawImage(image, dest.x, dest.y, &paint);
+  if (aSurface->GetFormat() != SurfaceFormat::A8) {
+    // Composite the original image after the shadow
+    auto dest = IntPoint::Round(aDest);
+    mCanvas->drawImage(image, dest.x, dest.y, &paint);
+  }
 
   mCanvas->restore();
 }
@@ -1226,7 +1227,7 @@ DrawTargetSkia::FillGlyphsWithCG(ScaledFont *aFont,
   }
 
   // Calculate the area of the text we just drew
-  CGRect *bboxes = new CGRect[aBuffer.mNumGlyphs];
+  auto *bboxes = new CGRect[aBuffer.mNumGlyphs];
   CTFontGetBoundingRectsForGlyphs(macFont->mCTFont, kCTFontDefaultOrientation,
                                   glyphs.begin(), bboxes, aBuffer.mNumGlyphs);
   CGRect extents = ComputeGlyphsExtents(bboxes, positions.begin(), aBuffer.mNumGlyphs, 1.0f);
@@ -1573,7 +1574,7 @@ DrawTargetSkia::CreateSimilarDrawTarget(const IntSize &aSize, SurfaceFormat aFor
   // is then we want similar storage to avoid losing fidelity (if and when this
   // DrawTarget is Snapshot()'ed, drawning a raster back into this DrawTarget
   // will lose fidelity).
-  if (mCanvas->imageInfo().colorType() != kUnknown_SkColorType) {
+  if (mCanvas->imageInfo().colorType() == kUnknown_SkColorType) {
     NS_WARNING("Not backed by pixels - we need to handle PDF backed SkCanvas");
   }
 #endif
@@ -1949,9 +1950,9 @@ public:
     : SkImageFilter(nullptr, 0, nullptr)
   {}
 
-  virtual sk_sp<SkSpecialImage> onFilterImage(SkSpecialImage* source,
-                                              const Context& ctx,
-                                              SkIPoint* offset) const override {
+  sk_sp<SkSpecialImage> onFilterImage(SkSpecialImage* source,
+                                      const Context& ctx,
+                                      SkIPoint* offset) const override {
     offset->set(0, 0);
     return sk_ref_sp(source);
   }

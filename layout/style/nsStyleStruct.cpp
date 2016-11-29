@@ -49,16 +49,6 @@ static_assert((((1 << nsStyleStructID_Length) - 1) &
 /* static */ const int32_t nsStyleGridLine::kMaxLine;
 
 static bool
-EqualURIs(nsIURI *aURI1, nsIURI *aURI2)
-{
-  bool eq;
-  return aURI1 == aURI2 ||    // handle null==null, and optimize
-         (aURI1 && aURI2 &&
-          NS_SUCCEEDED(aURI1->Equals(aURI2, &eq)) && // not equal on fail
-          eq);
-}
-
-static bool
 DefinitelyEqualURIs(css::URLValueData* aURI1,
                     css::URLValueData* aURI2)
 {
@@ -72,23 +62,6 @@ DefinitelyEqualURIsAndPrincipal(css::URLValueData* aURI1,
 {
   return aURI1 == aURI2 ||
          (aURI1 && aURI2 && aURI1->DefinitelyEqualURIsAndPrincipal(*aURI2));
-}
-
-static bool
-EqualImages(imgIRequest *aImage1, imgIRequest* aImage2)
-{
-  if (aImage1 == aImage2) {
-    return true;
-  }
-
-  if (!aImage1 || !aImage2) {
-    return false;
-  }
-
-  nsCOMPtr<nsIURI> uri1, uri2;
-  aImage1->GetURI(getter_AddRefs(uri1));
-  aImage2->GetURI(getter_AddRefs(uri2));
-  return EqualURIs(uri1, uri2);
 }
 
 static bool
@@ -1979,11 +1952,12 @@ nsStyleImageRequest::nsStyleImageRequest(Mode aModeFlags,
   , mResolved(true)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(aRequestProxy);
   MOZ_ASSERT(aImageValue);
   MOZ_ASSERT(!!(aModeFlags & Mode::Track) == !!aImageTracker);
 
-  MaybeTrackAndLock();
+  if (mRequestProxy) {
+    MaybeTrackAndLock();
+  }
 }
 
 nsStyleImageRequest::nsStyleImageRequest(
@@ -2311,7 +2285,7 @@ nsStyleImage::StartDecoding() const
     if (!req) {
       return NS_ERROR_FAILURE;
     }
-    return req->StartDecoding();
+    return req->StartDecoding(imgIContainer::FLAG_NONE);
   }
   return NS_OK;
 }
@@ -3809,10 +3783,10 @@ nsStyleText::nsStyleText(StyleStructContext aContext)
   , mControlCharacterVisibility(nsCSSParser::ControlCharVisibilityDefault())
   , mTextEmphasisStyle(NS_STYLE_TEXT_EMPHASIS_STYLE_NONE)
   , mTextRendering(NS_STYLE_TEXT_RENDERING_AUTO)
-  , mTabSize(NS_STYLE_TABSIZE_INITIAL)
   , mTextEmphasisColor(StyleComplexColor::CurrentColor())
   , mWebkitTextFillColor(StyleComplexColor::CurrentColor())
   , mWebkitTextStrokeColor(StyleComplexColor::CurrentColor())
+  , mTabSize(float(NS_STYLE_TABSIZE_INITIAL), eStyleUnit_Factor)
   , mWordSpacing(0, nsStyleCoord::CoordConstructor)
   , mLetterSpacing(eStyleUnit_Normal)
   , mLineHeight(eStyleUnit_Normal)
@@ -3846,10 +3820,10 @@ nsStyleText::nsStyleText(const nsStyleText& aSource)
   , mTextEmphasisPosition(aSource.mTextEmphasisPosition)
   , mTextEmphasisStyle(aSource.mTextEmphasisStyle)
   , mTextRendering(aSource.mTextRendering)
-  , mTabSize(aSource.mTabSize)
   , mTextEmphasisColor(aSource.mTextEmphasisColor)
   , mWebkitTextFillColor(aSource.mWebkitTextFillColor)
   , mWebkitTextStrokeColor(aSource.mWebkitTextStrokeColor)
+  , mTabSize(aSource.mTabSize)
   , mWordSpacing(aSource.mWordSpacing)
   , mLetterSpacing(aSource.mLetterSpacing)
   , mLineHeight(aSource.mLineHeight)
@@ -3981,13 +3955,8 @@ nsCursorImage::nsCursorImage(const nsCursorImage& aOther)
   : mHaveHotspot(aOther.mHaveHotspot)
   , mHotspotX(aOther.mHotspotX)
   , mHotspotY(aOther.mHotspotY)
+  , mImage(aOther.mImage)
 {
-  SetImage(aOther.GetImage());
-}
-
-nsCursorImage::~nsCursorImage()
-{
-  SetImage(nullptr);
 }
 
 nsCursorImage&
@@ -3997,7 +3966,7 @@ nsCursorImage::operator=(const nsCursorImage& aOther)
     mHaveHotspot = aOther.mHaveHotspot;
     mHotspotX = aOther.mHotspotX;
     mHotspotY = aOther.mHotspotY;
-    SetImage(aOther.GetImage());
+    mImage = aOther.mImage;
   }
 
   return *this;
@@ -4015,7 +3984,7 @@ nsCursorImage::operator==(const nsCursorImage& aOther) const
   return mHaveHotspot == aOther.mHaveHotspot &&
          mHotspotX == aOther.mHotspotX &&
          mHotspotY == aOther.mHotspotY &&
-         EqualImages(mImage, aOther.mImage);
+         DefinitelyEqualImages(mImage, aOther.mImage);
 }
 
 nsStyleUserInterface::nsStyleUserInterface(StyleStructContext aContext)
@@ -4042,6 +4011,19 @@ nsStyleUserInterface::nsStyleUserInterface(const nsStyleUserInterface& aSource)
 nsStyleUserInterface::~nsStyleUserInterface()
 {
   MOZ_COUNT_DTOR(nsStyleUserInterface);
+}
+
+void
+nsStyleUserInterface::FinishStyle(nsPresContext* aPresContext)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aPresContext->StyleSet()->IsServo());
+
+  for (nsCursorImage& cursor : mCursorImages) {
+    if (cursor.mImage && !cursor.mImage->IsResolved()) {
+      cursor.mImage->Resolve(aPresContext);
+    }
+  }
 }
 
 nsChangeHint

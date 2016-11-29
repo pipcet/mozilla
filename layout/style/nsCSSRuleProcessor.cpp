@@ -2075,13 +2075,12 @@ static bool SelectorMatches(Element* aElement,
           nsCOMPtr<nsIMozBrowserFrame>
             browserFrame = do_QueryInterface(aElement);
           if (!browserFrame ||
-              !browserFrame->GetReallyIsBrowserOrApp()) {
+              !browserFrame->GetReallyIsBrowser()) {
             return false;
           }
         }
         break;
 
-      case CSSPseudoClassType::mozDir:
       case CSSPseudoClassType::dir:
         {
           if (aDependence) {

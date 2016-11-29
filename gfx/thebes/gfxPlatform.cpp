@@ -178,7 +178,7 @@ using namespace mozilla::gfx;
 class SRGBOverrideObserver final : public nsIObserver,
                                    public nsSupportsWeakReference
 {
-    ~SRGBOverrideObserver() {}
+    ~SRGBOverrideObserver() = default;
 public:
     NS_DECL_ISUPPORTS
     NS_DECL_NSIOBSERVER
@@ -195,11 +195,11 @@ class CrashStatsLogForwarder: public mozilla::gfx::LogForwarder
 {
 public:
   explicit CrashStatsLogForwarder(const char* aKey);
-  virtual void Log(const std::string& aString) override;
-  virtual void CrashAction(LogReason aReason) override;
-  virtual bool UpdateStringsVector(const std::string& aString) override;
+  void Log(const std::string& aString) override;
+  void CrashAction(LogReason aReason) override;
+  bool UpdateStringsVector(const std::string& aString) override;
 
-  virtual LoggingRecord LoggingRecordCopy() override;
+  LoggingRecord LoggingRecordCopy() override;
 
   void SetCircularBufferSize(uint32_t aCapacity);
 
@@ -289,8 +289,8 @@ void CrashStatsLogForwarder::UpdateCrashReport()
     break;
   }
 
-  for (LoggingRecord::iterator it = mBuffer.begin(); it != mBuffer.end(); ++it) {
-    message << logAnnotation << Get<0>(*it) << "]" << Get<1>(*it) << " (t=" << Get<2>(*it) << ") ";
+  for (auto& it : mBuffer) {
+    message << logAnnotation << Get<0>(it) << "]" << Get<1>(it) << " (t=" << Get<2>(it) << ") ";
   }
 
 #ifdef MOZ_CRASHREPORTER
@@ -307,7 +307,7 @@ void CrashStatsLogForwarder::UpdateCrashReport()
 
 class LogForwarderEvent : public Runnable
 {
-  virtual ~LogForwarderEvent() {}
+  ~LogForwarderEvent() override = default;
 
   NS_DECL_ISUPPORTS_INHERITED
 
@@ -361,7 +361,7 @@ void CrashStatsLogForwarder::Log(const std::string& aString)
 
 class CrashTelemetryEvent : public Runnable
 {
-  virtual ~CrashTelemetryEvent() {}
+  ~CrashTelemetryEvent() override = default;
 
   NS_DECL_ISUPPORTS_INHERITED
 
@@ -447,7 +447,7 @@ static const char* kObservedPrefs[] = {
 
 class FontPrefsObserver final : public nsIObserver
 {
-    ~FontPrefsObserver() {}
+    ~FontPrefsObserver() = default;
 public:
     NS_DECL_ISUPPORTS
     NS_DECL_NSIOBSERVER
@@ -472,7 +472,7 @@ FontPrefsObserver::Observe(nsISupports *aSubject,
 
 class MemoryPressureObserver final : public nsIObserver
 {
-    ~MemoryPressureObserver() {}
+    ~MemoryPressureObserver() = default;
 public:
     NS_DECL_ISUPPORTS
     NS_DECL_NSIOBSERVER
@@ -653,10 +653,9 @@ gfxPlatform::Init()
                                gfxPrefs::WebGLForceLayersReadback(),
                                gfxPrefs::WebGLForceMSAA());
       // Prefs that don't fit into any of the other sections
-      forcedPrefs.AppendPrintf("-T%d%d%d%d) ",
+      forcedPrefs.AppendPrintf("-T%d%d%d) ",
                                gfxPrefs::AndroidRGB16Force(),
                                gfxPrefs::CanvasAzureAccelerated(),
-                               gfxPrefs::DisableGralloc(),
                                gfxPrefs::ForceShmemTiles());
       ScopedGfxFeatureReporter::AppNote(forcedPrefs);
     }
@@ -795,9 +794,26 @@ gfxPlatform::Init()
     InitNullMetadata();
     InitOpenGLConfig();
 
+    if (XRE_IsParentProcess()) {
+      gfxVars::SetDXInterop2Blocked(IsDXInterop2Blocked());
+    }
+
     if (obs) {
       obs->NotifyObservers(nullptr, "gfx-features-ready", nullptr);
     }
+}
+
+/* static*/ bool
+gfxPlatform::IsDXInterop2Blocked()
+{
+  nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
+  nsCString blockId;
+  int32_t status;
+  if (!NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DX_INTEROP2,
+                                              blockId, &status))) {
+    return true;
+  }
+  return status != nsIGfxInfo::FEATURE_STATUS_OK;
 }
 
 /* static */ void
@@ -1146,7 +1162,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget,
   }
 
   // Add user data to aSurface so we can cache lookups in the future.
-  SourceSurfaceUserData *srcSurfUD = new SourceSurfaceUserData;
+  auto *srcSurfUD = new SourceSurfaceUserData;
   srcSurfUD->mBackendType = aTarget->GetBackendType();
   srcSurfUD->mSrcSurface = srcBuffer;
   aSurface->SetData(&kSourceSurface, srcSurfUD, SourceBufferDestroy);
@@ -1173,7 +1189,7 @@ gfxPlatform::GetWrappedDataSourceSurface(gfxASurface* aSurface)
 
   // If we wrapped the underlying data of aSurface, then we need to add user data
   // to make sure aSurface stays alive until we are done with the data.
-  DependentSourceSurfaceUserData *srcSurfUD = new DependentSourceSurfaceUserData;
+  auto *srcSurfUD = new DependentSourceSurfaceUserData;
   srcSurfUD->mSurface = aSurface;
   result->AddUserData(&kThebesSurface, srcSurfUD, SourceSurfaceDestroyed);
 
@@ -1441,7 +1457,12 @@ gfxPlatform::CreateSimilarSoftwareDrawTarget(DrawTarget* aDT,
   if (Factory::DoesBackendSupportDataDrawtarget(aDT->GetBackendType())) {
     dt = aDT->CreateSimilarDrawTarget(aSize, aFormat);
   } else {
-    dt = Factory::CreateDrawTarget(BackendType::SKIA, aSize, aFormat);
+#ifdef USE_SKIA
+    BackendType backendType = BackendType::SKIA;
+#else
+    BackendType backendType = BackendType::CAIRO;
+#endif
+    dt = Factory::CreateDrawTarget(backendType, aSize, aFormat);
   }
 
   return dt.forget();
@@ -1454,7 +1475,11 @@ gfxPlatform::CreateDrawTargetForData(unsigned char* aData, const IntSize& aSize,
   NS_ASSERTION(backendType != BackendType::NONE, "No backend.");
 
   if (!Factory::DoesBackendSupportDataDrawtarget(backendType)) {
+#ifdef USE_SKIA
+    backendType = BackendType::SKIA;
+#else
     backendType = BackendType::CAIRO;
+#endif
   }
 
   RefPtr<DrawTarget> dt = Factory::CreateDrawTargetForData(backendType,
@@ -1645,6 +1670,7 @@ gfxPlatform::InitBackendPrefs(uint32_t aCanvasBitmask, BackendType aCanvasDefaul
           GetCanvasBackendPref(aCanvasBitmask & ~BackendTypeBit(mPreferredCanvasBackend));
     }
 
+
     mContentBackendBitmask = aContentBitmask;
     mContentBackend = GetContentBackendPref(mContentBackendBitmask);
     if (mContentBackend == BackendType::NONE) {
@@ -1654,6 +1680,10 @@ gfxPlatform::InitBackendPrefs(uint32_t aCanvasBitmask, BackendType aCanvasDefaul
         // overriding the prefs.
         mContentBackendBitmask |= BackendTypeBit(aContentDefault);
     }
+
+    uint32_t swBackendBits = BackendTypeBit(BackendType::SKIA) |
+                             BackendTypeBit(BackendType::CAIRO);
+    mSoftwareBackend = GetContentBackendPref(swBackendBits);
 
     if (XRE_IsParentProcess()) {
         gfxVars::SetContentBackend(mContentBackend);
@@ -2407,9 +2437,9 @@ gfxPlatform::GetTilesSupportInfo(mozilla::widget::InfoObject& aObj)
 /*static*/ bool
 gfxPlatform::AsyncPanZoomEnabled()
 {
-#if !defined(MOZ_B2G) && !defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_WIDGET_UIKIT)
-  // For XUL applications (everything but B2G on mobile and desktop, and
-  // Firefox on Android) we only want to use APZ when E10S is enabled. If
+#if !defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_WIDGET_UIKIT)
+  // For XUL applications (everything but Firefox on Android)
+  // we only want to use APZ when E10S is enabled. If
   // we ever get input events off the main thread we can consider relaxing
   // this requirement.
   if (!BrowserTabsRemoteAutostart()) {

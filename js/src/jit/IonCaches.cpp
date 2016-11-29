@@ -555,8 +555,8 @@ IsOptimizableArgumentsObjectForGetElem(JSObject* obj, const Value& idval)
     return true;
 }
 
-static bool
-IsCacheableGetPropCallNative(JSObject* obj, JSObject* holder, Shape* shape)
+bool
+jit::IsCacheableGetPropCallNative(JSObject* obj, JSObject* holder, Shape* shape)
 {
     if (!shape || !IsCacheableProtoChainForIonOrCacheIR(obj, holder))
         return false;
@@ -600,6 +600,9 @@ jit::IsCacheableGetPropCallScripted(JSObject* obj, JSObject* holder, Shape* shap
         return false;
 
     JSFunction& getter = shape->getterValue().toObject().as<JSFunction>();
+    if (getter.isNative())
+        return false;
+
     if (!getter.hasJITCode()) {
         if (isTemporarilyUnoptimizable)
             *isTemporarilyUnoptimizable = true;
@@ -1680,13 +1683,6 @@ PushObjectOpResult(MacroAssembler& masm)
     static_assert(sizeof(ObjectOpResult) == sizeof(uintptr_t),
                   "ObjectOpResult size must match size reserved by masm.Push() here");
     masm.Push(ImmWord(ObjectOpResult::Uninitialized));
-}
-
-static bool
-ProxyGetProperty(JSContext* cx, HandleObject proxy, HandleId id, MutableHandleValue vp)
-{
-    RootedValue receiver(cx, ObjectValue(*proxy));
-    return Proxy::get(cx, proxy, receiver, id, vp);
 }
 
 static bool

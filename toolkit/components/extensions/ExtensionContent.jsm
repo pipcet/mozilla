@@ -797,6 +797,9 @@ class BrowserExtensionContent extends EventEmitter {
     // Only used in addon processes.
     this.views = new Set();
 
+    // Only used for devtools views.
+    this.devtoolsViews = new Set();
+
     let uri = Services.io.newURI(data.resourceURL, null, null);
 
     if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
@@ -892,10 +895,7 @@ ExtensionManager = {
       }
 
       case "Extension:FlushJarCache": {
-        let nsIFile = Components.Constructor("@mozilla.org/file/local;1", "nsIFile",
-                                             "initWithPath");
-        let file = new nsIFile(data.path);
-        flushJarCache(file);
+        flushJarCache(data.path);
         Services.cpmm.sendAsyncMessage("Extension:FlushJarCacheComplete");
         break;
       }
@@ -1025,11 +1025,15 @@ this.ExtensionContent = {
 
   init(global) {
     this.globals.set(global, new ExtensionGlobal(global));
-    ExtensionChild.init(global);
+    if (ExtensionManagement.isExtensionProcess) {
+      ExtensionChild.init(global);
+    }
   },
 
   uninit(global) {
-    ExtensionChild.uninit(global);
+    if (ExtensionManagement.isExtensionProcess) {
+      ExtensionChild.uninit(global);
+    }
     this.globals.get(global).uninit();
     this.globals.delete(global);
   },

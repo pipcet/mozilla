@@ -147,7 +147,6 @@ using namespace mozilla::gfx;
 #define GRID_ENABLED_PREF_NAME "layout.css.grid.enabled"
 #define GRID_TEMPLATE_SUBGRID_ENABLED_PREF_NAME "layout.css.grid-template-subgrid-value.enabled"
 #define WEBKIT_PREFIXES_ENABLED_PREF_NAME "layout.css.prefixes.webkit"
-#define DISPLAY_CONTENTS_ENABLED_PREF_NAME "layout.css.display-contents.enabled"
 #define TEXT_ALIGN_UNSAFE_ENABLED_PREF_NAME "layout.css.text-align-unsafe-value.enabled"
 #define FLOAT_LOGICAL_VALUES_ENABLED_PREF_NAME "layout.css.float-logical-values.enabled"
 #define BG_CLIP_TEXT_ENABLED_PREF_NAME "layout.css.background-clip-text.enabled"
@@ -309,36 +308,6 @@ WebkitPrefixEnabledPrefChangeCallback(const char* aPrefName, void* aClosure)
     nsCSSProps::kDisplayKTable[sIndexOfWebkitInlineFlexInDisplayTable].mKeyword =
       isWebkitPrefixSupportEnabled ?
       eCSSKeyword__webkit_inline_flex : eCSSKeyword_UNKNOWN;
-  }
-}
-
-// When the pref "layout.css.display-contents.enabled" changes, this function is
-// invoked to let us update kDisplayKTable, to selectively disable or restore
-// the entries for "contents" in that table.
-static void
-DisplayContentsEnabledPrefChangeCallback(const char* aPrefName, void* aClosure)
-{
-  NS_ASSERTION(strcmp(aPrefName, DISPLAY_CONTENTS_ENABLED_PREF_NAME) == 0,
-               "Did you misspell " DISPLAY_CONTENTS_ENABLED_PREF_NAME " ?");
-
-  static bool sIsDisplayContentsKeywordIndexInitialized;
-  static int32_t sIndexOfContentsInDisplayTable;
-  bool isDisplayContentsEnabled =
-    Preferences::GetBool(DISPLAY_CONTENTS_ENABLED_PREF_NAME, false);
-
-  if (!sIsDisplayContentsKeywordIndexInitialized) {
-    // First run: find the position of "contents" in kDisplayKTable.
-    sIndexOfContentsInDisplayTable =
-      nsCSSProps::FindIndexOfKeyword(eCSSKeyword_contents,
-                                     nsCSSProps::kDisplayKTable);
-    sIsDisplayContentsKeywordIndexInitialized = true;
-  }
-
-  // OK -- now, stomp on or restore the "contents" entry in kDisplayKTable,
-  // depending on whether the pref is enabled vs. disabled.
-  if (sIndexOfContentsInDisplayTable >= 0) {
-    nsCSSProps::kDisplayKTable[sIndexOfContentsInDisplayTable].mKeyword =
-      isDisplayContentsEnabled ? eCSSKeyword_contents : eCSSKeyword_UNKNOWN;
   }
 }
 
@@ -4656,9 +4625,9 @@ GetBSizeTakenByBoxSizing(StyleBoxSizing aBoxSizing,
       const nsStyleSides& stylePadding =
         aFrame->StylePadding()->mPadding;
       const nsStyleCoord& paddingStart =
-        stylePadding.Get(aHorizontalAxis ? NS_SIDE_TOP : NS_SIDE_LEFT);
+        stylePadding.Get(aHorizontalAxis ? eSideTop : eSideLeft);
       const nsStyleCoord& paddingEnd =
-        stylePadding.Get(aHorizontalAxis ? NS_SIDE_BOTTOM : NS_SIDE_RIGHT);
+        stylePadding.Get(aHorizontalAxis ? eSideBottom : eSideRight);
       nscoord pad;
       // XXXbz Calling GetPercentBSize on padding values looks bogus, since
       // percent padding is always a percentage of the inline-size of the
@@ -6742,23 +6711,23 @@ nsLayoutUtils::HasNonZeroCorner(const nsStyleCorners& aCorners)
 }
 
 // aCorner is a "full corner" value, i.e. NS_CORNER_TOP_LEFT etc
-static bool IsCornerAdjacentToSide(uint8_t aCorner, css::Side aSide)
+static bool IsCornerAdjacentToSide(uint8_t aCorner, Side aSide)
 {
-  static_assert((int)NS_SIDE_TOP == NS_CORNER_TOP_LEFT, "Check for Full Corner");
-  static_assert((int)NS_SIDE_RIGHT == NS_CORNER_TOP_RIGHT, "Check for Full Corner");
-  static_assert((int)NS_SIDE_BOTTOM == NS_CORNER_BOTTOM_RIGHT, "Check for Full Corner");
-  static_assert((int)NS_SIDE_LEFT == NS_CORNER_BOTTOM_LEFT, "Check for Full Corner");
-  static_assert((int)NS_SIDE_TOP == ((NS_CORNER_TOP_RIGHT - 1)&3), "Check for Full Corner");
-  static_assert((int)NS_SIDE_RIGHT == ((NS_CORNER_BOTTOM_RIGHT - 1)&3), "Check for Full Corner");
-  static_assert((int)NS_SIDE_BOTTOM == ((NS_CORNER_BOTTOM_LEFT - 1)&3), "Check for Full Corner");
-  static_assert((int)NS_SIDE_LEFT == ((NS_CORNER_TOP_LEFT - 1)&3), "Check for Full Corner");
+  static_assert((int)eSideTop == NS_CORNER_TOP_LEFT, "Check for Full Corner");
+  static_assert((int)eSideRight == NS_CORNER_TOP_RIGHT, "Check for Full Corner");
+  static_assert((int)eSideBottom == NS_CORNER_BOTTOM_RIGHT, "Check for Full Corner");
+  static_assert((int)eSideLeft == NS_CORNER_BOTTOM_LEFT, "Check for Full Corner");
+  static_assert((int)eSideTop == ((NS_CORNER_TOP_RIGHT - 1)&3), "Check for Full Corner");
+  static_assert((int)eSideRight == ((NS_CORNER_BOTTOM_RIGHT - 1)&3), "Check for Full Corner");
+  static_assert((int)eSideBottom == ((NS_CORNER_BOTTOM_LEFT - 1)&3), "Check for Full Corner");
+  static_assert((int)eSideLeft == ((NS_CORNER_TOP_LEFT - 1)&3), "Check for Full Corner");
 
   return aSide == aCorner || aSide == ((aCorner - 1)&3);
 }
 
 /* static */ bool
 nsLayoutUtils::HasNonZeroCornerOnSide(const nsStyleCorners& aCorners,
-                                      css::Side aSide)
+                                      Side aSide)
 {
   static_assert(NS_CORNER_TOP_LEFT_X/2 == NS_CORNER_TOP_LEFT, "Check for Non Zero on side");
   static_assert(NS_CORNER_TOP_LEFT_Y/2 == NS_CORNER_TOP_LEFT, "Check for Non Zero on side");
@@ -7104,7 +7073,8 @@ nsLayoutUtils::SurfaceFromElement(nsIImageLoadingContent* aElement,
   uint32_t whichFrame = (aSurfaceFlags & SFE_WANT_FIRST_FRAME)
                         ? (uint32_t) imgIContainer::FRAME_FIRST
                         : (uint32_t) imgIContainer::FRAME_CURRENT;
-  uint32_t frameFlags = imgIContainer::FLAG_SYNC_DECODE;
+  uint32_t frameFlags = imgIContainer::FLAG_SYNC_DECODE
+                      | imgIContainer::FLAG_ASYNC_NOTIFY;
   if (aSurfaceFlags & SFE_NO_COLORSPACE_CONVERSION)
     frameFlags |= imgIContainer::FLAG_DECODE_NO_COLORSPACE_CONVERSION;
   if (aSurfaceFlags & SFE_PREFER_NO_PREMULTIPLY_ALPHA) {
@@ -7536,8 +7506,6 @@ static const PrefCallbacks kPrefCallbacks[] = {
     WebkitPrefixEnabledPrefChangeCallback },
   { TEXT_ALIGN_UNSAFE_ENABLED_PREF_NAME,
     TextAlignUnsafeEnabledPrefChangeCallback },
-  { DISPLAY_CONTENTS_ENABLED_PREF_NAME,
-    DisplayContentsEnabledPrefChangeCallback },
   { FLOAT_LOGICAL_VALUES_ENABLED_PREF_NAME,
     FloatLogicalValuesEnabledPrefChangeCallback },
   { BG_CLIP_TEXT_ENABLED_PREF_NAME,

@@ -5512,6 +5512,42 @@ NS_IMETHODIMP nsHttpChannel::OnAuthCancelled(bool userCancel)
     return NS_OK;
 }
 
+NS_IMETHODIMP nsHttpChannel::CloseStickyConnection()
+{
+    LOG(("nsHttpChannel::CloseStickyConnection this=%p", this));
+
+    // Require we are between OnStartRequest and OnStopRequest, because
+    // what we do here takes effect in OnStopRequest (not reusing the
+    // connection for next authentication round).
+    if (!mIsPending) {
+        LOG(("  channel not pending"));
+        NS_ERROR("CloseStickyConnection not called before OnStopRequest, won't have any effect");
+        return NS_ERROR_UNEXPECTED;
+    }
+
+    MOZ_ASSERT(mTransaction);
+    if (!mTransaction) {
+        return NS_ERROR_UNEXPECTED;
+    }
+
+    if (!(mCaps & NS_HTTP_STICKY_CONNECTION ||
+          mTransaction->Caps() & NS_HTTP_STICKY_CONNECTION)) {
+        LOG(("  not sticky"));
+        return NS_OK;
+    }
+
+    RefPtr<nsAHttpConnection> conn = mTransaction->GetConnectionReference();
+    if (!conn) {
+        LOG(("  no connection"));
+        return NS_OK;
+    }
+
+    // This turns the IsPersistent() indicator on the connection to false,
+    // and makes us throw it away in OnStopRequest.
+    conn->DontReuse();
+    return NS_OK;
+}
+
 //-----------------------------------------------------------------------------
 // nsHttpChannel::nsISupports
 //-----------------------------------------------------------------------------
@@ -5688,6 +5724,11 @@ nsHttpChannel::AsyncOpen(nsIStreamListener *listener, nsISupports *context)
 
     AddCookiesToRequest();
 
+    // Set user agent override, do so before OnOpeningRequest notification
+    // since we want to allow consumers of that notification change or remove
+    // the User-Agent request header.
+    HttpBaseChannel::SetDocshellUserAgentOverride();
+
     // After we notify any observers (on-opening-request, loadGroup, etc) we
     // must return NS_OK and return any errors asynchronously via
     // OnStart/OnStopRequest.  Observers may add a reference to the channel
@@ -5698,9 +5739,6 @@ nsHttpChannel::AsyncOpen(nsIStreamListener *listener, nsISupports *context)
     if (!(mLoadFlags & LOAD_REPLACE)) {
         gHttpHandler->OnOpeningRequest(this);
     }
-
-    // Set user agent override
-    HttpBaseChannel::SetDocshellUserAgentOverride();
 
     mIsPending = true;
     mWasOpened = true;
@@ -7987,24 +8025,19 @@ nsHttpChannel::OnHSTSPrimingFailed(nsresult aError, bool aCached)
 
     LOG(("HSTS Priming Failed [this=%p], %s the load", this,
                 (wouldBlock) ? "blocking" : "allowing"));
-    if (aError == NS_ERROR_HSTS_PRIMING_TIMEOUT) {
-        // A priming request was sent, but timed out
-        Telemetry::Accumulate(Telemetry::MIXED_CONTENT_HSTS_PRIMING_RESULT,
-                (wouldBlock) ?  HSTSPrimingResult::eHSTS_PRIMING_TIMEOUT_BLOCK :
-                HSTSPrimingResult::eHSTS_PRIMING_TIMEOUT_ACCEPT);
-    } else if (aCached) {
+    if (aCached) {
         // Between the time we marked for priming and started the priming request,
         // the host was found to not allow the upgrade, probably from another
         // priming request.
         Telemetry::Accumulate(Telemetry::MIXED_CONTENT_HSTS_PRIMING_RESULT,
                 (wouldBlock) ?  HSTSPrimingResult::eHSTS_PRIMING_CACHED_BLOCK :
-                HSTSPrimingResult::eHSTS_PRIMING_CACHED_NO_UPGRADE);
+                                HSTSPrimingResult::eHSTS_PRIMING_CACHED_NO_UPGRADE);
     } else {
         // A priming request was sent, and no HSTS header was found that allows
         // the upgrade.
         Telemetry::Accumulate(Telemetry::MIXED_CONTENT_HSTS_PRIMING_RESULT,
                 (wouldBlock) ?  HSTSPrimingResult::eHSTS_PRIMING_FAILED_BLOCK :
-                HSTSPrimingResult::eHSTS_PRIMING_FAILED_ACCEPT);
+                                HSTSPrimingResult::eHSTS_PRIMING_FAILED_ACCEPT);
     }
 
     // Don't visit again for at least

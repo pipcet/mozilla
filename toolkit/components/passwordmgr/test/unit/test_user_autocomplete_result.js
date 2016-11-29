@@ -39,23 +39,23 @@ let expectedResults = [
     items: [{
       value: "",
       label: LABEL_NO_USERNAME,
-      style: ""
+      style: "login",
     }, {
       value: "tempuser1",
       label: "tempuser1",
-      style: ""
+      style: "login",
     }, {
       value: "testuser2",
       label: "testuser2",
-      style: ""
+      style: "login",
     }, {
       value: "testuser3",
       label: "testuser3",
-      style: ""
+      style: "login",
     }, {
       value: "zzzuser4",
       label: "zzzuser4",
-      style: ""
+      style: "login",
     }]
   },
   {
@@ -71,23 +71,23 @@ let expectedResults = [
     }, {
       value: "",
       label: LABEL_NO_USERNAME,
-      style: ""
+      style: "login",
     }, {
       value: "tempuser1",
       label: "tempuser1",
-      style: ""
+      style: "login",
     }, {
       value: "testuser2",
       label: "testuser2",
-      style: ""
+      style: "login",
     }, {
       value: "testuser3",
       label: "testuser3",
-      style: ""
+      style: "login",
     }, {
       value: "zzzuser4",
       label: "zzzuser4",
-      style: ""
+      style: "login",
     }]
   },
   {
@@ -99,23 +99,23 @@ let expectedResults = [
     items: [{
       value: "emptypass1",
       label: LABEL_NO_USERNAME,
-      style: ""
+      style: "login",
     }, {
       value: "temppass1",
       label: "tempuser1",
-      style: ""
+      style: "login",
     }, {
       value: "testpass2",
       label: "testuser2",
-      style: ""
+      style: "login",
     }, {
       value: "testpass3",
       label: "testuser3",
-      style: ""
+      style: "login",
     }, {
       value: "zzzpass4",
       label: "zzzuser4",
-      style: ""
+      style: "login",
     }]
   },
   {
@@ -131,23 +131,23 @@ let expectedResults = [
     }, {
       value: "emptypass1",
       label: LABEL_NO_USERNAME,
-      style: ""
+      style: "login",
     }, {
       value: "temppass1",
       label: "tempuser1",
-      style: ""
+      style: "login",
     }, {
       value: "testpass2",
       label: "testuser2",
-      style: ""
+      style: "login",
     }, {
       value: "testpass3",
       label: "testuser3",
-      style: ""
+      style: "login",
     }, {
       value: "zzzpass4",
       label: "zzzuser4",
-      style: ""
+      style: "login",
     }]
   },
   {
@@ -159,23 +159,23 @@ let expectedResults = [
     items: [{
       value: "",
       label: LABEL_NO_USERNAME,
-      style: ""
+      style: "login",
     }, {
       value: "tempuser1",
       label: "tempuser1",
-      style: ""
+      style: "login",
     }, {
       value: "testuser2",
       label: "testuser2",
-      style: ""
+      style: "login",
     }, {
       value: "testuser3",
       label: "testuser3",
-      style: ""
+      style: "login",
     }, {
       value: "zzzuser4",
       label: "zzzuser4",
-      style: ""
+      style: "login",
     }]
   },
   {
@@ -187,23 +187,23 @@ let expectedResults = [
     items: [{
       value: "",
       label: LABEL_NO_USERNAME,
-      style: ""
+      style: "login",
     }, {
       value: "tempuser1",
       label: "tempuser1",
-      style: ""
+      style: "login",
     }, {
       value: "testuser2",
       label: "testuser2",
-      style: ""
+      style: "login",
     }, {
       value: "testuser3",
       label: "testuser3",
-      style: ""
+      style: "login",
     }, {
       value: "zzzuser4",
       label: "zzzuser4",
-      style: ""
+      style: "login",
     }]
   },
   {
@@ -215,23 +215,23 @@ let expectedResults = [
     items: [{
       value: "emptypass1",
       label: LABEL_NO_USERNAME,
-      style: ""
+      style: "login",
     }, {
       value: "temppass1",
       label: "tempuser1",
-      style: ""
+      style: "login",
     }, {
       value: "testpass2",
       label: "testuser2",
-      style: ""
+      style: "login",
     }, {
       value: "testpass3",
       label: "testuser3",
-      style: ""
+      style: "login",
     }, {
       value: "zzzpass4",
       label: "zzzuser4",
-      style: ""
+      style: "login",
     }]
   },
   {
@@ -243,23 +243,23 @@ let expectedResults = [
     items: [{
       value: "emptypass1",
       label: LABEL_NO_USERNAME,
-      style: ""
+      style: "login",
     }, {
       value: "temppass1",
       label: "tempuser1",
-      style: ""
+      style: "login",
     }, {
       value: "testpass2",
       label: "testuser2",
-      style: ""
+      style: "login",
     }, {
       value: "testpass3",
       label: "testuser3",
-      style: ""
+      style: "login",
     }, {
       value: "zzzpass4",
       label: "zzzuser4",
-      style: ""
+      style: "login",
     }]
   },
   {
@@ -271,23 +271,23 @@ let expectedResults = [
     items: [{
       value: "",
       label: LABEL_NO_USERNAME,
-      style: ""
+      style: "login",
     }, {
       value: "tempuser1",
       label: "tempuser1",
-      style: ""
+      style: "login",
     }, {
       value: "testuser2",
       label: "testuser2",
-      style: ""
+      style: "login",
     }, {
       value: "testuser3",
       label: "testuser3",
-      style: ""
+      style: "login",
     }, {
       value: "zzzuser4",
       label: "zzzuser4",
-      style: ""
+      style: "login",
     }]
   },
   {
@@ -300,6 +300,26 @@ let expectedResults = [
       value: "",
       label: "This connection is not secure. Logins entered here could be compromised.",
       style: "insecureWarning"
+    }, {
+      value: "",
+      label: LABEL_NO_USERNAME,
+      style: "login",
+    }, {
+      value: "tempuser1",
+      label: "tempuser1",
+      style: "login",
+    }, {
+      value: "testuser2",
+      label: "testuser2",
+      style: "login",
+    }, {
+      value: "testuser3",
+      label: "testuser3",
+      style: "login",
+    }, {
+      value: "zzzuser4",
+      label: "zzzuser4",
+      style: "login",
     }]
   },
   {
@@ -311,23 +331,23 @@ let expectedResults = [
     items: [{
       value: "emptypass1",
       label: LABEL_NO_USERNAME,
-      style: ""
+      style: "login",
     }, {
       value: "temppass1",
       label: "tempuser1",
-      style: ""
+      style: "login",
     }, {
       value: "testpass2",
       label: "testuser2",
-      style: ""
+      style: "login",
     }, {
       value: "testpass3",
       label: "testuser3",
-      style: ""
+      style: "login",
     }, {
       value: "zzzpass4",
       label: "zzzuser4",
-      style: ""
+      style: "login",
     }]
   },
   {
@@ -340,6 +360,26 @@ let expectedResults = [
       value: "",
       label: "This connection is not secure. Logins entered here could be compromised.",
       style: "insecureWarning"
+    }, {
+      value: "emptypass1",
+      label: LABEL_NO_USERNAME,
+      style: "login",
+    }, {
+      value: "temppass1",
+      label: "tempuser1",
+      style: "login",
+    }, {
+      value: "testpass2",
+      label: "testuser2",
+      style: "login",
+    }, {
+      value: "testpass3",
+      label: "testuser3",
+      style: "login",
+    }, {
+      value: "zzzpass4",
+      label: "zzzuser4",
+      style: "login",
     }]
   },
   {
@@ -351,23 +391,23 @@ let expectedResults = [
     items: [{
       value: "",
       label: LABEL_NO_USERNAME,
-      style: ""
+      style: "login",
     }, {
       value: "tempuser1",
       label: "tempuser1",
-      style: ""
+      style: "login",
     }, {
       value: "testuser2",
       label: "testuser2",
-      style: ""
+      style: "login",
     }, {
       value: "testuser3",
       label: "testuser3",
-      style: ""
+      style: "login",
     }, {
       value: "zzzuser4",
       label: "zzzuser4",
-      style: ""
+      style: "login",
     }]
   },
   {
@@ -387,23 +427,23 @@ let expectedResults = [
     items: [{
       value: "emptypass1",
       label: LABEL_NO_USERNAME,
-      style: ""
+      style: "login",
     }, {
       value: "temppass1",
       label: "tempuser1",
-      style: ""
+      style: "login",
     }, {
       value: "testpass2",
       label: "testuser2",
-      style: ""
+      style: "login",
     }, {
       value: "testpass3",
       label: "testuser3",
-      style: ""
+      style: "login",
     }, {
       value: "zzzpass4",
       label: "zzzuser4",
-      style: ""
+      style: "login",
     }]
   },
   {

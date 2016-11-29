@@ -2032,8 +2032,8 @@ var gCSSProperties = {
     inherited: true,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "8" ],
-    other_values: [ "0", "3", "99", "12000" ],
-    invalid_values: [ "-1", "-808", "3.0", "17.5" ]
+    other_values: [ "0", "2.5", "3", "99", "12000", "0px", "1em", "calc(1px + 1em)", "calc(1px - 2px)", "calc(1 + 1)", "calc(-2.5)" ],
+    invalid_values: [ "9%", "calc(9% + 1px)", "calc(1 + 1em)", "-1", "-808", "auto" ]
   },
   "-moz-text-size-adjust": {
     domProp: "MozTextSizeAdjust",
@@ -4560,6 +4560,41 @@ var gCSSProperties = {
     invalid_values: [ "space-between", "abc", "30px", "none", "first", "last",
                       "legacy left", "right legacy", "baseline first", "baseline last" ]
   },
+  "place-content": {
+    domProp: "placeContent",
+    inherited: false,
+    type: CSS_TYPE_TRUE_SHORTHAND,
+    subproperties: [ "align-content", "justify-content" ],
+    initial_values: [ "normal" ],
+    other_values: [ "normal start", "end baseline", "end end",
+                    "space-between flex-end", "last baseline start",
+                    "space-evenly", "flex-start", "end", "left" ],
+    invalid_values: [ "none", "center safe", "unsafe start", "right / end" ]
+  },
+  "place-items": {
+    domProp: "placeItems",
+    inherited: false,
+    type: CSS_TYPE_TRUE_SHORTHAND,
+    subproperties: [ "align-items", "justify-items" ],
+    initial_values: [ "normal" ],
+    other_values: [ "normal center", "end baseline", "end auto",
+                    "end", "right", "baseline", "start last baseline",
+                    "left flex-end", "last baseline start", "stretch" ],
+    invalid_values: [ "space-between", "start space-evenly", "none", "end/end",
+                      "center safe", "auto start", "end legacy left" ]
+  },
+  "place-self": {
+    domProp: "placeSelf",
+    inherited: false,
+    type: CSS_TYPE_TRUE_SHORTHAND,
+    subproperties: [ "align-self", "justify-self" ],
+    initial_values: [ "auto" ],
+    other_values: [ "normal start", "end first baseline", "end auto",
+                    "end", "right", "normal", "baseline", "start baseline",
+                    "left self-end", "last baseline start", "stretch" ],
+    invalid_values: [ "space-between", "start space-evenly", "none", "end safe",
+                      "auto legacy left", "legacy left", "auto/auto" ]
+  },
   "flex": {
     domProp: "flex",
     inherited: false,
@@ -4989,13 +5024,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "hyphens",
     subproperties: [ "hyphens" ],
-  },
-  "-moz-text-align-last": {
-    domProp: "MozTextAlignLast",
-    inherited: true,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "text-align-last",
-    subproperties: [ "text-align-last" ],
   },
   // vertical text properties
   "writing-mode": {
@@ -6671,9 +6699,7 @@ if (IsCSSPropertyPrefEnabled("layout.css.grid.enabled")) {
   };
 }
 
-if (IsCSSPropertyPrefEnabled("layout.css.display-contents.enabled")) {
-  gCSSProperties["display"].other_values.push("contents");
-}
+gCSSProperties["display"].other_values.push("contents");
 
 if (IsCSSPropertyPrefEnabled("layout.css.contain.enabled")) {
   gCSSProperties["contain"] = {

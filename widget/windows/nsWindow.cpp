@@ -270,6 +270,9 @@ int             nsWindow::sTrimOnMinimize         = 2;
 
 TriStateBool nsWindow::sHasBogusPopupsDropShadowOnMultiMonitor = TRI_UNKNOWN;
 
+WPARAM nsWindow::sMouseExitwParam = 0;
+LPARAM nsWindow::sMouseExitlParamScreen = 0;
+
 static SystemTimeConverter<DWORD>&
 TimeConverter() {
   static SystemTimeConverter<DWORD> timeConverterSingleton;
@@ -3273,6 +3276,17 @@ nsWindow::MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen)
     mWidgetListener->FullscreenChanged(aFullScreen);
   }
 
+  // Send a eMouseEnterIntoWidget event since Windows has already sent
+  // a WM_MOUSELEAVE that caused us to send a eMouseExitFromWidget event.
+  if (aFullScreen && !sCurrentWindow) {
+    sCurrentWindow = this;
+    LPARAM pos = sCurrentWindow->lParamToClient(sMouseExitlParamScreen);
+    sCurrentWindow->DispatchMouseEvent(eMouseEnterIntoWidget,
+                                       sMouseExitwParam, pos, false,
+                                       WidgetMouseEvent::eLeftButton,
+                                       MOUSE_INPUT_SOURCE(), MOUSE_POINTERID());
+  }
+
   return NS_OK;
 }
 
@@ -4251,6 +4265,8 @@ nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
         }
       }
     } else if (aEventMessage == eMouseExitFromWidget) {
+      sMouseExitwParam = wParam;
+      sMouseExitlParamScreen = lParamToScreen(lParam);
       if (sCurrentWindow == this) {
         sCurrentWindow = nullptr;
       }
@@ -6262,6 +6278,8 @@ void nsWindow::OnWindowPosChanged(WINDOWPOS* wp)
     if (mLastSizeMode != nsSizeMode_Normal && mSizeMode == nsSizeMode_Normal)
       DispatchFocusToTopLevelWindow(true);
 
+    mLastSizeMode = mSizeMode;
+
     // Skip window size change events below on minimization.
     if (mSizeMode == nsSizeMode_Minimized)
       return;
@@ -7572,7 +7590,8 @@ nsWindow::DealWithPopups(HWND aWnd, UINT aMessage,
       } else if (LOWORD(aWParam) == WA_CLICKACTIVE) {
         // If the WM_ACTIVATE message is caused by a click in a popup,
         // we should not rollup any popups.
-        if (EventIsInsideWindow(popupWindow) ||
+        nsWindow* window = WinUtils::GetNSWindowPtr(aWnd);
+        if ((window && window->IsPopup()) ||
             !GetPopupsToRollup(rollupListener, &popupsToRollup)) {
           return false;
         }

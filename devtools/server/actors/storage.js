@@ -15,6 +15,12 @@ const {isWindowIncluded} = require("devtools/shared/layout/utils");
 const specs = require("devtools/shared/specs/storage");
 const { Task } = require("devtools/shared/task");
 
+// GUID to be used as a separator in compound keys. This must match the same
+// constant in devtools/client/storage/ui.js,
+// devtools/client/storage/test/head.js and
+// devtools/server/tests/browser/head.js
+const SEPARATOR_GUID = "{9d414cc5-8319-0a04-0586-c0a6ae01670a}";
+
 loader.lazyImporter(this, "OS", "resource://gre/modules/osfile.jsm");
 loader.lazyImporter(this, "Sqlite", "resource://gre/modules/Sqlite.jsm");
 
@@ -100,10 +106,10 @@ var StorageActors = {};
  *
  * @param {string} typeName
  *        The typeName of the actor.
- * @param {string} observationTopic
- *        The topic which this actor listens to via Notification Observers.
+ * @param {array} observationTopics
+ *        An array of topics which this actor listens to via Notification Observers.
  */
-StorageActors.defaults = function (typeName, observationTopic) {
+StorageActors.defaults = function (typeName, observationTopics) {
   return {
     typeName: typeName,
 
@@ -144,8 +150,10 @@ StorageActors.defaults = function (typeName, observationTopic) {
       this.storageActor = storageActor;
 
       this.populateStoresForHosts();
-      if (observationTopic) {
-        Services.obs.addObserver(this, observationTopic, false);
+      if (observationTopics) {
+        observationTopics.forEach((observationTopic) => {
+          Services.obs.addObserver(this, observationTopic, false);
+        });
       }
       this.onWindowReady = this.onWindowReady.bind(this);
       this.onWindowDestroyed = this.onWindowDestroyed.bind(this);
@@ -154,13 +162,18 @@ StorageActors.defaults = function (typeName, observationTopic) {
     },
 
     destroy() {
-      if (observationTopic) {
-        Services.obs.removeObserver(this, observationTopic, false);
+      if (observationTopics) {
+        observationTopics.forEach((observationTopic) => {
+          Services.obs.removeObserver(this, observationTopic, false);
+        });
       }
       events.off(this.storageActor, "window-ready", this.onWindowReady);
       events.off(this.storageActor, "window-destroyed", this.onWindowDestroyed);
 
       this.hostVsStores.clear();
+
+      protocol.Actor.prototype.destroy.call(this);
+
       this.storageActor = null;
     },
 
@@ -360,8 +373,8 @@ StorageActors.defaults = function (typeName, observationTopic) {
  *        Options required by StorageActors.defaults method which are :
  *         - typeName {string}
  *                    The typeName of the actor.
- *         - observationTopic {string}
- *                            The topic which this actor listens to via
+ *         - observationTopics {array}
+ *                            The topics which this actor listens to via
  *                            Notification Observers.
  * @param {object} overrides
  *        All the methods which you want to be different from the ones in
@@ -370,7 +383,7 @@ StorageActors.defaults = function (typeName, observationTopic) {
 StorageActors.createActor = function (options = {}, overrides = {}) {
   let actorObject = StorageActors.defaults(
     options.typeName,
-    options.observationTopic || null
+    options.observationTopics || null
   );
   for (let key in overrides) {
     actorObject[key] = overrides[key];
@@ -415,7 +428,11 @@ StorageActors.createActor({
     events.off(this.storageActor, "window-ready", this.onWindowReady);
     events.off(this.storageActor, "window-destroyed", this.onWindowDestroyed);
 
-    this._pendingResponse = this.storageActor = null;
+    this._pendingResponse = null;
+
+    protocol.Actor.prototype.destroy.call(this);
+
+    this.storageActor = null;
   },
 
   /**
@@ -460,14 +477,16 @@ StorageActors.createActor({
     }
 
     return {
+      uniqueKey: `${cookie.name}${SEPARATOR_GUID}${cookie.host}` +
+                 `${SEPARATOR_GUID}${cookie.path}`,
       name: cookie.name,
-      path: cookie.path || "",
       host: cookie.host || "",
+      path: cookie.path || "",
 
       // because expires is in seconds
       expires: (cookie.expires || 0) * 1000,
 
-      // because it is in micro seconds
+      // because creationTime is in micro seconds
       creationTime: cookie.creationTime / 1000,
 
       // - do -
@@ -488,7 +507,10 @@ StorageActors.createActor({
 
     for (let cookie of cookies) {
       if (this.isCookieAtHost(cookie, host)) {
-        this.hostVsStores.get(host).set(cookie.name, cookie);
+        let uniqueKey = `${cookie.name}${SEPARATOR_GUID}${cookie.host}` +
+                        `${SEPARATOR_GUID}${cookie.path}`;
+
+        this.hostVsStores.get(host).set(uniqueKey, cookie);
       }
     }
   },
@@ -521,8 +543,11 @@ StorageActors.createActor({
       case "changed":
         if (hosts.length) {
           for (let host of hosts) {
-            this.hostVsStores.get(host).set(subject.name, subject);
-            data[host] = [subject.name];
+            let uniqueKey = `${subject.name}${SEPARATOR_GUID}${subject.host}` +
+                            `${SEPARATOR_GUID}${subject.path}`;
+
+            this.hostVsStores.get(host).set(uniqueKey, subject);
+            data[host] = [uniqueKey];
           }
           this.storageActor.update(action, "cookies", data);
         }
@@ -531,8 +556,11 @@ StorageActors.createActor({
       case "deleted":
         if (hosts.length) {
           for (let host of hosts) {
-            this.hostVsStores.get(host).delete(subject.name);
-            data[host] = [subject.name];
+            let uniqueKey = `${subject.name}${SEPARATOR_GUID}${subject.host}` +
+                            `${SEPARATOR_GUID}${subject.path}`;
+
+            this.hostVsStores.get(host).delete(uniqueKey);
+            data[host] = [uniqueKey];
           }
           this.storageActor.update("deleted", "cookies", data);
         }
@@ -543,8 +571,11 @@ StorageActors.createActor({
           for (let host of hosts) {
             let stores = [];
             for (let cookie of subject) {
-              this.hostVsStores.get(host).delete(cookie.name);
-              stores.push(cookie.name);
+              let uniqueKey = `${cookie.name}${SEPARATOR_GUID}${cookie.host}` +
+                              `${SEPARATOR_GUID}${cookie.path}`;
+
+              this.hostVsStores.get(host).delete(uniqueKey);
+              stores.push(uniqueKey);
             }
             data[host] = stores;
           }
@@ -566,15 +597,17 @@ StorageActors.createActor({
 
   getFields: Task.async(function* () {
     return [
-      { name: "name", editable: 1},
-      { name: "path", editable: 1},
-      { name: "host", editable: 1},
-      { name: "expires", editable: 1},
-      { name: "lastAccessed", editable: 0},
-      { name: "value", editable: 1},
-      { name: "isDomain", editable: 0},
-      { name: "isSecure", editable: 1},
-      { name: "isHttpOnly", editable: 1}
+      { name: "uniqueKey", editable: false, private: true },
+      { name: "name", editable: true, hidden: false },
+      { name: "host", editable: true, hidden: false },
+      { name: "path", editable: true, hidden: false },
+      { name: "expires", editable: true, hidden: false },
+      { name: "lastAccessed", editable: false, hidden: false },
+      { name: "creationTime", editable: false, hidden: true },
+      { name: "value", editable: true, hidden: false },
+      { name: "isDomain", editable: false, hidden: true },
+      { name: "isSecure", editable: true, hidden: true },
+      { name: "isHttpOnly", editable: true, hidden: false }
     ];
   }),
 
@@ -696,7 +729,7 @@ var cookieHelpers = {
    *        {
    *          host: "http://www.mozilla.org",
    *          field: "value",
-   *          key: "name",
+   *          editCookie: "name",
    *          oldValue: "%7BHello%7D",
    *          newValue: "%7BHelloo%7D",
    *          items: {
@@ -720,10 +753,13 @@ var cookieHelpers = {
     let origPath = field === "path" ? oldValue : data.items.path;
     let cookie = null;
 
-    let enumerator = Services.cookies.getCookiesFromHost(origHost, data.originAttributes || {});
+    let enumerator =
+      Services.cookies.getCookiesFromHost(origHost, data.originAttributes || {});
     while (enumerator.hasMoreElements()) {
       let nsiCookie = enumerator.getNext().QueryInterface(Ci.nsICookie2);
-      if (nsiCookie.name === origName && nsiCookie.host === origHost) {
+      if (nsiCookie.name === origName &&
+          nsiCookie.host === origHost &&
+          nsiCookie.path === origPath) {
         cookie = {
           host: nsiCookie.host,
           path: nsiCookie.path,
@@ -743,7 +779,7 @@ var cookieHelpers = {
       return;
     }
 
-    // If the date is expired set it for 1 minute in the future.
+    // If the date is expired set it for 10 seconds in the future.
     let now = new Date();
     if (!cookie.isSession && (cookie.expires * 1000) <= now) {
       let tenSecondsFromNow = (now.getTime() + 10 * 1000) / 1000;
@@ -797,6 +833,15 @@ var cookieHelpers = {
   },
 
   _removeCookies(host, opts = {}) {
+    // We use a uniqueId to emulate compound keys for cookies. We need to
+    // extract the cookie name to remove the correct cookie.
+    if (opts.name) {
+      let split = opts.name.split(SEPARATOR_GUID);
+
+      opts.name = split[0];
+      opts.path = split[2];
+    }
+
     function hostMatches(cookieHost, matchHost) {
       if (cookieHost == null) {
         return matchHost == null;
@@ -807,12 +852,15 @@ var cookieHelpers = {
       return cookieHost == host;
     }
 
-    let enumerator = Services.cookies.getCookiesFromHost(host, opts.originAttributes || {});
+    let enumerator =
+      Services.cookies.getCookiesFromHost(host, opts.originAttributes || {});
+
     while (enumerator.hasMoreElements()) {
       let cookie = enumerator.getNext().QueryInterface(Ci.nsICookie2);
       if (hostMatches(cookie.host, host) &&
           (!opts.name || cookie.name === opts.name) &&
-          (!opts.domain || cookie.host === opts.domain)) {
+          (!opts.domain || cookie.host === opts.domain) &&
+          (!opts.path || cookie.path === opts.path)) {
         Services.cookies.remove(
           cookie.host,
           cookie.name,
@@ -1024,8 +1072,8 @@ function getObjectForLocalOrSessionStorage(type) {
 
     getFields: Task.async(function* () {
       return [
-        { name: "name", editable: 1},
-        { name: "value", editable: 1}
+        { name: "name", editable: true },
+        { name: "value", editable: true }
       ];
     }),
 
@@ -1065,7 +1113,9 @@ function getObjectForLocalOrSessionStorage(type) {
     }),
 
     observe(subject, topic, data) {
-      if (topic != "dom-storage2-changed" || data != type) {
+      if ((topic != "dom-storage2-changed" &&
+           topic != "dom-private-storage2-changed") ||
+          data != type) {
         return null;
       }
 
@@ -1117,7 +1167,7 @@ function getObjectForLocalOrSessionStorage(type) {
  */
 StorageActors.createActor({
   typeName: "localStorage",
-  observationTopic: "dom-storage2-changed"
+  observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"]
 }, getObjectForLocalOrSessionStorage("localStorage"));
 
 /**
@@ -1125,7 +1175,7 @@ StorageActors.createActor({
  */
 StorageActors.createActor({
   typeName: "sessionStorage",
-  observationTopic: "dom-storage2-changed"
+  observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"]
 }, getObjectForLocalOrSessionStorage("sessionStorage"));
 
 StorageActors.createActor({
@@ -1205,8 +1255,8 @@ StorageActors.createActor({
 
   getFields: Task.async(function* () {
     return [
-      { name: "url", editable: 0 },
-      { name: "status", editable: 0 }
+      { name: "url", editable: false },
+      { name: "status", editable: false }
     ];
   }),
 
@@ -1444,6 +1494,10 @@ StorageActors.createActor({
 
     events.off(this.storageActor, "window-ready", this.onWindowReady);
     events.off(this.storageActor, "window-destroyed", this.onWindowDestroyed);
+
+    protocol.Actor.prototype.destroy.call(this);
+
+    this.storageActor = null;
   },
 
   /**
@@ -1725,26 +1779,26 @@ StorageActors.createActor({
       // Detail of database
       case "database":
         return [
-          { name: "objectStore", editable: 0 },
-          { name: "keyPath", editable: 0 },
-          { name: "autoIncrement", editable: 0 },
-          { name: "indexes", editable: 0 },
+          { name: "objectStore", editable: false },
+          { name: "keyPath", editable: false },
+          { name: "autoIncrement", editable: false },
+          { name: "indexes", editable: false },
         ];
 
       // Detail of object store
       case "object store":
         return [
-          { name: "name", editable: 0 },
-          { name: "value", editable: 0 }
+          { name: "name", editable: false },
+          { name: "value", editable: false }
         ];
 
       // Detail of indexedDB for one origin
       default:
         return [
-          { name: "db", editable: 0 },
-          { name: "origin", editable: 0 },
-          { name: "version", editable: 0 },
-          { name: "objectStores", editable: 0 },
+          { name: "db", editable: false },
+          { name: "origin", editable: false },
+          { name: "version", editable: false },
+          { name: "objectStores", editable: false },
         ];
     }
   })
@@ -2233,9 +2287,8 @@ let StorageActor = protocol.ActorClassWithSpec(specs.storageSpec, {
   },
 
   initialize(conn, tabActor) {
-    protocol.Actor.prototype.initialize.call(this, null);
+    protocol.Actor.prototype.initialize.call(this, conn);
 
-    this.conn = conn;
     this.parentActor = tabActor;
 
     this.childActorPool = new Map();
@@ -2271,10 +2324,8 @@ let StorageActor = protocol.ActorClassWithSpec(specs.storageSpec, {
     Services.obs.removeObserver(this, "inner-window-destroyed", false);
     this.destroyed = true;
     if (this.parentActor.browser) {
-      this.parentActor.browser.removeEventListener(
-        "pageshow", this.onPageChange, true);
-      this.parentActor.browser.removeEventListener(
-        "pagehide", this.onPageChange, true);
+      this.parentActor.browser.removeEventListener("pageshow", this.onPageChange, true);
+      this.parentActor.browser.removeEventListener("pagehide", this.onPageChange, true);
     }
     // Destroy the registered store types
     for (let actor of this.childActorPool.values()) {
@@ -2282,9 +2333,15 @@ let StorageActor = protocol.ActorClassWithSpec(specs.storageSpec, {
     }
     this.childActorPool.clear();
     this.childWindowPool.clear();
-    this.childWindowPool = this.childActorPool = this.__poolMap = this.conn =
-      this.parentActor = this.boundUpdate = this.registeredPool =
-      this._pendingResponse = null;
+
+    this.childActorPool = null;
+    this.childWindowPool = null;
+    this.parentActor = null;
+    this.boundUpdate = null;
+    this.registeredPool = null;
+    this._pendingResponse = null;
+
+    protocol.Actor.prototype.destroy.call(this);
   },
 
   /**
@@ -2480,6 +2537,7 @@ let StorageActor = protocol.ActorClassWithSpec(specs.storageSpec, {
       // added or changed update
       this.removeNamesFromUpdateList("added", storeType, data);
       this.removeNamesFromUpdateList("changed", storeType, data);
+
       for (let host in data) {
         if (data[host].length == 0 && this.boundUpdate.added &&
             this.boundUpdate.added[storeType] &&

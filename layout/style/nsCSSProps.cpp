@@ -1330,8 +1330,6 @@ KTableEntry nsCSSProps::kDisplayKTable[] = {
   { eCSSKeyword__webkit_inline_box,  StyleDisplay::WebkitInlineBox },
   { eCSSKeyword__webkit_flex,        StyleDisplay::Flex },
   { eCSSKeyword__webkit_inline_flex, StyleDisplay::InlineFlex },
-  // The next entry is controlled by the layout.css.display-contents.enabled
-  // pref.
   { eCSSKeyword_contents,            StyleDisplay::Contents },
   { eCSSKeyword_UNKNOWN,             -1 }
 };
@@ -2743,8 +2741,8 @@ static const nsCSSPropertyID gBorderBottomSubpropTable[] = {
   eCSSProperty_UNKNOWN
 };
 
-static_assert(NS_SIDE_TOP == 0 && NS_SIDE_RIGHT == 1 &&
-              NS_SIDE_BOTTOM == 2 && NS_SIDE_LEFT == 3,
+static_assert(eSideTop == 0 && eSideRight == 1 &&
+              eSideBottom == 2 && eSideLeft == 3,
               "box side constants not top/right/bottom/left == 0/1/2/3");
 static const nsCSSPropertyID gBorderColorSubpropTable[] = {
   // Code relies on these being in top-right-bottom-left order.
@@ -3005,6 +3003,24 @@ static const nsCSSPropertyID gMarkerSubpropTable[] = {
   eCSSProperty_marker_start,
   eCSSProperty_marker_mid,
   eCSSProperty_marker_end,
+  eCSSProperty_UNKNOWN
+};
+
+static const nsCSSPropertyID gPlaceContentSubpropTable[] = {
+  eCSSProperty_align_content,
+  eCSSProperty_justify_content,
+  eCSSProperty_UNKNOWN
+};
+
+static const nsCSSPropertyID gPlaceItemsSubpropTable[] = {
+  eCSSProperty_align_items,
+  eCSSProperty_justify_items,
+  eCSSProperty_UNKNOWN
+};
+
+static const nsCSSPropertyID gPlaceSelfSubpropTable[] = {
+  eCSSProperty_align_self,
+  eCSSProperty_justify_self,
   eCSSProperty_UNKNOWN
 };
 

@@ -461,7 +461,7 @@ intrinsic_FinishBoundFunctionInit(JSContext* cx, unsigned argc, Value* vp)
     // Try to avoid invoking the resolve hook.
     if (targetObj->is<JSFunction>() && !targetObj->as<JSFunction>().hasResolvedLength()) {
         RootedValue targetLength(cx);
-        if (!targetObj->as<JSFunction>().getUnresolvedLength(cx, &targetLength))
+        if (!JSFunction::getUnresolvedLength(cx, targetObj.as<JSFunction>(), &targetLength))
             return false;
 
         length = Max(0.0, targetLength.toNumber() - argCount);
@@ -2466,7 +2466,6 @@ static const JSFunctionSpec intrinsic_functions[] = {
     // See builtin/Intl.h for descriptions of the intl_* functions.
     JS_FN("intl_availableCalendars", intl_availableCalendars, 1,0),
     JS_FN("intl_availableCollations", intl_availableCollations, 1,0),
-    JS_FN("intl_availableTimeZones", intl_availableTimeZones, 0,0),
     JS_FN("intl_canonicalizeTimeZone", intl_canonicalizeTimeZone, 1,0),
     JS_FN("intl_Collator", intl_Collator, 2,0),
     JS_FN("intl_Collator_availableLocales", intl_Collator_availableLocales, 0,0),
@@ -2478,6 +2477,7 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("intl_FormatDateTime", intl_FormatDateTime, 2,0),
     JS_FN("intl_FormatNumber", intl_FormatNumber, 2,0),
     JS_FN("intl_GetCalendarInfo", intl_GetCalendarInfo, 1,0),
+    JS_FN("intl_IsValidTimeZoneName", intl_IsValidTimeZoneName, 1,0),
     JS_FN("intl_NumberFormat", intl_NumberFormat, 2,0),
     JS_FN("intl_NumberFormat_availableLocales", intl_NumberFormat_availableLocales, 0,0),
     JS_FN("intl_numberingSystem", intl_numberingSystem, 1,0),
@@ -2721,7 +2721,7 @@ JSRuntime::finishSelfHosting()
 }
 
 void
-JSRuntime::markSelfHostingGlobal(JSTracer* trc)
+JSRuntime::traceSelfHostingGlobal(JSTracer* trc)
 {
     if (selfHostingGlobal_ && !parentRuntime)
         TraceRoot(trc, &selfHostingGlobal_, "self-hosting global");
@@ -3006,7 +3006,7 @@ JSRuntime::cloneSelfHostedFunctionScript(JSContext* cx, HandlePropertyName name,
     MOZ_ASSERT(targetFun->isInterpretedLazy());
     MOZ_ASSERT(targetFun->isSelfHostedBuiltin());
 
-    RootedScript sourceScript(cx, sourceFun->getOrCreateScript(cx));
+    RootedScript sourceScript(cx, JSFunction::getOrCreateScript(cx, sourceFun));
     if (!sourceScript)
         return false;
 
@@ -3022,7 +3022,7 @@ JSRuntime::cloneSelfHostedFunctionScript(JSContext* cx, HandlePropertyName name,
     MOZ_ASSERT(!targetFun->isInterpretedLazy());
 
     MOZ_ASSERT(sourceFun->nargs() == targetFun->nargs());
-    MOZ_ASSERT(sourceFun->hasRest() == targetFun->hasRest());
+    MOZ_ASSERT(sourceScript->hasRest() == targetFun->nonLazyScript()->hasRest());
 
     // The target function might have been relazified after its flags changed.
     targetFun->setFlags(targetFun->flags() | sourceFun->flags());

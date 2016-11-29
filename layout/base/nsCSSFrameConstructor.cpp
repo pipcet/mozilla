@@ -2429,7 +2429,9 @@ nsCSSFrameConstructor::ConstructDocElementFrame(Element*                 aDocEle
   // do so for the construction of a style context for an element.)
   RefPtr<nsStyleContext> styleContext;
   styleContext = mPresShell->StyleSet()->ResolveStyleFor(aDocElement,
-                                                         nullptr);
+                                                         nullptr,
+                                                         ConsumeStyleBehavior::Consume,
+                                                         LazyComputeBehavior::Allow);
 
   const nsStyleDisplay* display = styleContext->StyleDisplay();
 
@@ -2464,9 +2466,17 @@ nsCSSFrameConstructor::ConstructDocElementFrame(Element*                 aDocEle
       // don't do so for the construction of a style context for an
       // element.)
       styleContext = mPresShell->StyleSet()->ResolveStyleFor(aDocElement,
-                                                             nullptr);
+                                                             nullptr,
+                                                             ConsumeStyleBehavior::Consume,
+                                                             LazyComputeBehavior::Allow);
       display = styleContext->StyleDisplay();
     }
+  }
+
+  // We delay traversing the entire document until here, since we per above we
+  // may invalidate the root style when we load doc stylesheets.
+  if (ServoStyleSet* set = mPresShell->StyleSet()->GetAsServo()) {
+    set->StyleDocument();
   }
 
   // --------- IF SCROLLABLE WRAP IN SCROLLFRAME --------
@@ -3552,10 +3562,6 @@ nsCSSFrameConstructor::FindHTMLData(Element* aElement,
     return nullptr;
   }
 
-  if (aTag == nsGkAtoms::details && !HTMLDetailsElement::IsDetailsEnabled()) {
-    return nullptr;
-  }
-
   static const FrameConstructionDataByTag sHTMLData[] = {
     SIMPLE_TAG_CHAIN(img, nsCSSFrameConstructor::FindImgData),
     SIMPLE_TAG_CHAIN(mozgeneratedcontentimage,
@@ -4078,7 +4084,8 @@ nsCSSFrameConstructor::ConstructFrameFromItemInternal(FrameConstructionItem& aIt
   // the frame bit, because by this point mIsGeneratedContent has been cleared
   // on aItem.
   if ((!aState.mCreatingExtraFrames ||
-       ((primaryFrame->GetStateBits() & NS_FRAME_GENERATED_CONTENT) &&
+       (primaryFrame->HasAnyStateBits(NS_FRAME_ANONYMOUSCONTENTCREATOR_CONTENT |
+                                      NS_FRAME_GENERATED_CONTENT) &&
         !aItem.mContent->GetPrimaryFrame())) &&
        !(bits & FCDATA_SKIP_FRAMESET)) {
     aItem.mContent->SetPrimaryFrame(primaryFrame);
@@ -5026,10 +5033,14 @@ nsCSSFrameConstructor::ResolveStyleContext(nsStyleContext* aParentStyleContext,
     if (aState) {
       result = styleSet->ResolveStyleFor(aContent->AsElement(),
                                          aParentStyleContext,
+                                         ConsumeStyleBehavior::Consume,
+                                         LazyComputeBehavior::Assert,
                                          aState->mTreeMatchContext);
     } else {
       result = styleSet->ResolveStyleFor(aContent->AsElement(),
-                                         aParentStyleContext);
+                                         aParentStyleContext,
+                                         ConsumeStyleBehavior::Consume,
+                                         LazyComputeBehavior::Assert);
     }
   } else {
     NS_ASSERTION(aContent->IsNodeOfType(nsINode::eTEXT),
@@ -5717,6 +5728,11 @@ nsCSSFrameConstructor::AddFrameConstructionItemsInternal(nsFrameConstructorState
       aState.AddPendingBinding(newPendingBinding.forget());
     }
 
+    if (aContent->IsStyledByServo()) {
+      NS_WARNING("stylo: Skipping Unsupported binding re-resolve. This needs fixing.");
+      resolveStyle = false;
+    }
+
     if (resolveStyle) {
       styleContext =
         ResolveStyleContext(styleContext->GetParent(), aContent, &aState);
@@ -5767,7 +5783,7 @@ nsCSSFrameConstructor::AddFrameConstructionItemsInternal(nsFrameConstructorState
   // ::before and ::after); we always want to create "internal" anonymous
   // content.
   auto* details = HTMLDetailsElement::FromContentOrNull(parent);
-  if (details && details->IsDetailsEnabled() && !details->Open() &&
+  if (details && !details->Open() &&
       (!aContent->IsRootOfNativeAnonymousSubtree() ||
        aContent->IsGeneratedContentContainerForBefore() ||
        aContent->IsGeneratedContentContainerForAfter())) {
@@ -5935,7 +5951,7 @@ nsCSSFrameConstructor::AddFrameConstructionItemsInternal(nsFrameConstructorState
   }
 
   FrameConstructionItem* item = nullptr;
-  if (details && details->IsDetailsEnabled() && details->Open()) {
+  if (details && details->Open()) {
     auto* summary = HTMLSummaryElement::FromContentOrNull(aContent);
     if (summary && summary->IsMainSummary()) {
       // If details is open, the main summary needs to be rendered as if it is
@@ -6566,6 +6582,12 @@ nsCSSFrameConstructor::IsValidSibling(nsIFrame*              aSibling,
       }
       if (!styleParent) {
         NS_NOTREACHED("Shouldn't happen");
+        return false;
+      }
+      if (aContent->IsNodeOfType(nsINode::eCOMMENT) ||
+          aContent->IsNodeOfType(nsINode::ePROCESSING_INSTRUCTION)) {
+        // Comments and processing instructions never have frames, so we
+        // should not try to generate style contexts for them.
         return false;
       }
       // XXXbz when this code is killed, the state argument to
@@ -7340,7 +7362,26 @@ nsCSSFrameConstructor::ContentAppended(nsIContent*     aContainer,
 
   if (aAllowLazyConstruction &&
       MaybeConstructLazily(CONTENTAPPEND, aContainer, aFirstNewContent)) {
+    if (aContainer->IsStyledByServo()) {
+      aContainer->AsElement()->NoteDirtyDescendantsForServo();
+    }
     return NS_OK;
+  }
+
+  // We couldn't construct lazily. Make Servo eagerly traverse the subtree.
+  if (ServoStyleSet* set = mPresShell->StyleSet()->GetAsServo()) {
+    // We use the same codepaths to handle both of the following cases:
+    //   (a) Newly-appended content for which lazy frame construction is disallowed.
+    //   (b) Lazy frame construction driven by the restyle manager.
+    // We need the styles for (a). In the case of (b), the Servo traversal has
+    // already happened, so we don't need to do it again.
+    if (!RestyleManager()->AsBase()->IsInStyleRefresh()) {
+      if (aFirstNewContent->GetNextSibling()) {
+        set->StyleNewChildren(aContainer);
+      } else {
+        set->StyleNewSubtree(aFirstNewContent);
+      }
+    }
   }
 
   LAYOUT_PHASE_TEMP_EXIT();
@@ -7785,7 +7826,22 @@ nsCSSFrameConstructor::ContentRangeInserted(nsIContent*            aContainer,
 
     if (aAllowLazyConstruction &&
         MaybeConstructLazily(CONTENTINSERT, aContainer, aStartChild)) {
+      if (aContainer->IsStyledByServo()) {
+        aContainer->AsElement()->NoteDirtyDescendantsForServo();
+      }
       return NS_OK;
+    }
+  }
+
+  // We couldn't construct lazily. Make Servo eagerly traverse the subtree.
+  if (ServoStyleSet* set = mPresShell->StyleSet()->GetAsServo()) {
+    // We use the same codepaths to handle both of the following cases:
+    //   (a) Newly-appended content for which lazy frame construction is disallowed.
+    //   (b) Lazy frame construction driven by the restyle manager.
+    // We need the styles for (a). In the case of (b), the Servo traversal has
+    // already happened, so we don't need to do it again.
+    if (!RestyleManager()->AsBase()->IsInStyleRefresh()) {
+      set->StyleNewSubtree(aStartChild);
     }
   }
 
@@ -9253,7 +9309,9 @@ nsCSSFrameConstructor::MaybeRecreateFramesForElement(Element* aElement)
 
   // The parent has a frame, so try resolving a new context.
   RefPtr<nsStyleContext> newContext = mPresShell->StyleSet()->
-    ResolveStyleFor(aElement, oldContext->GetParent());
+    ResolveStyleFor(aElement, oldContext->GetParent(),
+                    ConsumeStyleBehavior::Consume,
+                    LazyComputeBehavior::Assert);
 
   if (oldDisplay == StyleDisplay::None) {
     ChangeUndisplayedContent(aElement, newContext);
@@ -10625,14 +10683,15 @@ nsCSSFrameConstructor::AddFCItemsForAnonymousContent(
       // This happens when a native anonymous node is used to implement a
       // pseudo-element. Allowing Servo to traverse these nodes would be wasted
       // work, so assert that we didn't do that.
-      MOZ_ASSERT_IF(content->IsStyledByServo(), !content->HasServoData());
+      MOZ_ASSERT_IF(content->IsStyledByServo(),
+                    !content->IsElement() || !content->AsElement()->HasServoData());
       styleContext = aAnonymousItems[i].mStyleContext.forget();
     } else {
       // If we don't have an explicit style context, that means we need the
       // ordinary computed values. Make sure we eagerly cascaded them when the
       // anonymous nodes were created.
       MOZ_ASSERT_IF(content->IsStyledByServo() && content->IsElement(),
-                    content->HasServoData());
+                    content->AsElement()->HasServoData());
       styleContext = ResolveStyleContext(aFrame, content, &aState);
     }
 

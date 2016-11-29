@@ -294,6 +294,11 @@ public:
       return mContentBackend;
     }
 
+    /// Return the software backend to use by default.
+    mozilla::gfx::BackendType GetSoftwareBackend() {
+        return mSoftwareBackend;
+    }
+
     // Return the best content backend available that is compatible with the
     // given layers backend.
     virtual mozilla::gfx::BackendType GetContentBackendFor(mozilla::layers::LayersBackend aLayers) {
@@ -405,9 +410,7 @@ public:
      * True when zooming should not require reflow, so glyph metrics and
      * positioning should not be adjusted for device pixels.
      * If this is TRUE, then FontHintingEnabled() should be FALSE,
-     * but the converse is not necessarily required; in particular,
-     * B2G always has FontHintingEnabled FALSE, but RequiresLinearZoom
-     * is only true for the browser process, not Gaia or other apps.
+     * but the converse is not necessarily required;
      *
      * Like FontHintingEnabled (above), this setting shouldn't
      * change per gecko process, while the process is live.  If so the
@@ -819,6 +822,8 @@ private:
     void InitCompositorAccelerationPrefs();
     void InitGPUProcessPrefs();
 
+    static bool IsDXInterop2Blocked();
+
     RefPtr<gfxASurface> mScreenReferenceSurface;
     nsCOMPtr<nsIObserver> mSRGBOverrideObserver;
     nsCOMPtr<nsIObserver> mFontPrefsObserver;
@@ -830,6 +835,8 @@ private:
     mozilla::gfx::BackendType mFallbackCanvasBackend;
     // The backend to use for content
     mozilla::gfx::BackendType mContentBackend;
+    // The backend to use when we need it not to be accelerated.
+    mozilla::gfx::BackendType mSoftwareBackend;
     // Bitmask of backend types we can use to render content
     uint32_t mContentBackendBitmask;
 

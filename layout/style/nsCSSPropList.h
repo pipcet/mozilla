@@ -434,7 +434,7 @@ CSS_PROP_DISPLAY(
     "",
     // FIXME: The spec should say something about 'inherit' and 'initial'
     // not being allowed.
-    VARIANT_NONE | VARIANT_IDENTIFIER_NO_INHERIT, // used by list parsing
+    VARIANT_NONE | VARIANT_IDENTIFIER_NO_INHERIT | VARIANT_STRING, // used by list parsing
     nullptr,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
@@ -3457,6 +3457,24 @@ CSS_PROP_DISPLAY(
     kImageLayerPositionKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Custom)
+CSS_PROP_SHORTHAND(
+    place-content,
+    place_content,
+    PlaceContent,
+    CSS_PROPERTY_PARSE_FUNCTION,
+    "")
+CSS_PROP_SHORTHAND(
+    place-items,
+    place_items,
+    PlaceItems,
+    CSS_PROPERTY_PARSE_FUNCTION,
+    "")
+CSS_PROP_SHORTHAND(
+    place-self,
+    place_self,
+    PlaceSelf,
+    CSS_PROPERTY_PARSE_FUNCTION,
+    "")
 CSS_PROP_USERINTERFACE(
     pointer-events,
     pointer_events,
@@ -3843,7 +3861,7 @@ CSS_PROP_TEXT(
     CSS_PROPERTY_PARSE_VALUE |
         CSS_PROPERTY_VALUE_NONNEGATIVE,
     "",
-    VARIANT_HI,
+    VARIANT_INHERIT | VARIANT_LNCALC,
     nullptr,
     offsetof(nsStyleText, mTabSize),
     eStyleAnimType_Discrete)

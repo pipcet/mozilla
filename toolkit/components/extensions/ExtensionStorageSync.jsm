@@ -38,8 +38,6 @@ const {
   runSafeSyncWithoutClone,
 } = Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "AppsUtils",
-                                  "resource://gre/modules/AppsUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
                                   "resource://gre/modules/AsyncShutdown.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "CollectionKeyManager",
@@ -56,8 +54,10 @@ XPCOMUtils.defineLazyModuleGetter(this, "fxAccounts",
                                   "resource://gre/modules/FxAccounts.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "KintoHttpClient",
                                   "resource://services-common/kinto-http-client.js");
-XPCOMUtils.defineLazyModuleGetter(this, "loadKinto",
+XPCOMUtils.defineLazyModuleGetter(this, "Kinto",
                                   "resource://services-common/kinto-offline-client.js");
+XPCOMUtils.defineLazyModuleGetter(this, "FirefoxAdapter",
+                                  "resource://services-common/kinto-storage-adapter.js");
 XPCOMUtils.defineLazyModuleGetter(this, "Log",
                                   "resource://gre/modules/Log.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Observers",
@@ -95,15 +95,14 @@ const log = Log.repository.getLogger("Sync.Engine.Extension-Storage");
  *   collections in this database will use the same Sqlite connection.
  */
 const storageSyncInit = Task.spawn(function* () {
-  const Kinto = loadKinto();
   const path = "storage-sync.sqlite";
   const opts = {path, sharedMemoryCache: false};
   const connection = yield Sqlite.openConnection(opts);
-  yield Kinto.adapters.FirefoxAdapter._init(connection);
+  yield FirefoxAdapter._init(connection);
   return {
     connection,
     kinto: new Kinto({
-      adapter: Kinto.adapters.FirefoxAdapter,
+      adapter: FirefoxAdapter,
       adapterOptions: {sqliteHandle: connection},
       timeout: KINTO_REQUEST_TIMEOUT,
     }),
@@ -396,7 +395,7 @@ this.ExtensionStorageSync = {
   syncAll: Task.async(function* () {
     const extensions = extensionContexts.keys();
     const extIds = Array.from(extensions, extension => extension.id);
-    log.debug(`Syncing extension settings for ${JSON.stringify(extIds)}\n`);
+    log.debug(`Syncing extension settings for ${JSON.stringify(extIds)}`);
     if (extIds.length == 0) {
       // No extensions to sync. Get out.
       return;

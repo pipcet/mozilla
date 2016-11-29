@@ -55,6 +55,7 @@
 
 #include "nsIDOMStyleSheet.h"
 #include "mozilla/dom/Attr.h"
+#include "mozilla/dom/BindingDeclarations.h"
 #include "nsIDOMDOMImplementation.h"
 #include "nsIDOMDocumentXBL.h"
 #include "mozilla/dom/Element.h"
@@ -2887,6 +2888,27 @@ nsIDocument::GetDocGroup()
   return mDocGroup;
 }
 
+nsresult
+nsIDocument::Dispatch(const char* aName,
+                      TaskCategory aCategory,
+                      already_AddRefed<nsIRunnable>&& aRunnable)
+{
+  // Note that this method may be called off the main thread.
+  if (mDocGroup) {
+    return mDocGroup->Dispatch(aName, aCategory, Move(aRunnable));
+  }
+  return DispatcherTrait::Dispatch(aName, aCategory, Move(aRunnable));
+}
+
+already_AddRefed<nsIEventTarget>
+nsIDocument::CreateEventTarget(const char* aName, TaskCategory aCategory)
+{
+  if (mDocGroup) {
+    return mDocGroup->CreateEventTarget(aName, aCategory);
+  }
+  return DispatcherTrait::CreateEventTarget(aName, aCategory);
+}
+
 NS_IMETHODIMP
 nsDocument::GetApplicationCache(nsIApplicationCache **aApplicationCache)
 {
@@ -2936,21 +2958,21 @@ nsDocument::GetAllowPlugins(bool * aAllowPlugins)
 }
 
 bool
-nsDocument::IsElementAnimateEnabled(JSContext* /*unused*/, JSObject* /*unused*/)
+nsDocument::IsElementAnimateEnabled(JSContext* aCx, JSObject* /*unused*/)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  return nsContentUtils::IsCallerChrome() ||
+  return nsContentUtils::IsSystemCaller(aCx) ||
          Preferences::GetBool("dom.animations-api.core.enabled") ||
          Preferences::GetBool("dom.animations-api.element-animate.enabled");
 }
 
 bool
-nsDocument::IsWebAnimationsEnabled(JSContext* /*unused*/, JSObject* /*unused*/)
+nsDocument::IsWebAnimationsEnabled(JSContext* aCx, JSObject* /*unused*/)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  return nsContentUtils::IsCallerChrome() ||
+  return nsContentUtils::IsSystemCaller(aCx) ||
          Preferences::GetBool("dom.animations-api.core.enabled");
 }
 
@@ -3298,13 +3320,6 @@ already_AddRefed<nsContentList>
 nsIDocument::GetElementsByClassName(const nsAString& aClasses)
 {
   return nsContentUtils::GetElementsByClassName(this, aClasses);
-}
-
-NS_IMETHODIMP
-nsDocument::ReleaseCapture()
-{
-  nsIDocument::ReleaseCapture();
-  return NS_OK;
 }
 
 void
@@ -5716,7 +5731,28 @@ nsDocument::IsWebComponentsEnabled(JSContext* aCx, JSObject* aObject)
   nsCOMPtr<nsPIDOMWindowInner> window =
     do_QueryInterface(nsJSUtils::GetStaticScriptGlobal(global));
 
-  if (window) {
+  return IsWebComponentsEnabled(window);
+}
+
+bool
+nsDocument::IsWebComponentsEnabled(dom::NodeInfo* aNodeInfo)
+{
+  if (Preferences::GetBool("dom.webcomponents.enabled")) {
+    return true;
+  }
+
+  nsIDocument* doc = aNodeInfo->GetDocument();
+  // Use GetScopeObject() here so that data documents work the same way as the
+  // main document they're associated with.
+  nsCOMPtr<nsPIDOMWindowInner> window =
+    do_QueryInterface(doc->GetScopeObject());
+  return IsWebComponentsEnabled(window);
+}
+
+bool
+nsDocument::IsWebComponentsEnabled(nsPIDOMWindowInner* aWindow)
+{
+  if (aWindow) {
     nsresult rv;
     nsCOMPtr<nsIPermissionManager> permMgr =
       do_GetService(NS_PERMISSIONMANAGER_CONTRACTID, &rv);
@@ -5724,7 +5760,7 @@ nsDocument::IsWebComponentsEnabled(JSContext* aCx, JSObject* aObject)
 
     uint32_t perm;
     rv = permMgr->TestPermissionFromWindow(
-      window, "moz-extremely-unstable-and-will-change-webcomponents", &perm);
+      aWindow, "moz-extremely-unstable-and-will-change-webcomponents", &perm);
     NS_ENSURE_SUCCESS(rv, false);
 
     return perm == nsIPermissionManager::ALLOW_ACTION;
@@ -7056,9 +7092,10 @@ nsIDocument::GetURL(nsString& aURL) const
 }
 
 void
-nsIDocument::GetDocumentURIFromJS(nsString& aDocumentURI, ErrorResult& aRv) const
+nsIDocument::GetDocumentURIFromJS(nsString& aDocumentURI, CallerType aCallerType,
+                                  ErrorResult& aRv) const
 {
-  if (!mChromeXHRDocURI || !nsContentUtils::IsCallerChrome()) {
+  if (!mChromeXHRDocURI || aCallerType != CallerType::System) {
     aRv = GetDocumentURI(aDocumentURI);
     return;
   }
@@ -7080,19 +7117,6 @@ nsIDocument::GetDocumentURIObject() const
   }
 
   return mChromeXHRDocURI;
-}
-
-
-// Returns "BackCompat" if we are in quirks mode, "CSS1Compat" if we are
-// in almost standards or full standards mode. See bug 105640.  This was
-// implemented to match MSIE's compatMode property.
-NS_IMETHODIMP
-nsDocument::GetCompatMode(nsAString& aCompatMode)
-{
-  nsString temp;
-  nsIDocument::GetCompatMode(temp);
-  aCompatMode = temp;
-  return NS_OK;
 }
 
 void
@@ -7604,7 +7628,7 @@ nsDocument::GetExistingListenerManager() const
 }
 
 nsresult
-nsDocument::PreHandleEvent(EventChainPreVisitor& aVisitor)
+nsDocument::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
   aVisitor.mCanHandle = true;
    // FIXME! This is a hack to make middle mouse paste working also in Editor.
@@ -10468,13 +10492,6 @@ nsDocument::SetFullscreenRoot(nsIDocument* aRoot)
   mFullscreenRoot = do_GetWeakReference(aRoot);
 }
 
-NS_IMETHODIMP
-nsDocument::MozCancelFullScreen()
-{
-  nsIDocument::ExitFullscreen();
-  return NS_OK;
-}
-
 void
 nsIDocument::ExitFullscreen()
 {
@@ -10988,7 +11005,7 @@ nsresult nsDocument::RemoteFrameFullscreenReverted()
 nsDocument::IsUnprefixedFullscreenEnabled(JSContext* aCx, JSObject* aObject)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  return nsContentUtils::IsCallerChrome() ||
+  return nsContentUtils::IsSystemCaller(aCx) ||
          nsContentUtils::IsUnprefixedFullscreenApiEnabled();
 }
 
@@ -11006,15 +11023,14 @@ HasFullScreenSubDocument(nsIDocument* aDoc)
 static const char*
 GetFullscreenError(nsIDocument* aDoc, bool aCallerIsChrome)
 {
-  if (nsContentUtils::IsFullScreenApiEnabled() && aCallerIsChrome) {
+  bool apiEnabled = nsContentUtils::IsFullScreenApiEnabled();
+  if (apiEnabled && aCallerIsChrome) {
     // Chrome code can always use the full-screen API, provided it's not
-    // explicitly disabled. Note IsCallerChrome() returns true when running
-    // in a Runnable, so don't use GetMozFullScreenEnabled() from a
-    // Runnable!
+    // explicitly disabled.
     return nullptr;
   }
 
-  if (!nsContentUtils::IsFullScreenApiEnabled()) {
+  if (!apiEnabled) {
     return "FullscreenDeniedDisabled";
   }
 
@@ -11412,15 +11428,6 @@ nsDocument::ApplyFullscreen(const FullscreenRequest& aRequest)
   return true;
 }
 
-NS_IMETHODIMP
-nsDocument::GetMozFullScreenElement(nsIDOMElement **aFullScreenElement)
-{
-  Element* el = GetFullscreenElement();
-  nsCOMPtr<nsIDOMElement> retval = do_QueryInterface(el);
-  retval.forget(aFullScreenElement);
-  return NS_OK;
-}
-
 Element*
 nsDocument::GetFullscreenElement()
 {
@@ -11431,25 +11438,10 @@ nsDocument::GetFullscreenElement()
   return element;
 }
 
-NS_IMETHODIMP
-nsDocument::GetMozFullScreen(bool *aFullScreen)
-{
-  *aFullScreen = Fullscreen();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDocument::GetMozFullScreenEnabled(bool *aFullScreen)
-{
-  NS_ENSURE_ARG_POINTER(aFullScreen);
-  *aFullScreen = FullscreenEnabled();
-  return NS_OK;
-}
-
 bool
-nsDocument::FullscreenEnabled()
+nsDocument::FullscreenEnabled(CallerType aCallerType)
 {
-  return !GetFullscreenError(this, nsContentUtils::IsCallerChrome());
+  return !GetFullscreenError(this, aCallerType == CallerType::System);
 }
 
 uint16_t
@@ -11670,7 +11662,7 @@ PointerLockRequest::Run()
 }
 
 void
-nsDocument::RequestPointerLock(Element* aElement)
+nsDocument::RequestPointerLock(Element* aElement, CallerType aCallerType)
 {
   NS_ASSERTION(aElement,
     "Must pass non-null element to nsDocument::RequestPointerLock");
@@ -11687,10 +11679,10 @@ nsDocument::RequestPointerLock(Element* aElement)
     return;
   }
 
-  bool userInputOrChromeCaller = EventStateManager::IsHandlingUserInput() ||
-                                 nsContentUtils::IsCallerChrome();
+  bool userInputOrSystemCaller = EventStateManager::IsHandlingUserInput() ||
+                                 aCallerType == CallerType::System;
   NS_DispatchToMainThread(new PointerLockRequest(aElement,
-                                                 userInputOrChromeCaller));
+                                                 userInputOrSystemCaller));
 }
 
 bool
@@ -11771,22 +11763,6 @@ void
 nsIDocument::UnlockPointer(nsIDocument* aDoc)
 {
   nsDocument::UnlockPointer(aDoc);
-}
-
-NS_IMETHODIMP
-nsDocument::MozExitPointerLock()
-{
-  nsIDocument::ExitPointerLock();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDocument::GetMozPointerLockElement(nsIDOMElement** aPointerLockedElement)
-{
-  Element* el = nsIDocument::GetPointerLockElement();
-  nsCOMPtr<nsIDOMElement> retval = do_QueryInterface(el);
-  retval.forget(aPointerLockedElement);
-  return NS_OK;
 }
 
 Element*
@@ -12061,18 +12037,6 @@ nsDocument::DocAddSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const
   // - many!
 }
 
-NS_IMETHODIMP
-nsDocument::QuerySelector(const nsAString& aSelector, nsIDOMElement **aReturn)
-{
-  return nsINode::QuerySelector(aSelector, aReturn);
-}
-
-NS_IMETHODIMP
-nsDocument::QuerySelectorAll(const nsAString& aSelector, nsIDOMNodeList **aReturn)
-{
-  return nsINode::QuerySelectorAll(aSelector, aReturn);
-}
-
 already_AddRefed<nsIDocument>
 nsIDocument::Constructor(const GlobalObject& aGlobal,
                          ErrorResult& rv)
@@ -12261,6 +12225,8 @@ nsIDocument::HasScriptsBlockedBySandbox()
 bool
 nsIDocument::InlineScriptAllowedByCSP()
 {
+  // this function assumes the inline script is parser created
+  //  (e.g., before setting attribute(!) event handlers)
   nsCOMPtr<nsIContentSecurityPolicy> csp;
   nsresult rv = NodePrincipal()->GetCsp(getter_AddRefs(csp));
   NS_ENSURE_SUCCESS(rv, true);
@@ -12268,7 +12234,7 @@ nsIDocument::InlineScriptAllowedByCSP()
   if (csp) {
     nsresult rv = csp->GetAllowsInline(nsIContentPolicy::TYPE_SCRIPT,
                                        EmptyString(), // aNonce
-                                       false,         // parserCreated
+                                       true,          // aParserCreated
                                        EmptyString(), // FIXME get script sample (bug 1314567)
                                        0,             // aLineNumber
                                        &allowsInlineScript);

@@ -120,6 +120,7 @@ WebGLContext::WebGLContext()
     , mMaxFetchedInstances(0)
     , mLayerIsMirror(false)
     , mBypassShaderValidation(false)
+    , mBuffersForUB_Dirty(true)
     , mContextLossHandler(this)
     , mNeedsFakeNoAlpha(false)
     , mNeedsFakeNoDepth(false)
@@ -262,6 +263,7 @@ WebGLContext::DestroyResourcesAndContext()
     mQuerySlot_TimeElapsed = nullptr;
 
     mIndexedUniformBufferBindings.clear();
+    OnUBIndexedBindingsChanged();
 
     //////
 
@@ -2302,6 +2304,21 @@ ZeroTextureData(WebGLContext* webgl, const char* funcName, GLuint tex,
     gl::GLContext* gl = webgl->GL();
     gl->MakeCurrent();
 
+    GLenum scopeBindTarget;
+    switch (target.get()) {
+    case LOCAL_GL_TEXTURE_CUBE_MAP_POSITIVE_X:
+    case LOCAL_GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
+    case LOCAL_GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
+    case LOCAL_GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
+    case LOCAL_GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
+    case LOCAL_GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
+        scopeBindTarget = LOCAL_GL_TEXTURE_CUBE_MAP;
+        break;
+    default:
+        scopeBindTarget = target.get();
+        break;
+    }
+    ScopedBindTexture scopeBindTexture(gl, tex, scopeBindTarget);
     auto compression = usage->format->compression;
     if (compression) {
         MOZ_RELEASE_ASSERT(!xOffset && !yOffset && !zOffset, "GFX: Can't zero compressed texture with offsets.");
@@ -2380,7 +2397,6 @@ ZeroTextureData(WebGLContext* webgl, const char* funcName, GLuint tex,
 
     ScopedUnpackReset scopedReset(webgl);
     gl->fPixelStorei(LOCAL_GL_UNPACK_ALIGNMENT, 1); // Don't bother with striding it well.
-
     const auto error = DoTexSubImage(gl, target, level, xOffset, yOffset, zOffset, width,
                                      height, depth, packing, zeros.get());
     if (error)
@@ -2553,6 +2569,42 @@ WebGLContext::ValidateArrayBufferView(const char* funcName,
 
     *out_bytes = bytes + (elemOffset * elemSize);
     *out_byteLen = elemCount * elemSize;
+    return true;
+}
+
+////
+
+const decltype(WebGLContext::mBuffersForUB)&
+WebGLContext::BuffersForUB() const
+{
+    if (mBuffersForUB_Dirty) {
+        mBuffersForUB.clear();
+        for (const auto& cur : mIndexedUniformBufferBindings) {
+            if (cur.mBufferBinding) {
+                mBuffersForUB.insert(cur.mBufferBinding.get());
+            }
+        }
+        mBuffersForUB_Dirty = false;
+    }
+    return mBuffersForUB;
+}
+
+////
+
+bool
+WebGLContext::ValidateForNonTransformFeedback(const char* funcName, WebGLBuffer* buffer)
+{
+    if (!mBoundTransformFeedback)
+        return true;
+
+    const auto& buffersForTF = mBoundTransformFeedback->BuffersForTF();
+    if (buffersForTF.count(buffer)) {
+        ErrorInvalidOperation("%s: Specified WebGLBuffer is currently bound for transform"
+                              " feedback.",
+                              funcName);
+        return false;
+    }
+
     return true;
 }
 

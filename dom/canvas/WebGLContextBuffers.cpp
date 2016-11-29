@@ -75,6 +75,9 @@ WebGLContext::ValidateBufferSelection(const char* funcName, GLenum target)
         return nullptr;
     }
 
+    if (!ValidateForNonTransformFeedback(funcName, buffer.get()))
+        return nullptr;
+
     return buffer.get();
 }
 
@@ -119,9 +122,8 @@ WebGLContext::BindBuffer(GLenum target, WebGLBuffer* buffer)
     if (!ValidateObjectAllowDeletedOrNull(funcName, buffer))
         return;
 
-    // silently ignore a deleted buffer
     if (buffer && buffer->IsDeleted())
-        return;
+        return ErrorInvalidOperation("%s: Cannot bind a deleted object.", funcName);
 
     const auto& slot = ValidateBufferSlot(funcName, target);
     if (!slot)
@@ -184,9 +186,8 @@ WebGLContext::BindBufferBase(GLenum target, GLuint index, WebGLBuffer* buffer)
     if (!ValidateObjectAllowDeletedOrNull(funcName, buffer))
         return;
 
-    // silently ignore a deleted buffer
     if (buffer && buffer->IsDeleted())
-        return;
+        return ErrorInvalidOperation("%s: Cannot bind a deleted object.", funcName);
 
     WebGLRefPtr<WebGLBuffer>* genericBinding;
     IndexedBufferBinding* indexedBinding;
@@ -214,6 +215,15 @@ WebGLContext::BindBufferBase(GLenum target, GLuint index, WebGLBuffer* buffer)
     if (buffer) {
         buffer->SetContentAfterBind(target);
     }
+
+    switch (target) {
+    case LOCAL_GL_TRANSFORM_FEEDBACK_BUFFER:
+        mBoundTransformFeedback->OnIndexedBindingsChanged();
+        break;
+    case LOCAL_GL_UNIFORM:
+        OnUBIndexedBindingsChanged();
+        break;
+    }
 }
 
 void
@@ -227,9 +237,8 @@ WebGLContext::BindBufferRange(GLenum target, GLuint index, WebGLBuffer* buffer,
     if (!ValidateObjectAllowDeletedOrNull(funcName, buffer))
         return;
 
-    // silently ignore a deleted buffer
     if (buffer && buffer->IsDeleted())
-        return;
+        return ErrorInvalidOperation("%s: Cannot bind a deleted object.", funcName);
 
     if (!ValidateNonNegative(funcName, "offset", offset) ||
         !ValidateNonNegative(funcName, "size", size))
@@ -299,6 +308,15 @@ WebGLContext::BindBufferRange(GLenum target, GLuint index, WebGLBuffer* buffer,
     if (buffer) {
         buffer->SetContentAfterBind(target);
     }
+
+    switch (target) {
+    case LOCAL_GL_TRANSFORM_FEEDBACK_BUFFER:
+        mBoundTransformFeedback->OnIndexedBindingsChanged();
+        break;
+    case LOCAL_GL_UNIFORM:
+        OnUBIndexedBindingsChanged();
+        break;
+    }
 }
 
 ////////////////////////////////////////
@@ -338,25 +356,15 @@ WebGLContext::BufferData(GLenum target, WebGLsizeiptr size, GLenum usage)
 }
 
 void
-WebGLContext::BufferData(GLenum target, const dom::SharedArrayBuffer& src, GLenum usage)
-{
-    if (IsContextLost())
-        return;
-
-    src.ComputeLengthAndData();
-    BufferDataImpl(target, src.LengthAllowShared(), src.DataAllowShared(), usage);
-}
-
-void
 WebGLContext::BufferData(GLenum target, const dom::Nullable<dom::ArrayBuffer>& maybeSrc,
                          GLenum usage)
 {
     if (IsContextLost())
         return;
 
-    if (maybeSrc.IsNull())
-        return ErrorInvalidValue("bufferData: null object passed");
-    auto& src = maybeSrc.Value();
+    if (!ValidateNonNull("bufferData", maybeSrc))
+        return;
+    const auto& src = maybeSrc.Value();
 
     src.ComputeLengthAndData();
     BufferDataImpl(target, src.LengthAllowShared(), src.DataAllowShared(), usage);
@@ -396,13 +404,6 @@ WebGLContext::BufferSubDataImpl(GLenum target, WebGLsizeiptr dstByteOffset,
     if (!buffer)
         return;
 
-    if (buffer->mNumActiveTFOs) {
-        ErrorInvalidOperation("%s: Buffer is bound to an active transform feedback"
-                              " object.",
-                              "bufferSubData");
-        return;
-    }
-
     if (!buffer->ValidateRange(funcName, dstByteOffset, dataLen))
         return;
 
@@ -426,23 +427,7 @@ WebGLContext::BufferSubDataImpl(GLenum target, WebGLsizeiptr dstByteOffset,
 
 void
 WebGLContext::BufferSubData(GLenum target, WebGLsizeiptr dstByteOffset,
-                            const dom::Nullable<dom::ArrayBuffer>& maybeSrc)
-{
-    if (IsContextLost())
-        return;
-
-    if (maybeSrc.IsNull())
-        return ErrorInvalidValue("BufferSubData: returnedData is null.");
-    auto& src = maybeSrc.Value();
-
-    src.ComputeLengthAndData();
-    BufferSubDataImpl(target, dstByteOffset, src.LengthAllowShared(),
-                      src.DataAllowShared());
-}
-
-void
-WebGLContext::BufferSubData(GLenum target, WebGLsizeiptr dstByteOffset,
-                            const dom::SharedArrayBuffer& src)
+                            const dom::ArrayBuffer& src)
 {
     if (IsContextLost())
         return;

@@ -714,7 +714,10 @@ HttpObserverManager = {
         try {
           let result = callback(data);
 
-          if (result && typeof result === "object" && opts.blocking) {
+          if (result && typeof result === "object" && opts.blocking
+              && !AddonManagerPermissions.isHostPermitted(uri.host)
+              && loadInfo && loadInfo.loadingPrincipal && loadInfo.loadingPrincipal.URI
+              && !AddonManagerPermissions.isHostPermitted(loadInfo.loadingPrincipal.URI.host)) {
             handlerResults.push({opts, result});
           }
         } catch (e) {
@@ -780,22 +783,18 @@ HttpObserverManager = {
           responseHeaders.applyChanges(result.responseHeaders);
         }
       }
+
+      if (kind === "opening") {
+        yield this.runChannelListener(channel, loadContext, "modify");
+      } else if (kind === "modify") {
+        yield this.runChannelListener(channel, loadContext, "afterModify");
+      }
     } catch (e) {
       Cu.reportError(e);
     }
 
-    if (kind === "opening") {
-      return this.runChannelListener(channel, loadContext, "modify");
-    } else if (kind === "modify") {
-      return this.runChannelListener(channel, loadContext, "afterModify");
-    }
-
-    // Only resume the channel if either it was suspended by this call,
-    // and this callback is not part of the opening-modify-afterModify
-    // chain, or if this is an afterModify callback. This allows us to
-    // chain the aforementioned handlers without repeatedly suspending
-    // and resuming the request.
-    if (shouldResume || kind === "afterModify") {
+    // Only resume the channel if it was suspended by this call.
+    if (shouldResume) {
       this.maybeResume(channel);
     }
   }),

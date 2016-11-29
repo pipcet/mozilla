@@ -24,14 +24,15 @@ const Telemetry = require("devtools/client/shared/telemetry");
 const Menu = require("devtools/client/framework/menu");
 const MenuItem = require("devtools/client/framework/menu-item");
 
-const {CommandUtils} = require("devtools/client/shared/developer-toolbar");
+const {HTMLBreadcrumbs} = require("devtools/client/inspector/breadcrumbs");
 const {ComputedViewTool} = require("devtools/client/inspector/computed/computed");
 const {FontInspector} = require("devtools/client/inspector/fonts/fonts");
-const {HTMLBreadcrumbs} = require("devtools/client/inspector/breadcrumbs");
 const {InspectorSearch} = require("devtools/client/inspector/inspector-search");
-const MarkupView = require("devtools/client/inspector/markup/markup");
 const {RuleViewTool} = require("devtools/client/inspector/rules/rules");
+const HighlightersOverlay = require("devtools/client/inspector/shared/highlighters-overlay");
 const {ToolSidebar} = require("devtools/client/inspector/toolsidebar");
+const MarkupView = require("devtools/client/inspector/markup/markup");
+const {CommandUtils} = require("devtools/client/shared/developer-toolbar");
 const {ViewHelpers} = require("devtools/client/shared/widgets/view-helpers");
 const clipboardHelper = require("devtools/shared/platform/clipboard");
 
@@ -92,6 +93,7 @@ function Inspector(toolbox) {
   this.panelWin = window;
   this.panelWin.inspector = this;
 
+  this.highlighters = new HighlightersOverlay(this);
   this.telemetry = new Telemetry();
 
   this.nodeMenuTriggerInfo = null;
@@ -612,7 +614,25 @@ Inspector.prototype = {
     this.sidebar.addTab(id, title, panel, selected);
   },
 
-  setupToolbar: function () {
+  /**
+   * Method to check whether the document is a HTML document and
+   * pickColorFromPage method is available or not.
+   * Returns a boolean value
+   */
+  supportsEyeDropper: Task.async(function* () {
+    let isInHTMLDocument = this.selection.nodeFront &&
+                            this.selection.nodeFront.isInHTMLDocument;
+    let pickColorAvailable = false;
+    try {
+      pickColorAvailable = yield this.target
+                                      .actorHasMethod("inspector", "pickColorFromPage");
+    } catch (e) {
+      console.error(e);
+    }
+    return isInHTMLDocument && pickColorAvailable;
+  }),
+
+  setupToolbar: Task.async(function* () {
     this.teardownToolbar();
 
     // Setup the sidebar toggle button.
@@ -635,26 +655,21 @@ Inspector.prototype = {
     this.addNodeButton.addEventListener("click", this.addNode);
 
     // Setup the eye-dropper icon if we're in an HTML document and we have actor support.
-    if (this.selection.nodeFront && this.selection.nodeFront.isInHTMLDocument) {
-      this.target.actorHasMethod("inspector", "pickColorFromPage").then(value => {
-        if (!value) {
-          return;
-        }
-
-        this.onEyeDropperDone = this.onEyeDropperDone.bind(this);
-        this.onEyeDropperButtonClicked = this.onEyeDropperButtonClicked.bind(this);
-        this.eyeDropperButton = this.panelDoc
+    let canShowEyeDropper = yield this.supportsEyeDropper();
+    if (canShowEyeDropper) {
+      this.onEyeDropperDone = this.onEyeDropperDone.bind(this);
+      this.onEyeDropperButtonClicked = this.onEyeDropperButtonClicked.bind(this);
+      this.eyeDropperButton = this.panelDoc
                                     .getElementById("inspector-eyedropper-toggle");
-        this.eyeDropperButton.disabled = false;
-        this.eyeDropperButton.title = INSPECTOR_L10N.getStr("inspector.eyedropper.label");
-        this.eyeDropperButton.addEventListener("click", this.onEyeDropperButtonClicked);
-      }, e => console.error(e));
+      this.eyeDropperButton.disabled = false;
+      this.eyeDropperButton.title = INSPECTOR_L10N.getStr("inspector.eyedropper.label");
+      this.eyeDropperButton.addEventListener("click", this.onEyeDropperButtonClicked);
     } else {
       let eyeDropperButton = this.panelDoc.getElementById("inspector-eyedropper-toggle");
       eyeDropperButton.disabled = true;
       eyeDropperButton.title = INSPECTOR_L10N.getStr("eyedropper.disabled.title");
     }
-  },
+  }),
 
   teardownToolbar: function () {
     this._sidebarToggle = null;
@@ -911,13 +926,19 @@ Inspector.prototype = {
     this.breadcrumbs.destroy();
     this.selection.off("new-node-front", this.onNewSelection);
     this.selection.off("detached-front", this.onDetached);
+
     let markupDestroyer = this._destroyMarkup();
+
     this.panelWin.inspector = null;
     this.target = null;
     this.panelDoc = null;
     this.panelWin = null;
     this.breadcrumbs = null;
     this._toolbox = null;
+
+    this.highlighters.destroy();
+    this.highlighters = null;
+
     this.search.destroy();
     this.search = null;
     this.searchBox = null;

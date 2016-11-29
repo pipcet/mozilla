@@ -65,7 +65,10 @@ class PuppeteerMixin(object):
 
         :param flags: Specific restart flags for Firefox
         """
-        self.marionette.restart(in_app=not kwargs.get('clean'), **kwargs)
+        if kwargs.get('clean'):
+            self.marionette.restart(clean=True)
+        else:
+            self.marionette.restart(in_app=True)
 
         # Ensure that we always have a valid browser instance available
         self.browser = self.puppeteer.windows.switch_to(lambda win: type(win) is BrowserWindow)
@@ -80,9 +83,11 @@ class PuppeteerMixin(object):
         self.puppeteer = Puppeteer(self.marionette)
         self.browser = self.puppeteer.windows.current
         self.browser.focus()
+
         with self.marionette.using_context(self.marionette.CONTEXT_CONTENT):
-            # Ensure that we have a default page opened
-            self.marionette.navigate(self.puppeteer.prefs.get_pref('browser.newtab.url'))
+            # Bug 1312674 - Navigating to about:blank twice can cause a hang in
+            # Marionette. So try to always have a known default page loaded.
+            self.marionette.navigate('about:')
 
     def tearDown(self, *args, **kwargs):
         self.marionette.set_context('chrome')

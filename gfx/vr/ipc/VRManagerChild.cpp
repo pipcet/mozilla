@@ -265,21 +265,30 @@ VRManagerChild::UpdateDisplayInfo(nsTArray<VRDisplayInfo>& aDisplayUpdates)
   mDisplaysInitialized = true;
 }
 
-bool
+mozilla::ipc::IPCResult
 VRManagerChild::RecvUpdateDisplayInfo(nsTArray<VRDisplayInfo>&& aDisplayUpdates)
 {
   UpdateDisplayInfo(aDisplayUpdates);
-  for (auto& nav : mNavigatorCallbacks) {
+  for (auto& windowId : mNavigatorCallbacks) {
     /** We must call NotifyVRDisplaysUpdated for every
-     * Navigator in mNavigatorCallbacks to ensure that
+     * window's Navigator in mNavigatorCallbacks to ensure that
      * the promise returned by Navigator.GetVRDevices
      * can resolve.  This must happen even if no changes
      * to VRDisplays have been detected here.
      */
+    nsGlobalWindow* window = nsGlobalWindow::GetInnerWindowWithId(windowId);
+    if (!window) {
+      continue;
+    }
+    ErrorResult result;
+    dom::Navigator* nav = window->GetNavigator(result);
+    if (NS_WARN_IF(result.Failed())) {
+      continue;
+    }
     nav->NotifyVRDisplaysUpdated();
   }
   mNavigatorCallbacks.Clear();
-  return true;
+  return IPC_OK();
 }
 
 bool
@@ -300,11 +309,11 @@ VRManagerChild::GetVRDisplays(nsTArray<RefPtr<VRDisplayClient>>& aDisplays)
 }
 
 bool
-VRManagerChild::RefreshVRDisplaysWithCallback(dom::Navigator* aNavigator)
+VRManagerChild::RefreshVRDisplaysWithCallback(uint64_t aWindowId)
 {
   bool success = SendRefreshDisplays();
   if (success) {
-    mNavigatorCallbacks.AppendElement(aNavigator);
+    mNavigatorCallbacks.AppendElement(aWindowId);
   }
   return success;
 }
@@ -315,7 +324,7 @@ VRManagerChild::GetInputFrameID()
   return mInputFrameID;
 }
 
-bool
+mozilla::ipc::IPCResult
 VRManagerChild::RecvParentAsyncMessages(InfallibleTArray<AsyncParentMessageData>&& aMessages)
 {
   for (InfallibleTArray<AsyncParentMessageData>::index_type i = 0; i < aMessages.Length(); ++i) {
@@ -329,10 +338,10 @@ VRManagerChild::RecvParentAsyncMessages(InfallibleTArray<AsyncParentMessageData>
       }
       default:
         NS_ERROR("unknown AsyncParentMessageData type");
-        return false;
+        return IPC_FAIL_NO_REASON(this);
     }
   }
-  return true;
+  return IPC_OK();
 }
 
 PTextureChild*
@@ -448,17 +457,17 @@ VRManagerChild::CancelFrameRequestCallback(int32_t aHandle)
   mFrameRequestCallbacks.RemoveElementSorted(aHandle);
 }
 
-bool
+mozilla::ipc::IPCResult
 VRManagerChild::RecvNotifyVSync()
 {
   for (auto& display : mDisplays) {
     display->NotifyVsync();
   }
 
-  return true;
+  return IPC_OK();
 }
 
-bool
+mozilla::ipc::IPCResult
 VRManagerChild::RecvNotifyVRVSync(const uint32_t& aDisplayID)
 {
   for (auto& display : mDisplays) {
@@ -467,10 +476,10 @@ VRManagerChild::RecvNotifyVRVSync(const uint32_t& aDisplayID)
     }
   }
 
-  return true;
+  return IPC_OK();
 }
 
-bool
+mozilla::ipc::IPCResult
 VRManagerChild::RecvGamepadUpdate(const GamepadChangeEvent& aGamepadEvent)
 {
 #ifdef MOZ_GAMEPAD
@@ -482,7 +491,7 @@ VRManagerChild::RecvGamepadUpdate(const GamepadChangeEvent& aGamepadEvent)
   }
 #endif
 
-  return true;
+  return IPC_OK();
 }
 
 void

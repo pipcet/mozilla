@@ -95,7 +95,8 @@ let apiManager = new class extends SchemaAPIManager {
   }
 
   registerSchemaAPI(namespace, envType, getAPI) {
-    if (envType == "addon_parent" || envType == "content_parent") {
+    if (envType == "addon_parent" || envType == "content_parent" ||
+        envType == "devtools_parent") {
       super.registerSchemaAPI(namespace, envType, getAPI);
     }
   }
@@ -106,16 +107,13 @@ let apiManager = new class extends SchemaAPIManager {
 // `onConnect` events are updated if needed.
 ProxyMessenger = {
   _initialized: false,
+
   init() {
     if (this._initialized) {
       return;
     }
     this._initialized = true;
 
-    // TODO(robwu): When addons move to a separate process, we should use the
-    // parent process manager(s) of the addon process(es) instead of the
-    // in-process one.
-    let pipmm = Services.ppmm.getChildAt(0);
     // Listen on the global frame message manager because content scripts send
     // and receive extension messages via their frame.
     // Listen on the parent process message manager because `runtime.connect`
@@ -123,7 +121,7 @@ ProxyMessenger = {
     // addon process (by the API contract).
     // And legacy addons are not associated with a frame, so that is another
     // reason for having a parent process manager here.
-    let messageManagers = [Services.mm, pipmm];
+    let messageManagers = [Services.mm, Services.ppmm];
 
     MessageChannel.addListener(messageManagers, "Extension:Connect", this);
     MessageChannel.addListener(messageManagers, "Extension:Message", this);
@@ -147,8 +145,9 @@ ProxyMessenger = {
       // native messages are handled by NativeApp.
       return;
     }
+
     let extension = GlobalManager.extensionMap.get(sender.extensionId);
-    let receiverMM = this._getMessageManagerForRecipient(recipient);
+    let receiverMM = this.getMessageManagerForRecipient(recipient);
     if (!extension || !receiverMM) {
       return Promise.reject({
         result: MessageChannel.RESULT_NO_HANDLER,
@@ -172,10 +171,11 @@ ProxyMessenger = {
   /**
    * @param {object} recipient An object that was passed to
    *     `MessageChannel.sendMessage`.
+   * @param {Extension} extension
    * @returns {object|null} The message manager matching the recipient if found.
    */
-  _getMessageManagerForRecipient(recipient) {
-    let {extensionId, tabId} = recipient;
+  getMessageManagerForRecipient(recipient) {
+    let {tabId} = recipient;
     // tabs.sendMessage / tabs.connect
     if (tabId) {
       // `tabId` being set implies that the tabs API is supported, so we don't
@@ -185,10 +185,9 @@ ProxyMessenger = {
     }
 
     // runtime.sendMessage / runtime.connect
-    if (extensionId) {
-      // TODO(robwu): map the extensionId to the addon parent process's message
-      // manager when they run in a separate process.
-      return Services.ppmm.getChildAt(0);
+    let extension = GlobalManager.extensionMap.get(recipient.extensionId);
+    if (extension) {
+      return extension.parentMessageManager;
     }
 
     return null;
@@ -229,6 +228,19 @@ GlobalManager = {
         ExtensionContent.uninit(this);
       });
     `, false);
+
+    let viewType = browser.getAttribute("webextension-view-type");
+    if (viewType) {
+      let data = {viewType};
+
+      let {getBrowserInfo} = apiManager.global;
+      if (getBrowserInfo) {
+        Object.assign(data, getBrowserInfo(browser));
+      }
+
+      browser.messageManager.sendAsyncMessage("Extension:InitExtensionView",
+                                              data);
+    }
   },
 
   getExtension(extensionId) {
@@ -321,6 +333,8 @@ class ExtensionPageContextParent extends ProxyContextParent {
     super(envType, extension, params, xulBrowser, extension.principal);
 
     this.viewType = params.viewType;
+
+    extension.emit("extension-proxy-context-load", this);
   }
 
   // The window that contains this context. This may change due to moving tabs.
@@ -337,12 +351,13 @@ class ExtensionPageContextParent extends ProxyContextParent {
   }
 
   get tabId() {
-    if (!apiManager.global.TabManager) {
-      return;  // Not yet supported on Android.
+    let {getBrowserInfo} = apiManager.global;
+
+    if (getBrowserInfo) {
+      // This is currently only available on desktop Firefox.
+      return getBrowserInfo(this.xulBrowser).tabId;
     }
-    let {gBrowser} = this.xulBrowser.ownerGlobal;
-    let tab = gBrowser && gBrowser.getTabForBrowser(this.xulBrowser);
-    return tab && apiManager.global.TabManager.getId(tab);
+    return undefined;
   }
 
   onBrowserChange(browser) {
@@ -425,13 +440,7 @@ ParentAPIManager = {
     }
 
     let context;
-    if (envType == "addon_parent") {
-      // Privileged addon contexts can only be loaded in documents whose main
-      // frame is also the same addon.
-      if (principal.URI.prePath !== extension.baseURI.prePath ||
-          !target.contentPrincipal.subsumes(principal)) {
-        throw new Error(`Refused to create privileged WebExtension context for ${principal.URI.spec}`);
-      }
+    if (envType == "addon_parent" || envType == "devtools_parent") {
       context = new ExtensionPageContextParent(envType, extension, data, target);
     } else if (envType == "content_parent") {
       context = new ContentScriptContextParent(envType, extension, data, target, principal);
@@ -452,8 +461,22 @@ ParentAPIManager = {
   call(data, target) {
     let context = this.getContextById(data.childId);
     if (context.parentMessageManager !== target.messageManager) {
-      Cu.reportError("WebExtension warning: Message manager unexpectedly changed");
+      throw new Error("Got message on unexpected message manager");
     }
+
+    let reply = result => {
+      if (!context.parentMessageManager) {
+        Cu.reportError("Cannot send function call result: other side closed connection");
+        return;
+      }
+
+      context.parentMessageManager.sendAsyncMessage(
+        "API:CallResult",
+        Object.assign({
+          childId: data.childId,
+          callId: data.callId,
+        }, result));
+    };
 
     try {
       let args = Cu.cloneInto(data.args, context.sandbox);
@@ -465,28 +488,16 @@ ParentAPIManager = {
         result.then(result => {
           result = result instanceof SpreadArgs ? [...result] : [result];
 
-          context.parentMessageManager.sendAsyncMessage("API:CallResult", {
-            childId: data.childId,
-            callId: data.callId,
-            result,
-          });
+          reply({result});
         }, error => {
           error = context.normalizeError(error);
-          context.parentMessageManager.sendAsyncMessage("API:CallResult", {
-            childId: data.childId,
-            callId: data.callId,
-            error: {message: error.message},
-          });
+          reply({error: {message: error.message}});
         });
       }
     } catch (e) {
       if (data.callId) {
         let error = context.normalizeError(e);
-        context.parentMessageManager.sendAsyncMessage("API:CallResult", {
-          childId: data.childId,
-          callId: data.callId,
-          error: {message: error.message},
-        });
+        reply({error: {message: error.message}});
       } else {
         Cu.reportError(e);
       }
@@ -496,7 +507,7 @@ ParentAPIManager = {
   addListener(data, target) {
     let context = this.getContextById(data.childId);
     if (context.parentMessageManager !== target.messageManager) {
-      Cu.reportError("WebExtension warning: Message manager unexpectedly changed");
+      throw new Error("Got message on unexpected message manager");
     }
 
     let {childId} = data;
@@ -516,7 +527,7 @@ ParentAPIManager = {
         });
     }
 
-    context.listenerProxies.set(data.path, listener);
+    context.listenerProxies.set(data.listenerId, listener);
 
     let args = Cu.cloneInto(data.args, context.sandbox);
     findPathInObject(context.apiObj, data.path).addListener(listener, ...args);
@@ -524,16 +535,14 @@ ParentAPIManager = {
 
   removeListener(data) {
     let context = this.getContextById(data.childId);
-    let listener = context.listenerProxies.get(data.path);
+    let listener = context.listenerProxies.get(data.listenerId);
     findPathInObject(context.apiObj, data.path).removeListener(listener);
   },
 
   getContextById(childId) {
     let context = this.proxyContexts.get(childId);
     if (!context) {
-      let error = new Error("WebExtension context not found!");
-      Cu.reportError(error);
-      throw error;
+      throw new Error("WebExtension context not found!");
     }
     return context;
   },

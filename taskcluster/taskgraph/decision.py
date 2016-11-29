@@ -16,7 +16,6 @@ import yaml
 from .generator import TaskGraphGenerator
 from .create import create_tasks
 from .parameters import Parameters
-from .target_tasks import get_method
 from .taskgraph import TaskGraph
 
 from taskgraph.util.templates import Templates
@@ -51,6 +50,11 @@ PER_PROJECT_PARAMETERS = {
         'optimize_target_tasks': True,
     },
 
+    'graphics': {
+        'target_tasks_method': 'graphics_tasks',
+        'optimize_target_tasks': True,
+    },
+
     # the default parameters are used for projects that do not match above.
     'default': {
         'target_tasks_method': 'default',
@@ -74,12 +78,9 @@ def taskgraph_decision(options):
     parameters = get_decision_parameters(options)
 
     # create a TaskGraphGenerator instance
-    target_tasks_method = parameters.get('target_tasks_method', 'all_tasks')
-    target_tasks_method = get_method(target_tasks_method)
     tgg = TaskGraphGenerator(
         root_dir=options['root'],
-        parameters=parameters,
-        target_tasks_method=target_tasks_method)
+        parameters=parameters)
 
     # write out the parameters used to generate this graph
     write_artifact('parameters.yml', dict(**parameters))
@@ -126,6 +127,13 @@ def get_decision_parameters(options):
         'triggered_by',
         'target_tasks_method',
     ] if n in options}
+
+    # Define default filter list, as most configurations shouldn't need
+    # custom filters.
+    parameters['filters'] = [
+        'check_servo',
+        'target_tasks_method',
+    ]
 
     # owner must be an email, but sometimes (e.g., for ffxbld) it is not, in which
     # case, fake it

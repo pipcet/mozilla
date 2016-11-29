@@ -1032,7 +1032,7 @@ var LoginManagerContent = {
       if (passwordField.maxLength >= 0)
         maxPasswordLen = passwordField.maxLength;
 
-      var logins = foundLogins.filter(function (l) {
+      var logins = foundLogins.filter(function(l) {
         var fit = (l.username.length <= maxUsernameLen &&
                    l.password.length <= maxPasswordLen);
         if (!fit)
@@ -1234,7 +1234,7 @@ var LoginUtils = {
 };
 
 // nsIAutoCompleteResult implementation
-function UserAutoCompleteResult (aSearchString, matchingLogins, {isSecure, messageManager, isPasswordField}) {
+function UserAutoCompleteResult(aSearchString, matchingLogins, {isSecure, messageManager, isPasswordField}) {
   this.searchString = aSearchString;
 
   this._stringBundle = Services.strings.createBundle("chrome://passwordmgr/locale/passwordmgr.properties");
@@ -1294,13 +1294,10 @@ UserAutoCompleteResult.prototype = {
       return duplicates;
     }
 
-    let currentMatchingLogins = (!LoginHelper.insecureAutofill && !this._isSecure) ?
-                                [] : this._matchingLogins;
-
     this._showInsecureFieldWarning = (!this._isSecure && LoginHelper.showInsecureFieldWarning) ? 1 : 0;
-    this.logins = currentMatchingLogins.sort(loginSort);
-    this.matchCount = currentMatchingLogins.length + this._showInsecureFieldWarning;
-    this._duplicateUsernames = findDuplicates(currentMatchingLogins);
+    this.logins = this._matchingLogins.sort(loginSort);
+    this.matchCount = this._matchingLogins.length + this._showInsecureFieldWarning;
+    this._duplicateUsernames = findDuplicates(this._matchingLogins);
 
     if (this.matchCount > 0) {
       this.searchResult = Ci.nsIAutoCompleteResult.RESULT_SUCCESS;
@@ -1370,7 +1367,8 @@ UserAutoCompleteResult.prototype = {
     if (index == 0 && this._showInsecureFieldWarning) {
       return "insecureWarning";
     }
-    return "";
+
+    return "login";
   },
 
   getImageAt(index) {

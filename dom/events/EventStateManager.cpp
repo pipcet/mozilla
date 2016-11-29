@@ -203,7 +203,7 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSITIMERCALLBACK
 private:
-  ~UITimerCallback() {}
+  ~UITimerCallback() = default;
   uint32_t mPreviousCount;
 };
 
@@ -242,9 +242,7 @@ OverOutElementsWrapper::OverOutElementsWrapper()
 {
 }
 
-OverOutElementsWrapper::~OverOutElementsWrapper()
-{
-}
+OverOutElementsWrapper::~OverOutElementsWrapper() = default;
 
 NS_IMPL_CYCLE_COLLECTION(OverOutElementsWrapper,
                          mLastOverElement,
@@ -1262,9 +1260,9 @@ EventStateManager::IsRemoteTarget(nsIContent* target) {
     return true;
   }
 
-  // <frame/iframe mozbrowser/mozapp>
+  // <frame/iframe mozbrowser>
   nsCOMPtr<nsIMozBrowserFrame> browserFrame = do_QueryInterface(target);
-  if (browserFrame && browserFrame->GetReallyIsBrowserOrApp()) {
+  if (browserFrame && browserFrame->GetReallyIsBrowser()) {
     return !!TabParent::GetFrom(target);
   }
 
@@ -3817,7 +3815,7 @@ class MOZ_STACK_CLASS ESMEventCB : public EventDispatchingCallback
 public:
   explicit ESMEventCB(nsIContent* aTarget) : mTarget(aTarget) {}
 
-  virtual void HandleEvent(EventChainPostVisitor& aVisitor)
+  void HandleEvent(EventChainPostVisitor& aVisitor) override
   {
     if (aVisitor.mPresContext) {
       nsIFrame* frame = aVisitor.mPresContext->GetPrimaryFrameFor(mTarget);
@@ -4676,6 +4674,8 @@ EventStateManager::CheckForAndDispatchClick(WidgetMouseEvent* aEvent,
         event2.mClickCount = aEvent->mClickCount;
         event2.mModifiers = aEvent->mModifiers;
         event2.buttons = aEvent->buttons;
+        event2.mTime = aEvent->mTime;
+        event2.mTimeStamp = aEvent->mTimeStamp;
         event2.mFlags.mNoContentDispatch = notDispatchToContents;
         event2.button = aEvent->button;
         event2.inputSource = aEvent->inputSource;

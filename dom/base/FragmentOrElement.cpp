@@ -675,7 +675,7 @@ FindChromeAccessOnlySubtreeOwner(nsIContent* aContent)
 }
 
 nsresult
-nsIContent::PreHandleEvent(EventChainPreVisitor& aVisitor)
+nsIContent::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
   //FIXME! Document how this event retargeting works, Bug 329124.
   aVisitor.mCanHandle = true;
@@ -2342,53 +2342,5 @@ FragmentOrElement::SetIsElementInStyleScopeFlagOnShadowTree(bool aInStyleScope)
   while (shadowRoot) {
     shadowRoot->SetIsElementInStyleScopeFlagOnSubtree(aInStyleScope);
     shadowRoot = shadowRoot->GetOlderShadowRoot();
-  }
-}
-
-#ifdef DEBUG
-static void
-AssertDirtyDescendantsBitPropagated(nsINode* aNode)
-{
-  MOZ_ASSERT(aNode->HasDirtyDescendantsForServo());
-  nsINode* parent = aNode->GetFlattenedTreeParentNode();
-  if (!parent->IsContent()) {
-    MOZ_ASSERT(parent == aNode->OwnerDoc());
-    MOZ_ASSERT(parent->HasDirtyDescendantsForServo());
-  } else {
-    AssertDirtyDescendantsBitPropagated(parent);
-  }
-}
-#else
-static void AssertDirtyDescendantsBitPropagated(nsINode* aNode) {}
-#endif
-
-void
-nsIContent::MarkAncestorsAsHavingDirtyDescendantsForServo()
-{
-  MOZ_ASSERT(IsInComposedDoc());
-
-  // Get the parent in the flattened tree.
-  nsINode* parent = GetFlattenedTreeParentNode();
-
-  // Loop until we hit a base case.
-  while (true) {
-
-    // Base case: the document.
-    if (!parent->IsContent()) {
-      MOZ_ASSERT(parent == OwnerDoc());
-      parent->SetHasDirtyDescendantsForServo();
-      return;
-    }
-
-    // Base case: the parent is already marked, and therefore
-    // so are all its ancestors.
-    if (parent->HasDirtyDescendantsForServo()) {
-      AssertDirtyDescendantsBitPropagated(parent);
-      return;
-    }
-
-    // Mark the parent and iterate.
-    parent->SetHasDirtyDescendantsForServo();
-    parent = parent->GetFlattenedTreeParentNode();
   }
 }

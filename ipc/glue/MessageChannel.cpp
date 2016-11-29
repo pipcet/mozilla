@@ -992,7 +992,7 @@ MessageChannel::OnMessageReceivedFromLink(Message&& aMsg)
 }
 
 void
-MessageChannel::PeekMessages(mozilla::function<bool(const Message& aMsg)> aInvoke)
+MessageChannel::PeekMessages(std::function<bool(const Message& aMsg)> aInvoke)
 {
     // FIXME: We shouldn't be holding the lock for aInvoke!
     MonitorAutoLock lock(*mMonitor);
@@ -1628,7 +1628,14 @@ MessageChannel::MessageTask::Post()
     mScheduled = true;
 
     RefPtr<MessageTask> self = this;
-    mChannel->mWorkerLoop->PostTask(self.forget());
+    nsCOMPtr<nsIEventTarget> eventTarget =
+        mChannel->mListener->GetMessageEventTarget(mMessage);
+
+    if (eventTarget) {
+        eventTarget->Dispatch(self.forget(), NS_DISPATCH_NORMAL);
+    } else {
+        mChannel->mWorkerLoop->PostTask(self.forget());
+    }
 }
 
 void
@@ -2118,6 +2125,11 @@ MessageChannel::MaybeHandleError(Result code, const Message& aMsg, const char* c
     }
 
     PrintErrorMessage(mSide, channelName, reason);
+
+    // Error handled in mozilla::ipc::IPCResult.
+    if (code == MsgProcessingError) {
+        return false;
+    }
 
     mListener->ProcessingError(code, reason);
 

@@ -54,12 +54,6 @@ function setState(component, newState) {
   });
 }
 
-function setProps(component, newProps) {
-  return new Promise(resolve => {
-    component.setProps(newProps, onNextAnimationFrame(resolve));
-  });
-}
-
 function dumpn(msg) {
   dump(`SHARED-COMPONENTS-TEST: ${msg}\n`);
 }
@@ -206,7 +200,7 @@ function shallowRenderComponent(component, props) {
  */
 function testRepRenderModes(modeTests, testName, componentUnderTest, gripStub) {
   modeTests.forEach(({mode, expectedOutput, message}) => {
-    const modeString = typeof mode === "undefined" ? "no mode" : mode;
+    const modeString = typeof mode === "undefined" ? "no mode" : mode.toString();
     if (!message) {
       message = `${testName}: ${modeString} renders correctly.`;
     }

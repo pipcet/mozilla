@@ -163,6 +163,7 @@
 #endif
 
 #include "mozilla/layers/CompositorBridgeChild.h"
+#include "ClientLayerManager.h"
 #include "GeckoProfiler.h"
 #include "gfxPlatform.h"
 #include "Layers.h"
@@ -225,6 +226,7 @@ using namespace mozilla::layers;
 using namespace mozilla::gfx;
 using namespace mozilla::layout;
 using PaintFrameFlags = nsLayoutUtils::PaintFrameFlags;
+typedef FrameMetrics::ViewID ViewID;
 
 CapturingContentInfo nsIPresShell::gCaptureInfo =
   { false /* mAllowed */, false /* mPointerLock */, false /* mRetargetToElement */,
@@ -1358,13 +1360,6 @@ PresShell::Destroy()
   mTouchManager.Destroy();
 }
 
-void
-PresShell::MakeZombie()
-{
-  mIsZombie = true;
-  CancelAllPendingReflows();
-}
-
 nsRefreshDriver*
 nsIPresShell::GetRefreshDriver() const
 {
@@ -1696,17 +1691,6 @@ PresShell::Initialize(nscoord aWidth, nscoord aHeight)
   // the way don't have region accumulation issues?
 
   mPresContext->SetVisibleArea(nsRect(0, 0, aWidth, aHeight));
-
-  if (mStyleSet->IsServo() && mDocument->GetRootElement()) {
-    // If we have the root element already, go ahead style it along with any
-    // descendants.
-    //
-    // Some things, like nsDocumentViewer::GetPageMode, recreate the PresShell
-    // while keeping the content tree alive (see bug 1292280) - so we
-    // unconditionally mark the root as dirty.
-    mDocument->GetRootElement()->SetIsDirtyForServo();
-    mStyleSet->AsServo()->StyleDocument(/* aLeaveDirtyBits = */ false);
-  }
 
   // Get the root frame from the frame manager
   // XXXbz it would be nice to move this somewhere else... like frame manager
@@ -4026,10 +4010,6 @@ PresShell::FlushPendingNotifications(mozFlushType aType)
 void
 PresShell::FlushPendingNotifications(mozilla::ChangesToFlush aFlush)
 {
-  if (mIsZombie) {
-    return;
-  }
-
   /**
    * VERY IMPORTANT: If you add some sort of new flushing to this
    * method, make sure to add the relevant SetNeedLayoutFlush or
@@ -6274,7 +6254,7 @@ PresShell::Paint(nsView*        aViewToPaint,
 
   MOZ_ASSERT(!mApproximateFrameVisibilityVisited, "Should have been cleared");
 
-  if (!mIsActive || mIsZombie) {
+  if (!mIsActive) {
     return;
   }
 
@@ -6845,6 +6825,82 @@ FlushThrottledStyles(nsIDocument *aDocument, void *aData)
   return true;
 }
 
+/*
+ * This function handles the preventDefault behavior of pointerdown. When user
+ * preventDefault on pointerdown, We have to mark the active pointer to prevent
+ * sebsequent mouse events (except mouse transition events) and default
+ * behaviors.
+ *
+ * We add mPreventMouseEventByContent flag in PointerInfo to represent the
+ * active pointer won't firing compatible mouse events. It's set to true when
+ * content preventDefault on pointerdown
+ */
+static void
+PostHandlePointerEventsPreventDefault(WidgetPointerEvent* aPointerEvent,
+                                      WidgetGUIEvent* aMouseOrTouchEvent)
+{
+  if (!aPointerEvent->mIsPrimary || aPointerEvent->mMessage != ePointerDown ||
+      !aPointerEvent->DefaultPreventedByContent()) {
+    return;
+  }
+  nsIPresShell::PointerInfo* pointerInfo = nullptr;
+  if (!sActivePointersIds->Get(aPointerEvent->pointerId, &pointerInfo) ||
+      !pointerInfo) {
+    // We already added the PointerInfo for active pointer when
+    // PresShell::HandleEvent handling pointerdown event.
+#ifdef DEBUG
+    MOZ_CRASH("Got ePointerDown w/o active pointer info!!");
+#endif // #ifdef DEBUG
+    return;
+  }
+  // PreventDefault only applied for active pointers.
+  if (!pointerInfo->mActiveState) {
+    return;
+  }
+  aMouseOrTouchEvent->PreventDefault(false);
+  pointerInfo->mPreventMouseEventByContent = true;
+}
+
+/*
+ * This function handles the case when content had called preventDefault on the
+ * active pointer. In that case we have to prevent firing subsequent mouse
+ * to content. We check the flag PointerInfo::mPreventMouseEventByContent and
+ * call PreventDefault(false) to stop default behaviors and stop firing mouse
+ * events to content and chrome.
+ *
+ * note: mouse transition events are excluded
+ * note: we have to clean mPreventMouseEventByContent on pointerup for those
+ *       devices support hover
+ * note: we don't suppress firing mouse events to chrome and system group
+ *       handlers because they may implement default behaviors
+ */
+static void
+PreHandlePointerEventsPreventDefault(WidgetPointerEvent* aPointerEvent,
+                                     WidgetGUIEvent* aMouseOrTouchEvent)
+{
+  if (!aPointerEvent->mIsPrimary || aPointerEvent->mMessage == ePointerDown) {
+    return;
+  }
+  nsIPresShell::PointerInfo* pointerInfo = nullptr;
+  if (!sActivePointersIds->Get(aPointerEvent->pointerId, &pointerInfo) ||
+      !pointerInfo) {
+    // The PointerInfo for active pointer should be added for normal cases. But
+    // in some cases, we may receive mouse events before adding PointerInfo in
+    // sActivePointersIds. (e.g. receive mousemove before eMouseEnterIntoWidget
+    // or change preference 'dom.w3c_pointer_events.enabled' from off to on).
+    // In these cases, we could ignore them because they are not the events
+    // between a DefaultPrevented pointerdown and the corresponding pointerup.
+    return;
+  }
+  if (!pointerInfo->mPreventMouseEventByContent) {
+    return;
+  }
+  aMouseOrTouchEvent->PreventDefault(false);
+  if (aPointerEvent->mMessage == ePointerUp) {
+    pointerInfo->mPreventMouseEventByContent = false;
+  }
+}
+
 static nsresult
 DispatchPointerFromMouseOrTouch(PresShell* aShell,
                                 nsIFrame* aFrame,
@@ -6891,8 +6947,10 @@ DispatchPointerFromMouseOrTouch(PresShell* aShell,
                      mouseEvent->pressure ? mouseEvent->pressure : 0.5f :
                      0.0f;
     event.convertToPointer = mouseEvent->convertToPointer = false;
+    PreHandlePointerEventsPreventDefault(&event, aEvent);
     aShell->HandleEvent(aFrame, &event, aDontRetargetEvents, aStatus,
                         aTargetContent);
+    PostHandlePointerEventsPreventDefault(&event, aEvent);
   } else if (aEvent->mClass == eTouchEventClass) {
     WidgetTouchEvent* touchEvent = aEvent->AsTouchEvent();
     // loop over all touches and dispatch pointer events on each touch
@@ -6937,8 +6995,10 @@ DispatchPointerFromMouseOrTouch(PresShell* aShell,
       event.buttons = WidgetMouseEvent::eLeftButtonFlag;
       event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
       event.convertToPointer = touch->convertToPointer = false;
+      PreHandlePointerEventsPreventDefault(&event, aEvent);
       aShell->HandleEvent(aFrame, &event, aDontRetargetEvents, aStatus,
                           aTargetContent);
+      PostHandlePointerEventsPreventDefault(&event, aEvent);
     }
   }
   return NS_OK;
@@ -6996,20 +7056,6 @@ CheckPermissionForBeforeAfterKeyboardEvent(Element* aElement)
     if (permission == nsIPermissionManager::ALLOW_ACTION) {
       return true;
     }
-
-    // Check "embed-apps" permission for later use.
-    permission = nsIPermissionManager::DENY_ACTION;
-    permMgr->TestPermissionFromPrincipal(principal, "embed-apps", &permission);
-  }
-
-  // An element can handle before events and after events if the following
-  // conditions are met:
-  // 1) <iframe mozbrowser mozapp>
-  // 2) it has "embed-apps" permission.
-  nsCOMPtr<nsIMozBrowserFrame> browserFrame(do_QueryInterface(aElement));
-  if ((permission == nsIPermissionManager::ALLOW_ACTION) &&
-      browserFrame && browserFrame->GetReallyIsApp()) {
-    return true;
   }
 
   return false;
@@ -7456,6 +7502,7 @@ PresShell::HandleEvent(nsIFrame* aFrame,
         delete event;
       }
     }
+    aEvent->mFlags.mIsSuppressedOrDelayed = true;
     return NS_OK;
   }
 
@@ -9243,10 +9290,6 @@ PresShell::ScheduleReflowOffTimer()
 bool
 PresShell::DoReflow(nsIFrame* target, bool aInterruptible)
 {
-  if (mIsZombie) {
-    return true;
-  }
-
   gfxTextPerfMetrics* tp = mPresContext->GetTextPerfMetrics();
   TimeStamp timeStart;
   if (tp) {

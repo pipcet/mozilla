@@ -23,6 +23,10 @@ registerCleanupFunction(() => {
   for (let script of FRAME_SCRIPTS) {
     mm.removeDelayedFrameScript(script, true);
   }
+
+  // Force a garbage collect after the end of each test run, to make sure that it
+  // won't interfere with the timing of the next test to be run from the suite.
+  window.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils).garbageCollect();
 });
 
 const {Promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
@@ -544,15 +548,11 @@ function modifySessionStorage(browser, data, options = {}) {
 }
 
 function pushPrefs(...aPrefs) {
-  return new Promise(resolve => {
-    SpecialPowers.pushPrefEnv({"set": aPrefs}, resolve);
-  });
+  return SpecialPowers.pushPrefEnv({"set": aPrefs});
 }
 
 function popPrefs() {
-  return new Promise(resolve => {
-    SpecialPowers.popPrefEnv(resolve);
-  });
+  return SpecialPowers.popPrefEnv();
 }
 
 function* checkScroll(tab, expected, msg) {

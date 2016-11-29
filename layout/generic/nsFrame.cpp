@@ -1725,9 +1725,7 @@ nsFrame::DisplaySelection(nsPresContext* aPresContext, bool isOkToTurnOn)
     result = selCon->GetDisplaySelection(&selType);
     if (NS_SUCCEEDED(result) && (selType != nsISelectionController::SELECTION_OFF)) {
       // Check whether style allows selection.
-      bool selectable;
-      IsSelectable(&selectable, nullptr);
-      if (!selectable) {
+      if (!IsSelectable(nullptr)) {
         selType = nsISelectionController::SELECTION_OFF;
         isOkToTurnOn = false;
       }
@@ -2896,12 +2894,19 @@ nsIFrame::BuildDisplayListForChild(nsDisplayListBuilder*   aBuilder,
     if (aBuilder->IsBuildingLayerEventRegions()) {
       // If this frame has a different animated geometry root than its parent,
       // make sure we accumulate event regions for its layer.
-      if (buildingForChild.IsAnimatedGeometryRoot()) {
+      if (buildingForChild.IsAnimatedGeometryRoot() || isPositioned) {
         nsDisplayLayerEventRegions* eventRegions =
           new (aBuilder) nsDisplayLayerEventRegions(aBuilder, child);
         eventRegions->AddFrame(aBuilder, child);
         aBuilder->SetLayerEventRegions(eventRegions);
-        aLists.BorderBackground()->AppendNewToTop(eventRegions);
+
+        if (isPositioned) {
+          // We need this nsDisplayLayerEventRegions to be sorted with the positioned
+          // elements as positioned elements will be sorted on top of normal elements
+          list.AppendNewToTop(eventRegions);
+        } else {
+          aLists.BorderBackground()->AppendNewToTop(eventRegions);
+        }
       } else {
         nsDisplayLayerEventRegions* eventRegions = aBuilder->GetLayerEventRegions();
         if (eventRegions) {
@@ -3162,11 +3167,10 @@ nsFrame::GetDataForTableSelection(const nsFrameSelection* aFrameSelection,
   return NS_OK;
 }
 
-nsresult
-nsFrame::IsSelectable(bool* aSelectable, StyleUserSelect* aSelectStyle) const
+bool
+nsIFrame::IsSelectable(StyleUserSelect* aSelectStyle) const
 {
-  if (!aSelectable) //it's ok if aSelectStyle is null
-    return NS_ERROR_NULL_POINTER;
+  // it's ok if aSelectStyle is null
 
   // Like 'visibility', we must check all the parents: if a parent
   // is not selectable, none of its children is selectable.
@@ -3190,7 +3194,7 @@ nsFrame::IsSelectable(bool* aSelectable, StyleUserSelect* aSelectStyle) const
   //    AUTO     -> CELL      -> TEXT -> AUTO,      the returned value is TEXT
   //
   StyleUserSelect selectStyle  = StyleUserSelect::Auto;
-  nsIFrame* frame              = const_cast<nsFrame*>(this);
+  nsIFrame* frame              = const_cast<nsIFrame*>(this);
   bool containsEditable        = false;
 
   while (frame) {
@@ -3238,13 +3242,9 @@ nsFrame::IsSelectable(bool* aSelectable, StyleUserSelect* aSelectStyle) const
     *aSelectStyle = selectStyle;
   }
 
-  if (mState & NS_FRAME_GENERATED_CONTENT) {
-    *aSelectable = false;
-  } else {
-    *aSelectable = allowSelection && (selectStyle != StyleUserSelect::None);
-  }
-
-  return NS_OK;
+  return !(mState & NS_FRAME_GENERATED_CONTENT) &&
+         allowSelection &&
+         selectStyle != StyleUserSelect::None;
 }
 
 /**
@@ -3271,7 +3271,6 @@ nsFrame::HandlePress(nsPresContext* aPresContext,
   if (!aPresContext->EventStateManager()->EventStatusOK(aEvent)) 
     return NS_OK;
 
-  nsresult rv;
   nsIPresShell *shell = aPresContext->GetPresShell();
   if (!shell)
     return NS_ERROR_FAILURE;
@@ -3301,14 +3300,11 @@ nsFrame::HandlePress(nsPresContext* aPresContext,
 
   // check whether style allows selection
   // if not, don't tell selection the mouse event even occurred.  
-  bool    selectable;
   StyleUserSelect selectStyle;
-  rv = IsSelectable(&selectable, &selectStyle);
-  if (NS_FAILED(rv)) return rv;
-  
   // check for select: none
-  if (!selectable)
+  if (!IsSelectable(&selectStyle)) {
     return NS_OK;
+  }
 
   // When implementing StyleUserSelect::Element, StyleUserSelect::Elements and
   // StyleUserSelect::Toggle, need to change this logic
@@ -3389,6 +3385,7 @@ nsFrame::HandlePress(nsPresContext* aPresContext,
   nsCOMPtr<nsIContent>parentContent;
   int32_t  contentOffset;
   int32_t target;
+  nsresult rv;
   rv = GetDataForTableSelection(frameselection, shell, mouseEvent,
                                 getter_AddRefs(parentContent), &contentOffset,
                                 &target);
@@ -4632,11 +4629,11 @@ IntrinsicSizeOffsets(nsIFrame* aFrame, bool aForISize)
 
   const nsStyleBorder* styleBorder = aFrame->StyleBorder();
   if (verticalAxis) {
-    result.hBorder += styleBorder->GetComputedBorderWidth(NS_SIDE_TOP);
-    result.hBorder += styleBorder->GetComputedBorderWidth(NS_SIDE_BOTTOM);
+    result.hBorder += styleBorder->GetComputedBorderWidth(eSideTop);
+    result.hBorder += styleBorder->GetComputedBorderWidth(eSideBottom);
   } else {
-    result.hBorder += styleBorder->GetComputedBorderWidth(NS_SIDE_LEFT);
-    result.hBorder += styleBorder->GetComputedBorderWidth(NS_SIDE_RIGHT);
+    result.hBorder += styleBorder->GetComputedBorderWidth(eSideLeft);
+    result.hBorder += styleBorder->GetComputedBorderWidth(eSideRight);
   }
 
   const nsStyleDisplay* disp = aFrame->StyleDisplay();
@@ -4720,8 +4717,24 @@ nsFrame::ComputeSize(nsRenderingContext* aRenderingContext,
   const nsStyleCoord* blockStyleCoord = &stylePos->BSize(aWM);
 
   nsIAtom* parentFrameType = GetParent() ? GetParent()->GetType() : nullptr;
+  auto alignCB = GetParent();
   bool isGridItem = (parentFrameType == nsGkAtoms::gridContainerFrame &&
                      !(GetStateBits() & NS_FRAME_OUT_OF_FLOW));
+  if (parentFrameType == nsGkAtoms::tableWrapperFrame &&
+      GetType() == nsGkAtoms::tableFrame) {
+    // An inner table frame is sized as a grid item if its table wrapper is,
+    // because they actually have the same CB (the wrapper's CB).
+    // @see ReflowInput::InitCBReflowInput
+    auto tableWrapper = GetParent();
+    auto grandParent = tableWrapper->GetParent();
+    isGridItem = (grandParent->GetType() == nsGkAtoms::gridContainerFrame &&
+                  !(tableWrapper->GetStateBits() & NS_FRAME_OUT_OF_FLOW));
+    if (isGridItem) {
+      // When resolving justify/align-self below, we want to use the grid
+      // container's justify/align-items value and WritingMode.
+      alignCB = grandParent;
+    }
+  }
   bool isFlexItem = (parentFrameType == nsGkAtoms::flexContainerFrame &&
                      !(GetStateBits() & NS_FRAME_OUT_OF_FLOW));
   bool isInlineFlexItem = false;
@@ -4772,9 +4785,9 @@ nsFrame::ComputeSize(nsRenderingContext* aRenderingContext,
     if (!(aFlags & nsIFrame::eShrinkWrap) &&
         !StyleMargin()->HasInlineAxisAuto(aWM)) {
       auto inlineAxisAlignment =
-        aWM.IsOrthogonalTo(GetParent()->GetWritingMode()) ?
-          StylePosition()->UsedAlignSelf(GetParent()->StyleContext()) :
-          StylePosition()->UsedJustifySelf(GetParent()->StyleContext());
+        aWM.IsOrthogonalTo(alignCB->GetWritingMode()) ?
+          StylePosition()->UsedAlignSelf(alignCB->StyleContext()) :
+          StylePosition()->UsedJustifySelf(alignCB->StyleContext());
       stretch = inlineAxisAlignment == NS_STYLE_ALIGN_NORMAL ||
                 inlineAxisAlignment == NS_STYLE_ALIGN_STRETCH;
     }
@@ -4859,9 +4872,9 @@ nsFrame::ComputeSize(nsRenderingContext* aRenderingContext,
         bool stretch = false;
         if (!StyleMargin()->HasBlockAxisAuto(aWM)) {
           auto blockAxisAlignment =
-            !aWM.IsOrthogonalTo(GetParent()->GetWritingMode()) ?
-              StylePosition()->UsedAlignSelf(StyleContext()->GetParent()) :
-              StylePosition()->UsedJustifySelf(StyleContext()->GetParent());
+            !aWM.IsOrthogonalTo(alignCB->GetWritingMode()) ?
+              StylePosition()->UsedAlignSelf(alignCB->StyleContext()) :
+              StylePosition()->UsedJustifySelf(alignCB->StyleContext());
           stretch = blockAxisAlignment == NS_STYLE_ALIGN_NORMAL ||
                     blockAxisAlignment == NS_STYLE_ALIGN_STRETCH;
         }
@@ -7425,10 +7438,7 @@ nsFrame::GetNextPrevLineFromeBlockFrame(nsPresContext* aPresContext,
           aPos->mAttach = offsets.associate;
           if (offsets.content)
           {
-            bool selectable;
-            resultFrame->IsSelectable(&selectable, nullptr);
-            if (selectable)
-            {
+            if (resultFrame->IsSelectable(nullptr)) {
               found = true;
               break;
             }
@@ -7470,10 +7480,7 @@ nsFrame::GetNextPrevLineFromeBlockFrame(nsPresContext* aPresContext,
         aPos->mAttach = offsets.associate;
         if (offsets.content)
         {
-          bool selectable;
-          resultFrame->IsSelectable(&selectable, nullptr);
-          if (selectable)
-          {
+          if (resultFrame->IsSelectable(nullptr)) {
             found = true;
             if (resultFrame == farStoppingFrame)
               aPos->mAttach = CARET_ASSOCIATE_BEFORE;
@@ -8284,7 +8291,7 @@ nsIFrame::GetFrameFromDirection(nsDirection aDirection, bool aVisual,
       }
     }
 
-    traversedFrame->IsSelectable(&selectable, nullptr);
+    selectable = traversedFrame->IsSelectable(nullptr);
     if (!selectable) {
       *aOutMovedOverNonSelectableText = true;
     }
@@ -9273,20 +9280,21 @@ void nsFrame::FillCursorInformationFromStyle(const nsStyleUserInterface* ui,
 
   for (const nsCursorImage& item : ui->mCursorImages) {
     uint32_t status;
-    nsresult rv = item.GetImage()->GetImageStatus(&status);
-    if (NS_SUCCEEDED(rv)) {
-      if (!(status & imgIRequest::STATUS_LOAD_COMPLETE)) {
-        // If we are falling back because any cursor before is loading,
-        // let the consumer know.
-        aCursor.mLoading = true;
-      } else if (!(status & imgIRequest::STATUS_ERROR)) {
-        // This is the one we want
-        item.GetImage()->GetImage(getter_AddRefs(aCursor.mContainer));
-        aCursor.mHaveHotspot = item.mHaveHotspot;
-        aCursor.mHotspotX = item.mHotspotX;
-        aCursor.mHotspotY = item.mHotspotY;
-        break;
-      }
+    imgRequestProxy* req = item.GetImage();
+    if (!req || NS_FAILED(req->GetImageStatus(&status))) {
+      continue;
+    }
+    if (!(status & imgIRequest::STATUS_LOAD_COMPLETE)) {
+      // If we are falling back because any cursor before is loading,
+      // let the consumer know.
+      aCursor.mLoading = true;
+    } else if (!(status & imgIRequest::STATUS_ERROR)) {
+      // This is the one we want
+      req->GetImage(getter_AddRefs(aCursor.mContainer));
+      aCursor.mHaveHotspot = item.mHaveHotspot;
+      aCursor.mHotspotX = item.mHotspotX;
+      aCursor.mHotspotY = item.mHotspotY;
+      break;
     }
   }
 }
