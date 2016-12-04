@@ -117,8 +117,6 @@ function createI64(val) {
 
 function _wasmFullPassInternal(assertValueFunc, text, expected, maybeImports, ...args) {
     let binary = wasmTextToBinary(text);
-    assertEq(WebAssembly.validate(binary), true, "Must validate.");
-
     let module = new WebAssembly.Module(binary);
     let instance = new WebAssembly.Instance(module, maybeImports);
     assertEq(typeof instance.exports.run, 'function', "A 'run' function must be exported.");
