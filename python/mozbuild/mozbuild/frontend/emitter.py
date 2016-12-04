@@ -104,23 +104,6 @@ from mozbuild.base import ExecutionSummary
 
 
 ALLOWED_XPCOM_GLUE = {
-    ('TestStreamConv', 'netwerk/streamconv/test'),
-    ('PropertiesTest', 'netwerk/test'),
-    ('ReadNTLM', 'netwerk/test'),
-    ('TestBlockingSocket', 'netwerk/test'),
-    ('TestDNS', 'netwerk/test'),
-    ('TestIncrementalDownload', 'netwerk/test'),
-    ('TestNamedPipeService', 'netwerk/test'),
-    ('TestOpen', 'netwerk/test'),
-    ('TestProtocols', 'netwerk/test'),
-    ('TestServ', 'netwerk/test'),
-    ('TestStreamLoader', 'netwerk/test'),
-    ('TestUpload', 'netwerk/test'),
-    ('TestURLParser', 'netwerk/test'),
-    ('urltest', 'netwerk/test'),
-    ('TestBind', 'netwerk/test'),
-    ('TestCookie', 'netwerk/test'),
-    ('TestUDPSocket', 'netwerk/test'),
     ('xpcshell', 'js/xpconnect/shell'),
     ('testcrasher', 'toolkit/crashreporter/test'),
     ('mediaconduit_unittests', 'media/webrtc/signaling/test'),
@@ -530,8 +513,15 @@ class TreeMetadataEmitter(LoggingMixin):
 
         dependencies = set(config.get('dependencies', {}).iterkeys())
 
+        features = context.get('RUST_LIBRARY_FEATURES', [])
+        unique_features = set(features)
+        if len(features) != len(unique_features):
+            raise SandboxValidationError(
+                'features for %s should not contain duplicates: %s' % (libname, features),
+                context)
+
         return RustLibrary(context, libname, cargo_file, crate_type,
-                           dependencies, **static_args)
+                           dependencies, features, **static_args)
 
     def _handle_linkables(self, context, passthru, generated_files):
         linkables = []

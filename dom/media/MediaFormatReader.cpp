@@ -264,6 +264,10 @@ public:
   {
     mDecoder->SetSeekThreshold(aTime);
   }
+  bool SupportDecoderRecycling() const override
+  {
+    return mDecoder->SupportDecoderRecycling();
+  }
   void Shutdown() override
   {
     mDecoder->Shutdown();
@@ -927,13 +931,13 @@ MediaFormatReader::DoDemuxVideo()
 
   if (mVideo.mFirstDemuxedSampleTime.isNothing()) {
     RefPtr<MediaFormatReader> self = this;
-    p = p->Then(OwnerThread(), __func__,
+    p = p->ThenPromise(OwnerThread(), __func__,
                 [self] (RefPtr<MediaTrackDemuxer::SamplesHolder> aSamples) {
                   self->OnFirstDemuxCompleted(TrackInfo::kVideoTrack, aSamples);
                 },
                 [self] (const MediaResult& aError) {
                   self->OnFirstDemuxFailed(TrackInfo::kVideoTrack, aError);
-                })->CompletionPromise();
+                });
   }
 
   mVideo.mDemuxRequest.Begin(p->Then(OwnerThread(), __func__, this,
@@ -993,13 +997,13 @@ MediaFormatReader::DoDemuxAudio()
 
   if (mAudio.mFirstDemuxedSampleTime.isNothing()) {
     RefPtr<MediaFormatReader> self = this;
-    p = p->Then(OwnerThread(), __func__,
+    p = p->ThenPromise(OwnerThread(), __func__,
                 [self] (RefPtr<MediaTrackDemuxer::SamplesHolder> aSamples) {
                   self->OnFirstDemuxCompleted(TrackInfo::kAudioTrack, aSamples);
                 },
                 [self] (const MediaResult& aError) {
                   self->OnFirstDemuxFailed(TrackInfo::kAudioTrack, aError);
-                })->CompletionPromise();
+                });
   }
 
   mAudio.mDemuxRequest.Begin(p->Then(OwnerThread(), __func__, this,
@@ -1302,29 +1306,39 @@ MediaFormatReader::HandleDemuxedSamples(TrackType aTrack,
         return;
       }
 
+      bool supportRecycling = MediaPrefs::MediaDecoderCheckRecycling() &&
+                              decoder.mDecoder->SupportDecoderRecycling();
       if (decoder.mNextStreamSourceID.isNothing() ||
           decoder.mNextStreamSourceID.ref() != info->GetID()) {
-        LOG("%s stream id has changed from:%d to:%d, draining decoder.",
+        if (!supportRecycling) {
+          LOG("%s stream id has changed from:%d to:%d, draining decoder.",
             TrackTypeToStr(aTrack), decoder.mLastStreamSourceID,
             info->GetID());
-        decoder.mNeedDraining = true;
-        decoder.mNextStreamSourceID = Some(info->GetID());
-        ScheduleUpdate(aTrack);
-        return;
+          decoder.mNeedDraining = true;
+          decoder.mNextStreamSourceID = Some(info->GetID());
+          ScheduleUpdate(aTrack);
+          return;
+        }
       }
 
-      LOG("%s stream id has changed from:%d to:%d, recreating decoder.",
+      LOG("%s stream id has changed from:%d to:%d.",
           TrackTypeToStr(aTrack), decoder.mLastStreamSourceID,
           info->GetID());
       decoder.mLastStreamSourceID = info->GetID();
       decoder.mNextStreamSourceID.reset();
-      // Reset will clear our array of queued samples. So make a copy now.
-      nsTArray<RefPtr<MediaRawData>> samples{decoder.mQueuedSamples};
-      Reset(aTrack);
-      decoder.ShutdownDecoder();
+      if (!supportRecycling) {
+        LOG("Decoder does not support recycling, recreate decoder.");
+        // Reset will clear our array of queued samples. So make a copy now.
+        nsTArray<RefPtr<MediaRawData>> samples{decoder.mQueuedSamples};
+        Reset(aTrack);
+        decoder.ShutdownDecoder();
+        if (sample->mKeyframe) {
+          decoder.mQueuedSamples.AppendElements(Move(samples));
+        }
+      }
+
       decoder.mInfo = info;
       if (sample->mKeyframe) {
-        decoder.mQueuedSamples.AppendElements(Move(samples));
         ScheduleUpdate(aTrack);
       } else {
         TimeInterval time =

@@ -640,7 +640,7 @@ $(PROGRAM): $(PROGOBJS) $(STATIC_LIBS_DEPS) $(EXTRA_DEPS) $(EXE_DEF_FILE) $(RESF
 	$(REPORT_BUILD)
 	@$(RM) $@.manifest
 ifeq (_WINNT,$(GNU_CC)_$(OS_ARCH))
-	$(EXPAND_LD) -NOLOGO -OUT:$@ -PDB:$(LINK_PDBFILE) $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(MOZ_PROGRAM_LDFLAGS) $(PROGOBJS) $(RESFILE) $(STATIC_LIBS) $(SHARED_LIBS) $(EXTRA_LIBS) $(OS_LIBS)
+	$(EXPAND_LINK) -NOLOGO -OUT:$@ -PDB:$(LINK_PDBFILE) $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(MOZ_PROGRAM_LDFLAGS) $(PROGOBJS) $(RESFILE) $(STATIC_LIBS) $(SHARED_LIBS) $(EXTRA_LIBS) $(OS_LIBS)
 ifdef MSMANIFEST_TOOL
 	@if test -f $@.manifest; then \
 		if test -f '$(srcdir)/$@.manifest'; then \
@@ -675,7 +675,7 @@ endif
 $(HOST_PROGRAM): $(HOST_PROGOBJS) $(HOST_LIBS) $(HOST_EXTRA_DEPS) $(GLOBAL_DEPS)
 	$(REPORT_BUILD)
 ifeq (_WINNT,$(GNU_CC)_$(HOST_OS_ARCH))
-	$(EXPAND_LIBS_EXEC) -- $(HOST_LD) -NOLOGO -OUT:$@ -PDB:$(HOST_PDBFILE) $(HOST_OBJS) $(WIN32_EXE_LDFLAGS) $(HOST_LDFLAGS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
+	$(EXPAND_LIBS_EXEC) -- $(LINK) -NOLOGO -OUT:$@ -PDB:$(HOST_PDBFILE) $(HOST_OBJS) $(WIN32_EXE_LDFLAGS) $(HOST_LDFLAGS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
 ifdef MSMANIFEST_TOOL
 	@if test -f $@.manifest; then \
 		if test -f '$(srcdir)/$@.manifest'; then \
@@ -712,7 +712,7 @@ endif
 $(SIMPLE_PROGRAMS): %$(BIN_SUFFIX): %.$(OBJ_SUFFIX) $(STATIC_LIBS_DEPS) $(EXTRA_DEPS) $(GLOBAL_DEPS)
 	$(REPORT_BUILD)
 ifeq (_WINNT,$(GNU_CC)_$(OS_ARCH))
-	$(EXPAND_LD) -nologo -out:$@ -pdb:$(LINK_PDBFILE) $< $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(MOZ_PROGRAM_LDFLAGS) $(STATIC_LIBS) $(SHARED_LIBS) $(EXTRA_LIBS) $(OS_LIBS)
+	$(EXPAND_LINK) -nologo -out:$@ -pdb:$(LINK_PDBFILE) $< $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(MOZ_PROGRAM_LDFLAGS) $(STATIC_LIBS) $(SHARED_LIBS) $(EXTRA_LIBS) $(OS_LIBS)
 ifdef MSMANIFEST_TOOL
 	@if test -f $@.manifest; then \
 		$(MT) -NOLOGO -MANIFEST $@.manifest -OUTPUTRESOURCE:$@\;1; \
@@ -734,7 +734,7 @@ endif
 $(HOST_SIMPLE_PROGRAMS): host_%$(HOST_BIN_SUFFIX): host_%.$(OBJ_SUFFIX) $(HOST_LIBS) $(HOST_EXTRA_DEPS) $(GLOBAL_DEPS)
 	$(REPORT_BUILD)
 ifeq (WINNT_,$(HOST_OS_ARCH)_$(GNU_CC))
-	$(EXPAND_LIBS_EXEC) -- $(HOST_LD) -NOLOGO -OUT:$@ -PDB:$(HOST_PDBFILE) $< $(WIN32_EXE_LDFLAGS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
+	$(EXPAND_LIBS_EXEC) -- $(LINK) -NOLOGO -OUT:$@ -PDB:$(HOST_PDBFILE) $< $(WIN32_EXE_LDFLAGS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
 else
 ifneq (,$(HOST_CPPSRCS)$(USE_HOST_CXX))
 	$(EXPAND_LIBS_EXEC) -- $(HOST_CXX) $(HOST_OUTOPTION)$@ $(HOST_CXXFLAGS) $(INCLUDES) $< $(HOST_LIBS) $(HOST_EXTRA_LIBS)
@@ -942,7 +942,13 @@ ifndef MOZ_OPTIMIZE
 rustflags_override = RUSTFLAGS='-C opt-level=0'
 endif
 
+CARGO_BUILD = env $(rustflags_override) CARGO_TARGET_DIR=. RUSTC=$(RUSTC) MOZ_DIST=$(DIST) $(CARGO) build $(cargo_build_flags)
+
 ifdef RUST_LIBRARY_FILE
+
+ifdef RUST_LIBRARY_FEATURES
+rust_features_flag := --features "$(RUST_LIBRARY_FEATURES)"
+endif
 
 # Assume any system libraries rustc links against are already in the target's LIBS.
 #
@@ -951,7 +957,7 @@ ifdef RUST_LIBRARY_FILE
 # build.
 force-cargo-library-build:
 	$(REPORT_BUILD)
-	env $(rustflags_override) CARGO_TARGET_DIR=. RUSTC=$(RUSTC) $(CARGO) build --lib $(cargo_build_flags) $(cargo_target_flag) --
+	$(CARGO_BUILD) --lib $(cargo_target_flag) $(rust_features_flag)
 
 $(RUST_LIBRARY_FILE): force-cargo-library-build
 endif # RUST_LIBRARY_FILE
@@ -959,14 +965,14 @@ endif # RUST_LIBRARY_FILE
 ifdef RUST_PROGRAMS
 force-cargo-program-build:
 	$(REPORT_BUILD)
-	env $(rustflags_override) CARGO_TARGET_DIR=. RUSTC=$(RUSTC) $(CARGO) build $(addprefix --bin ,$(RUST_CARGO_PROGRAMS)) $(cargo_build_flags) $(cargo_target_flag) --
+	$(CARGO_BUILD) $(addprefix --bin ,$(RUST_CARGO_PROGRAMS)) $(cargo_target_flag)
 
 $(RUST_PROGRAMS): force-cargo-program-build
 endif # RUST_PROGRAMS
 ifdef HOST_RUST_PROGRAMS
 force-cargo-host-program-build:
 	$(REPORT_BUILD)
-	env $(rustflags_override) CARGO_TARGET_DIR=. RUSTC=$(RUSTC) $(CARGO) build $(addprefix --bin ,$(HOST_RUST_CARGO_PROGRAMS)) $(cargo_build_flags) $(cargo_host_flag) --
+	$(CARGO_BUILD) $(addprefix --bin ,$(HOST_RUST_CARGO_PROGRAMS)) $(cargo_host_flag)
 
 $(HOST_RUST_PROGRAMS): force-cargo-host-program-build
 endif # HOST_RUST_PROGRAMS

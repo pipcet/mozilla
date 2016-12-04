@@ -103,12 +103,6 @@ LazyLogModule gUrlClassifierDbServiceLog("UrlClassifierDbService");
 #define CHECK_PHISHING_PREF     "browser.safebrowsing.phishing.enabled"
 #define CHECK_PHISHING_DEFAULT  false
 
-#define CHECK_TRACKING_PREF     "privacy.trackingprotection.enabled"
-#define CHECK_TRACKING_DEFAULT  false
-
-#define CHECK_TRACKING_PB_PREF    "privacy.trackingprotection.pbmode.enabled"
-#define CHECK_TRACKING_PB_DEFAULT false
-
 #define CHECK_BLOCKED_PREF    "browser.safebrowsing.blockedURIs.enabled"
 #define CHECK_BLOCKED_DEFAULT false
 
@@ -214,11 +208,10 @@ nsUrlClassifierDBServiceWorker::DoLocalLookup(const nsACString& spec,
   return NS_OK;
 }
 
-static nsCString
-ProcessLookupResults(LookupResultArray* results)
+static nsresult
+ProcessLookupResults(LookupResultArray* results, nsTArray<nsCString>& tables)
 {
-  // Build a stringified list of result tables.
-  nsTArray<nsCString> tables;
+  // Build the result array.
   for (uint32_t i = 0; i < results->Length(); i++) {
     LookupResult& result = results->ElementAt(i);
     MOZ_ASSERT(!result.mNoise, "Lookup results should not have noise added");
@@ -227,13 +220,7 @@ ProcessLookupResults(LookupResultArray* results)
       tables.AppendElement(result.mTableName);
     }
   }
-  nsAutoCString tableStr;
-  for (uint32_t i = 0; i < tables.Length(); i++) {
-    if (i != 0)
-      tableStr.Append(',');
-    tableStr.Append(tables[i]);
-  }
-  return tableStr;
+  return NS_OK;
 }
 
 /**
@@ -1215,7 +1202,6 @@ nsUrlClassifierDBService::GetInstance(nsresult *result)
 nsUrlClassifierDBService::nsUrlClassifierDBService()
  : mCheckMalware(CHECK_MALWARE_DEFAULT)
  , mCheckPhishing(CHECK_PHISHING_DEFAULT)
- , mCheckTracking(CHECK_TRACKING_DEFAULT)
  , mCheckBlockedURIs(CHECK_BLOCKED_DEFAULT)
  , mInUpdate(false)
 {
@@ -1310,9 +1296,6 @@ nsUrlClassifierDBService::Init()
     CHECK_MALWARE_DEFAULT);
   mCheckPhishing = Preferences::GetBool(CHECK_PHISHING_PREF,
     CHECK_PHISHING_DEFAULT);
-  mCheckTracking =
-    Preferences::GetBool(CHECK_TRACKING_PREF, CHECK_TRACKING_DEFAULT) ||
-    Preferences::GetBool(CHECK_TRACKING_PB_PREF, CHECK_TRACKING_PB_DEFAULT);
   mCheckBlockedURIs = Preferences::GetBool(CHECK_BLOCKED_PREF,
     CHECK_BLOCKED_DEFAULT);
   uint32_t gethashNoise = Preferences::GetUint(GETHASH_NOISE_PREF,
@@ -1386,8 +1369,6 @@ nsUrlClassifierDBService::Init()
   //       situations. See Bug 1247798 and Bug 1244803.
   Preferences::AddStrongObserver(this, CHECK_MALWARE_PREF);
   Preferences::AddStrongObserver(this, CHECK_PHISHING_PREF);
-  Preferences::AddStrongObserver(this, CHECK_TRACKING_PREF);
-  Preferences::AddStrongObserver(this, CHECK_TRACKING_PB_PREF);
   Preferences::AddStrongObserver(this, CHECK_BLOCKED_PREF);
   Preferences::AddStrongObserver(this, GETHASH_NOISE_PREF);
   Preferences::AddStrongObserver(this, CONFIRM_AGE_PREF);
@@ -1493,27 +1474,49 @@ nsUrlClassifierDBService::Classify(nsIPrincipal* aPrincipal,
 }
 
 NS_IMETHODIMP
+nsUrlClassifierDBService::ClassifyLocal(nsIURI *aURI,
+                                        const nsACString& aTables,
+                                        nsACString& aTableResults)
+{
+  nsTArray<nsCString> results;
+  ClassifyLocalWithTables(aURI, aTables, results);
+
+  // Convert the result array to a comma separated string
+  aTableResults.AssignLiteral("");
+  bool first = true;
+  for (nsCString& result : results) {
+    if (first) {
+      first = false;
+    } else {
+      aTableResults.AppendLiteral(",");
+    }
+    aTableResults.Append(result);
+  }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsUrlClassifierDBService::ClassifyLocalWithTables(nsIURI *aURI,
-                                                  const nsACString & aTables,
-                                                  nsACString & aTableResults)
+                                                  const nsACString& aTables,
+                                                  nsTArray<nsCString>& aTableResults)
 {
   MOZ_ASSERT(NS_IsMainThread(), "ClassifyLocalWithTables must be on main thread");
   if (gShuttingDownThread) {
     return NS_ERROR_ABORT;
   }
 
+  nsresult rv;
   if (XRE_IsContentProcess()) {
     using namespace mozilla::dom;
     using namespace mozilla::ipc;
     URIParams uri;
     SerializeURI(aURI, uri);
     nsAutoCString tables(aTables);
-    nsAutoCString results;
     bool result = ContentChild::GetSingleton()->SendClassifyLocal(uri, tables,
-                                                                  &results);
+                                                                  &rv,
+                                                                  &aTableResults);
     if (result) {
-      aTableResults = results;
-      return NS_OK;
+      return rv;
     }
     return NS_ERROR_FAILURE;
   }
@@ -1527,7 +1530,7 @@ nsUrlClassifierDBService::ClassifyLocalWithTables(nsIURI *aURI,
   // Canonicalize the url
   nsCOMPtr<nsIUrlClassifierUtils> utilsService =
     do_GetService(NS_URLCLASSIFIERUTILS_CONTRACTID);
-  nsresult rv = utilsService->GetKeyForURI(uri, key);
+  rv = utilsService->GetKeyForURI(uri, key);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsAutoPtr<LookupResultArray> results(new LookupResultArray());
@@ -1538,7 +1541,8 @@ nsUrlClassifierDBService::ClassifyLocalWithTables(nsIURI *aURI,
   // In unittests, we may not have been initalized, so don't crash.
   rv = mWorkerProxy->DoLocalLookup(key, aTables, results);
   if (NS_SUCCEEDED(rv)) {
-    aTableResults = ProcessLookupResults(results);
+    rv = ProcessLookupResults(results, aTableResults);
+    NS_ENSURE_SUCCESS(rv, rv);
   }
   return NS_OK;
 }
@@ -1808,11 +1812,6 @@ nsUrlClassifierDBService::Observe(nsISupports *aSubject, const char *aTopic,
     } else if (NS_LITERAL_STRING(CHECK_PHISHING_PREF).Equals(aData)) {
       mCheckPhishing = Preferences::GetBool(CHECK_PHISHING_PREF,
         CHECK_PHISHING_DEFAULT);
-    } else if (NS_LITERAL_STRING(CHECK_TRACKING_PREF).Equals(aData) ||
-               NS_LITERAL_STRING(CHECK_TRACKING_PB_PREF).Equals(aData)) {
-      mCheckTracking =
-        Preferences::GetBool(CHECK_TRACKING_PREF, CHECK_TRACKING_DEFAULT) ||
-        Preferences::GetBool(CHECK_TRACKING_PB_PREF, CHECK_TRACKING_PB_DEFAULT);
     } else if (NS_LITERAL_STRING(CHECK_BLOCKED_PREF).Equals(aData)) {
       mCheckBlockedURIs = Preferences::GetBool(CHECK_BLOCKED_PREF,
         CHECK_BLOCKED_DEFAULT);
@@ -1870,8 +1869,6 @@ nsUrlClassifierDBService::Shutdown()
   if (prefs) {
     prefs->RemoveObserver(CHECK_MALWARE_PREF, this);
     prefs->RemoveObserver(CHECK_PHISHING_PREF, this);
-    prefs->RemoveObserver(CHECK_TRACKING_PREF, this);
-    prefs->RemoveObserver(CHECK_TRACKING_PB_PREF, this);
     prefs->RemoveObserver(CHECK_BLOCKED_PREF, this);
     prefs->RemoveObserver(PHISH_TABLE_PREF, this);
     prefs->RemoveObserver(MALWARE_TABLE_PREF, this);

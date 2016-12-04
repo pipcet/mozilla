@@ -467,7 +467,7 @@ pref("media.navigator.video.h264.max_mbps", 0);
 pref("media.peerconnection.video.h264_enabled", false);
 pref("media.peerconnection.video.vp9_enabled", true);
 pref("media.getusermedia.aec", 1);
-pref("media.getusermedia.browser.enabled", true);
+pref("media.getusermedia.browser.enabled", false);
 #endif
 // Gonk typically captures at QVGA, and so min resolution is QQVGA or
 // 160x120; 100Kbps is plenty for that.
@@ -606,6 +606,9 @@ pref("media.video-queue.send-to-compositor-size", 9999);
 
 // Whether to disable the video stats to prevent fingerprinting
 pref("media.video_stats.enabled", true);
+
+// Whether to check the decoder supports recycling.
+pref("media.decoder.recycle.enabled", false);
 
 // Weather we allow AMD switchable graphics
 pref("layers.amd-switchable-gfx.enabled", true);
@@ -1217,6 +1220,8 @@ pref("privacy.donottrackheader.enabled",    false);
 pref("privacy.trackingprotection.enabled",  false);
 // Enforce tracking protection in Private Browsing mode
 pref("privacy.trackingprotection.pbmode.enabled",  true);
+// Annotate channels based on the tracking protection list in all modes
+pref("privacy.trackingprotection.annotate_channels",  false);
 
 pref("dom.event.contextmenu.enabled",       true);
 pref("dom.event.clipboardevents.enabled",   true);
@@ -2541,6 +2546,9 @@ pref("layout.css.image-orientation.enabled", true);
 
 // Is support for the font-display @font-face descriptor enabled?
 pref("layout.css.font-display.enabled", false);
+
+// Is support for variation fonts enabled?
+pref("layout.css.font-variations.enabled", false);
 
 // Are sets of prefixed properties supported?
 pref("layout.css.prefixes.border-image", true);
@@ -5162,7 +5170,9 @@ pref("browser.safebrowsing.id", "Firefox");
 // Turn off Spatial navigation by default.
 pref("snav.enabled", false);
 
-// New implementation to unify touch-caret and selection-carets.
+// Debug-only pref to force enable the AccessibleCaret. If you want to
+// control AccessibleCaret by mouse, you'll need to set
+// "layout.accessiblecaret.hide_carets_for_mouse_input" to false.
 pref("layout.accessiblecaret.enabled", false);
 
 // Enable the accessible caret on platforms/devices

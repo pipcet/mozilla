@@ -428,7 +428,7 @@ NS_IMPL_FRAMEARENA_HELPERS(nsFrame)
 void
 nsFrame::operator delete(void *, size_t)
 {
-  NS_RUNTIMEABORT("nsFrame::operator delete should never be called");
+  MOZ_CRASH("nsFrame::operator delete should never be called");
 }
 
 NS_QUERYFRAME_HEAD(nsFrame)
@@ -555,7 +555,8 @@ nsFrame::Init(nsIContent*       aContent,
   }
   const nsStyleDisplay *disp = StyleDisplay();
   if (disp->HasTransform(this) ||
-      nsLayoutUtils::HasAnimationOfProperty(this, eCSSProperty_transform)) {
+      (IsFrameOfType(eSupportsCSSTransforms) &&
+       nsLayoutUtils::HasAnimationOfProperty(this, eCSSProperty_transform))) {
     // The frame gets reconstructed if we toggle the -moz-transform
     // property, so we can set this bit here and then ignore it.
     mState |= NS_FRAME_MAY_BE_TRANSFORMED;
@@ -5822,8 +5823,8 @@ nsIFrame::GetOffsetToCrossDoc(const nsIFrame* aOther, const int32_t aAPD) const
   if (PresContext()->GetRootPresContext() !=
         aOther->PresContext()->GetRootPresContext()) {
     // crash right away, we are almost certainly going to crash anyway.
-    NS_RUNTIMEABORT("trying to get the offset between frames in different "
-                    "document hierarchies?");
+    MOZ_CRASH("trying to get the offset between frames in different "
+              "document hierarchies?");
   }
 
   const nsIFrame* root = nullptr;

@@ -159,7 +159,16 @@ txExecutionState::end(nsresult aResult)
     return mOutputHandler->endDocument(aResult);
 }
 
-
+void
+txExecutionState::popAndDeleteEvalContextUntil(txIEvalContext* aContext)
+{
+  auto ctx = popEvalContext();
+  while (ctx && ctx != aContext) {
+    MOZ_RELEASE_ASSERT(ctx != mInitialEvalContext);
+    delete ctx;
+    ctx = popEvalContext();
+  }
+}
 
 nsresult
 txExecutionState::getVariable(int32_t aNamespace, nsIAtom* aLName,
@@ -228,7 +237,7 @@ txExecutionState::getVariable(int32_t aNamespace, nsIAtom* aLName,
         mLocalVariables = oldVars;
 
         if (NS_FAILED(rv)) {
-          popEvalContext();
+          popAndDeleteEvalContextUntil(mInitialEvalContext);
           return rv;
         }
     }
@@ -237,7 +246,7 @@ txExecutionState::getVariable(int32_t aNamespace, nsIAtom* aLName,
 
         rv = pushResultHandler(rtfHandler);
         if (NS_FAILED(rv)) {
-          popEvalContext();
+          popAndDeleteEvalContextUntil(mInitialEvalContext);
           return rv;
         }
 
@@ -248,14 +257,14 @@ txExecutionState::getVariable(int32_t aNamespace, nsIAtom* aLName,
         mNextInstruction = nullptr;
         rv = runTemplate(var->mFirstInstruction);
         if (NS_FAILED(rv)) {
-          popEvalContext();
+          popAndDeleteEvalContextUntil(mInitialEvalContext);
           return rv;
         }
 
         pushTemplateRule(nullptr, txExpandedName(), nullptr);
         rv = txXSLTProcessor::execute(*this);
         if (NS_FAILED(rv)) {
-          popEvalContext();
+          popAndDeleteEvalContextUntil(mInitialEvalContext);
           return rv;
         }
 
@@ -265,7 +274,7 @@ txExecutionState::getVariable(int32_t aNamespace, nsIAtom* aLName,
         rtfHandler = (txRtfHandler*)popResultHandler();
         rv = rtfHandler->getAsRTF(&aResult);
         if (NS_FAILED(rv)) {
-          popEvalContext();
+          popAndDeleteEvalContextUntil(mInitialEvalContext);
           return rv;
         }
     }
