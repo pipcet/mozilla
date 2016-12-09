@@ -2,8 +2,14 @@ load(libdir + "wasm.js");
 
 let bodies = [
     `
-    i32.const -1
-    i32.load offset=0 align=4
+    i32.const 1
+    i32.const 0
+    i32.div_s
+    `,
+    `
+    i32.const 1
+    i32.const 0
+    i32.rem_s
     `,
     `
     f64.const 1797693134862315708145274e284
@@ -18,7 +24,6 @@ let bodies = [
 for (let body of bodies) {
     wasmFullPass(`
     (module
-        (memory 1)
         (func $f (param $x i32) (result i32)
             loop $top
                 get_local $x
