@@ -1796,6 +1796,10 @@ CodeGeneratorX86Shared::ToOperand(const LDefinition* def)
 MoveOperand
 CodeGeneratorX86Shared::toMoveOperand(LAllocation a) const
 {
+    if (a.isConstant())
+        return MoveOperand(a.toConstant()->toInt32());
+    if (a.isClobber())
+        return MoveOperand(int32_t(0), MoveOperand::Kind::CLOBBER);
     if (a.isGeneralReg())
         return MoveOperand(ToRegister(a));
     if (a.isFloatReg())
@@ -1855,9 +1859,15 @@ CodeGeneratorX86Shared::emitTableSwitchDispatch(MTableSwitch* mir, Register inde
     Label* defaultcase = skipTrivialBlocks(mir->getDefault())->lir()->label();
 
     // Lower value with low value
-    if (mir->low() != 0)
+    if (mir->low() != 0) {
+        Label *firstcase = skipTrivialBlocks(mir->getSuccessor(1))->lir()->label();
         masm.subl(Imm32(mir->low()), index);
-
+        masm.j(AssemblerX86Shared::Equal, firstcase);
+    } else {
+        Label *firstcase = skipTrivialBlocks(mir->getSuccessor(1))->lir()->label();
+        masm.test32(index, index);
+        masm.j(AssemblerX86Shared::Equal, firstcase);
+    }
     // Jump to default case if input is out of range
     int32_t cases = mir->numCases();
     masm.cmp32(index, Imm32(cases));

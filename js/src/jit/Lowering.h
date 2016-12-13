@@ -74,6 +74,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitCallee(MCallee* callee);
     void visitIsConstructing(MIsConstructing* ins);
     void visitGoto(MGoto* ins);
+    void visitThreadedGoto(MThreadedGoto* ins);
     void visitTableSwitch(MTableSwitch* tableswitch);
     void visitNewArray(MNewArray* ins);
     void visitNewArrayCopyOnWrite(MNewArrayCopyOnWrite* ins);

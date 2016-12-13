@@ -79,7 +79,8 @@ class LAllocation : public TempObject
         GPR,            // General purpose register.
         FPU,            // Floating-point register.
         STACK_SLOT,     // Stack slot.
-        ARGUMENT_SLOT   // Argument slot.
+        ARGUMENT_SLOT,  // Argument slot.
+        CLOBBER         // Irrelevant value.
     };
 
     static const uintptr_t DATA_MASK = (1 << DATA_BITS) - 1;
@@ -113,10 +114,15 @@ class LAllocation : public TempObject
 
     // The MConstant pointer must have its low bits cleared.
     explicit LAllocation(const MConstant* c) {
-        MOZ_ASSERT(c);
-        bits_ = uintptr_t(c);
-        MOZ_ASSERT((bits_ & (KIND_MASK << KIND_SHIFT)) == 0);
-        bits_ |= CONSTANT_VALUE << KIND_SHIFT;
+        if (c) {
+            MOZ_ASSERT(c);
+            bits_ = uintptr_t(c);
+            MOZ_ASSERT((bits_ & (KIND_MASK << KIND_SHIFT)) == 0);
+            bits_ |= CONSTANT_VALUE << KIND_SHIFT;
+        } else {
+            bits_ = 0;
+            bits_ |= CLOBBER << KIND_SHIFT;
+        }
     }
     inline explicit LAllocation(AnyRegister reg);
 
@@ -150,6 +156,9 @@ class LAllocation : public TempObject
     }
     bool isArgument() const {
         return kind() == ARGUMENT_SLOT;
+    }
+    bool isClobber() const {
+        return kind() == CLOBBER;
     }
     bool isRegister() const {
         return isGeneralReg() || isFloatReg();
@@ -1051,9 +1060,8 @@ class LBlock
 
     // Test whether this basic block is empty except for a simple goto, and
     // which is not forming a loop. No code will be emitted for such blocks.
-    bool isTrivial() {
-        return begin()->isGoto() && !mir()->isLoopHeader();
-    }
+
+    bool isTrivial();
 
     void dump(GenericPrinter& out);
     void dump();

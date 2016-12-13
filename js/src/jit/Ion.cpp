@@ -1862,6 +1862,17 @@ OptimizeMIR(MIRGenerator* mir)
             return false;
     }
 
+    {
+        //AutoTraceLog log(logger, TraceLogger_MakeLoopsContiguous);
+        if (!ThreadGotos(graph))
+            return false;
+        gs.spewPass("Thread gotos");
+        AssertExtendedGraphCoherency(graph);
+
+        if (mir->shouldCancel("Thread gotos"))
+            return false;
+    }
+
     // Passes after this point must not move instructions; these analyses
     // depend on knowing the final order in which instructions will execute.
 
@@ -1910,7 +1921,7 @@ OptimizeMIR(MIRGenerator* mir)
 }
 
 LIRGraph*
-GenerateLIR(MIRGenerator* mir)
+GenerateLIR(MIRGenerator* mir, LiveRegisterSet &regsInUse)
 {
     MIRGraph& graph = mir->graph();
     GraphSpewer& gs = mir->graphSpewer();
@@ -1953,7 +1964,7 @@ GenerateLIR(MIRGenerator* mir)
 
             BacktrackingAllocator regalloc(mir, &lirgen, *lir,
                                            allocator == RegisterAllocator_Testbed);
-            if (!regalloc.go())
+            if (!regalloc.go(regsInUse))
                 return nullptr;
 
 #ifdef DEBUG
@@ -2023,7 +2034,8 @@ CompileBackEnd(MIRGenerator* mir)
     if (!OptimizeMIR(mir))
         return nullptr;
 
-    LIRGraph* lir = GenerateLIR(mir);
+    LiveRegisterSet regsInUse;
+    LIRGraph* lir = GenerateLIR(mir, regsInUse);
     if (!lir)
         return nullptr;
 

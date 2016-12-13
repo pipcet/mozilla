@@ -278,6 +278,7 @@ class SplayTree
 
     Node* checkCoherency(Node* node, Node* minimum)
     {
+        return nullptr;
 #ifdef DEBUG
         if (!enableCheckCoherency)
             return nullptr;

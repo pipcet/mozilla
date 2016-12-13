@@ -36,7 +36,9 @@ class MoveOperand
         // A memory region.
         MEMORY,
         // The address of a memory region.
-        EFFECTIVE_ADDRESS
+        EFFECTIVE_ADDRESS,
+        INT32,
+        CLOBBER
     };
 
   private:
@@ -56,13 +58,17 @@ class MoveOperand
         code_(reg.code()),
         disp_(disp)
     {
-        MOZ_ASSERT(isMemoryOrEffectiveAddress());
+        MOZ_ASSERT(isMemoryOrEffectiveAddress() || isClobber());
 
         // With a zero offset, this is a plain reg-to-reg move.
         if (disp == 0 && kind_ == EFFECTIVE_ADDRESS)
             kind_ = REG;
     }
     MoveOperand(MacroAssembler& masm, const ABIArg& arg);
+    MoveOperand(int32_t v, Kind kind = INT32)
+        : kind_(kind),
+          disp_(v)
+    { }
     MoveOperand(const MoveOperand& other)
       : kind_(other.kind_),
         code_(other.code_),
@@ -86,6 +92,12 @@ class MoveOperand
     }
     bool isEffectiveAddress() const {
         return kind_ == EFFECTIVE_ADDRESS;
+    }
+    bool isInt32() const {
+        return kind_ == INT32;
+    }
+    bool isClobber() const {
+        return kind_ == CLOBBER;
     }
     bool isMemoryOrEffectiveAddress() const {
         return isMemory() || isEffectiveAddress();
@@ -112,6 +124,10 @@ class MoveOperand
     }
     int32_t disp() const {
         MOZ_ASSERT(isMemoryOrEffectiveAddress());
+        return disp_;
+    }
+    int32_t toInt32() const {
+        MOZ_ASSERT(isInt32());
         return disp_;
     }
 
@@ -298,6 +314,8 @@ class MoveResolver
 
     // Internal reset function. Does not clear lists.
     void resetState();
+    int clas(MoveOp &x);
+    bool before(MoveOp &a, MoveOp &b);
 
   public:
     MoveResolver();
@@ -311,6 +329,7 @@ class MoveResolver
     // cycle resolution algorithm. Calling addMove() again resets the resolver.
     MOZ_MUST_USE bool addMove(const MoveOperand& from, const MoveOperand& to, MoveOp::Type type);
     MOZ_MUST_USE bool resolve();
+    void sortMoves();
     void sortMemoryToMemoryMoves();
 
     size_t numMoves() const {

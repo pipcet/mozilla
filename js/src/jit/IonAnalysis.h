@@ -96,6 +96,13 @@ EliminateRedundantChecks(MIRGraph& graph);
 MOZ_MUST_USE bool
 AddKeepAliveInstructions(MIRGraph& graph);
 
+bool
+MarkThreadedBlock(MIRGraph& graph, MBasicBlock* block,
+                  MDefinition* operand, size_t len);
+
+bool
+ThreadGotos(MIRGraph& graph);
+
 class MDefinition;
 
 // Simple linear sum of the form 'n' or 'x + n'.

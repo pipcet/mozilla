@@ -126,6 +126,8 @@ class LMoveGroup : public LInstructionHelper<0, 0, 0>
 
     // Add a move which takes place after existing moves in the group.
     bool addAfter(LAllocation from, LAllocation to, LDefinition::Type type);
+    bool compose(LMoveGroup *other);
+    bool peek(LMoveGroup *other);
 
     size_t numMoves() const {
         return moves_.length();
@@ -143,10 +145,31 @@ class LMoveGroup : public LInstructionHelper<0, 0, 0>
     }
 #endif
 
+    bool isTrivial() {
+        for (size_t i = 0; i < numMoves(); i++) {
+            LMove move = getMove(i);
+            if (move.from().isClobber())
+                continue;
+
+            return false;
+        }
+
+        return true;
+    }
+
     bool uses(Register reg) {
         for (size_t i = 0; i < numMoves(); i++) {
             LMove move = getMove(i);
             if (move.from() == LGeneralReg(reg) || move.to() == LGeneralReg(reg))
+                return true;
+        }
+        return false;
+    }
+
+    bool uses(LAllocation alloc) {
+        for (size_t i = 0; i < numMoves(); i++) {
+            LMove move = getMove(i);
+            if (move.from() == alloc || move.to() == alloc)
                 return true;
         }
         return false;
@@ -997,6 +1020,33 @@ class LGoto : public LControlInstructionHelper<1, 0, 0>
 
     MBasicBlock* target() const {
         return getSuccessor(0);
+    }
+};
+
+// Jumps to the start of a basic block.
+class LThreadedGoto : public LControlInstructionHelper<1, 0, 0>
+{
+    size_t len_;
+    int32_t val_;
+
+  public:
+    LIR_HEADER(ThreadedGoto)
+
+    explicit LThreadedGoto(TempAllocator &alloc, MBasicBlock* block, size_t len, int32_t val)
+         : len_(len),
+           val_(val)
+    {
+         setSuccessor(0, block);
+    }
+
+    MBasicBlock* target() const {
+        return getSuccessor(0);
+    }
+    size_t len() {
+        return len_;
+    }
+    int32_t val() {
+        return val_;
     }
 };
 
@@ -3387,6 +3437,12 @@ class LReturn : public LInstructionHelper<0, BOX_PIECES, 0>
 {
   public:
     LIR_HEADER(Return)
+};
+
+class LAsmJSEntry : public LInstructionHelper<0, 0, 0>
+{
+  public:
+    LIR_HEADER(AsmJSEntry)
 };
 
 class LThrow : public LCallInstructionHelper<0, BOX_PIECES, 0>

@@ -25,6 +25,7 @@ class MoveEmitterX86
     // codegen->framePushed_ at the time it is allocated. -1 if not allocated.
     int32_t pushedAtCycle_;
 
+    mozilla::Maybe<Register> zeroRegister_;
 #ifdef JS_CODEGEN_X86
     // Optional scratch register for performing moves.
     mozilla::Maybe<Register> scratchRegister_;
@@ -50,6 +51,7 @@ class MoveEmitterX86
     void emitSimd128IntMove(const MoveOperand& from, const MoveOperand& to);
     void breakCycle(const MoveOperand& to, MoveOp::Type type);
     void completeCycle(const MoveOperand& to, MoveOp::Type type);
+    bool firstInPair(const MoveResolver& moves, size_t i);
 
   public:
     explicit MoveEmitterX86(MacroAssembler& masm);

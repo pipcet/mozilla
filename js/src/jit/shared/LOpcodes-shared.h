@@ -64,6 +64,7 @@
     _(TableSwitch)                  \
     _(TableSwitchV)                 \
     _(Goto)                         \
+    _(ThreadedGoto)                 \
     _(NewArray)                     \
     _(NewArrayCopyOnWrite)          \
     _(NewArrayDynamicLength)        \

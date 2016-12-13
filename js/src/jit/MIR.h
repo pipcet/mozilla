@@ -1497,6 +1497,25 @@ class MNop : public MNullaryInstruction
     ALLOW_CLONE(MNop)
 };
 
+class MAsmJSEntry : public MNullaryInstruction
+{
+  protected:
+    MAsmJSEntry() {
+    }
+
+  public:
+    INSTRUCTION_HEADER(AsmJSEntry)
+    static MAsmJSEntry* New(TempAllocator& alloc) {
+        return new(alloc) MAsmJSEntry();
+    }
+
+    AliasSet getAliasSet() const override {
+        return AliasSet::None();
+    }
+
+    ALLOW_CLONE(MAsmJSEntry)
+};
+
 // Truncation barrier. This is intended for protecting its input against
 // follow-up truncation optimizations.
 class MLimitedTruncate
@@ -2998,6 +3017,39 @@ class MAryControlInstruction : public MControlInstruction
     }
     void replaceSuccessor(size_t i, MBasicBlock* succ) final override {
         successors_[i] = succ;
+    }
+};
+
+// Jump to the start of another basic block.
+class MThreadedGoto
+  : public MAryControlInstruction<0, 1>,
+    public NoTypePolicy::Data
+{
+    size_t len_;
+    int32_t val_;
+
+    explicit MThreadedGoto(TempAllocator& alloc, MBasicBlock* target, size_t len, int32_t val)
+        : len_(len),
+          val_(val)
+    {
+        setSuccessor(0, target);
+    }
+
+  public:
+    INSTRUCTION_HEADER(ThreadedGoto)
+    static MThreadedGoto* New(TempAllocator& alloc, MBasicBlock *target, size_t len, int32_t val);
+
+    MBasicBlock* target() {
+        return getSuccessor(0);
+    }
+    size_t len() {
+        return len_;
+    }
+    int32_t val() {
+        return val_;
+    }
+    AliasSet getAliasSet() const override {
+        return AliasSet::None();
     }
 };
 

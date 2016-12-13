@@ -359,6 +359,8 @@ class CodeGeneratorShared : public LElementVisitor
         return block;
     }
 
+    MBasicBlock* skipTrivialBlocks(MBasicBlock* block, LMoveGroup* moveGroup);
+
     // Test whether the given block can be reached via fallthrough from the
     // current block.
     inline bool isNextBlock(LBlock* block) {

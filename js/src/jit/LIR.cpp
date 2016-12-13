@@ -158,6 +158,23 @@ LBlock::getExitMoveGroup(TempAllocator& alloc)
     return exitMoveGroup_;
 }
 
+bool
+LBlock::isTrivial() {
+    if (mir()->isLoopHeader())
+        return false;
+
+    for (LInstructionIterator iter = begin(); iter != end(); iter++) {
+        if (iter->isGoto())
+            continue;
+        if (iter->isMoveGroup() && iter->toMoveGroup()->isTrivial())
+            continue;
+
+        return false;
+    }
+
+    return true;
+}
+
 void
 LBlock::dump(GenericPrinter& out)
 {
@@ -427,7 +444,7 @@ LAllocation::toString() const
         switch (kind()) {
           case LAllocation::CONSTANT_VALUE:
           case LAllocation::CONSTANT_INDEX:
-            buf = JS_smprintf("c");
+            buf = JS_smprintf("c<%08x>", toConstant()->toInt32());
             break;
           case LAllocation::GPR:
             buf = JS_smprintf("%s", toGeneralReg()->reg().name());
@@ -444,6 +461,9 @@ LAllocation::toString() const
           case LAllocation::USE:
             buf = PrintUse(toUse());
             break;
+            case LAllocation::CLOBBER:
+                buf = JS_smprintf("clobber");
+                break;
           default:
             MOZ_CRASH("what?");
         }
@@ -553,7 +573,6 @@ bool
 LMoveGroup::add(LAllocation from, LAllocation to, LDefinition::Type type)
 {
 #ifdef DEBUG
-    MOZ_ASSERT(from != to);
     for (size_t i = 0; i < moves_.length(); i++)
         MOZ_ASSERT(to != moves_[i].to());
 
@@ -576,6 +595,84 @@ LMoveGroup::add(LAllocation from, LAllocation to, LDefinition::Type type)
     }
 #endif
     return moves_.append(LMove(from, to, type));
+}
+
+bool
+LMoveGroup::compose(LMoveGroup *other)
+{
+    size_t origlen = moves_.length();
+
+    for (size_t j = 0; j < other->moves_.length(); j++) {
+        LAllocation from = other->moves_[j].from();
+        LAllocation to = other->moves_[j].to();
+        LDefinition::Type type = other->moves_[j].type();
+
+        for (size_t i = 0; i < origlen; i++) {
+            if (moves_[i].to() == from) {
+                from = moves_[i].from();
+                break;
+            }
+        }
+
+        if (!moves_.append(LMove(from, to, type)))
+            return false;
+    }
+
+    for (size_t j = origlen; j < moves_.length(); j++) {
+        LAllocation from = moves_[j].from();
+        LAllocation to = moves_[j].to();
+        LDefinition::Type type = moves_[j].type();
+
+        for (size_t i = 0; i < origlen; i++) {
+            if (to == moves_[i].to()) {
+                moves_[i] = LMove(from, to, type);
+                moves_[j] = LMove(to, to, type);
+                break;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < moves_.length(); i++)
+        if (moves_[i].from() == moves_[i].to()) {
+            moves_.erase(&moves_[i]);
+            i--;
+        }
+
+    return true;
+}
+
+bool
+LMoveGroup::peek(LMoveGroup *other)
+{
+    size_t origlen = moves_.length();
+    bool prune = false;
+
+
+    for (size_t j = 0; j < other->moves_.length(); j++) {
+        LAllocation to = other->moves_[j].to();
+        LDefinition::Type type = other->moves_[j].type();
+
+        for (size_t i = 0; i < origlen; i++) {
+            if (to == moves_[i].to()) {
+                moves_[i] = LMove(to, to, type);
+                prune = true;
+            }
+        }
+    }
+
+    if (prune)
+        for (size_t i = 0; i < moves_.length(); i++)
+            if (moves_[i].from() == moves_[i].to()) {
+                moves_.erase(&moves_[i]);
+                i--;
+            }
+
+#if 0
+    fprintf(stderr, "new:\n");
+    this->dump();
+#endif
+
+    return true;
 }
 
 bool

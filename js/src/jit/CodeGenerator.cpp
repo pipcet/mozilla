@@ -31,6 +31,7 @@
 #include "jit/IonBuilder.h"
 #include "jit/IonCaches.h"
 #include "jit/IonOptimizationLevels.h"
+#include "jit/JitAllocPolicy.h"
 #include "jit/JitcodeMap.h"
 #include "jit/JitSpewer.h"
 #include "jit/Linker.h"
@@ -164,6 +165,7 @@ CodeGenerator::CodeGenerator(MIRGenerator* gen, LIRGraph* graph, MacroAssembler*
   , ionScriptLabels_(gen->alloc())
   , scriptCounts_(nullptr)
   , simdRefreshTemplatesDuringLink_(0)
+  , movegroup_(nullptr)
 {
 }
 
@@ -2631,6 +2633,115 @@ CodeGenerator::visitOsiPoint(LOsiPoint* lir)
 void
 CodeGenerator::visitGoto(LGoto* lir)
 {
+    MBasicBlock *mir = lir->target();
+
+    // XXX we don't need a flushMoveGroup here if all the "trivial"
+    // blocks we skip have a single predecessor each (us). In other
+    // cases, this flushMoveGroup, and, actually, another one before
+    // each trivial block, is necessary.
+    // 
+    flushMoveGroup();
+    // Skip past trivial blocks.
+    mir = skipTrivialBlocks(mir, getMoveGroup());
+
+    // No jump necessary if we can fall through to the next block.
+    if (isNextBlock(mir->lir()) && mir->numPredecessors() == 1)
+        return;
+
+    for (LInstructionIterator iter = mir->lir()->begin(); iter != mir->lir()->end(); iter++) {
+        if (!iter->isMoveGroup())
+            break;
+        getMoveGroup()->peek(iter->toMoveGroup());
+    }
+
+    flushMoveGroup();
+    jumpToBlock(mir);
+}
+
+void CodeGenerator::visitMoveGroups(LBlock *block)
+{
+    LInstructionIterator iter = block->begin();
+    for (; iter != block->end(); iter++) {
+        if (iter->isMoveGroup() || iter->isInteger()) {
+            iter->accept(this);
+        } else if (!iter->isGoto() && !iter->isThreadedGoto() &&
+                   !iter->isTableSwitch()) {
+            flushMoveGroup();
+
+            iter->accept(this);
+        }
+    }
+}
+
+void
+CodeGenerator::visitThreadedGoto(LThreadedGoto* lir)
+{
+    js::Vector<MBasicBlock *, 0, SystemAllocPolicy> path;
+
+    MBasicBlock *block = lir->block()->mir();
+    for (size_t i = 0; i < lir->len(); i++) {
+        MOZ_ASSERT(block->numSuccessors() == 1);
+        block = block->getSuccessor(0);
+        if (!path.append(block))
+            goto fallback;
+    }
+
+    MOZ_ASSERT(block->lastIns()->isTableSwitch());
+    {
+        MTableSwitch *ts = block->lastIns()->toTableSwitch();
+        int32_t val = lir->val();
+        size_t index;
+
+        if (ts->low() > val || ts->high() < val)
+            index = 0;
+        else
+            index = val - ts->low() + 1;
+
+        block = index ? ts->getCase(index-1) : ts->getDefault();
+    }
+
+    if (!path.append(block))
+        goto fallback;
+
+    for (size_t count = 5; count; count--) {
+        if (block->numSuccessors() != 1 ||
+            !block->phisEmpty())
+            break;
+
+        bool last = false;
+
+        for (MInstructionIterator ii(block->begin());
+             ii != block->end(); ii++) {
+            MInstruction *ins = *ii;
+            if (!ins->isGoto() && !ins->isConstant()) {
+                last = true;
+                break;
+            }
+        }
+
+        if (last)
+            break;
+
+        block = block->getSuccessor(0);
+        if (!path.append(block))
+            goto fallback;
+    }
+
+    for (size_t i = 0; i < path.length()-1; i++) {
+        visitMoveGroups(path[i]->lir());
+    }
+
+    for (LInstructionIterator iter = block->lir()->begin(); iter->isMoveGroup(); iter++) {
+        getMoveGroup()->peek(iter->toMoveGroup());
+    }
+
+    flushMoveGroup();
+    jumpToBlock(block);
+
+    return;
+
+fallback:
+    flushMoveGroup();
     jumpToBlock(lir->target());
 }
 
@@ -2672,7 +2783,7 @@ CodeGenerator::visitOutOfLineInterruptCheckImplicit(OutOfLineInterruptCheckImpli
             // Replay this move group that preceds the interrupt check at the
             // start of the loop header. Any incoming jumps here will be from
             // the backedge and will skip over the move group emitted inline.
-            visitMoveGroup(iter->toMoveGroup());
+            emitMoveGroup(iter->toMoveGroup());
         } else {
             break;
         }
@@ -2778,6 +2889,11 @@ CodeGenerator::visitIsConstructing(LIsConstructing* lir)
 
 void
 CodeGenerator::visitStart(LStart* lir)
+{
+}
+
+void
+CodeGenerator::visitAsmJSEntry(LAsmJSEntry* lir)
 {
 }
 
@@ -2909,8 +3025,28 @@ CodeGenerator::visitStackArgV(LStackArgV* lir)
     masm.storeValue(val, Address(masm.getStackPointer(), stack_offset));
 }
 
+LMoveGroup *
+CodeGenerator::getMoveGroup()
+{
+    if (!movegroup_)
+        movegroup_ = LMoveGroup::New(alloc());
+
+    return movegroup_;
+}
+
 void
-CodeGenerator::visitMoveGroup(LMoveGroup* group)
+CodeGenerator::flushMoveGroup()
+{
+    if (movegroup_) {
+        emitMoveGroup(movegroup_);
+    }
+
+    movegroup_ = nullptr;
+}
+
+
+void
+CodeGenerator::emitMoveGroup(LMoveGroup* group)
 {
     if (!group->numMoves())
         return;
@@ -2926,7 +3062,6 @@ CodeGenerator::visitMoveGroup(LMoveGroup* group)
 
         // No bogus moves.
         MOZ_ASSERT(from != to);
-        MOZ_ASSERT(!from.isConstant());
         MoveOp::Type moveType;
         switch (type) {
           case LDefinition::OBJECT:
@@ -2961,15 +3096,26 @@ CodeGenerator::visitMoveGroup(LMoveGroup* group)
     else
         resolver.sortMemoryToMemoryMoves();
 #endif
+    resolver.sortMoves();
 
     emitter.emit(resolver);
     emitter.finish();
 }
 
 void
+CodeGenerator::visitMoveGroup(LMoveGroup* group)
+{
+    getMoveGroup()->compose(group);
+}
+
+void
 CodeGenerator::visitInteger(LInteger* lir)
 {
-    masm.move32(Imm32(lir->getValue()), ToRegister(lir->output()));
+    MConstant *c = MConstant::New(alloc(), Int32Value(lir->getValue()));
+    LAllocation from = LAllocation(c);
+    LAllocation to = *(lir->output()->output());
+
+    getMoveGroup()->addAfter(from, to, LDefinition::Type::INT32);
 }
 
 void
@@ -5183,6 +5329,9 @@ CodeGenerator::generateBody()
             emitDebugForceBailing(*iter);
 #endif
 
+            if (!iter->isMoveGroup() && !iter->isInteger() &&
+                !iter->isThreadedGoto() && !iter->isGoto())
+                flushMoveGroup();
             iter->accept(this);
 
             // Track the end native offset of optimizations.
@@ -9293,7 +9442,8 @@ CodeGenerator::generateWasm(wasm::SigIdDesc sigId, wasm::TrapOffset trapOffset,
 {
     JitSpew(JitSpew_Codegen, "# Emitting wasm code");
 
-    wasm::GenerateFunctionPrologue(masm, frameSize(), sigId, offsets);
+    wasm::GenerateFunctionPrologue(masm, frameSize(), sigId, offsets,
+                                   regsInUse);
 
     // Overflow checks are omitted by CodeGenerator in some cases (leaf
     // functions with small framePushed). Perform overflow-checking after
@@ -9310,7 +9460,7 @@ CodeGenerator::generateWasm(wasm::SigIdDesc sigId, wasm::TrapOffset trapOffset,
         return false;
 
     masm.bind(&returnLabel_);
-    wasm::GenerateFunctionEpilogue(masm, frameSize(), offsets);
+    wasm::GenerateFunctionEpilogue(masm, frameSize(), offsets, regsInUse);
 
     if (!omitOverRecursedCheck()) {
         // Since we just overflowed the stack, to be on the safe side, pop the

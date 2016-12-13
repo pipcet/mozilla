@@ -1579,6 +1579,25 @@ CodeGeneratorShared::labelForBackedgeWithImplicitCheck(MBasicBlock* mir)
     return nullptr;
 }
 
+MBasicBlock*
+CodeGeneratorShared::skipTrivialBlocks(MBasicBlock* block, LMoveGroup* moveGroup)
+{
+    while (block->lir()->isTrivial()) {
+        for (LInstructionIterator iter = block->lir()->begin(); iter != block->lir()->end(); iter++) {
+            if (iter->isMoveGroup())
+                moveGroup->compose(iter->toMoveGroup());
+            else {
+                MOZ_ASSERT(iter->isGoto());
+                MOZ_ASSERT(iter->numSuccessors() == 1);
+                block = iter->getSuccessor(0);
+                break;
+            }
+        }
+    }
+
+    return block;
+}
+
 void
 CodeGeneratorShared::jumpToBlock(MBasicBlock* mir)
 {

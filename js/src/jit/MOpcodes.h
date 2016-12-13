@@ -39,6 +39,7 @@ namespace jit {
     _(IsConstructing)                                                       \
     _(TableSwitch)                                                          \
     _(Goto)                                                                 \
+    _(ThreadedGoto)                                                         \
     _(Test)                                                                 \
     _(GotoWithFake)                                                         \
     _(ObjectGroupDispatch)                                                  \
