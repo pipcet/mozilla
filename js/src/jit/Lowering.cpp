@@ -142,7 +142,7 @@ LIRGenerator::visitGoto(MGoto* ins)
 void
 LIRGenerator::visitThreadedGoto(MThreadedGoto* ins)
 {
-    if (!gen->compilingAsmJS() && ins->block()->isLoopBackedge())
+    if (!gen->compilingWasm() && ins->block()->isLoopBackedge())
         TryToUseImplicitInterruptCheck(graph, ins->block());
 
     LThreadedGoto *lir = new(alloc()) LThreadedGoto(alloc(), ins->target(), ins->len(), ins->val());

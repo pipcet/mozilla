@@ -456,7 +456,7 @@ wasm::GenerateImportFunction(jit::MacroAssembler& masm, const FuncImport& fi, Si
     unsigned framePushed = StackDecrementForCall(masm, WasmStackAlignment, fi.sig().args(), tlsBytes);
 
     FuncOffsets offsets;
-    GenerateFunctionPrologue(masm, framePushed, sigId, &offsets);
+    GenerateFunctionPrologue(masm, framePushed, sigId, &offsets, LiveRegisterSet());
 
     // The argument register state is already setup by our caller. We just need
     // to be sure not to clobber it before the call.
@@ -486,7 +486,7 @@ wasm::GenerateImportFunction(jit::MacroAssembler& masm, const FuncImport& fi, Si
     masm.loadPtr(Address(masm.getStackPointer(), tlsStackOffset), WasmTlsReg);
     masm.loadWasmPinnedRegsFromTls();
 
-    GenerateFunctionEpilogue(masm, framePushed, &offsets);
+    GenerateFunctionEpilogue(masm, framePushed, &offsets, LiveRegisterSet());
     offsets.end = masm.currentOffset();
     return offsets;
 }
@@ -879,7 +879,7 @@ wasm::GenerateTrapExit(MacroAssembler& masm, Trap trap, Label* throwLabel)
     uint32_t framePushed = StackDecrementForCall(masm, ABIStackAlignment, args);
 
     ProfilingOffsets offsets;
-    GenerateExitPrologue(masm, framePushed, ExitReason::Trap, &offsets);
+    GenerateExitPrologue(masm, framePushed, ExitReason::Trap, &offsets, LiveRegisterSet());
 
     ABIArgMIRTypeIter i(args);
     if (i->kind() == ABIArg::GPR)
@@ -894,7 +894,7 @@ wasm::GenerateTrapExit(MacroAssembler& masm, Trap trap, Label* throwLabel)
 
     masm.jump(throwLabel);
 
-    GenerateExitEpilogue(masm, framePushed, ExitReason::Trap, &offsets);
+    GenerateExitEpilogue(masm, framePushed, ExitReason::Trap, &offsets, LiveRegisterSet());
 
     offsets.end = masm.currentOffset();
     return offsets;

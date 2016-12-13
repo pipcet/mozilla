@@ -29,9 +29,6 @@ struct CheckRangeEnds
     void operator()(const LiveRange *range)
     {
         return;
-        fprintf(stderr, "[%d, %d], looking for [%d, %d]: %s\n",
-                range->from(), range->to(), pos0_, pos1_,
-                *found_ ? "found" : "not found");
     }
 };
 
@@ -429,7 +426,7 @@ BacktrackingAllocator::init()
 
             if (ins->isAsmJSEntry())
                 entryIns = *ins;
-            else if (ins->isAsmJSReturn() || ins->isAsmJSVoidReturn())
+            else if (ins->isWasmReturn() || ins->isWasmReturnVoid())
                 returnIns = *ins;
             for (size_t j = 0; j < ins->numDefs(); j++) {
                 LDefinition* def = ins->getDef(j);
@@ -599,13 +596,15 @@ BacktrackingAllocator::buildLivenessInfo()
 
         // Shorten the front end of ranges for live variables to their point of
         // definition, if found.
-        for (LInstructionReverseIterator ins = block->rbegin(); ins != block->rend(); ins++) {
+        for (LInstructionReverseIterator ins = block->rbegin(); ins != block->rend(); ++ins) {
             // Calls may clobber registers, so force a spill and reload around the callsite.
             if (ins->isCall()) {
-                for (AnyRegisterIterator iter(allRegisters_.asLiveSet()); iter.more(); iter++) {
+                for (AnyRegisterIterator iter(allRegisters_.asLiveSet()); iter.more(); ++iter) {
+#if 0
                     if (!(*iter).volatile_())
-                        if (testbed && ins->isAsmJSCall() && ins->toAsmJSCall()->mir()->callee().which() == MAsmJSCall::Callee::Internal)
+                        if (testbed && ins->isWasmCall() && ins->toWasmCall()->mir()->callee().which() == wasm:CalleeDesc::function)
                             continue;
+#endif
 
                     bool found = false;
                     for (size_t i = 0; i < ins->numDefs(); i++) {
@@ -2334,7 +2333,7 @@ BacktrackingAllocator::annotateMoveGroups(LiveRegisterSet &regsInUse)
                                     break;
                                 }
                             }
-                            if (riter->isAsmJSParameter())
+                            if (riter->isWasmParameter())
                                 found = true;
                         } while (riter != block->begin());
                     }

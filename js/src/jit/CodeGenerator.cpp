@@ -9438,7 +9438,7 @@ CodeGenerator::visitRest(LRest* lir)
 
 bool
 CodeGenerator::generateWasm(wasm::SigIdDesc sigId, wasm::TrapOffset trapOffset,
-                            wasm::FuncOffsets* offsets)
+                            wasm::FuncOffsets* offsets, LiveRegisterSet regsInUse)
 {
     JitSpew(JitSpew_Codegen, "# Emitting wasm code");
 

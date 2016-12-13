@@ -406,6 +406,7 @@
     _(CheckIsObj)                   \
     _(CheckObjCoercible)            \
     _(DebugCheckSelfHosted)         \
+    _(AsmJSEntry)                   \
     _(AsmJSLoadHeap)                \
     _(AsmJSStoreHeap)               \
     _(AsmJSCompareExchangeHeap)     \
