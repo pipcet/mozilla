@@ -456,7 +456,7 @@ wasm::GenerateImportFunction(jit::MacroAssembler& masm, const FuncImport& fi, Si
     unsigned framePushed = StackDecrementForCall(masm, WasmStackAlignment, fi.sig().args(), tlsBytes);
 
     FuncOffsets offsets;
-    GenerateFunctionPrologue(masm, framePushed, sigId, &offsets, LiveRegisterSet());
+    GenerateFunctionPrologue(masm, framePushed, sigId, &offsets);
 
     // The argument register state is already setup by our caller. We just need
     // to be sure not to clobber it before the call.
@@ -486,7 +486,7 @@ wasm::GenerateImportFunction(jit::MacroAssembler& masm, const FuncImport& fi, Si
     masm.loadPtr(Address(masm.getStackPointer(), tlsStackOffset), WasmTlsReg);
     masm.loadWasmPinnedRegsFromTls();
 
-    GenerateFunctionEpilogue(masm, framePushed, &offsets, LiveRegisterSet());
+    GenerateFunctionEpilogue(masm, framePushed, &offsets);
     offsets.end = masm.currentOffset();
     return offsets;
 }
@@ -517,7 +517,7 @@ wasm::GenerateImportInterpExit(MacroAssembler& masm, const FuncImport& fi, uint3
     unsigned framePushed = StackDecrementForCall(masm, ABIStackAlignment, argOffset + argBytes);
 
     ProfilingOffsets offsets;
-    GenerateExitPrologue(masm, framePushed, ExitReason::ImportInterp, &offsets, LiveRegisterSet());
+    GenerateExitPrologue(masm, framePushed, ExitReason::ImportInterp, &offsets);
 
     // Fill the argument array.
     unsigned offsetToCallerStackArgs = sizeof(Frame) + masm.framePushed();
@@ -616,7 +616,7 @@ wasm::GenerateImportInterpExit(MacroAssembler& masm, const FuncImport& fi, uint3
     MOZ_ASSERT(NonVolatileRegs.has(GlobalReg));
 #endif
 
-    GenerateExitEpilogue(masm, framePushed, ExitReason::ImportInterp, &offsets, LiveRegisterSet());
+    GenerateExitEpilogue(masm, framePushed, ExitReason::ImportInterp, &offsets);
 
     offsets.end = masm.currentOffset();
     return offsets;
@@ -646,7 +646,7 @@ wasm::GenerateImportJitExit(MacroAssembler& masm, const FuncImport& fi, Label* t
                               sizeOfRetAddr;
 
     ProfilingOffsets offsets;
-    GenerateExitPrologue(masm, jitFramePushed, ExitReason::ImportJit, &offsets, LiveRegisterSet());
+    GenerateExitPrologue(masm, jitFramePushed, ExitReason::ImportJit, &offsets);
 
     // 1. Descriptor
     size_t argOffset = 0;
@@ -800,7 +800,7 @@ wasm::GenerateImportJitExit(MacroAssembler& masm, const FuncImport& fi, Label* t
     // different offset than when WasmTlsReg was stored.
     masm.loadPtr(Address(masm.getStackPointer(), jitFrameBytes + sizeOfRetAddr), WasmTlsReg);
 
-    GenerateExitEpilogue(masm, masm.framePushed(), ExitReason::ImportJit, &offsets, LiveRegisterSet());
+    GenerateExitEpilogue(masm, masm.framePushed(), ExitReason::ImportJit, &offsets);
 
     if (oolConvert.used()) {
         masm.bind(&oolConvert);
@@ -879,7 +879,7 @@ wasm::GenerateTrapExit(MacroAssembler& masm, Trap trap, Label* throwLabel)
     uint32_t framePushed = StackDecrementForCall(masm, ABIStackAlignment, args);
 
     ProfilingOffsets offsets;
-    GenerateExitPrologue(masm, framePushed, ExitReason::Trap, &offsets, LiveRegisterSet());
+    GenerateExitPrologue(masm, framePushed, ExitReason::Trap, &offsets);
 
     ABIArgMIRTypeIter i(args);
     if (i->kind() == ABIArg::GPR)
@@ -894,7 +894,7 @@ wasm::GenerateTrapExit(MacroAssembler& masm, Trap trap, Label* throwLabel)
 
     masm.jump(throwLabel);
 
-    GenerateExitEpilogue(masm, framePushed, ExitReason::Trap, &offsets, LiveRegisterSet());
+    GenerateExitEpilogue(masm, framePushed, ExitReason::Trap, &offsets);
 
     offsets.end = masm.currentOffset();
     return offsets;

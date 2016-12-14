@@ -4311,12 +4311,6 @@ LIRGenerator::visitWasmReturnVoid(MWasmReturnVoid* ins)
 }
 
 void
-LIRGenerator::visitAsmJSEntry(MAsmJSEntry *ins)
-{
-    add(new(alloc()) LAsmJSEntry);
-}
-
-void
 LIRGenerator::visitWasmStackArg(MWasmStackArg* ins)
 {
     if (ins->arg()->type() == MIRType::Int64) {

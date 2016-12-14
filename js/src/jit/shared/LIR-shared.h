@@ -3439,12 +3439,6 @@ class LReturn : public LInstructionHelper<0, BOX_PIECES, 0>
     LIR_HEADER(Return)
 };
 
-class LAsmJSEntry : public LInstructionHelper<0, 0, 0>
-{
-  public:
-    LIR_HEADER(AsmJSEntry)
-};
-
 class LThrow : public LCallInstructionHelper<0, BOX_PIECES, 0>
 {
   public:

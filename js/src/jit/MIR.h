@@ -1497,25 +1497,6 @@ class MNop : public MNullaryInstruction
     ALLOW_CLONE(MNop)
 };
 
-class MAsmJSEntry : public MNullaryInstruction
-{
-  protected:
-    MAsmJSEntry() {
-    }
-
-  public:
-    INSTRUCTION_HEADER(AsmJSEntry)
-    static MAsmJSEntry* New(TempAllocator& alloc) {
-        return new(alloc) MAsmJSEntry();
-    }
-
-    AliasSet getAliasSet() const override {
-        return AliasSet::None();
-    }
-
-    ALLOW_CLONE(MAsmJSEntry)
-};
-
 // Truncation barrier. This is intended for protecting its input against
 // follow-up truncation optimizations.
 class MLimitedTruncate

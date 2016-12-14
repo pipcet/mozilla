@@ -166,7 +166,7 @@ public:
   // For testing purposes only.
   void checkCoherency()
   {
-    //checkCoherency(mRoot, nullptr);
+    checkCoherency(mRoot, nullptr);
   }
 
 private:
@@ -276,7 +276,6 @@ private:
 
   T* checkCoherency(T* aNode, T* aMinimum)
   {
-    return nullptr;
     if (mRoot) {
       MOZ_RELEASE_ASSERT(!mRoot->mParent);
     }

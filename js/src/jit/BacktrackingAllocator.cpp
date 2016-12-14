@@ -19,19 +19,6 @@ using mozilla::DebugOnly;
 // Utility
 /////////////////////////////////////////////////////////////////////
 
-struct CheckRangeEnds
-{
-    CodePosition pos0_;
-    CodePosition pos1_;
-    bool *found_;
-    explicit CheckRangeEnds(CodePosition pos0, CodePosition pos1, bool *found) : pos0_(pos0), pos1_(pos1), found_(found) {}
-
-    void operator()(const LiveRange *range)
-    {
-        return;
-    }
-};
-
 static inline bool
 SortBefore(UsePosition* a, UsePosition* b)
 {
@@ -353,22 +340,6 @@ VirtualRegister::rangeFor(CodePosition pos, bool preferRegister /* = false */) c
     return found;
 }
 
-LiveRange*
-VirtualRegister::rangeFor(LiveRange *needle, bool preferRegister /* = false */) const
-{
-    LiveRange* found = nullptr;
-    for (LiveRange::RegisterLinkIterator iter = rangesBegin(); iter; iter++) {
-        LiveRange* range = LiveRange::get(*iter);
-        if (range->intersects(needle)) {
-            if (!preferRegister || range->bundle()->allocation().isRegister())
-                return range;
-            if (!found)
-                found = range;
-        }
-    }
-    return found;
-}
-
 void
 VirtualRegister::addRange(LiveRange* range)
 {
@@ -411,9 +382,6 @@ BacktrackingAllocator::init()
     for (uint32_t i = 0; i < numVregs; i++)
         new(&vregs[i]) VirtualRegister();
 
-    LInstruction* entryIns = NULL;
-    LInstruction* returnIns = NULL;
-
     // Build virtual register objects.
     for (size_t i = 0; i < graph.numBlocks(); i++) {
         if (mir->shouldCancel("Create data structures (main loop)"))
@@ -424,10 +392,6 @@ BacktrackingAllocator::init()
             if (mir->shouldCancel("Create data structures (inner loop 1)"))
                 return false;
 
-            if (ins->isAsmJSEntry())
-                entryIns = *ins;
-            else if (ins->isWasmReturn() || ins->isWasmReturnVoid())
-                returnIns = *ins;
             for (size_t j = 0; j < ins->numDefs(); j++) {
                 LDefinition* def = ins->getDef(j);
                 if (def->isBogusTemp())
@@ -596,16 +560,10 @@ BacktrackingAllocator::buildLivenessInfo()
 
         // Shorten the front end of ranges for live variables to their point of
         // definition, if found.
-        for (LInstructionReverseIterator ins = block->rbegin(); ins != block->rend(); ++ins) {
+        for (LInstructionReverseIterator ins = block->rbegin(); ins != block->rend(); ins++) {
             // Calls may clobber registers, so force a spill and reload around the callsite.
             if (ins->isCall()) {
                 for (AnyRegisterIterator iter(allRegisters_.asLiveSet()); iter.more(); ++iter) {
-#if 0
-                    if (!(*iter).volatile_())
-                        if (testbed && ins->isWasmCall() && ins->toWasmCall()->mir()->callee().which() == wasm:CalleeDesc::function)
-                            continue;
-#endif
-
                     bool found = false;
                     for (size_t i = 0; i < ins->numDefs(); i++) {
                         if (ins->getDef(i)->isFixed() &&
@@ -848,7 +806,7 @@ BacktrackingAllocator::buildLivenessInfo()
 }
 
 bool
-BacktrackingAllocator::go(LiveRegisterSet &regsInUse)
+BacktrackingAllocator::go()
 {
     JitSpew(JitSpew_RegAlloc, "Beginning register allocation");
 
@@ -890,13 +848,13 @@ BacktrackingAllocator::go(LiveRegisterSet &regsInUse)
     if (!resolveControlFlow())
         return false;
 
-    if (!reifyAllocations(regsInUse))
+    if (!reifyAllocations())
         return false;
 
     if (!populateSafepoints())
         return false;
 
-    if (!annotateMoveGroups(regsInUse))
+    if (!annotateMoveGroups())
         return false;
 
     return true;
@@ -1261,30 +1219,11 @@ BacktrackingAllocator::tryAllocateNonFixed(LiveBundle* bundle,
     if (conflicting.empty() || minimalBundle(bundle)) {
         // Search for any available register which the bundle can be
         // allocated to.
-        if (testbed) {
-            for (size_t i = 0; i < AnyRegister::Total; i++) {
-                if (!AnyRegister::FromCode(i).volatile_())
-                    continue;
-                if (!tryAllocateRegister(registers[i], bundle, success, pfixed, conflicting))
-                    return false;
-                if (*success)
-                    return true;
-            }
-            for (size_t i = 0; i < AnyRegister::Total; i++) {
-                if (AnyRegister::FromCode(i).volatile_())
-                    continue;
-                if (!tryAllocateRegister(registers[i], bundle, success, pfixed, conflicting))
-                    return false;
-                if (*success)
-                    return true;
-            }
-        } else {
-            for (size_t i = 0; i < AnyRegister::Total; i++) {
-                if (!tryAllocateRegister(registers[i], bundle, success, pfixed, conflicting))
-                    return false;
-                if (*success)
-                    return true;
-            }
+        for (size_t i = 0; i < AnyRegister::Total; i++) {
+            if (!tryAllocateRegister(registers[i], bundle, success, pfixed, conflicting))
+                return false;
+            if (*success)
+                return true;
         }
     }
 
@@ -2027,7 +1966,7 @@ BacktrackingAllocator::isRegisterDefinition(LiveRange* range)
 }
 
 bool
-BacktrackingAllocator::reifyAllocations(LiveRegisterSet &regsInUse)
+BacktrackingAllocator::reifyAllocations()
 {
     JitSpew(JitSpew_RegAlloc, "Reifying Allocations");
 
@@ -2082,7 +2021,7 @@ BacktrackingAllocator::reifyAllocations(LiveRegisterSet &regsInUse)
                 }
             }
 
-            addLiveRegistersForRange(reg, range, regsInUse);
+            addLiveRegistersForRange(reg, range);
         }
     }
 
@@ -2103,14 +2042,12 @@ BacktrackingAllocator::findFirstNonCallSafepoint(CodePosition from)
 }
 
 void
-BacktrackingAllocator::addLiveRegistersForRange(VirtualRegister& reg, LiveRange* range, LiveRegisterSet &regsInUse)
+BacktrackingAllocator::addLiveRegistersForRange(VirtualRegister& reg, LiveRange* range)
 {
     // Fill in the live register sets for all non-call safepoints.
     LAllocation a = range->bundle()->allocation();
     if (!a.isRegister())
         return;
-
-    regsInUse.addUnchecked(a.toRegister());
 
     // Don't add output registers to the safepoint.
     CodePosition start = range->from();
@@ -2274,8 +2211,13 @@ BacktrackingAllocator::populateSafepoints()
 }
 
 bool
-BacktrackingAllocator::annotateMoveGroups(LiveRegisterSet &regsInUse)
+BacktrackingAllocator::annotateMoveGroups()
 {
+    // Annotate move groups in the LIR graph with any register that is not
+    // allocated at that point and can be used as a scratch register. This is
+    // only required for x86, as other platforms always have scratch registers
+    // available for use.
+#ifdef JS_CODEGEN_X86
     LiveRange* range = LiveRange::FallibleNew(alloc(), 0, CodePosition(), CodePosition().next());
     if (!range)
         return false;
@@ -2288,7 +2230,6 @@ BacktrackingAllocator::annotateMoveGroups(LiveRegisterSet &regsInUse)
         LInstruction* last = nullptr;
         for (LInstructionIterator iter = block->begin(); iter != block->end(); ++iter) {
             if (iter->isMoveGroup()) {
-                bool exitMoveGroup = false;
                 CodePosition from = last ? outputOf(last) : entryOf(block);
                 range->setTo(from.next());
                 range->setFrom(from);
@@ -2310,10 +2251,7 @@ BacktrackingAllocator::annotateMoveGroups(LiveRegisterSet &regsInUse)
                         continue;
                     bool found = false;
                     LInstructionIterator niter(iter);
-                    niter++;
-                    if (*niter == block->lastInstructionWithId())
-                        exitMoveGroup = true;
-                    for (; niter != block->end(); niter++) {
+                    for (niter++; niter != block->end(); niter++) {
                         if (niter->isMoveGroup()) {
                             if (niter->toMoveGroup()->uses(reg.reg.gpr())) {
                                 found = true;
@@ -2332,9 +2270,9 @@ BacktrackingAllocator::annotateMoveGroups(LiveRegisterSet &regsInUse)
                                     found = true;
                                     break;
                                 }
+                            } else {
+                                break;
                             }
-                            if (riter->isWasmParameter())
-                                found = true;
                         } while (riter != block->begin());
                     }
 
@@ -2342,74 +2280,15 @@ BacktrackingAllocator::annotateMoveGroups(LiveRegisterSet &regsInUse)
                     if (found || reg.allocations.contains(range, &existing))
                         continue;
 
-                    if (!reg.reg.gpr().volatile_() && !regsInUse.has(reg.reg.gpr()))
-                        continue;
-                    //MConstant *c = MConstant::New(alloc(), Int32Value(0xdeadbeef));
-                    MConstant *c = NULL; /* clobber */
-                    LAllocation fromAlloc = LAllocation(c);
-                    LAllocation toAlloc = LAllocation(AnyRegister(reg.reg.gpr()));
-                    iter->toMoveGroup()->add(fromAlloc, toAlloc, LDefinition::Type::INT32);
-                }
-
-                if (exitMoveGroup)
-                    for (auto it = normalSlots.begin(); it; it++) {
-                        SpillSlot *slot = *it;
-                        LiveRange* range2 = LiveRange::FallibleNew(alloc(), 0, entryOf(block), exitOf(block));
-                        LiveRange* existing;
-
-                        LAllocation toAlloc = slot->alloc;
-                        if (!slot->allocated.contains(range2, &existing))
-                            continue;
-
-                        if (existing->from() <= entryOf(block) &&
-                            existing->to() >= exitOf(block))
-                            continue;
-
-                        range2->setFrom(exitOf(block).previous());
-
-                        if (slot->allocated.contains(range2, &existing))
-                            continue;
-
-                        size_t i;
-                        for (i = 0; i < iter->toMoveGroup()->numMoves(); i++)
-                            if (iter->toMoveGroup()->uses(toAlloc))
-                                break;
-
-                        if (i < iter->toMoveGroup()->numMoves()) {
-                            continue;
-                        }
-                        bool found = false;
-                        if (iter != block->begin()) {
-                            LInstructionIterator riter(iter);
-                            do {
-                                riter--;
-                                if (riter->isMoveGroup()) {
-                                    for (i = 0; i < riter->toMoveGroup()->numMoves(); i++)
-                                        if (riter->toMoveGroup()->uses(toAlloc))
-                                            break;
-                                    if (i < riter->toMoveGroup()->numMoves()) {
-                                        found = true;
-                                        break;
-                                    }
-                                } else {
-                                    break;
-                                }
-                            } while (riter != block->begin());
-                        }
-
-                        if (found)
-                            continue;
-
-                        MConstant *c = NULL; /* clobber */
-                        LAllocation fromAlloc = LAllocation(c);
-
-                        iter->toMoveGroup()->addAfter(fromAlloc, toAlloc, LDefinition::Type::INT32);
+                    iter->toMoveGroup()->setScratchRegister(reg.reg.gpr());
+                    break;
                 }
             } else {
                 last = *iter;
             }
         }
     }
+#endif
 
     return true;
 }
@@ -2690,7 +2569,7 @@ BacktrackingAllocator::computeSpillWeight(LiveBundle* bundle)
 
     // Bundles with fixed uses are given a higher spill weight, since they must
     // be allocated to a specific register.
-    if (0 && testbed && fixed)
+    if (testbed && fixed)
         usesTotal *= 2;
 
     // Compute spill weight as a use density, lowering the weight for long

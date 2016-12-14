@@ -2013,7 +2013,7 @@ class BaseCompiler
         JitSpew(JitSpew_Codegen, "# Emitting wasm baseline code");
 
         SigIdDesc sigId = env_.funcSigs[func_.index()]->id;
-        GenerateFunctionPrologue(masm, localSize_, sigId, &compileResults_.offsets(), LiveRegisterSet());
+        GenerateFunctionPrologue(masm, localSize_, sigId, &compileResults_.offsets());
 
         MOZ_ASSERT(masm.framePushed() == uint32_t(localSize_));
 
@@ -2118,7 +2118,7 @@ class BaseCompiler
         // Restore the TLS register in case it was overwritten by the function.
         loadFromFramePtr(WasmTlsReg, frameOffsetFromSlot(tlsSlot_, MIRType::Pointer));
 
-        GenerateFunctionEpilogue(masm, localSize_, &compileResults_.offsets(), LiveRegisterSet());
+        GenerateFunctionEpilogue(masm, localSize_, &compileResults_.offsets());
 
 #if defined(JS_ION_PERF)
         // FIXME - profiling code missing.  Bug 1286948.

@@ -1080,8 +1080,7 @@ js::jit::DeadIfUnused(const MDefinition* def)
            (!def->isGuard() || def->block() == def->block()->graph().osrBlock()) &&
            !def->isGuardRangeBailouts() &&
            !def->isControlInstruction() &&
-           (!def->isInstruction() || !def->toInstruction()->resumePoint()) &&
-        !def->isAsmJSEntry();
+           (!def->isInstruction() || !def->toInstruction()->resumePoint());
 }
 
 // Test whether |def| may be safely discarded, due to being dead or due to being

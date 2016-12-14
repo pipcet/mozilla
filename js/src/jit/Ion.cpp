@@ -1921,7 +1921,7 @@ OptimizeMIR(MIRGenerator* mir)
 }
 
 LIRGraph*
-GenerateLIR(MIRGenerator* mir, LiveRegisterSet &regsInUse)
+GenerateLIR(MIRGenerator* mir)
 {
     MIRGraph& graph = mir->graph();
     GraphSpewer& gs = mir->graphSpewer();
@@ -1964,7 +1964,7 @@ GenerateLIR(MIRGenerator* mir, LiveRegisterSet &regsInUse)
 
             BacktrackingAllocator regalloc(mir, &lirgen, *lir,
                                            allocator == RegisterAllocator_Testbed);
-            if (!regalloc.go(regsInUse))
+            if (!regalloc.go())
                 return nullptr;
 
 #ifdef DEBUG
@@ -2034,8 +2034,7 @@ CompileBackEnd(MIRGenerator* mir)
     if (!OptimizeMIR(mir))
         return nullptr;
 
-    LiveRegisterSet regsInUse;
-    LIRGraph* lir = GenerateLIR(mir, regsInUse);
+    LIRGraph* lir = GenerateLIR(mir);
     if (!lir)
         return nullptr;
 

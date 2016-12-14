@@ -271,7 +271,7 @@ PushRetAddr(MacroAssembler& masm)
 // generated code.
 static void
 GenerateProfilingPrologue(MacroAssembler& masm, unsigned framePushed, ExitReason reason,
-                          ProfilingOffsets* offsets, LiveRegisterSet regsInUse)
+                          ProfilingOffsets* offsets)
 {
     Register scratch = ABINonArgReg0;
 
@@ -308,7 +308,7 @@ GenerateProfilingPrologue(MacroAssembler& masm, unsigned framePushed, ExitReason
 // Generate the inverse of GenerateProfilingPrologue.
 static void
 GenerateProfilingEpilogue(MacroAssembler& masm, unsigned framePushed, ExitReason reason,
-                          ProfilingOffsets* offsets, LiveRegisterSet regsInUse)
+                          ProfilingOffsets* offsets)
 {
     Register scratch = ABINonArgReturnReg0;
 #if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64) || \
@@ -364,7 +364,7 @@ GenerateProfilingEpilogue(MacroAssembler& masm, unsigned framePushed, ExitReason
 // profiling or non-profiling entry point.
 void
 wasm::GenerateFunctionPrologue(MacroAssembler& masm, unsigned framePushed, const SigIdDesc& sigId,
-                               FuncOffsets* offsets, jit::LiveRegisterSet regsInUse)
+                               FuncOffsets* offsets)
 {
 #if defined(JS_CODEGEN_ARM)
     // Flush pending pools so they do not get dumped between the 'begin' and
@@ -374,8 +374,7 @@ wasm::GenerateFunctionPrologue(MacroAssembler& masm, unsigned framePushed, const
 
     masm.haltingAlign(CodeAlignment);
 
-    GenerateProfilingPrologue(masm, framePushed, ExitReason::None, offsets,
-                              regsInUse);
+    GenerateProfilingPrologue(masm, framePushed, ExitReason::None, offsets);
     Label body;
     masm.jump(&body);
 
@@ -403,7 +402,7 @@ wasm::GenerateFunctionPrologue(MacroAssembler& masm, unsigned framePushed, const
     masm.nopAlign(CodeAlignment);
     offsets->nonProfilingEntry = masm.currentOffset();
     PushRetAddr(masm);
-    masm.prologue(framePushed, regsInUse);
+    masm.subFromStackPtr(Imm32(framePushed + FrameBytesAfterReturnAddress));
 
     // Prologue join point, body begin:
     masm.bind(&body);
@@ -416,9 +415,9 @@ wasm::GenerateFunctionPrologue(MacroAssembler& masm, unsigned framePushed, const
 // (falling through to the normal prologue) or a jump (jumping to the profiling
 // epilogue).
 void
-wasm::GenerateFunctionEpilogue(MacroAssembler& masm, unsigned framePushed, FuncOffsets* offsets, LiveRegisterSet regsInUse)
+wasm::GenerateFunctionEpilogue(MacroAssembler& masm, unsigned framePushed, FuncOffsets* offsets)
 {
-    //MOZ_ASSERT(masm.framePushed() == framePushed);
+    MOZ_ASSERT(masm.framePushed() == framePushed);
 
 #if defined(JS_CODEGEN_ARM)
     // Flush pending pools so they do not get dumped between the profilingReturn
@@ -432,31 +431,31 @@ wasm::GenerateFunctionEpilogue(MacroAssembler& masm, unsigned framePushed, FuncO
     offsets->profilingJump = masm.nopPatchableToNearJump().offset();
 
     // Normal epilogue:
-    masm.epilogue(framePushed, regsInUse);
+    masm.addToStackPtr(Imm32(framePushed + FrameBytesAfterReturnAddress));
     masm.ret();
     masm.setFramePushed(0);
 
     // Profiling epilogue:
     offsets->profilingEpilogue = masm.currentOffset();
-    GenerateProfilingEpilogue(masm, framePushed, ExitReason::None, offsets, regsInUse);
+    GenerateProfilingEpilogue(masm, framePushed, ExitReason::None, offsets);
 }
 
 void
 wasm::GenerateExitPrologue(MacroAssembler& masm, unsigned framePushed, ExitReason reason,
-                           ProfilingOffsets* offsets, LiveRegisterSet regsInUse)
+                           ProfilingOffsets* offsets)
 {
     masm.haltingAlign(CodeAlignment);
-    GenerateProfilingPrologue(masm, framePushed, reason, offsets, regsInUse);
+    GenerateProfilingPrologue(masm, framePushed, reason, offsets);
     masm.setFramePushed(framePushed);
 }
 
 void
 wasm::GenerateExitEpilogue(MacroAssembler& masm, unsigned framePushed, ExitReason reason,
-                           ProfilingOffsets* offsets, LiveRegisterSet regsInUse)
+                           ProfilingOffsets* offsets)
 {
     // Inverse of GenerateExitPrologue:
     MOZ_ASSERT(masm.framePushed() == framePushed);
-    GenerateProfilingEpilogue(masm, framePushed, reason, offsets, regsInUse);
+    GenerateProfilingEpilogue(masm, framePushed, reason, offsets);
     masm.setFramePushed(0);
 }
 

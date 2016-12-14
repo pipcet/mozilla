@@ -692,9 +692,6 @@ ValueNumberer::loopHasOptimizablePhi(MBasicBlock* header) const
 bool
 ValueNumberer::visitDefinition(MDefinition* def)
 {
-    if (def->isAsmJSEntry())
-        return true;
-
     // Nop does not fit in any of the previous optimization, as its only purpose
     // is to reduce the register pressure by keeping additional resume
     // point. Still, there is no need consecutive list of MNop instructions, and

@@ -148,7 +148,7 @@ class LIRGraph;
 class CodeGenerator;
 
 MOZ_MUST_USE bool OptimizeMIR(MIRGenerator* mir);
-LIRGraph* GenerateLIR(MIRGenerator* mir, LiveRegisterSet &regsInUse);
+LIRGraph* GenerateLIR(MIRGenerator* mir);
 CodeGenerator* GenerateCode(MIRGenerator* mir, LIRGraph* lir);
 CodeGenerator* CompileBackEnd(MIRGenerator* mir);
 

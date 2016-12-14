@@ -2893,11 +2893,6 @@ CodeGenerator::visitStart(LStart* lir)
 }
 
 void
-CodeGenerator::visitAsmJSEntry(LAsmJSEntry* lir)
-{
-}
-
-void
 CodeGenerator::visitReturn(LReturn* lir)
 {
 #if defined(JS_NUNBOX32)
@@ -9438,12 +9433,11 @@ CodeGenerator::visitRest(LRest* lir)
 
 bool
 CodeGenerator::generateWasm(wasm::SigIdDesc sigId, wasm::TrapOffset trapOffset,
-                            wasm::FuncOffsets* offsets, LiveRegisterSet regsInUse)
+                            wasm::FuncOffsets* offsets)
 {
     JitSpew(JitSpew_Codegen, "# Emitting wasm code");
 
-    wasm::GenerateFunctionPrologue(masm, frameSize(), sigId, offsets,
-                                   regsInUse);
+    wasm::GenerateFunctionPrologue(masm, frameSize(), sigId, offsets);
 
     // Overflow checks are omitted by CodeGenerator in some cases (leaf
     // functions with small framePushed). Perform overflow-checking after
@@ -9460,7 +9454,7 @@ CodeGenerator::generateWasm(wasm::SigIdDesc sigId, wasm::TrapOffset trapOffset,
         return false;
 
     masm.bind(&returnLabel_);
-    wasm::GenerateFunctionEpilogue(masm, frameSize(), offsets, regsInUse);
+    wasm::GenerateFunctionEpilogue(masm, frameSize(), offsets);
 
     if (!omitOverRecursedCheck()) {
         // Since we just overflowed the stack, to be on the safe side, pop the

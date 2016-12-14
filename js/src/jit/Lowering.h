@@ -112,7 +112,6 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitBail(MBail* bail);
     void visitUnreachable(MUnreachable* unreachable);
     void visitEncodeSnapshot(MEncodeSnapshot* ins);
-    void visitAsmJSEntry(MAsmJSEntry* ins);
     void visitAssertFloat32(MAssertFloat32* ins);
     void visitAssertRecoveredOnBailout(MAssertRecoveredOnBailout* ins);
     void visitGetDynamicName(MGetDynamicName* ins);

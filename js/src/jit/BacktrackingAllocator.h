@@ -566,7 +566,6 @@ class VirtualRegister
         return LiveRange::get(ranges_.back());
     }
     LiveRange* rangeFor(CodePosition pos, bool preferRegister = false) const;
-    LiveRange* rangeFor(LiveRange *range, bool preferRegister = false) const;
     void removeRange(LiveRange* range);
     void addRange(LiveRange* range);
 
@@ -681,7 +680,7 @@ class BacktrackingAllocator : protected RegisterAllocator
         callRanges(nullptr)
     { }
 
-    MOZ_MUST_USE bool go(LiveRegisterSet &regsInUse);
+    MOZ_MUST_USE bool go();
 
   private:
 
@@ -731,14 +730,13 @@ class BacktrackingAllocator : protected RegisterAllocator
     // Reification methods.
     MOZ_MUST_USE bool pickStackSlots();
     MOZ_MUST_USE bool resolveControlFlow();
-    MOZ_MUST_USE bool reifyAllocations(LiveRegisterSet &regsInUse);
+    MOZ_MUST_USE bool reifyAllocations();
     MOZ_MUST_USE bool populateSafepoints();
-    MOZ_MUST_USE bool annotateMoveGroups(LiveRegisterSet &regsInUse);
+    MOZ_MUST_USE bool annotateMoveGroups();
     MOZ_MUST_USE bool deadRange(LiveRange* range);
     size_t findFirstNonCallSafepoint(CodePosition from);
     size_t findFirstSafepoint(CodePosition pos, size_t startFrom);
-    void addLiveRegistersForRange(VirtualRegister& reg, LiveRange* range,
-                                  LiveRegisterSet &regsInUse);
+    void addLiveRegistersForRange(VirtualRegister& reg, LiveRange* range);
 
     MOZ_MUST_USE bool addMove(LMoveGroup* moves, LiveRange* from, LiveRange* to,
                               LDefinition::Type type) {

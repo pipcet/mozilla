@@ -115,15 +115,15 @@ class ProfilingFrameIterator
 
 void
 GenerateExitPrologue(jit::MacroAssembler& masm, unsigned framePushed, ExitReason reason,
-                     ProfilingOffsets* offsets, jit::LiveRegisterSet regsInUse);
+                     ProfilingOffsets* offsets);
 void
 GenerateExitEpilogue(jit::MacroAssembler& masm, unsigned framePushed, ExitReason reason,
-                     ProfilingOffsets* offsets, jit::LiveRegisterSet regsInUse);
+                     ProfilingOffsets* offsets);
 void
 GenerateFunctionPrologue(jit::MacroAssembler& masm, unsigned framePushed, const SigIdDesc& sigId,
-                         FuncOffsets* offsets, jit::LiveRegisterSet regsInUse);
+                         FuncOffsets* offsets);
 void
-GenerateFunctionEpilogue(jit::MacroAssembler& masm, unsigned framePushed, FuncOffsets* offsets, jit::LiveRegisterSet regsInUse);
+GenerateFunctionEpilogue(jit::MacroAssembler& masm, unsigned framePushed, FuncOffsets* offsets);
 
 // Runtime patching to enable/disable profiling
 

@@ -460,8 +460,6 @@ class MacroAssembler : public MacroAssemblerSpecific
     // Warning: This method does not update the framePushed() counter.
     void freeStack(Register amount);
 
-    inline void prologue(uint32_t &amount, LiveRegisterSet regsInUse) PER_ARCH;
-    inline void epilogue(uint32_t amount, LiveRegisterSet regsInUse) PER_ARCH;
   private:
     // ===============================================================
     // Register allocation fields.
