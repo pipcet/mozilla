@@ -25,14 +25,14 @@ public:
   NS_IMETHOD GetDomain(nsIURI** aDomain) override;
   NS_IMETHOD SetDomain(nsIURI* aDomain) override;
   NS_IMETHOD GetBaseDomain(nsACString& aBaseDomain) override;
-  virtual bool IsOnCSSUnprefixingWhitelist() override;
   bool IsCodebasePrincipal() const override { return true; }
   nsresult GetOriginInternal(nsACString& aOrigin) override;
 
   nsPrincipal();
 
   // Init() must be called before the principal is in a usable state.
-  nsresult Init(nsIURI* aCodebase, const mozilla::PrincipalOriginAttributes& aOriginAttributes);
+  nsresult Init(nsIURI* aCodebase,
+                const mozilla::OriginAttributes& aOriginAttributes);
 
   virtual nsresult GetScriptLocation(nsACString& aStr) override;
   void SetURI(nsIURI* aURI);
@@ -50,7 +50,6 @@ public:
   bool mCodebaseImmutable;
   bool mDomainImmutable;
   bool mInitialized;
-  mozilla::Maybe<bool> mIsOnCSSUnprefixingWhitelist; // Lazily-computed
 
 protected:
   virtual ~nsPrincipal();
@@ -63,7 +62,7 @@ class nsExpandedPrincipal : public nsIExpandedPrincipal, public mozilla::BasePri
 {
 public:
   nsExpandedPrincipal(nsTArray<nsCOMPtr<nsIPrincipal>> &aWhiteList,
-                      const mozilla::PrincipalOriginAttributes& aAttrs);
+                      const mozilla::OriginAttributes& aAttrs);
 
   NS_DECL_NSIEXPANDEDPRINCIPAL
   NS_DECL_NSISERIALIZABLE
@@ -76,7 +75,6 @@ public:
   NS_IMETHOD SetDomain(nsIURI* aDomain) override;
   NS_IMETHOD GetBaseDomain(nsACString& aBaseDomain) override;
   virtual bool AddonHasPermission(const nsAString& aPerm) override;
-  virtual bool IsOnCSSUnprefixingWhitelist() override;
   virtual nsresult GetScriptLocation(nsACString &aStr) override;
   nsresult GetOriginInternal(nsACString& aOrigin) override;
 

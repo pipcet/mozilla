@@ -34,7 +34,7 @@ using mozilla::Nothing;
 class MOZ_STACK_CLASS AutoCompilationTraceLogger
 {
   public:
-    AutoCompilationTraceLogger(ExclusiveContext* cx, const TraceLoggerTextId id,
+    AutoCompilationTraceLogger(JSContext* cx, const TraceLoggerTextId id,
                                const ReadOnlyCompileOptions& options);
 
   private:
@@ -50,7 +50,7 @@ class MOZ_STACK_CLASS BytecodeCompiler
 {
   public:
     // Construct an object passing mandatory arguments.
-    BytecodeCompiler(ExclusiveContext* cx,
+    BytecodeCompiler(JSContext* cx,
                      LifoAlloc& alloc,
                      const ReadOnlyCompileOptions& options,
                      SourceBufferHolder& sourceBuffer,
@@ -65,18 +65,18 @@ class MOZ_STACK_CLASS BytecodeCompiler
     ModuleObject* compileModule();
     bool compileStandaloneFunction(MutableHandleFunction fun, GeneratorKind generatorKind,
                                    FunctionAsyncKind asyncKind,
-                                   Maybe<uint32_t> parameterListEnd);
+                                   const Maybe<uint32_t>& parameterListEnd);
 
     ScriptSourceObject* sourceObjectPtr() const;
 
   private:
     JSScript* compileScript(HandleObject environment, SharedContext* sc);
     bool checkLength();
-    bool createScriptSource(Maybe<uint32_t> parameterListEnd);
+    bool createScriptSource(const Maybe<uint32_t>& parameterListEnd);
     bool maybeCompressSource();
     bool canLazilyParse();
     bool createParser();
-    bool createSourceAndParser(Maybe<uint32_t> parameterListEnd = Nothing());
+    bool createSourceAndParser(const Maybe<uint32_t>& parameterListEnd = Nothing());
     bool createScript();
     bool emplaceEmitter(Maybe<BytecodeEmitter>& emitter, SharedContext* sharedContext);
     bool handleParseFailure(const Directives& newDirectives);
@@ -86,7 +86,7 @@ class MOZ_STACK_CLASS BytecodeCompiler
     AutoCompilationTraceLogger traceLogger;
     AutoKeepAtoms keepAtoms;
 
-    ExclusiveContext* cx;
+    JSContext* cx;
     LifoAlloc& alloc;
     const ReadOnlyCompileOptions& options;
     SourceBufferHolder& sourceBuffer;
@@ -109,23 +109,22 @@ class MOZ_STACK_CLASS BytecodeCompiler
     RootedScript script;
 };
 
-AutoCompilationTraceLogger::AutoCompilationTraceLogger(ExclusiveContext* cx,
+AutoCompilationTraceLogger::AutoCompilationTraceLogger(JSContext* cx,
         const TraceLoggerTextId id, const ReadOnlyCompileOptions& options)
-  : logger(cx->isJSContext() ? TraceLoggerForMainThread(cx->asJSContext()->runtime())
-                             : TraceLoggerForCurrentThread()),
-    event(logger, TraceLogger_AnnotateScripts, options),
+  : logger(TraceLoggerForCurrentThread(cx)),
+    event(TraceLogger_AnnotateScripts, options),
     scriptLogger(logger, event),
     typeLogger(logger, id)
 {}
 
-BytecodeCompiler::BytecodeCompiler(ExclusiveContext* cx,
+BytecodeCompiler::BytecodeCompiler(JSContext* cx,
                                    LifoAlloc& alloc,
                                    const ReadOnlyCompileOptions& options,
                                    SourceBufferHolder& sourceBuffer,
                                    HandleScope enclosingScope,
                                    TraceLoggerTextId logId)
   : traceLogger(cx, logId, options),
-    keepAtoms(cx->perThreadData),
+    keepAtoms(cx),
     cx(cx),
     alloc(alloc),
     options(options),
@@ -154,8 +153,8 @@ BytecodeCompiler::checkLength()
     // JSScript as 32-bits. It could be lifted fairly easily, since the compiler
     // is using size_t internally already.
     if (sourceBuffer.length() > UINT32_MAX) {
-        if (cx->isJSContext())
-            JS_ReportErrorNumberASCII(cx->asJSContext(), GetErrorMessage, nullptr,
+        if (!cx->helperThread())
+            JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                                       JSMSG_SOURCE_TOO_LONG);
         return false;
     }
@@ -163,7 +162,7 @@ BytecodeCompiler::checkLength()
 }
 
 bool
-BytecodeCompiler::createScriptSource(Maybe<uint32_t> parameterListEnd)
+BytecodeCompiler::createScriptSource(const Maybe<uint32_t>& parameterListEnd)
 {
     if (!checkLength())
         return false;
@@ -234,7 +233,7 @@ BytecodeCompiler::createParser()
 }
 
 bool
-BytecodeCompiler::createSourceAndParser(Maybe<uint32_t> parameterListEnd /* = Nothing() */)
+BytecodeCompiler::createSourceAndParser(const Maybe<uint32_t>& parameterListEnd /* = Nothing() */)
 {
     return createScriptSource(parameterListEnd) &&
            maybeCompressSource() &&
@@ -329,12 +328,12 @@ BytecodeCompiler::compileScript(HandleObject environment, SharedContext* sc)
 
         // Successfully parsed. Emit the script.
         if (pn) {
-            if (sc->isEvalContext() && sc->hasDebuggerStatement() && cx->isJSContext()) {
+            if (sc->isEvalContext() && sc->hasDebuggerStatement() && !cx->helperThread()) {
                 // If the eval'ed script contains any debugger statement, force construction
                 // of arguments objects for the caller script and any other scripts it is
                 // transitively nested inside. The debugger can access any variable on the
                 // scope chain.
-                if (!deoptimizeArgumentsInEnclosingScripts(cx->asJSContext(), environment))
+                if (!deoptimizeArgumentsInEnclosingScripts(cx, environment))
                     return nullptr;
             }
             if (!emitter->emitScript(pn))
@@ -357,7 +356,7 @@ BytecodeCompiler::compileScript(HandleObject environment, SharedContext* sc)
     if (!maybeCompleteCompressSource())
         return nullptr;
 
-    MOZ_ASSERT_IF(cx->isJSContext(), !cx->asJSContext()->isExceptionPending());
+    MOZ_ASSERT_IF(!cx->helperThread(), !cx->isExceptionPending());
 
     return script;
 }
@@ -421,7 +420,7 @@ BytecodeCompiler::compileModule()
     if (!maybeCompleteCompressSource())
         return nullptr;
 
-    MOZ_ASSERT_IF(cx->isJSContext(), !cx->asJSContext()->isExceptionPending());
+    MOZ_ASSERT_IF(!cx->helperThread(), !cx->isExceptionPending());
     return module;
 }
 
@@ -432,7 +431,7 @@ bool
 BytecodeCompiler::compileStandaloneFunction(MutableHandleFunction fun,
                                             GeneratorKind generatorKind,
                                             FunctionAsyncKind asyncKind,
-                                            Maybe<uint32_t> parameterListEnd)
+                                            const Maybe<uint32_t>& parameterListEnd)
 {
     MOZ_ASSERT(fun);
     MOZ_ASSERT(fun->isTenured());
@@ -486,8 +485,8 @@ BytecodeCompiler::sourceObjectPtr() const
 }
 
 ScriptSourceObject*
-frontend::CreateScriptSourceObject(ExclusiveContext* cx, const ReadOnlyCompileOptions& options,
-                                   Maybe<uint32_t> parameterListEnd /* = Nothing() */)
+frontend::CreateScriptSourceObject(JSContext* cx, const ReadOnlyCompileOptions& options,
+                                   const Maybe<uint32_t>& parameterListEnd /* = Nothing() */)
 {
     ScriptSource* ss = cx->new_<ScriptSource>();
     if (!ss)
@@ -510,8 +509,8 @@ frontend::CreateScriptSourceObject(ExclusiveContext* cx, const ReadOnlyCompileOp
     //
     // Instead, we put off populating those SSO slots in off-thread compilations
     // until after we've merged compartments.
-    if (cx->isJSContext()) {
-        if (!ScriptSourceObject::initFromOptions(cx->asJSContext(), sso, options))
+    if (!cx->helperThread()) {
+        if (!ScriptSourceObject::initFromOptions(cx, sso, options))
             return nullptr;
     }
 
@@ -519,12 +518,12 @@ frontend::CreateScriptSourceObject(ExclusiveContext* cx, const ReadOnlyCompileOp
 }
 
 // CompileScript independently returns the ScriptSourceObject (SSO) for the
-// compile.  This is used by off-main-thread script compilation (OMT-SC).
+// compile.  This is used by off-thread script compilation (OT-SC).
 //
-// OMT-SC cannot initialize the SSO when it is first constructed because the
+// OT-SC cannot initialize the SSO when it is first constructed because the
 // SSO is allocated initially in a separate compartment.
 //
-// After OMT-SC, the separate compartment is merged with the main compartment,
+// After OT-SC, the separate compartment is merged with the main compartment,
 // at which point the JSScripts created become observable by the debugger via
 // memory-space scanning.
 //
@@ -550,7 +549,7 @@ class MOZ_STACK_CLASS AutoInitializeSourceObject
 };
 
 JSScript*
-frontend::CompileGlobalScript(ExclusiveContext* cx, LifoAlloc& alloc, ScopeKind scopeKind,
+frontend::CompileGlobalScript(JSContext* cx, LifoAlloc& alloc, ScopeKind scopeKind,
                               const ReadOnlyCompileOptions& options,
                               SourceBufferHolder& srcBuf,
                               SourceCompressionTask* extraSct,
@@ -565,7 +564,7 @@ frontend::CompileGlobalScript(ExclusiveContext* cx, LifoAlloc& alloc, ScopeKind 
 }
 
 JSScript*
-frontend::CompileEvalScript(ExclusiveContext* cx, LifoAlloc& alloc,
+frontend::CompileEvalScript(JSContext* cx, LifoAlloc& alloc,
                             HandleObject environment, HandleScope enclosingScope,
                             const ReadOnlyCompileOptions& options,
                             SourceBufferHolder& srcBuf,
@@ -580,7 +579,7 @@ frontend::CompileEvalScript(ExclusiveContext* cx, LifoAlloc& alloc,
 }
 
 ModuleObject*
-frontend::CompileModule(ExclusiveContext* cx, const ReadOnlyCompileOptions& optionsInput,
+frontend::CompileModule(JSContext* cx, const ReadOnlyCompileOptions& optionsInput,
                         SourceBufferHolder& srcBuf, LifoAlloc& alloc,
                         ScriptSourceObject** sourceObjectOut /* = nullptr */)
 {
@@ -605,14 +604,14 @@ frontend::CompileModule(JSContext* cx, const ReadOnlyCompileOptions& options,
     if (!GlobalObject::ensureModulePrototypesCreated(cx, cx->global()))
         return nullptr;
 
-    LifoAlloc& alloc = cx->asJSContext()->tempLifoAlloc();
+    LifoAlloc& alloc = cx->tempLifoAlloc();
     RootedModuleObject module(cx, CompileModule(cx, options, srcBuf, alloc));
     if (!module)
         return nullptr;
 
     // This happens in GlobalHelperThreadState::finishModuleParseTask() when a
-    // module is compiled off main thread.
-    if (!ModuleObject::Freeze(cx->asJSContext(), module))
+    // module is compiled off thread.
+    if (!ModuleObject::Freeze(cx, module))
         return nullptr;
 
     return module;
@@ -671,6 +670,13 @@ frontend::CompileLazyFunction(JSContext* cx, Handle<LazyScript*> lazy, const cha
     if (!NameFunctions(cx, pn))
         return false;
 
+    // XDR the newly delazified function.
+    if (script->scriptSource()->hasEncoder() &&
+        !script->scriptSource()->xdrEncodeFunction(cx, fun, sourceObject))
+    {
+        return false;
+    }
+
     return true;
 }
 
@@ -678,7 +684,7 @@ bool
 frontend::CompileStandaloneFunction(JSContext* cx, MutableHandleFunction fun,
                                     const ReadOnlyCompileOptions& options,
                                     JS::SourceBufferHolder& srcBuf,
-                                    Maybe<uint32_t> parameterListEnd,
+                                    const Maybe<uint32_t>& parameterListEnd,
                                     HandleScope enclosingScope /* = nullptr */)
 {
     RootedScope scope(cx, enclosingScope);
@@ -694,7 +700,7 @@ bool
 frontend::CompileStandaloneGenerator(JSContext* cx, MutableHandleFunction fun,
                                      const ReadOnlyCompileOptions& options,
                                      JS::SourceBufferHolder& srcBuf,
-                                     Maybe<uint32_t> parameterListEnd)
+                                     const Maybe<uint32_t>& parameterListEnd)
 {
     RootedScope emptyGlobalScope(cx, &cx->global()->emptyGlobalScope());
 
@@ -707,7 +713,7 @@ bool
 frontend::CompileStandaloneAsyncFunction(JSContext* cx, MutableHandleFunction fun,
                                          const ReadOnlyCompileOptions& options,
                                          JS::SourceBufferHolder& srcBuf,
-                                         Maybe<uint32_t> parameterListEnd)
+                                         const Maybe<uint32_t>& parameterListEnd)
 {
     RootedScope emptyGlobalScope(cx, &cx->global()->emptyGlobalScope());
 

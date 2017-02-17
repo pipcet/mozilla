@@ -8,10 +8,11 @@
  */
 
 add_task(function* () {
-  let { monitor } = yield initNetMonitor(SINGLE_GET_URL);
+  let { monitor } = yield initNetMonitor(SIMPLE_URL);
   info("Starting test... ");
 
-  let { document, EVENTS } = monitor.panelWin;
+  let { document, windowRequire } = monitor.panelWin;
+  let { EVENTS } = windowRequire("devtools/client/netmonitor/events");
   let button = document.querySelector("#requests-menu-reload-notice-button");
   button.click();
 
@@ -21,7 +22,7 @@ add_task(function* () {
     markers.push(marker);
   });
 
-  yield waitForNetworkEvents(monitor, 2);
+  yield waitForNetworkEvents(monitor, 1);
   yield waitUntil(() => markers.length == 2);
 
   ok(true, "Reloading finished");

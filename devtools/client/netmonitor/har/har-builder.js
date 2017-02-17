@@ -30,8 +30,7 @@ const HAR_VERSION = "1.1";
  *
  * The following options are supported:
  *
- * - items {Array}: List of Network requests to be exported. It is possible
- *   to use directly: NetMonitorView.RequestsMenu.items
+ * - items {Array}: List of Network requests to be exported.
  *
  * - id {String}: ID of the exported page.
  *
@@ -63,9 +62,7 @@ HarBuilder.prototype = {
     let log = this.buildLog();
 
     // Build entries.
-    let items = this._options.items;
-    for (let i = 0; i < items.length; i++) {
-      let file = items[i].attachment;
+    for (let file of this._options.items) {
       log.entries.push(this.buildEntry(log, file));
     }
 

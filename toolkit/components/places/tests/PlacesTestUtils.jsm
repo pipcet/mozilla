@@ -44,8 +44,7 @@ this.PlacesTestUtils = Object.freeze({
         placeInfo instanceof URL ||
         typeof placeInfo == "string") {
       places.push({ uri: placeInfo });
-    }
-    else if (Array.isArray(placeInfo)) {
+    } else if (Array.isArray(placeInfo)) {
       places = places.concat(placeInfo);
     } else if (typeof placeInfo == "object" && placeInfo.uri) {
       places.push(placeInfo)
@@ -158,6 +157,25 @@ this.PlacesTestUtils = Object.freeze({
        JOIN moz_places h ON h.id = v.place_id
        WHERE url_hash = hash(:url) AND url = :url`,
       { url });
+    return rows[0].getResultByIndex(0);
+  }),
+
+  /**
+   * Asynchronously checks the frecency for a specified page.
+   * @param aURI
+   *        nsIURI or address to look for.
+   *
+   * @return {Promise}
+   * @resolves Returns the frecency.
+   * @rejects JavaScript exception.
+   */
+  frecencyInDB: Task.async(function* (aURI) {
+    let url = aURI instanceof Ci.nsIURI ? new URL(aURI.spec) : new URL(aURI);
+    let db = yield PlacesUtils.promiseDBConnection();
+    let rows = yield db.executeCached(
+      `SELECT frecency FROM moz_places
+       WHERE url_hash = hash(:url) AND url = :url`,
+      { url: url.href });
     return rows[0].getResultByIndex(0);
   }),
 

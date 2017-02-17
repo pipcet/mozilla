@@ -53,6 +53,7 @@
 #include "nsSocketTransportService2.h"
 #include "nsIOService.h"
 #include "nsIUUIDGenerator.h"
+#include "nsIThrottlingService.h"
 
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/net/NeckoParent.h"
@@ -74,6 +75,10 @@
 #if defined(XP_MACOSX)
 #include <CoreServices/CoreServices.h>
 #include "nsCocoaFeatures.h"
+#endif
+
+#ifdef MOZ_TASK_TRACER
+#include "GeckoTaskTracer.h"
 #endif
 
 //-----------------------------------------------------------------------------
@@ -164,6 +169,7 @@ nsHttpHandler::nsHttpHandler()
     , mCapabilities(NS_HTTP_ALLOW_KEEPALIVE)
     , mReferrerLevel(0xff) // by default we always send a referrer
     , mSpoofReferrerSource(false)
+    , mHideOnionReferrerSource(false)
     , mReferrerTrimmingPolicy(0)
     , mReferrerXOriginTrimmingPolicy(0)
     , mReferrerXOriginPolicy(0)
@@ -582,6 +588,17 @@ nsHttpHandler::GetIOService(nsIIOService** result)
 
     NS_ADDREF(*result = mIOService);
     return NS_OK;
+}
+
+nsIThrottlingService *
+nsHttpHandler::GetThrottlingService()
+{
+    if (!mThrottlingService) {
+        nsCOMPtr<nsIThrottlingService> service = do_GetService(NS_THROTTLINGSERVICE_CONTRACTID);
+        mThrottlingService = new nsMainThreadPtrHolder<nsIThrottlingService>(service);
+    }
+
+    return mThrottlingService;
 }
 
 uint32_t
@@ -1070,6 +1087,12 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
         rv = prefs->GetBoolPref(HTTP_PREF("referer.spoofSource"), &cVar);
         if (NS_SUCCEEDED(rv))
             mSpoofReferrerSource = cVar;
+    }
+
+    if (PREF_CHANGED(HTTP_PREF("referer.spoofOnionSource"))) {
+        rv = prefs->GetBoolPref(HTTP_PREF("referer.spoofOnionSource"), &cVar);
+        if (NS_SUCCEEDED(rv))
+            mHideOnionReferrerSource = cVar;
     }
 
     if (PREF_CHANGED(HTTP_PREF("referer.trimmingPolicy"))) {
@@ -1997,6 +2020,14 @@ nsHttpHandler::NewProxiedChannel2(nsIURI *uri,
     LOG(("nsHttpHandler::NewProxiedChannel [proxyInfo=%p]\n",
         givenProxyInfo));
 
+#ifdef MOZ_TASK_TRACER
+    {
+        nsAutoCString urispec;
+        uri->GetSpec(urispec);
+        tasktracer::AddLabel("nsHttpHandler::NewProxiedChannel2 %s", urispec.get());
+    }
+#endif
+
     nsCOMPtr<nsProxyInfo> proxyInfo;
     if (givenProxyInfo) {
         proxyInfo = do_QueryInterface(givenProxyInfo);
@@ -2293,22 +2324,20 @@ nsHttpHandler::SpeculativeConnectInternal(nsIURI *aURI,
     nsAutoCString username;
     aURI->GetUsername(username);
 
-    NeckoOriginAttributes neckoOriginAttributes;
+    OriginAttributes originAttributes;
     // If the principal is given, we use the originAttributes from this
     // principal. Otherwise, we use the originAttributes from the
     // loadContext.
     if (aPrincipal) {
-        neckoOriginAttributes.InheritFromDocToNecko(
-            BasePrincipal::Cast(aPrincipal)->OriginAttributesRef());
+        originAttributes.Inherit(aPrincipal->OriginAttributesRef());
     } else if (loadContext) {
-        DocShellOriginAttributes docshellOriginAttributes;
-        loadContext->GetOriginAttributes(docshellOriginAttributes);
-        neckoOriginAttributes.InheritFromDocShellToNecko(docshellOriginAttributes);
+        loadContext->GetOriginAttributes(originAttributes);
+        originAttributes.StripAttributes(OriginAttributes::STRIP_ADDON_ID);
     }
 
     auto *ci =
         new nsHttpConnectionInfo(host, port, EmptyCString(), username, nullptr,
-                                 neckoOriginAttributes, usingSSL);
+                                 originAttributes, usingSSL);
     ci->SetAnonymous(anonymous);
 
     return SpeculativeConnect(ci, aCallbacks);

@@ -29,8 +29,9 @@ class nsAsyncVerifyRedirectCallbackEvent : public Runnable {
 public:
     nsAsyncVerifyRedirectCallbackEvent(nsIAsyncVerifyRedirectCallback *cb,
                                        nsresult result)
-        : mCallback(cb), mResult(result) {
-    }
+        : Runnable("nsAsyncVerifyRedirectCallbackEvent")
+        , mCallback(cb)
+        , mResult(result) {}
 
     NS_IMETHOD Run() override
     {
@@ -105,6 +106,12 @@ nsAsyncRedirectVerifyHelper::OnRedirectVerifyCallback(nsresult result)
     LOG(("nsAsyncRedirectVerifyHelper::OnRedirectVerifyCallback() "
          "result=%x expectedCBs=%u mResult=%x",
          result, mExpectedCallbacks, mResult));
+
+    MOZ_DIAGNOSTIC_ASSERT(mExpectedCallbacks > 0,
+                          "OnRedirectVerifyCallback called more times than expected");
+    if (mExpectedCallbacks <= 0) {
+      return NS_ERROR_UNEXPECTED;
+    }
 
     --mExpectedCallbacks;
 

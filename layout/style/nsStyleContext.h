@@ -10,7 +10,9 @@
 
 #include "mozilla/Assertions.h"
 #include "mozilla/RestyleLogging.h"
+#include "mozilla/ServoStyleSet.h"
 #include "mozilla/StyleContextSource.h"
+#include "mozilla/StyleComplexColor.h"
 #include "nsCSSAnonBoxes.h"
 #include "nsStyleSet.h"
 
@@ -351,6 +353,24 @@ public:
   #undef STYLE_STRUCT
 
   /**
+   * Equivalent to StyleFoo(), except that we skip the cache write during the
+   * servo traversal. This can cause incorrect behavior if used improperly,
+   * since we won't record that layout potentially depends on the values in
+   * this style struct. Use with care.
+   */
+
+  #define STYLE_STRUCT(name_, checkdata_cb_)                                  \
+    const nsStyle##name_ * ThreadsafeStyle##name_() {                         \
+      if (mozilla::ServoStyleSet::IsInServoTraversal()) {                     \
+        return Servo_GetStyle##name_(mSource.AsServoComputedValues());        \
+      }                                                                       \
+      return Style##name_();                                                  \
+    }
+  #include "nsStyleStructList.h"
+  #undef STYLE_STRUCT
+
+
+  /**
    * PeekStyle* is like Style* but doesn't trigger style
    * computation if the data is not cached on either the style context
    * or the rule node.
@@ -409,11 +429,12 @@ public:
    * Get a color that depends on link-visitedness using this and
    * this->GetStyleIfVisited().
    *
-   * aProperty must be a color-valued property that StyleAnimationValue
-   * knows how to extract.  It must also be a property that we know to
-   * do change handling for in nsStyleContext::CalcDifference.
+   * @param aField A pointer to a member variable in a style struct.
+   *               The member variable and its style struct must have
+   *               been listed in nsCSSVisitedDependentPropList.h.
    */
-  nscolor GetVisitedDependentColor(nsCSSPropertyID aProperty);
+  template<typename T, typename S>
+  nscolor GetVisitedDependentColor(T S::* aField);
 
   /**
    * aColors should be a two element array of nscolor in which the first

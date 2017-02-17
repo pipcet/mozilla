@@ -99,8 +99,6 @@
         './src/media-conduit/AudioConduit.cpp',
         './src/media-conduit/VideoConduit.h',
         './src/media-conduit/VideoConduit.cpp',
-        './src/media-conduit/CodecStatistics.h',
-        './src/media-conduit/CodecStatistics.cpp',
         './src/media-conduit/RunningStat.h',
         # Common
         './src/common/CommonTypes.h',
@@ -366,6 +364,12 @@
 
           'cflags_mozilla': [
           ],
+        }],
+        ['clang == 1', {
+          'cflags_mozilla': [
+            '-Wno-inconsistent-missing-override',
+            '-Wno-macro-redefined',
+         ],
         }],
       ],
     },

@@ -12,8 +12,7 @@
 #include "FFmpegAudioDecoder.h"
 #include "FFmpegVideoDecoder.h"
 
-namespace mozilla
-{
+namespace mozilla {
 
 template <int V>
 class FFmpegDecoderModule : public PlatformDecoderModule
@@ -27,16 +26,22 @@ public:
     return pdm.forget();
   }
 
-  explicit FFmpegDecoderModule(FFmpegLibWrapper* aLib) : mLib(aLib) {}
-  virtual ~FFmpegDecoderModule() {}
+  explicit FFmpegDecoderModule(FFmpegLibWrapper* aLib) : mLib(aLib) { }
+  virtual ~FFmpegDecoderModule() { }
 
   already_AddRefed<MediaDataDecoder>
   CreateVideoDecoder(const CreateDecoderParams& aParams) override
   {
+    // Temporary - forces use of VPXDecoder when alpha is present.
+    // Bug 1263836 will handle alpha scenario once implemented. It will shift
+    // the check for alpha to PDMFactory but not itself remove the need for a
+    // check.
+    if (aParams.VideoConfig().HasAlpha()) {
+      return nullptr;
+    }
     RefPtr<MediaDataDecoder> decoder =
       new FFmpegVideoDecoder<V>(mLib,
                                 aParams.mTaskQueue,
-                                aParams.mCallback,
                                 aParams.VideoConfig(),
                                 aParams.mImageContainer);
     return decoder.forget();
@@ -48,7 +53,6 @@ public:
     RefPtr<MediaDataDecoder> decoder =
       new FFmpegAudioDecoder<V>(mLib,
                                 aParams.mTaskQueue,
-                                aParams.mCallback,
                                 aParams.AudioConfig());
     return decoder.forget();
   }
@@ -68,9 +72,9 @@ public:
   ConversionRequired
   DecoderNeedsConversion(const TrackInfo& aConfig) const override
   {
-    if (aConfig.IsVideo() &&
-        (aConfig.mMimeType.EqualsLiteral("video/avc") ||
-         aConfig.mMimeType.EqualsLiteral("video/mp4"))) {
+    if (aConfig.IsVideo()
+        && (aConfig.mMimeType.EqualsLiteral("video/avc")
+            || aConfig.mMimeType.EqualsLiteral("video/mp4"))) {
       return ConversionRequired::kNeedAVCC;
     } else {
       return ConversionRequired::kNeedNone;

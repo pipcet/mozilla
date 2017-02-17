@@ -53,6 +53,7 @@
 #include "MediaStreamList.h"
 #include "nsIScriptGlobalObject.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/Telemetry.h"
 #include "mozilla/dom/RTCStatsReportBinding.h"
 #include "MediaStreamTrack.h"
 #include "VideoStreamTrack.h"
@@ -66,6 +67,14 @@ namespace mozilla {
 using namespace dom;
 
 static const char* logTag = "PeerConnectionMedia";
+
+//XXX(pkerr) What about bitrate settings? Going with the defaults for now.
+RefPtr<WebRtcCallWrapper>
+CreateCall()
+{
+  WebRtcCallWrapper::Config call_config;
+  return WebRtcCallWrapper::Create(call_config);
+}
 
 nsresult
 PeerConnectionMedia::ReplaceTrack(const std::string& aOldStreamId,
@@ -164,8 +173,8 @@ void SourceStreamInfo::DetachTransport_s()
   ASSERT_ON_THREAD(mParent->GetSTSThread());
   // walk through all the MediaPipelines and call the shutdown
   // transport functions. Must be on the STS thread.
-  for (auto it = mPipelines.begin(); it != mPipelines.end(); ++it) {
-    it->second->DetachTransport_s();
+  for (auto& pipeline : mPipelines) {
+    pipeline.second->DetachTransport_s();
   }
 }
 
@@ -175,8 +184,8 @@ void SourceStreamInfo::DetachMedia_m()
 
   // walk through all the MediaPipelines and call the shutdown
   // media functions. Must be on the main thread.
-  for (auto it = mPipelines.begin(); it != mPipelines.end(); ++it) {
-    it->second->ShutdownMedia_m();
+  for (auto& pipeline : mPipelines) {
+    pipeline.second->ShutdownMedia_m();
   }
   mMediaStream = nullptr;
 }
@@ -406,6 +415,9 @@ nsresult PeerConnectionMedia::Init(const std::vector<NrIceStunServer>& stun_serv
   }
   ConnectSignals(mIceCtxHdlr->ctx().get());
 
+  // This webrtc:Call instance will be shared by audio and video media conduits.
+  mCall = CreateCall();
+
   return NS_OK;
 }
 
@@ -457,7 +469,8 @@ PeerConnectionMedia::EnsureTransport_s(size_t aLevel, size_t aComponentCount)
 }
 
 void
-PeerConnectionMedia::ActivateOrRemoveTransports(const JsepSession& aSession)
+PeerConnectionMedia::ActivateOrRemoveTransports(const JsepSession& aSession,
+                                                const bool forceIceTcp)
 {
   auto transports = aSession.GetTransports();
   for (size_t i = 0; i < transports.size(); ++i) {
@@ -478,6 +491,14 @@ PeerConnectionMedia::ActivateOrRemoveTransports(const JsepSession& aSession)
       // Make sure the MediaPipelineFactory doesn't try to use these.
       RemoveTransportFlow(i, false);
       RemoveTransportFlow(i, true);
+    }
+
+    if (forceIceTcp) {
+      candidates.erase(std::remove_if(candidates.begin(),
+                                      candidates.end(),
+                                      [](const std::string & s) {
+                                        return s.find(" UDP "); }),
+                       candidates.end());
     }
 
     RUN_ON_THREAD(
@@ -530,8 +551,8 @@ PeerConnectionMedia::ActivateOrRemoveTransport_s(
                 static_cast<unsigned>(aComponentCount));
 
     std::vector<std::string> attrs;
-    for (auto i = aCandidateList.begin(); i != aCandidateList.end(); ++i) {
-      attrs.push_back("candidate:" + *i);
+    for (const auto& candidate : aCandidateList) {
+      attrs.push_back("candidate:" + candidate);
     }
     attrs.push_back("ice-ufrag:" + aUfrag);
     attrs.push_back("ice-pwd:" + aPassword);
@@ -563,10 +584,9 @@ nsresult PeerConnectionMedia::UpdateMediaPipelines(
   MediaPipelineFactory factory(this);
   nsresult rv;
 
-  for (auto i = trackPairs.begin(); i != trackPairs.end(); ++i) {
-    JsepTrackPair pair = *i;
-
+  for (auto pair : trackPairs) {
     if (pair.mReceiving) {
+
       rv = factory.CreateOrUpdateMediaPipeline(pair, *pair.mReceiving);
       if (NS_FAILED(rv)) {
         return rv;
@@ -618,8 +638,8 @@ PeerConnectionMedia::StartIceChecks_s(
 
   if (!aIceOptionsList.empty()) {
     attributes.push_back("ice-options:");
-    for (auto i = aIceOptionsList.begin(); i != aIceOptionsList.end(); ++i) {
-      attributes.back() += *i + ' ';
+    for (const auto& option : aIceOptionsList) {
+      attributes.back() += option + ' ';
     }
   }
 
@@ -719,10 +739,8 @@ PeerConnectionMedia::FinalizeIceRestart_s()
   ASSERT_ON_THREAD(mSTSThread);
 
   // reset old streams since we don't need them anymore
-  for (auto i = mTransportFlows.begin();
-       i != mTransportFlows.end();
-       ++i) {
-    RefPtr<TransportFlow> aFlow = i->second;
+  for (auto& transportFlow : mTransportFlows) {
+    RefPtr<TransportFlow> aFlow = transportFlow.second;
     if (!aFlow) continue;
     TransportLayerIce* ice =
       static_cast<TransportLayerIce*>(aFlow->GetLayer(TransportLayerIce::ID()));
@@ -758,10 +776,8 @@ PeerConnectionMedia::RollbackIceRestart_s()
   RefPtr<NrIceCtx> restartCtx = mIceCtxHdlr->ctx();
 
   // restore old streams since we're rolling back
-  for (auto i = mTransportFlows.begin();
-       i != mTransportFlows.end();
-       ++i) {
-    RefPtr<TransportFlow> aFlow = i->second;
+  for (auto& transportFlow : mTransportFlows) {
+    RefPtr<TransportFlow> aFlow = transportFlow.second;
     if (!aFlow) continue;
     TransportLayerIce* ice =
       static_cast<TransportLayerIce*>(aFlow->GetLayer(TransportLayerIce::ID()));
@@ -770,6 +786,11 @@ PeerConnectionMedia::RollbackIceRestart_s()
 
   mIceCtxHdlr->RollbackIceRestart();
   ConnectSignals(mIceCtxHdlr->ctx().get(), restartCtx.get());
+
+  // Fixup the telemetry by transferring abandoned ctx stats to current ctx.
+  NrIceStats stats = restartCtx->Destroy();
+  restartCtx = nullptr;
+  mIceCtxHdlr->ctx()->AccumulateStats(stats);
 }
 
 bool
@@ -846,6 +867,7 @@ PeerConnectionMedia::AddIceCandidate(const std::string& candidate,
                     aMLine),
                 NS_DISPATCH_NORMAL);
 }
+
 void
 PeerConnectionMedia::AddIceCandidate_s(const std::string& aCandidate,
                                        const std::string& aMid,
@@ -866,15 +888,28 @@ PeerConnectionMedia::AddIceCandidate_s(const std::string& aCandidate,
 }
 
 void
+PeerConnectionMedia::UpdateNetworkState(bool online) {
+  RUN_ON_THREAD(GetSTSThread(),
+                WrapRunnable(
+                    RefPtr<PeerConnectionMedia>(this),
+                    &PeerConnectionMedia::UpdateNetworkState_s,
+                    online),
+                NS_DISPATCH_NORMAL);
+}
+
+void
+PeerConnectionMedia::UpdateNetworkState_s(bool online) {
+  mIceCtxHdlr->ctx()->UpdateNetworkState(online);
+}
+
+void
 PeerConnectionMedia::FlushIceCtxOperationQueueIfReady()
 {
   ASSERT_ON_THREAD(mMainThread);
 
   if (IsIceCtxReady()) {
-    for (auto i = mQueuedIceCtxOperations.begin();
-         i != mQueuedIceCtxOperations.end();
-         ++i) {
-      GetSTSThread()->Dispatch(*i, NS_DISPATCH_NORMAL);
+    for (auto& mQueuedIceCtxOperation : mQueuedIceCtxOperations) {
+      GetSTSThread()->Dispatch(mQueuedIceCtxOperation, NS_DISPATCH_NORMAL);
     }
     mQueuedIceCtxOperations.clear();
   }
@@ -1064,6 +1099,25 @@ PeerConnectionMedia::ShutdownMediaTransport_s()
 
   disconnect_all();
   mTransportFlows.clear();
+
+#if !defined(MOZILLA_EXTERNAL_LINKAGE)
+  NrIceStats stats = mIceCtxHdlr->Destroy();
+
+  CSFLogDebug(logTag, "Ice Telemetry: stun (retransmits: %d)"
+                      "   turn (401s: %d   403s: %d   438s: %d)",
+              stats.stun_retransmits, stats.turn_401s, stats.turn_403s,
+              stats.turn_438s);
+
+  Telemetry::ScalarAdd(Telemetry::ScalarID::WEBRTC_NICER_STUN_RETRANSMITS,
+                       stats.stun_retransmits);
+  Telemetry::ScalarAdd(Telemetry::ScalarID::WEBRTC_NICER_TURN_401S,
+                       stats.turn_401s);
+  Telemetry::ScalarAdd(Telemetry::ScalarID::WEBRTC_NICER_TURN_403S,
+                       stats.turn_403s);
+  Telemetry::ScalarAdd(Telemetry::ScalarID::WEBRTC_NICER_TURN_438S,
+                       stats.turn_438s);
+#endif
+
   mIceCtxHdlr = nullptr;
 
   mMainThread->Dispatch(WrapRunnable(this, &PeerConnectionMedia::SelfDestruct_m),
@@ -1477,9 +1531,9 @@ LocalSourceStreamInfo::UpdateSinkIdentity_m(MediaStreamTrack* aTrack,
                                             nsIPrincipal* aPrincipal,
                                             const PeerIdentity* aSinkIdentity)
 {
-  for (auto it = mPipelines.begin(); it != mPipelines.end(); ++it) {
+  for (auto& pipeline_ : mPipelines) {
     MediaPipelineTransmit* pipeline =
-      static_cast<MediaPipelineTransmit*>((*it).second.get());
+      static_cast<MediaPipelineTransmit*>(pipeline_.second.get());
     pipeline->UpdateSinkIdentity_m(aTrack, aPrincipal, aSinkIdentity);
   }
 }
@@ -1525,8 +1579,8 @@ bool
 SourceStreamInfo::AnyCodecHasPluginID(uint64_t aPluginID)
 {
   // Scan the videoConduits for this plugin ID
-  for (auto it = mPipelines.begin(); it != mPipelines.end(); ++it) {
-    if (it->second->Conduit()->CodecPluginID() == aPluginID) {
+  for (auto& pipeline : mPipelines) {
+    if (pipeline.second->Conduit()->CodecPluginID() == aPluginID) {
       return true;
     }
   }
@@ -1659,7 +1713,8 @@ LocalSourceStreamInfo::ForgetPipelineByTrackId_m(const std::string& trackId)
 auto
 RemoteTrackSource::ApplyConstraints(
     nsPIDOMWindowInner* aWindow,
-    const dom::MediaTrackConstraints& aConstraints) -> already_AddRefed<PledgeVoid>
+    const dom::MediaTrackConstraints& aConstraints,
+    dom::CallerType aCallerType) -> already_AddRefed<PledgeVoid>
 {
   RefPtr<PledgeVoid> p = new PledgeVoid();
   p->Reject(new dom::MediaStreamError(aWindow,

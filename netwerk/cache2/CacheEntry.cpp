@@ -48,8 +48,6 @@ NS_IMPL_ISUPPORTS(CacheEntryHandle, nsICacheEntry)
 CacheEntryHandle::CacheEntryHandle(CacheEntry* aEntry)
 : mEntry(aEntry)
 {
-  MOZ_COUNT_CTOR(CacheEntryHandle);
-
 #ifdef DEBUG
   if (!mEntry->HandlesCount()) {
     // CacheEntry.mHandlesCount must go from zero to one only under
@@ -68,8 +66,6 @@ CacheEntryHandle::~CacheEntryHandle()
 {
   mEntry->ReleaseHandleRef();
   mEntry->OnHandleClosed(this);
-
-  MOZ_COUNT_DTOR(CacheEntryHandle);
 }
 
 // CacheEntry::Callback
@@ -1483,7 +1479,7 @@ NS_IMETHODIMP CacheEntry::Recreate(bool aMemoryOnly,
   }
 
   BackgroundOp(Ops::CALLBACKS, true);
-  return NS_OK;
+  return NS_ERROR_NOT_AVAILABLE;
 }
 
 NS_IMETHODIMP CacheEntry::GetDataSize(int64_t *aDataSize)
@@ -1554,6 +1550,18 @@ NS_IMETHODIMP CacheEntry::GetDiskStorageSizeInKB(uint32_t *aDiskStorageSize)
   }
 
   return mFile->GetDiskStorageSizeInKB(aDiskStorageSize);
+}
+
+NS_IMETHODIMP CacheEntry::GetLoadContextInfo(nsILoadContextInfo** aInfo)
+{
+  nsCOMPtr<nsILoadContextInfo> info = CacheFileUtils::ParseKey(mStorageID);
+  if (!info) {
+    return NS_ERROR_FAILURE;
+  }
+
+  info.forget(aInfo);
+
+  return NS_OK;
 }
 
 // nsIRunnable
@@ -1864,12 +1872,10 @@ void CacheEntry::StoreFrecency(double aFrecency)
 CacheOutputCloseListener::CacheOutputCloseListener(CacheEntry* aEntry)
 : mEntry(aEntry)
 {
-  MOZ_COUNT_CTOR(CacheOutputCloseListener);
 }
 
 CacheOutputCloseListener::~CacheOutputCloseListener()
 {
-  MOZ_COUNT_DTOR(CacheOutputCloseListener);
 }
 
 void CacheOutputCloseListener::OnOutputClosed()

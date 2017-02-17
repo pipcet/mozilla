@@ -26,7 +26,7 @@ public:
   explicit BinaryHashSearchArrayComparator(const uint8_t* aTarget, size_t len)
     : mTarget(aTarget)
   {
-    NS_ASSERTION(len == HASH_LEN, "Hashes should be of the same length.");
+    MOZ_ASSERT(len == HASH_LEN, "Hashes should be of the same length.");
   }
 
   int operator()(const CertAuthorityHash val) const {
@@ -76,7 +76,7 @@ RootCABinNumber(const SECItem* cert)
 // Attempt to increment the appropriate bin in the provided Telemetry probe ID. If
 // there was a hash failure, we do nothing.
 void
-AccumulateTelemetryForRootCA(mozilla::Telemetry::ID probe, 
+AccumulateTelemetryForRootCA(mozilla::Telemetry::HistogramID probe,
   const CERTCertificate* cert)
 {
   int32_t binId = RootCABinNumber(&cert->derCert);

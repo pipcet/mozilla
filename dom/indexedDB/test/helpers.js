@@ -44,7 +44,7 @@ function clearAllDatabases(callback) {
 var testHarnessGenerator = testHarnessSteps();
 testHarnessGenerator.next();
 
-function testHarnessSteps() {
+function* testHarnessSteps() {
   function nextTestHarnessStep(val) {
     testHarnessGenerator.next(val);
   }
@@ -76,7 +76,6 @@ function testHarnessSteps() {
         ["dom.indexedDB.testing", true],
         ["dom.indexedDB.experimental", true],
         ["dom.archivereader.enabled", true],
-        ["dom.workers.latestJSVersion", true],
         ["javascript.options.wasm", true]
       ]
     },
@@ -255,6 +254,13 @@ function continueToNextStepSync()
 function errorHandler(event)
 {
   ok(false, "indexedDB error, '" + event.target.error.name + "'");
+  finishTest();
+}
+
+// For error callbacks where the argument is not an event object.
+function errorCallbackHandler(err)
+{
+  ok(false, "got unexpected error callback: " + err);
   finishTest();
 }
 

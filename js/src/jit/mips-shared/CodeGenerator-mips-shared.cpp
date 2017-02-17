@@ -1736,7 +1736,7 @@ CodeGeneratorMIPSShared::visitBitAndAndBranch(LBitAndAndBranch* lir)
         masm.ma_and(ScratchRegister, ToRegister(lir->left()), Imm32(ToInt32(lir->right())));
     else
         masm.as_and(ScratchRegister, ToRegister(lir->left()), ToRegister(lir->right()));
-    emitBranch(ScratchRegister, ScratchRegister, Assembler::NonZero, lir->ifTrue(),
+    emitBranch(ScratchRegister, ScratchRegister, lir->cond(), lir->ifTrue(),
                lir->ifFalse());
 }
 
@@ -1915,7 +1915,7 @@ CodeGeneratorMIPSShared::emitWasmLoad(T* lir)
 
     BaseIndex address(HeapReg, ptr, TimesOne);
 
-    if (mir->access().isUnaligned()) {
+    if (IsUnaligned(mir->access())) {
         Register temp = ToRegister(lir->getTemp(1));
 
         if (isFloat) {
@@ -2000,7 +2000,7 @@ CodeGeneratorMIPSShared::emitWasmStore(T* lir)
 
     BaseIndex address(HeapReg, ptr, TimesOne);
 
-    if (mir->access().isUnaligned()) {
+    if (IsUnaligned(mir->access())) {
         Register temp = ToRegister(lir->getTemp(1));
 
         if (isFloat) {
@@ -2118,11 +2118,9 @@ CodeGeneratorMIPSShared::visitAsmJSLoadHeap(LAsmJSLoadHeap* ins)
     // Offset is out of range. Load default values.
     if (isFloat) {
         if (size == 32)
-            masm.loadFloat32(Address(GlobalReg, wasm::NaN32GlobalDataOffset - WasmGlobalRegBias),
-                             ToFloatRegister(out));
+            masm.loadConstantFloat32(float(GenericNaN()), ToFloatRegister(out));
         else
-            masm.loadDouble(Address(GlobalReg, wasm::NaN64GlobalDataOffset - WasmGlobalRegBias),
-                            ToFloatRegister(out));
+            masm.loadConstantDouble(GenericNaN(), ToFloatRegister(out));
     } else {
         masm.move32(Imm32(0), ToRegister(out));
     }
@@ -2453,34 +2451,6 @@ CodeGeneratorMIPSShared::visitEffectiveAddress(LEffectiveAddress* ins)
 
     BaseIndex address(base, index, mir->scale(), mir->displacement());
     masm.computeEffectiveAddress(address, output);
-}
-
-void
-CodeGeneratorMIPSShared::visitWasmLoadGlobalVar(LWasmLoadGlobalVar* ins)
-{
-    const MWasmLoadGlobalVar* mir = ins->mir();
-    unsigned addr = mir->globalDataOffset() - WasmGlobalRegBias;
-    if (mir->type() == MIRType::Int32)
-        masm.load32(Address(GlobalReg, addr), ToRegister(ins->output()));
-    else if (mir->type() == MIRType::Float32)
-        masm.loadFloat32(Address(GlobalReg, addr), ToFloatRegister(ins->output()));
-    else
-        masm.loadDouble(Address(GlobalReg, addr), ToFloatRegister(ins->output()));
-}
-
-void
-CodeGeneratorMIPSShared::visitWasmStoreGlobalVar(LWasmStoreGlobalVar* ins)
-{
-    const MWasmStoreGlobalVar* mir = ins->mir();
-
-    MOZ_ASSERT(IsNumberType(mir->value()->type()));
-    unsigned addr = mir->globalDataOffset() - WasmGlobalRegBias;
-    if (mir->value()->type() == MIRType::Int32)
-        masm.store32(ToRegister(ins->value()), Address(GlobalReg, addr));
-    else if (mir->value()->type() == MIRType::Float32)
-        masm.storeFloat32(ToFloatRegister(ins->value()), Address(GlobalReg, addr));
-    else
-        masm.storeDouble(ToFloatRegister(ins->value()), Address(GlobalReg, addr));
 }
 
 void

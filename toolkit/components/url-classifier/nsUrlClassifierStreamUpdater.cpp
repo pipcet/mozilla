@@ -10,6 +10,7 @@
 #include "nsIUploadChannel.h"
 #include "nsIURI.h"
 #include "nsIUrlClassifierDBService.h"
+#include "nsUrlClassifierUtils.h"
 #include "nsNetUtil.h"
 #include "nsStreamUtils.h"
 #include "nsStringStream.h"
@@ -23,8 +24,7 @@
 #include "mozilla/Telemetry.h"
 #include "nsContentUtils.h"
 #include "nsIURLFormatter.h"
-
-using mozilla::DocShellOriginAttributes;
+#include "Classifier.h"
 
 static const char* gQuitApplicationMessage = "quit-application";
 
@@ -98,6 +98,7 @@ nsUrlClassifierStreamUpdater::DownloadDone()
   mSuccessCallback = nullptr;
   mUpdateErrorCallback = nullptr;
   mDownloadErrorCallback = nullptr;
+  mTelemetryProvider.Truncate();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -130,7 +131,11 @@ nsUrlClassifierStreamUpdater::FetchUpdate(nsIURI *aUpdateUrl,
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsILoadInfo> loadInfo = mChannel->GetLoadInfo();
-  loadInfo->SetOriginAttributes(mozilla::NeckoOriginAttributes(NECKO_SAFEBROWSING_APP_ID, false));
+  mozilla::OriginAttributes attrs;
+  attrs.mFirstPartyDomain.AssignLiteral(NECKO_SAFEBROWSING_FIRST_PARTY_DOMAIN);
+  if (loadInfo) {
+    loadInfo->SetOriginAttributes(attrs);
+  }
 
   mBeganStream = false;
 
@@ -173,15 +178,6 @@ nsUrlClassifierStreamUpdater::FetchUpdate(nsIURI *aUpdateUrl,
     rv = httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Connection"), NS_LITERAL_CSTRING("close"), false);
     NS_ENSURE_SUCCESS(rv, rv);
   }
-
-  // Create a custom LoadContext for SafeBrowsing, so we can use callbacks on
-  // the channel to query the appId which allows separation of safebrowsing
-  // cookies in a separate jar.
-  DocShellOriginAttributes attrs;
-  attrs.mAppId = NECKO_SAFEBROWSING_APP_ID;
-  nsCOMPtr<nsIInterfaceRequestor> sbContext = new mozilla::LoadContext(attrs);
-  rv = mChannel->SetNotificationCallbacks(sbContext);
-  NS_ENSURE_SUCCESS(rv, rv);
 
   // Make the request.
   rv = mChannel->AsyncOpen2(this);
@@ -290,6 +286,14 @@ nsUrlClassifierStreamUpdater::DownloadUpdates(
   if (NS_FAILED(rv)) {
     return rv;
   }
+
+  nsCOMPtr<nsIUrlClassifierUtils> urlUtil =
+    do_GetService(NS_URLCLASSIFIERUTILS_CONTRACTID);
+
+  nsTArray<nsCString> tables;
+  mozilla::safebrowsing::Classifier::SplitTables(aRequestTables, tables);
+  urlUtil->GetTelemetryProvider(tables.SafeElementAt(0, EmptyCString()),
+                                mTelemetryProvider);
 
   mSuccessCallback = aSuccessCallback;
   mUpdateErrorCallback = aUpdateErrorCallback;
@@ -646,8 +650,8 @@ nsUrlClassifierStreamUpdater::OnStartRequest(nsIRequest *request,
     if (NS_FAILED(status)) {
       // Assume we're overloading the server and trigger backoff.
       downloadError = true;
-      mozilla::Telemetry::Accumulate(mozilla::Telemetry::URLCLASSIFIER_UPDATE_REMOTE_STATUS,
-                                     15 /* unknown response code */);
+      mozilla::Telemetry::Accumulate(mozilla::Telemetry::URLCLASSIFIER_UPDATE_REMOTE_STATUS2,
+                                     mTelemetryProvider, 15 /* unknown response code */);
 
     } else {
       bool succeeded = false;
@@ -657,8 +661,8 @@ nsUrlClassifierStreamUpdater::OnStartRequest(nsIRequest *request,
       uint32_t requestStatus;
       rv = httpChannel->GetResponseStatus(&requestStatus);
       NS_ENSURE_SUCCESS(rv, rv);
-      mozilla::Telemetry::Accumulate(mozilla::Telemetry::URLCLASSIFIER_UPDATE_REMOTE_STATUS,
-                                     HTTPStatusToBucket(requestStatus));
+      mozilla::Telemetry::Accumulate(mozilla::Telemetry::URLCLASSIFIER_UPDATE_REMOTE_STATUS2,
+                                     mTelemetryProvider, HTTPStatusToBucket(requestStatus));
       LOG(("nsUrlClassifierStreamUpdater::OnStartRequest %s (%d)", succeeded ?
            "succeeded" : "failed", requestStatus));
       if (!succeeded) {

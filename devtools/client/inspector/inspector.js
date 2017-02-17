@@ -13,7 +13,7 @@ var promise = require("promise");
 var defer = require("devtools/shared/defer");
 var EventEmitter = require("devtools/shared/event-emitter");
 const {executeSoon} = require("devtools/shared/DevToolsUtils");
-var {KeyShortcuts} = require("devtools/client/shared/key-shortcuts");
+var KeyShortcuts = require("devtools/client/shared/key-shortcuts");
 var {Task} = require("devtools/shared/task");
 const {initCssProperties} = require("devtools/shared/fronts/css-properties");
 const nodeConstants = require("devtools/shared/dom-node-constants");
@@ -33,6 +33,8 @@ const MarkupView = require("devtools/client/inspector/markup/markup");
 const {CommandUtils} = require("devtools/client/shared/developer-toolbar");
 const {ViewHelpers} = require("devtools/client/shared/widgets/view-helpers");
 const clipboardHelper = require("devtools/shared/platform/clipboard");
+
+const Store = require("devtools/client/inspector/store");
 
 const {LocalizationHelper, localizeMarkup} = require("devtools/shared/l10n");
 const INSPECTOR_L10N =
@@ -92,6 +94,7 @@ function Inspector(toolbox) {
   this.panelWin.inspector = this;
 
   this.highlighters = new HighlightersOverlay(this);
+  this.store = Store();
   this.telemetry = new Telemetry();
 
   this.nodeMenuTriggerInfo = null;
@@ -167,6 +170,10 @@ Inspector.prototype = {
 
   get canGetUniqueSelector() {
     return this._target.client.traits.getUniqueSelector;
+  },
+
+  get canGetCssPath() {
+    return this._target.client.traits.getCssPath;
   },
 
   get canGetUsedFontFaces() {
@@ -568,7 +575,7 @@ Inspector.prototype = {
     this.computedview = new ComputedViewTool(this, this.panelWin);
 
     if (Services.prefs.getBoolPref("devtools.layoutview.enabled")) {
-      const {LayoutView} = this.browserRequire("devtools/client/inspector/layout/layout");
+      const LayoutView = this.browserRequire("devtools/client/inspector/layout/layout");
       this.layoutview = new LayoutView(this, this.panelWin);
     }
 
@@ -906,7 +913,6 @@ Inspector.prototype = {
     this.cancelUpdate();
 
     this.target.off("will-navigate", this._onBeforeNavigate);
-
     this.target.off("thread-paused", this.updateDebuggerPausedWarning);
     this.target.off("thread-resumed", this.updateDebuggerPausedWarning);
     this._toolbox.off("select", this.updateDebuggerPausedWarning);
@@ -938,8 +944,6 @@ Inspector.prototype = {
 
     this.teardownSplitter();
 
-    this.sidebar = null;
-
     this.teardownToolbar();
     this.breadcrumbs.destroy();
     this.selection.off("new-node-front", this.onNewSelection);
@@ -947,12 +951,14 @@ Inspector.prototype = {
 
     let markupDestroyer = this._destroyMarkup();
 
-    this.panelWin.inspector = null;
-    this.target = null;
-    this.panelDoc = null;
-    this.panelWin = null;
-    this.breadcrumbs = null;
     this._toolbox = null;
+    this.breadcrumbs = null;
+    this.panelDoc = null;
+    this.panelWin.inspector = null;
+    this.panelWin = null;
+    this.sidebar = null;
+    this.store = null;
+    this.target = null;
 
     this.highlighters.destroy();
     this.highlighters = null;
@@ -1111,6 +1117,15 @@ Inspector.prototype = {
       disabled: !isSelectionElement,
       hidden: !this.canGetUniqueSelector,
       click: () => this.copyUniqueSelector(),
+    }));
+    copySubmenu.append(new MenuItem({
+      id: "node-menu-copycsspath",
+      label: INSPECTOR_L10N.getStr("inspectorCopyCSSPath.label"),
+      accesskey:
+        INSPECTOR_L10N.getStr("inspectorCopyCSSPath.accesskey"),
+      disabled: !isSelectionElement,
+      hidden: !this.canGetCssPath,
+      click: () => this.copyCssPath(),
     }));
     copySubmenu.append(new MenuItem({
       id: "node-menu-copyimagedatauri",
@@ -1393,7 +1408,7 @@ Inspector.prototype = {
     }
 
     if (this._markupFrame) {
-      this._markupFrame.parentNode.removeChild(this._markupFrame);
+      this._markupFrame.remove();
       this._markupFrame = null;
     }
 
@@ -1440,7 +1455,7 @@ Inspector.prototype = {
   },
 
   onEyeDropperButtonClicked: function () {
-    this.eyeDropperButton.hasAttribute("checked")
+    this.eyeDropperButton.classList.contains("checked")
       ? this.hideEyeDropper()
       : this.showEyeDropper();
   },
@@ -1458,7 +1473,7 @@ Inspector.prototype = {
   },
 
   onEyeDropperDone: function () {
-    this.eyeDropperButton.removeAttribute("checked");
+    this.eyeDropperButton.classList.remove("checked");
     this.stopEyeDropperListeners();
   },
 
@@ -1474,7 +1489,7 @@ Inspector.prototype = {
     }
 
     this.telemetry.toolOpened("toolbareyedropper");
-    this.eyeDropperButton.setAttribute("checked", "true");
+    this.eyeDropperButton.classList.add("checked");
     this.startEyeDropperListeners();
     return this.inspector.pickColorFromPage(this.toolbox, {copyOnSelect: true})
                          .catch(e => console.error(e));
@@ -1491,7 +1506,7 @@ Inspector.prototype = {
       return null;
     }
 
-    this.eyeDropperButton.removeAttribute("checked");
+    this.eyeDropperButton.classList.remove("checked");
     this.stopEyeDropperListeners();
     return this.inspector.cancelPickColorFromPage()
                          .catch(e => console.error(e));
@@ -1715,9 +1730,24 @@ Inspector.prototype = {
       return;
     }
 
-    this.selection.nodeFront.getUniqueSelector().then((selector) => {
+    this.telemetry.toolOpened("copyuniquecssselector");
+    this.selection.nodeFront.getUniqueSelector().then(selector => {
       clipboardHelper.copyString(selector);
-    }).then(null, console.error);
+    }).catch(e => console.error);
+  },
+
+  /**
+   * Copy the full CSS Path of the selected Node to the clipboard.
+   */
+  copyCssPath: function () {
+    if (!this.selection.isNode()) {
+      return;
+    }
+
+    this.telemetry.toolOpened("copyfullcssselector");
+    this.selection.nodeFront.getCssPath().then(path => {
+      clipboardHelper.copyString(path);
+    }).catch(e => console.error);
   },
 
   /**
@@ -1727,14 +1757,11 @@ Inspector.prototype = {
     const command = Services.prefs.getBoolPref("devtools.screenshot.clipboard.enabled") ?
       "screenshot --file --clipboard --selector" :
       "screenshot --file --selector";
-    CommandUtils.createRequisition(this._target, {
-      environment: CommandUtils.createEnvironment(this, "_target")
-    }).then(requisition => {
-      // Bug 1180314 -  CssSelector might contain white space so need to make sure it is
-      // passed to screenshot as a single parameter.  More work *might* be needed if
-      // CssSelector could contain escaped single- or double-quotes, backslashes, etc.
-      requisition.updateExec(`${command} '${this.selectionCssSelector}'`);
-    });
+    // Bug 1180314 -  CssSelector might contain white space so need to make sure it is
+    // passed to screenshot as a single parameter.  More work *might* be needed if
+    // CssSelector could contain escaped single- or double-quotes, backslashes, etc.
+    CommandUtils.executeOnTarget(this._target,
+      `${command} '${this.selectionCssSelector}'`);
   },
 
   /**

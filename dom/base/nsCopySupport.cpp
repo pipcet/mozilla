@@ -589,6 +589,15 @@ static nsresult AppendImagePromise(nsITransferable* aTransferable,
   nsresult rv;
 
   NS_ENSURE_TRUE(aImgRequest, NS_OK);
+
+  uint32_t imageStatus;
+  rv = aImgRequest->GetImageStatus(&imageStatus);
+  NS_ENSURE_SUCCESS(rv, rv);
+  if (!(imageStatus & imgIRequest::STATUS_FRAME_COMPLETE) ||
+      (imageStatus & imgIRequest::STATUS_ERROR)) {
+    return NS_OK;
+  }
+
   nsCOMPtr<nsINode> node = do_QueryInterface(aImageElement, &rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -722,7 +731,7 @@ IsSelectionInsideRuby(nsISelection* aSelection)
   if (NS_FAILED(rv)) {
     return false;
   }
-  for (auto i : MakeRange(rangeCount)) {
+  for (auto i : IntegerRange(rangeCount)) {
     nsCOMPtr<nsIDOMRange> range;
     aSelection->GetRangeAt(i, getter_AddRefs(range));
     nsCOMPtr<nsIDOMNode> node;
@@ -834,7 +843,7 @@ nsCopySupport::FireClipboardEvent(EventMessage aEventMessage,
 
   // Update the presentation in case the event handler modified the selection,
   // see bug 602231.
-  presShell->FlushPendingNotifications(Flush_Frames);
+  presShell->FlushPendingNotifications(FlushType::Frames);
   if (presShell->IsDestroying())
     return false;
 

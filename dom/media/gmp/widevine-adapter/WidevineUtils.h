@@ -12,18 +12,15 @@
 #include "gmp-api/gmp-platform.h"
 #include "nsISupportsImpl.h"
 #include "nsTArray.h"
+#include "mozilla/Logging.h"
 
 namespace mozilla {
 
-// Uncomment for logging...
-//#define ENABLE_WIDEVINE_LOG 1
-#ifdef ENABLE_WIDEVINE_LOG
-void
-Log(const char* aFormat, ...);
-#else
-#define Log(...)
-#endif // ENABLE_WIDEVINE_LOG
+namespace detail {
+LogModule* GetCDMLog();
+} // namespace detail
 
+#define Log(...) MOZ_LOG(detail::GetCDMLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
 
 #define ENSURE_TRUE(condition, rv) { \
   if (!(condition)) {\
@@ -42,23 +39,19 @@ Log(const char* aFormat, ...);
 GMPErr
 ToGMPErr(cdm::Status aStatus);
 
+class WidevineDecryptor;
+
 class CDMWrapper {
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(CDMWrapper)
 
-  explicit CDMWrapper(cdm::ContentDecryptionModule_8* aCDM)
-    : mCDM(aCDM)
-  {
-    MOZ_ASSERT(mCDM);
-  }
+  explicit CDMWrapper(cdm::ContentDecryptionModule_8* aCDM,
+                      WidevineDecryptor* aDecryptor);
   cdm::ContentDecryptionModule_8* GetCDM() const { return mCDM; }
 private:
+  ~CDMWrapper();
   cdm::ContentDecryptionModule_8* mCDM;
-  ~CDMWrapper() {
-    Log("CDMWrapper destroying CDM=%p", mCDM);
-    mCDM->Destroy();
-    mCDM = nullptr;
-  }
+  RefPtr<WidevineDecryptor> mDecryptor;
 };
 
 void InitInputBuffer(const GMPEncryptedBufferMetadata* aCrypto,

@@ -34,14 +34,13 @@ class nsIProfileSaveEvent;
 class nsPluginTag;
 
 namespace mozilla {
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
 class ProfileGatherer;
 #endif
-namespace dom {
-class PCrashReporterParent;
-class CrashReporterParent;
-} // namespace dom
 
+namespace ipc {
+class CrashReporterHost;
+} // namespace ipc
 namespace layers {
 class TextureClientRecycleAllocator;
 } // namespace layers
@@ -86,8 +85,6 @@ class PluginModuleParent
 {
 protected:
     typedef mozilla::PluginLibrary PluginLibrary;
-    typedef mozilla::dom::PCrashReporterParent PCrashReporterParent;
-    typedef mozilla::dom::CrashReporterParent CrashReporterParent;
 
     PPluginInstanceParent*
     AllocPPluginInstanceParent(const nsCString& aMimeType,
@@ -167,12 +164,6 @@ protected:
 
     virtual mozilla::ipc::IPCResult
     RecvPluginHideWindow(const uint32_t& aWindowId) override;
-
-    virtual PCrashReporterParent*
-    AllocPCrashReporterParent(mozilla::dom::NativeThreadId* id,
-                              uint32_t* processType) override;
-    virtual bool
-    DeallocPCrashReporterParent(PCrashReporterParent* actor) override;
 
     virtual mozilla::ipc::IPCResult
     RecvSetCursor(const NSCursorInfo& aCursorInfo) override;
@@ -339,8 +330,6 @@ protected:
     NPPluginFuncs* mNPPIface;
     nsNPAPIPlugin* mPlugin;
     ipc::TaskFactory<PluginModuleParent> mTaskFactory;
-    nsString mPluginDumpID;
-    nsString mBrowserDumpID;
     nsString mHangID;
     RefPtr<nsIObserver> mProfilerObserver;
     TimeDuration mTimeBlocked;
@@ -358,7 +347,6 @@ protected:
     bool
     GetPluginDetails();
 
-    friend class mozilla::dom::CrashReporterParent;
     friend class mozilla::plugins::PluginAsyncSurrogate;
 
     bool              mIsStartingAsync;
@@ -370,6 +358,17 @@ protected:
 
     RefPtr<layers::TextureClientRecycleAllocator> mTextureAllocatorForDirectBitmap;
     RefPtr<layers::TextureClientRecycleAllocator> mTextureAllocatorForDXGISurface;
+
+#ifdef MOZ_CRASHREPORTER
+    /**
+     * This mutex protects the crash reporter when the Plugin Hang UI event
+     * handler is executing off main thread. It is intended to protect both
+     * the mCrashReporter variable in addition to the CrashReporterHost object
+     * that mCrashReporter refers to.
+     */
+    mozilla::Mutex mCrashReporterMutex;
+    UniquePtr<ipc::CrashReporterHost> mCrashReporter;
+#endif // MOZ_CRASHREPORTER
 };
 
 class PluginModuleContentParent : public PluginModuleParent
@@ -379,10 +378,10 @@ class PluginModuleContentParent : public PluginModuleParent
 
     static PluginLibrary* LoadModule(uint32_t aPluginId, nsPluginTag* aPluginTag);
 
-    static PluginModuleContentParent* Initialize(mozilla::ipc::Transport* aTransport,
-                                                 base::ProcessId aOtherProcess);
+    static void OnLoadPluginResult(const uint32_t& aPluginId,
+                                   const bool& aResult,
+                                   Endpoint<PPluginModuleParent>&& aEndpoint);
 
-    static void OnLoadPluginResult(const uint32_t& aPluginId, const bool& aResult);
     static void AssociatePluginId(uint32_t aPluginId, base::ProcessId aProcessId);
 
     virtual ~PluginModuleContentParent();
@@ -392,6 +391,8 @@ class PluginModuleContentParent : public PluginModuleParent
 #endif
 
   private:
+    static void Initialize(Endpoint<PPluginModuleParent>&& aEndpoint);
+
     virtual bool ShouldContinueFromReplyTimeout() override;
     virtual void OnExitedSyncSend() override;
 
@@ -408,6 +409,7 @@ class PluginModuleChromeParent
     : public PluginModuleParent
     , public mozilla::HangMonitor::Annotator
 {
+    friend class mozilla::ipc::CrashReporterHost;
   public:
     /**
      * LoadModule
@@ -494,7 +496,7 @@ class PluginModuleChromeParent
 
     void CachedSettingChanged();
 
-#ifdef  MOZ_ENABLE_PROFILER_SPS
+#ifdef  MOZ_GECKO_PROFILER
     void GatherAsyncProfile();
     void GatheredAsyncProfile(nsIProfileSaveEvent* aSaveEvent);
     void StartProfiler(nsIProfilerStartParams* aParams);
@@ -524,14 +526,8 @@ private:
 
 #ifdef MOZ_CRASHREPORTER
     void ProcessFirstMinidump();
-    void WriteExtraDataForMinidump(CrashReporter::AnnotationTable& notes);
+    void WriteExtraDataForMinidump();
 #endif
-
-    virtual PCrashReporterParent*
-    AllocPCrashReporterParent(mozilla::dom::NativeThreadId* id,
-                              uint32_t* processType) override;
-    virtual bool
-    DeallocPCrashReporterParent(PCrashReporterParent* actor) override;
 
     PluginProcessParent* Process() const { return mSubprocess; }
     base::ProcessHandle ChildProcessHandle() { return mSubprocess->GetChildProcessHandle(); }
@@ -553,19 +549,19 @@ private:
                                       int32_t aSandboxLevel,
                                       bool aAllowAsyncInit);
 
-    CrashReporterParent* CrashReporter();
-
     void CleanupFromTimeout(const bool aByHangUI);
 
     virtual void UpdatePluginTimeout() override;
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
     void InitPluginProfiling();
     void ShutdownPluginProfiling();
 #endif
 
     void RegisterSettingsCallbacks();
     void UnregisterSettingsCallbacks();
+
+    bool InitCrashReporter();
 
     virtual mozilla::ipc::IPCResult RecvNotifyContentModuleDestroyed() override;
 
@@ -594,17 +590,6 @@ private:
     PluginHangUIParent *mHangUIParent;
     bool mHangUIEnabled;
     bool mIsTimerReset;
-#ifdef MOZ_CRASHREPORTER
-    /**
-     * This mutex protects the crash reporter when the Plugin Hang UI event
-     * handler is executing off main thread. It is intended to protect both
-     * the mCrashReporter variable in addition to the CrashReporterParent object
-     * that mCrashReporter refers to.
-     */
-    mozilla::Mutex mCrashReporterMutex;
-    CrashReporterParent* mCrashReporter;
-#endif // MOZ_CRASHREPORTER
-
 
     /**
      * Launches the Plugin Hang UI.
@@ -623,7 +608,6 @@ private:
     FinishHangUI();
 #endif
 
-    friend class mozilla::dom::CrashReporterParent;
     friend class mozilla::plugins::PluginAsyncSurrogate;
 
 #ifdef MOZ_CRASHREPORTER_INJECTOR
@@ -672,7 +656,7 @@ private:
     // processes in existence!
     dom::ContentParent* mContentParent;
     nsCOMPtr<nsIObserver> mPluginOfflineObserver;
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
     RefPtr<mozilla::ProfileGatherer> mGatherer;
 #endif
     nsCString mProfile;

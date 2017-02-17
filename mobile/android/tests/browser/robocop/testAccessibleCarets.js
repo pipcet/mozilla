@@ -1,4 +1,4 @@
-﻿// -*- indent-tabs-mode: nil; js-indent-level: 2 -*-
+// -*- indent-tabs-mode: nil; js-indent-level: 2 -*-
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -29,16 +29,12 @@ const gChromeWin = Services.wm.getMostRecentWindow("navigator:browser");
  */
 function do_promiseTabChangeEvent(tabId, eventType) {
   return new Promise(resolve => {
-    let observer = (subject, topic, data) => {
-      let message = JSON.parse(data);
-
+    EventDispatcher.instance.registerListener(function listener(event, message, callback) {
       if (message.event === eventType && message.tabId === tabId) {
-        Services.obs.removeObserver(observer, TAB_CHANGE_EVENT);
-        resolve(data);
+        EventDispatcher.instance.unregisterListener(listener, TAB_CHANGE_EVENT);
+        resolve();
       }
-    }
-
-    Services.obs.addObserver(observer, TAB_CHANGE_EVENT, false);
+    }, TAB_CHANGE_EVENT);
   });
 }
 
@@ -57,7 +53,7 @@ function isInputOrTextarea(element) {
 function elementSelection(element) {
   return (isInputOrTextarea(element)) ?
     element.editor.selection :
-    element.ownerDocument.defaultView.getSelection();
+    element.ownerGlobal.getSelection();
 }
 
 /**
@@ -144,8 +140,8 @@ function UIhasActionByID(expectedActionID) {
  * Messages the ActionBarHandler to close the Selection UI.
  */
 function closeSelectionUI() {
-  Services.obs.notifyObservers(null, "TextSelection:End",
-    JSON.stringify({selectionID: gChromeWin.ActionBarHandler._selectionID}));
+  gChromeWin.WindowEventDispatcher.dispatch("TextSelection:End",
+    {selectionID: gChromeWin.ActionBarHandler._selectionID});
 }
 
 /**

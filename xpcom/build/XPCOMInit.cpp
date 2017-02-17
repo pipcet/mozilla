@@ -111,7 +111,6 @@ extern nsresult nsStringInputStreamConstructor(nsISupports*, REFNSIID, void**);
 #include "SpecialSystemDirectory.h"
 
 #if defined(XP_WIN)
-#include "mozilla/WindowsVersion.h"
 #include "nsWindowsRegKey.h"
 #endif
 
@@ -131,6 +130,7 @@ extern nsresult nsStringInputStreamConstructor(nsISupports*, REFNSIID, void**);
 #include "mozilla/Services.h"
 #include "mozilla/Omnijar.h"
 #include "mozilla/HangMonitor.h"
+#include "mozilla/SystemGroup.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/BackgroundHangMonitor.h"
 
@@ -219,7 +219,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsSupportsPRInt32)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsSupportsPRInt64)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsSupportsFloat)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsSupportsDouble)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsSupportsVoid)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsSupportsInterfacePointer)
 
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsConsoleService, Init)
@@ -472,13 +471,6 @@ NS_IMPL_ISUPPORTS(VPXReporter, nsIMemoryReporter)
 CountingAllocatorBase<VPXReporter>::sAmount(0);
 #endif /* MOZ_VPX */
 
-static double
-TimeSinceProcessCreation()
-{
-  bool ignore;
-  return (TimeStamp::Now() - TimeStamp::ProcessCreation(ignore)).ToMilliseconds();
-}
-
 static bool sInitializedJS = false;
 
 // Note that on OSX, aBinDirectory will point to .app/Contents/Resources/browser
@@ -501,8 +493,6 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
   NS_InitAtomTable();
 
   mozilla::LogModule::Init();
-
-  JS_SetCurrentEmbedderTimeFunction(TimeSinceProcessCreation);
 
   char aLocal;
   profiler_init(&aLocal);
@@ -564,6 +554,9 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
     return rv;
   }
 
+  // Init the SystemGroup for dispatching main thread runnables.
+  SystemGroup::InitStatic();
+
   // Set up the timer globals/timer thread
   rv = nsTimerImpl::Startup();
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -583,8 +576,6 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
 #endif
 
   NS_StartupLocalFile();
-
-  StartupSpecialSystemDirectory();
 
   nsDirectoryService::RealInit();
 
@@ -736,7 +727,9 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
   SharedThreadPool::InitStatics();
 
   // Force layout to spin up so that nsContentUtils is available for cx stack
-  // munging.
+  // munging.  Note that layout registers a number of static atoms, and also
+  // seals the static atom table, so NS_RegisterStaticAtom may not be called
+  // beyond this point.
   nsCOMPtr<nsISupports> componentLoader =
     do_GetService("@mozilla.org/moz/jsloader;1");
 
@@ -796,6 +789,9 @@ NS_InitMinimalXPCOM()
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
+
+  // Init the SystemGroup for dispatching main thread runnables.
+  SystemGroup::InitStatic();
 
   // Set up the timer globals/timer thread.
   rv = nsTimerImpl::Startup();
@@ -1040,7 +1036,7 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
     NS_WARNING("Component Manager was never created ...");
   }
 
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
   // In optimized builds we don't do shutdown collections by default, so
   // uncollected (garbage) objects may keep the nsXPConnect singleton alive,
   // and its XPCJSContext along with it. However, we still destroy various
@@ -1049,7 +1045,7 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
   // JS pseudo-stack's internal reference to the main thread JSContext,
   // duplicating the call in XPCJSContext::~XPCJSContext() in case that
   // never fired.
-  if (PseudoStack* stack = mozilla_get_pseudo_stack()) {
+  if (PseudoStack* stack = profiler_get_pseudo_stack()) {
     stack->sampleContext(nullptr);
   }
 #endif
@@ -1075,6 +1071,9 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
   }
   nsComponentManagerImpl::gComponentManager = nullptr;
   nsCategoryManager::Destroy();
+
+  // Shut down SystemGroup for main thread dispatching.
+  SystemGroup::Shutdown();
 
   NS_ShutdownAtomTable();
 

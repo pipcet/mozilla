@@ -7,7 +7,7 @@
 #ifndef mozilla_EffectSet_h
 #define mozilla_EffectSet_h
 
-#include "mozilla/AnimValuesStyleRule.h"
+#include "mozilla/AnimationRule.h" // For AnimationRule
 #include "mozilla/DebugOnly.h"
 #include "mozilla/EffectCompositor.h"
 #include "mozilla/EnumeratedArray.h"
@@ -57,7 +57,7 @@ public:
   // Methods for supporting cycle-collection
   void Traverse(nsCycleCollectionTraversalCallback& aCallback);
 
-  static EffectSet* GetEffectSet(dom::Element* aElement,
+  static EffectSet* GetEffectSet(const dom::Element* aElement,
                                  CSSPseudoElementType aPseudoType);
   static EffectSet* GetEffectSet(const nsIFrame* aFrame);
   static EffectSet* GetOrCreateEffectSet(dom::Element* aElement,
@@ -163,8 +163,8 @@ public:
 
   size_t Count() const { return mEffects.Count(); }
 
-  RefPtr<AnimValuesStyleRule>& AnimationRule(EffectCompositor::CascadeLevel
-                                             aCascadeLevel)
+  struct AnimationRule&
+  AnimationRule(EffectCompositor::CascadeLevel aCascadeLevel)
   {
     return mAnimationRule[aCascadeLevel];
   }
@@ -199,24 +199,6 @@ public:
     return mPropertiesForAnimationsLevel;
   }
 
-  StyleAnimationValue GetBaseStyle(nsCSSPropertyID aProperty) const
-  {
-    StyleAnimationValue result;
-    DebugOnly<bool> hasProperty = mBaseStyleValues.Get(aProperty, &result);
-    MOZ_ASSERT(hasProperty || result.IsNull());
-    return result;
-  }
-
-  void PutBaseStyle(nsCSSPropertyID aProperty,
-                    const StyleAnimationValue& aValue)
-  {
-    return mBaseStyleValues.Put(aProperty, aValue);
-  }
-  void ClearBaseStyles()
-  {
-    return mBaseStyleValues.Clear();
-  }
-
 private:
   static nsIAtom* GetEffectSetPropertyAtom(CSSPseudoElementType aPseudoType);
 
@@ -230,7 +212,7 @@ private:
   EnumeratedArray<EffectCompositor::CascadeLevel,
                   EffectCompositor::CascadeLevel(
                     EffectCompositor::kCascadeLevelCount),
-                  RefPtr<AnimValuesStyleRule>> mAnimationRule;
+                  mozilla::AnimationRule> mAnimationRule;
 
   // A parallel array to mAnimationRule that records the refresh driver
   // timestamp when the rule was last updated. This is used for certain
@@ -264,11 +246,6 @@ private:
   // animations level of the cascade and hence should be skipped when we are
   // composing the animation style for the transitions level of the cascede.
   nsCSSPropertyIDSet mPropertiesForAnimationsLevel;
-
-  // The non-animated values for properties animated by effects in this set that
-  // contain at least one animation value that is composited with the underlying
-  // value (i.e. it uses the additive or accumulate composite mode).
-  nsDataHashtable<nsUint32HashKey, StyleAnimationValue> mBaseStyleValues;
 
 #ifdef DEBUG
   // Track how many iterators are referencing this effect set when we are

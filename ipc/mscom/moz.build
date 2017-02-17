@@ -5,6 +5,8 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 EXPORTS.mozilla.mscom += [
+    'Aggregation.h',
+    'AsyncInvoker.h',
     'COMApartmentRegion.h',
     'COMPtrHolder.h',
     'EnsureMTA.h',
@@ -14,14 +16,11 @@ EXPORTS.mozilla.mscom += [
     'Utils.h',
 ]
 
-SOURCES += [
-    'Utils.cpp',
-]
-
 UNIFIED_SOURCES += [
     'EnsureMTA.cpp',
     'MainThreadRuntime.cpp',
     'ProxyStream.cpp',
+    'Utils.cpp',
 ]
 
 if CONFIG['ACCESSIBILITY']:
@@ -58,3 +57,6 @@ LOCAL_INCLUDES += [
 include('/ipc/chromium/chromium-config.mozbuild')
 
 FINAL_LIBRARY = 'xul'
+
+with Files("**"):
+    BUG_COMPONENT = ("Core", "Disability Access APIs")

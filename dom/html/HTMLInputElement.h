@@ -669,7 +669,7 @@ public:
 
   Nullable<Date> GetValueAsDate(ErrorResult& aRv);
 
-  void SetValueAsDate(Nullable<Date>, ErrorResult& aRv);
+  void SetValueAsDate(const Nullable<Date>& aDate, ErrorResult& aRv);
 
   double ValueAsNumber() const
   {
@@ -1070,11 +1070,7 @@ protected:
   /**
    * Returns if the step attribute apply for the current type.
    */
-  bool DoesStepApply() const
-  {
-    // TODO: this is temporary until bug 888331 is fixed.
-    return DoesMinMaxApply() && mType != NS_FORM_INPUT_DATETIME_LOCAL;
-  }
+  bool DoesStepApply() const { return DoesMinMaxApply(); }
 
   /**
    * Returns if stepDown and stepUp methods apply for the current type.
@@ -1084,11 +1080,7 @@ protected:
   /**
    * Returns if valueAsNumber attribute applies for the current type.
    */
-  bool DoesValueAsNumberApply() const
-  {
-    // TODO: this is temporary until bug 888331 is fixed.
-    return DoesMinMaxApply() && mType != NS_FORM_INPUT_DATETIME_LOCAL;
-  }
+  bool DoesValueAsNumberApply() const { return DoesMinMaxApply(); }
 
   /**
    * Returns if autocomplete attribute applies for the current type.
@@ -1296,6 +1288,7 @@ protected:
    * https://html.spec.whatwg.org/multipage/infrastructure.html#valid-normalised-local-date-and-time-string
    */
   void NormalizeDateTimeLocal(nsAString& aValue) const;
+
   /**
    * This methods returns the number of days since epoch for a given year and
    * week.
@@ -1325,6 +1318,13 @@ protected:
    * result is either 52 or 53.
    */
   uint32_t MaximumWeekInYear(uint32_t aYear) const;
+
+  /**
+   * This method converts aValue (milliseconds within a day) to hours, minutes,
+   * seconds and milliseconds.
+   */
+  bool GetTimeFromMs(double aValue, uint16_t* aHours, uint16_t* aMinutes,
+                     uint16_t* aSeconds, uint16_t* aMilliseconds) const;
 
   /**
    * This methods returns true if it's a leap year.
@@ -1618,7 +1618,7 @@ protected:
 
 private:
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
-                                    nsRuleData* aData);
+                                    GenericSpecifiedValues* aGenericData);
 
   /**
    * Returns true if this input's type will fire a DOM "change" event when it

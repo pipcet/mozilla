@@ -9,12 +9,14 @@
 #include "mozIThirdPartyUtil.h"
 #include "nsCharSeparatedTokenizer.h"
 #include "nsContentUtils.h"
+#include "nsIAddonPolicyService.h"
 #include "nsICacheEntry.h"
 #include "nsICachingChannel.h"
 #include "nsIChannel.h"
 #include "nsIDocShell.h"
 #include "nsIDocument.h"
 #include "nsIDOMDocument.h"
+#include "nsIHttpChannel.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsIIOService.h"
 #include "nsIParentChannel.h"
@@ -31,10 +33,12 @@
 #include "nsNetUtil.h"
 #include "nsPIDOMWindow.h"
 #include "nsXULAppAPI.h"
+#include "nsQueryObject.h"
 
 #include "mozilla/ErrorNames.h"
 #include "mozilla/Logging.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/net/HttpBaseChannel.h"
 
 namespace mozilla {
 namespace net {
@@ -44,12 +48,21 @@ namespace net {
 //
 static LazyLogModule gChannelClassifierLog("nsChannelClassifier");
 
+// Whether channels should be annotated as being on the tracking protection
+// list.
+static bool sAnnotateChannelEnabled = false;
+// Whether the priority of the channels annotated as being on the tracking
+// protection list should be lowered.
+static bool sLowerNetworkPriority = false;
+static bool sIsInited = false;
+
 #undef LOG
 #define LOG(args)     MOZ_LOG(gChannelClassifierLog, LogLevel::Debug, args)
 #define LOG_ENABLED() MOZ_LOG_TEST(gChannelClassifierLog, LogLevel::Debug)
 
 NS_IMPL_ISUPPORTS(nsChannelClassifier,
-                  nsIURIClassifierCallback)
+                  nsIURIClassifierCallback,
+                  nsIObserver)
 
 nsChannelClassifier::nsChannelClassifier(nsIChannel *aChannel)
   : mIsAllowListed(false),
@@ -58,6 +71,13 @@ nsChannelClassifier::nsChannelClassifier(nsIChannel *aChannel)
     mTrackingProtectionEnabled(Nothing())
 {
   MOZ_ASSERT(mChannel);
+  if (!sIsInited) {
+    sIsInited = true;
+    Preferences::AddBoolVarCache(&sAnnotateChannelEnabled,
+                                 "privacy.trackingprotection.annotate_channels");
+    Preferences::AddBoolVarCache(&sLowerNetworkPriority,
+                                 "privacy.trackingprotection.lower_network_priority");
+  }
 }
 
 nsresult
@@ -127,6 +147,10 @@ nsChannelClassifier::ShouldEnableTrackingProtectionInternal(nsIChannel *aChannel
              this, aChannel, chanURI->GetSpecOrDefault().get()));
       }
       return NS_OK;
+    }
+
+    if (AddonMayLoad(aChannel, chanURI)) {
+        return NS_OK;
     }
 
     nsCOMPtr<nsIIOService> ios = do_GetService(NS_IOSERVICE_CONTRACTID, &rv);
@@ -212,6 +236,23 @@ nsChannelClassifier::ShouldEnableTrackingProtectionInternal(nsIChannel *aChannel
     // window for the channel, then the shield won't show up so we can't send
     // an event to the securityUI anyway.
     return NotifyTrackingProtectionDisabled(aChannel);
+}
+
+bool
+nsChannelClassifier::AddonMayLoad(nsIChannel *aChannel, nsIURI *aUri)
+{
+    nsCOMPtr<nsILoadInfo> channelLoadInfo = aChannel->GetLoadInfo();
+    if (!channelLoadInfo)
+        return false;
+
+    // loadingPrincipal is used here to ensure we are loading into an
+    // addon principal.  This allows an addon, with explicit permission, to
+    // call out to API endpoints that may otherwise get blocked.
+    nsIPrincipal* loadingPrincipal = channelLoadInfo->LoadingPrincipal();
+    if (!loadingPrincipal)
+        return false;
+
+    return BasePrincipal::Cast(loadingPrincipal)->AddonAllowsLoad(aUri, true);
 }
 
 // static
@@ -360,14 +401,6 @@ nsChannelClassifier::StartInternal()
       trackingProtectionEnabled = mTrackingProtectionEnabled.value();
     }
 
-    static bool sAnnotateChannelEnabled = false;
-    static bool sIsInited = false;
-    if (!sIsInited) {
-      sIsInited = true;
-      Preferences::AddBoolVarCache(&sAnnotateChannelEnabled,
-                                   "privacy.trackingprotection.annotate_channels");
-    }
-
     if (LOG_ENABLED()) {
       nsCOMPtr<nsIURI> principalURI;
       principal->GetURI(getter_AddRefs(principalURI));
@@ -401,6 +434,12 @@ nsChannelClassifier::StartInternal()
         return NS_ERROR_FAILURE;
     }
 
+    // Add an observer for shutdown
+    nsCOMPtr<nsIObserverService> observerService = mozilla::services::GetObserverService();
+    if (!observerService)
+      return NS_ERROR_FAILURE;
+
+    observerService->AddObserver(this, "profile-change-net-teardown", false);
     return NS_OK;
 }
 
@@ -695,17 +734,34 @@ nsChannelClassifier::OnClassifyComplete(nsresult aErrorCode)
 
       if (aErrorCode == NS_ERROR_TRACKING_URI &&
           !mTrackingProtectionEnabled.valueOr(false)) {
-        if (LOG_ENABLED()) {
-          nsCOMPtr<nsIURI> uri;
-          mChannel->GetURI(getter_AddRefs(uri));
-          LOG(("nsChannelClassifier[%p]: lower the priority of channel %p"
-               ", since %s is a tracker", this, mChannel.get(),
-               uri->GetSpecOrDefault().get()));
+        if (sAnnotateChannelEnabled) {
+          nsCOMPtr<nsIParentChannel> parentChannel;
+          NS_QueryNotificationCallbacks(mChannel, parentChannel);
+          if (parentChannel) {
+            // This channel is a parent-process proxy for a child process
+            // request. We should notify the child process as well.
+            parentChannel->NotifyTrackingResource();
+          }
+          RefPtr<HttpBaseChannel> httpChannel = do_QueryObject(mChannel);
+          if (httpChannel) {
+            httpChannel->SetIsTrackingResource();
+          }
         }
-        nsCOMPtr<nsISupportsPriority> p = do_QueryInterface(mChannel);
-        if (p) {
-          p->SetPriority(nsISupportsPriority::PRIORITY_LOWEST);
+
+        if (sLowerNetworkPriority) {
+          if (LOG_ENABLED()) {
+            nsCOMPtr<nsIURI> uri;
+            mChannel->GetURI(getter_AddRefs(uri));
+            LOG(("nsChannelClassifier[%p]: lower the priority of channel %p"
+                 ", since %s is a tracker", this, mChannel.get(),
+                 uri->GetSpecOrDefault().get()));
+          }
+          nsCOMPtr<nsISupportsPriority> p = do_QueryInterface(mChannel);
+          if (p) {
+            p->SetPriority(nsISupportsPriority::PRIORITY_LOWEST);
+          }
         }
+
         aErrorCode = NS_OK;
       }
 
@@ -735,6 +791,26 @@ nsChannelClassifier::OnClassifyComplete(nsresult aErrorCode)
     mChannel = nullptr;
 
     return NS_OK;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// nsIObserver implementation
+NS_IMETHODIMP
+nsChannelClassifier::Observe(nsISupports *aSubject, const char *aTopic,
+                             const char16_t *aData)
+{
+  if (!strcmp(aTopic, "profile-change-net-teardown")) {
+    // If we aren't getting a callback for any reason, make sure
+    // we resume the channel.
+
+    if (mChannel && mSuspendedChannel) {
+      mSuspendedChannel = false;
+      mChannel->Cancel(NS_ERROR_ABORT);
+      mChannel->Resume();
+    }
+  }
+
+  return NS_OK;
 }
 
 } // namespace net

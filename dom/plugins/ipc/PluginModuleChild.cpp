@@ -24,6 +24,7 @@
 #include "nsXULAppAPI.h"
 
 #ifdef MOZ_X11
+# include "nsX11ErrorHandler.h"
 # include "mozilla/X11Util.h"
 #endif
 #include "mozilla/ipc/ProcessChild.h"
@@ -40,13 +41,17 @@
 #ifdef XP_WIN
 #include "nsWindowsDllInterceptor.h"
 #include "mozilla/widget/AudioSession.h"
-#include "WinUtils.h"
 #include <knownfolders.h>
+#include <shlobj.h>
 #endif
 
 #ifdef MOZ_WIDGET_COCOA
 #include "PluginInterposeOSX.h"
 #include "PluginUtilsOSX.h"
+#endif
+
+#ifdef MOZ_CRASHREPORTER
+#include "mozilla/ipc/CrashReporterClient.h"
 #endif
 
 #include "GeckoProfiler.h"
@@ -55,8 +60,6 @@ using namespace mozilla;
 using namespace mozilla::ipc;
 using namespace mozilla::plugins;
 using namespace mozilla::widget;
-using mozilla::dom::CrashReporterChild;
-using mozilla::dom::PCrashReporterChild;
 
 #if defined(XP_WIN)
 const wchar_t * kFlashFullscreenClass = L"ShockwaveFlashFullScreen";
@@ -97,17 +100,11 @@ static GetKeyStatePtr sGetKeyStatePtrStub = nullptr;
 #endif
 
 /* static */
-PluginModuleChild*
-PluginModuleChild::CreateForContentProcess(mozilla::ipc::Transport* aTransport,
-                                           base::ProcessId aOtherPid)
+bool
+PluginModuleChild::CreateForContentProcess(Endpoint<PPluginModuleChild>&& aEndpoint)
 {
     auto* child = new PluginModuleChild(false);
-
-    if (!child->InitForContent(aOtherPid, XRE_GetIOMessageLoop(), aTransport)) {
-        return nullptr;
-    }
-
-    return child;
+    return child->InitForContent(Move(aEndpoint));
 }
 
 PluginModuleChild::PluginModuleChild(bool aIsChrome)
@@ -116,7 +113,6 @@ PluginModuleChild::PluginModuleChild(bool aIsChrome)
   , mQuirks(QUIRKS_NOT_INITIALIZED)
   , mIsChrome(aIsChrome)
   , mHasShutdown(false)
-  , mTransport(nullptr)
   , mShutdownFunc(0)
   , mInitializeFunc(0)
 #if defined(OS_WIN) || defined(OS_MACOSX)
@@ -169,10 +165,8 @@ PluginModuleChild::GetChrome()
     return gChromeInstance;
 }
 
-bool
-PluginModuleChild::CommonInit(base::ProcessId aParentPid,
-                              MessageLoop* aIOLoop,
-                              IPC::Channel* aChannel)
+void
+PluginModuleChild::CommonInit()
 {
     PLUGIN_LOG_DEBUG_METHOD;
 
@@ -182,27 +176,19 @@ PluginModuleChild::CommonInit(base::ProcessId aParentPid,
     // Bug 1090573 - Don't do this for connections to content processes.
     GetIPCChannel()->SetChannelFlags(MessageChannel::REQUIRE_DEFERRED_MESSAGE_PROTECTION);
 
-    if (!Open(aChannel, aParentPid, aIOLoop)) {
-        return false;
-    }
-
     memset((void*) &mFunctions, 0, sizeof(mFunctions));
     mFunctions.size = sizeof(mFunctions);
     mFunctions.version = (NP_VERSION_MAJOR << 8) | NP_VERSION_MINOR;
-
-    return true;
 }
 
 bool
-PluginModuleChild::InitForContent(base::ProcessId aParentPid,
-                                  MessageLoop* aIOLoop,
-                                  IPC::Channel* aChannel)
+PluginModuleChild::InitForContent(Endpoint<PPluginModuleChild>&& aEndpoint)
 {
-    if (!CommonInit(aParentPid, aIOLoop, aChannel)) {
+    CommonInit();
+
+    if (!aEndpoint.Bind(this)) {
         return false;
     }
-
-    mTransport = aChannel;
 
     mLibrary = GetChrome()->mLibrary;
     mFunctions = GetChrome()->mFunctions;
@@ -280,7 +266,9 @@ PluginModuleChild::InitForChrome(const std::string& aPluginFilename,
     }
     NS_ASSERTION(mLibrary, "couldn't open shared object");
 
-    if (!CommonInit(aParentPid, aIOLoop, aChannel)) {
+    CommonInit();
+
+    if (!Open(aChannel, aParentPid, aIOLoop)) {
         return false;
     }
 
@@ -608,7 +596,7 @@ PluginModuleChild::InitGraphics()
 #endif
 #ifdef MOZ_X11
     // Do this after initializing GDK, or GDK will install its own handler.
-    XRE_InstallX11ErrorHandler();
+    InstallX11ErrorHandler();
 #endif
     return true;
 }
@@ -725,36 +713,22 @@ PluginModuleChild::RecvSetAudioSessionData(const nsID& aId,
 #endif
 }
 
-PPluginModuleChild*
-PluginModuleChild::AllocPPluginModuleChild(mozilla::ipc::Transport* aTransport,
-                                           base::ProcessId aOtherPid)
+mozilla::ipc::IPCResult
+PluginModuleChild::RecvInitPluginModuleChild(Endpoint<PPluginModuleChild>&& aEndpoint)
 {
-    return PluginModuleChild::CreateForContentProcess(aTransport, aOtherPid);
+    if (!CreateForContentProcess(Move(aEndpoint))) {
+        return IPC_FAIL(this, "CreateForContentProcess failed");
+    }
+    return IPC_OK();
 }
 
-PCrashReporterChild*
-PluginModuleChild::AllocPCrashReporterChild(mozilla::dom::NativeThreadId* id,
-                                            uint32_t* processType)
-{
-    return new CrashReporterChild();
-}
-
-bool
-PluginModuleChild::DeallocPCrashReporterChild(PCrashReporterChild* actor)
-{
-    delete actor;
-    return true;
-}
 
 mozilla::ipc::IPCResult
-PluginModuleChild::AnswerPCrashReporterConstructor(
-        PCrashReporterChild* actor,
-        mozilla::dom::NativeThreadId* id,
-        uint32_t* processType)
+PluginModuleChild::AnswerInitCrashReporter(Shmem&& aShmem, mozilla::dom::NativeThreadId* aOutId)
 {
 #ifdef MOZ_CRASHREPORTER
-    *id = CrashReporter::CurrentThreadId();
-    *processType = XRE_GetProcessType();
+    CrashReporterClient::InitSingletonWithShmem(aShmem);
+    *aOutId = CrashReporter::CurrentThreadId();
 #endif
     return IPC_OK();
 }
@@ -787,6 +761,9 @@ PluginModuleChild::ActorDestroy(ActorDestroyReason why)
 
     // doesn't matter why we're being destroyed; it's up to us to
     // initiate (clean) shutdown
+#ifdef MOZ_CRASHREPORTER
+    CrashReporterClient::DestroySingleton();
+#endif
     XRE_ShutdownChildProcess();
 }
 
@@ -1127,10 +1104,9 @@ _getvalue(NPP aNPP,
         case NPNVxDisplay: {
             if (aNPP) {
                 return InstCast(aNPP)->NPN_GetValue(aVariable, aValue);
-            } 
-            else {
-                *(void **)aValue = xt_client_get_display();
-            }          
+            }
+            *(void
+              **)aValue = xt_client_get_display();
             return NPERR_NO_ERROR;
         }
         case NPNVxtAppContext:
@@ -1620,9 +1596,7 @@ _getvalueforurl(NPP npp, NPNURLVariable variable, const char *url,
     if (!npp || !value || !len)
         return NPERR_INVALID_PARAM;
 
-    switch (variable) {
-    case NPNURLVCookie:
-    case NPNURLVProxy:
+    if (variable == NPNURLVProxy) {
         nsCString v;
         NPError result;
         InstCast(npp)->
@@ -1650,9 +1624,7 @@ _setvalueforurl(NPP npp, NPNURLVariable variable, const char *url,
     if (!url)
         return NPERR_INVALID_URL;
 
-    switch (variable) {
-    case NPNURLVCookie:
-    case NPNURLVProxy:
+    if (variable == NPNURLVProxy) {
         NPError result;
         InstCast(npp)->CallNPN_SetValueForURL(variable, nsCString(url),
                                               nsDependentCString(value, len),
@@ -1950,8 +1922,8 @@ GetLocalLowTempPath(size_t aLen, LPWSTR aPath)
 {
     NS_NAMED_LITERAL_STRING(tempname, "\\Temp");
     LPWSTR path;
-    if (SUCCEEDED(WinUtils::SHGetKnownFolderPath(FOLDERID_LocalAppDataLow, 0,
-                                                 nullptr, &path))) {
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppDataLow, 0,
+                                       nullptr, &path))) {
         if (wcslen(path) + tempname.Length() < aLen) {
             wcscpy(aPath, path);
             wcscat(aPath, tempname.get());

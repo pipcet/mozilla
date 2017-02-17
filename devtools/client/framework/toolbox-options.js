@@ -14,6 +14,8 @@ const {gDevTools} = require("devtools/client/framework/devtools");
 const {LocalizationHelper} = require("devtools/shared/l10n");
 const L10N = new LocalizationHelper("devtools/client/locales/toolbox.properties");
 
+loader.lazyRequireGetter(this, "system", "devtools/shared/system");
+
 exports.OptionsPanel = OptionsPanel;
 
 function GetPref(name) {
@@ -91,6 +93,7 @@ OptionsPanel.prototype = {
     this.setupToolsList();
     this.setupToolbarButtonsList();
     this.setupThemeList();
+    this.setupNightlyOptions();
     yield this.populatePreferences();
     this.isReady = true;
     this.emit("ready");
@@ -135,30 +138,36 @@ OptionsPanel.prototype = {
     }
   },
 
-  setupToolbarButtonsList: function () {
+  setupToolbarButtonsList: Task.async(function* () {
+    // Ensure the toolbox is open, and the buttons are all set up.
+    yield this.toolbox.isOpen;
+
     let enabledToolbarButtonsBox = this.panelDoc.getElementById(
       "enabled-toolbox-buttons-box");
 
-    let toggleableButtons = this.toolbox.toolboxButtons;
-    let setToolboxButtonsVisibility =
-      this.toolbox.setToolboxButtonsVisibility.bind(this.toolbox);
+    let toolbarButtons = this.toolbox.toolbarButtons;
+
+    if (!toolbarButtons) {
+      console.warn("The command buttons weren't initiated yet.");
+      return;
+    }
 
     let onCheckboxClick = (checkbox) => {
-      let toolDefinition = toggleableButtons.filter(
+      let commandButton = toolbarButtons.filter(
         toggleableButton => toggleableButton.id === checkbox.id)[0];
       Services.prefs.setBoolPref(
-        toolDefinition.visibilityswitch, checkbox.checked);
-      setToolboxButtonsVisibility();
+        commandButton.visibilityswitch, checkbox.checked);
+      this.toolbox.updateToolboxButtonsVisibility();
     };
 
-    let createCommandCheckbox = tool => {
+    let createCommandCheckbox = button => {
       let checkboxLabel = this.panelDoc.createElement("label");
       let checkboxSpanLabel = this.panelDoc.createElement("span");
-      checkboxSpanLabel.textContent = tool.label;
+      checkboxSpanLabel.textContent = button.description;
       let checkboxInput = this.panelDoc.createElement("input");
       checkboxInput.setAttribute("type", "checkbox");
-      checkboxInput.setAttribute("id", tool.id);
-      if (InfallibleGetBoolPref(tool.visibilityswitch)) {
+      checkboxInput.setAttribute("id", button.id);
+      if (button.isVisible) {
         checkboxInput.setAttribute("checked", true);
       }
       checkboxInput.addEventListener("change",
@@ -169,14 +178,14 @@ OptionsPanel.prototype = {
       return checkboxLabel;
     };
 
-    for (let tool of toggleableButtons) {
-      if (!tool.isTargetSupported(this.toolbox.target)) {
+    for (let button of toolbarButtons) {
+      if (!button.isTargetSupported(this.toolbox.target)) {
         continue;
       }
 
-      enabledToolbarButtonsBox.appendChild(createCommandCheckbox(tool));
+      enabledToolbarButtonsBox.appendChild(createCommandCheckbox(button));
     }
-  },
+  }),
 
   setupToolsList: function () {
     let defaultToolsBox = this.panelDoc.getElementById("default-tools-box");
@@ -296,6 +305,60 @@ OptionsPanel.prototype = {
     this.updateCurrentTheme();
   },
 
+  /**
+   * Add common preferences enabled only on Nightly.
+   */
+  setupNightlyOptions: function () {
+    let isNightly = system.constants.NIGHTLY_BUILD;
+    if (!isNightly) {
+      return;
+    }
+
+    // Labels for these new buttons are nightly only and mostly intended for working on
+    // devtools. They should not be localized.
+    let prefDefinitions = [{
+      pref: "devtools.webconsole.new-frontend-enabled",
+      label: "Enable new console frontend",
+      id: "devtools-new-webconsole",
+      parentId: "webconsole-options"
+    }, {
+      pref: "devtools.debugger.new-debugger-frontend",
+      label: "Enable new debugger frontend",
+      id: "devtools-new-debugger",
+      parentId: "debugger-options"
+    }, {
+      pref: "devtools.layoutview.enabled",
+      label: "Enable layout panel",
+      id: "devtools-layout-panel",
+      parentId: "inspector-options"
+    }];
+
+    let createPreferenceOption = ({pref, label, id}) => {
+      let inputLabel = this.panelDoc.createElement("label");
+      let checkbox = this.panelDoc.createElement("input");
+      checkbox.setAttribute("type", "checkbox");
+      if (GetPref(pref)) {
+        checkbox.setAttribute("checked", "checked");
+      }
+      checkbox.setAttribute("id", id);
+      checkbox.addEventListener("change", e => {
+        SetPref(pref, e.target.checked);
+      });
+
+      let inputSpanLabel = this.panelDoc.createElement("span");
+      inputSpanLabel.textContent = label;
+      inputLabel.appendChild(checkbox);
+      inputLabel.appendChild(inputSpanLabel);
+
+      return inputLabel;
+    };
+
+    for (let prefDefinition of prefDefinitions) {
+      let parent = this.panelDoc.getElementById(prefDefinition.parentId);
+      parent.appendChild(createPreferenceOption(prefDefinition));
+    }
+  },
+
   populatePreferences: function () {
     let prefCheckboxes = this.panelDoc.querySelectorAll(
       "input[type=checkbox][data-pref]");
@@ -351,7 +414,7 @@ OptionsPanel.prototype = {
           this._origJavascriptEnabled = !response.javascriptEnabled;
           this.disableJSNode.checked = this._origJavascriptEnabled;
           this.disableJSNode.addEventListener("click",
-            this._disableJSClicked, false);
+            this._disableJSClicked);
         });
     }
     this.disableJSNode.hidden = true;

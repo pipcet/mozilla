@@ -178,6 +178,14 @@ else:
     env.setdefault('CC', compiler)
     env.setdefault('CXX', cxx)
 
+rust_dir = os.path.join(DIR.tooltool, 'rustc')
+if os.path.exists(os.path.join(rust_dir, 'bin', 'rustc')):
+    env.setdefault('RUSTC', os.path.join(rust_dir, 'bin', 'rustc'))
+    env.setdefault('CARGO', os.path.join(rust_dir, 'bin', 'cargo'))
+else:
+    env.setdefault('RUSTC', 'rustc')
+    env.setdefault('CARGO', 'cargo')
+
 if platform.system() == 'Darwin':
     os.environ['SOURCE'] = DIR.source
     set_vars_from_script(os.path.join(DIR.scripts, 'macbuildenv.sh'),
@@ -208,6 +216,15 @@ if word_bits == 32:
     elif platform.system() == 'Linux':
         if UNAME_M != 'arm':
             CONFIGURE_ARGS += ' --target=i686-pc-linux --host=i686-pc-linux'
+
+    # Add SSE2 support for x86/x64 architectures.
+    if UNAME_M != 'arm':
+        if platform.system() == 'Windows':
+            sse_flags = '-arch:SSE2'
+        else:
+            sse_flags = '-msse -msse2 -mfpmath=sse'
+        env['CCFLAGS'] = '{0} {1}'.format(env.get('CCFLAGS', ''), sse_flags)
+        env['CXXFLAGS'] = '{0} {1}'.format(env.get('CXXFLAGS', ''), sse_flags)
 else:
     if platform.system() == 'Windows':
         CONFIGURE_ARGS += ' --target=x86_64-pc-mingw32 --host=x86_64-pc-mingw32'

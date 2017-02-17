@@ -144,7 +144,7 @@ public:
   void Observe(Element& aTarget);
   void Unobserve(Element& aTarget);
 
-  bool UnlinkTarget(Element& aTarget);
+  void UnlinkTarget(Element& aTarget);
   void Disconnect();
 
   void TakeRecords(nsTArray<RefPtr<DOMIntersectionObserverEntry>>& aRetVal);

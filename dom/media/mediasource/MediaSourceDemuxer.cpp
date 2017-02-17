@@ -20,8 +20,9 @@ typedef TrackInfo::TrackType TrackType;
 using media::TimeUnit;
 using media::TimeIntervals;
 
-MediaSourceDemuxer::MediaSourceDemuxer()
+MediaSourceDemuxer::MediaSourceDemuxer(AbstractThread* aAbstractMainThread)
   : mTaskQueue(new AutoTaskQueue(GetMediaThreadPool(MediaThreadType::PLAYBACK),
+                                 aAbstractMainThread,
                                  /* aSupportsTailDispatch = */ false))
   , mMonitor("MediaSourceDemuxer")
 {
@@ -246,7 +247,7 @@ MediaSourceDemuxer::~MediaSourceDemuxer()
 }
 
 void
-MediaSourceDemuxer::GetMozDebugReaderData(nsAString& aString)
+MediaSourceDemuxer::GetMozDebugReaderData(nsACString& aString)
 {
   MonitorAutoLock mon(mMonitor);
   nsAutoCString result;
@@ -279,7 +280,7 @@ MediaSourceDemuxer::GetMozDebugReaderData(nsAString& aString)
     result += nsPrintfCString("\t\tBuffered: ranges=%s\n",
                               DumpTimeRanges(mVideoTrack->SafeBuffered(TrackInfo::kVideoTrack)).get());
   }
-  aString += NS_ConvertUTF8toUTF16(result);
+  aString += result;
 }
 
 MediaSourceTrackDemuxer::MediaSourceTrackDemuxer(MediaSourceDemuxer* aParent,
@@ -290,10 +291,9 @@ MediaSourceTrackDemuxer::MediaSourceTrackDemuxer(MediaSourceDemuxer* aParent,
   , mType(aType)
   , mMonitor("MediaSourceTrackDemuxer")
   , mReset(true)
-  , mPreRoll(
-      TimeUnit::FromMicroseconds(
-        OpusDataDecoder::IsOpus(mParent->GetTrackInfo(mType)->mMimeType)
-          ? 80000 : 0))
+  , mPreRoll(TimeUnit::FromMicroseconds(
+      OpusDataDecoder::IsOpus(mParent->GetTrackInfo(mType)->mMimeType) ? 80000
+                                                                       : 0))
 {
 }
 

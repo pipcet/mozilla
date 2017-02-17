@@ -77,7 +77,6 @@ protected:
 
   void RevalidateDataList();
   bool RowMatch(nsFormHistory *aHistory, uint32_t aIndex, const nsAString &aInputName, const nsAString &aInputValue);
-  nsresult ShowPopup();
 
   inline nsIDocShell *GetDocShellForInput(nsIDOMHTMLInputElement *aInput);
   inline nsPIDOMWindowOuter *GetWindowForDocShell(nsIDocShell *aDocShell);
@@ -111,6 +110,7 @@ protected:
   nsString mLastSearchString;
 
   nsDataHashtable<nsPtrHashKey<const nsINode>, bool> mPwmgrInputs;
+  nsDataHashtable<nsPtrHashKey<const nsINode>, bool> mAutofillInputs;
 
   uint32_t mTimeout;
   uint32_t mMinResultsForPopup;

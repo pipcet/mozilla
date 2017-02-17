@@ -49,9 +49,12 @@ PCMappingSlotInfo::ToSlotLocation(const StackValue* stackVal)
 }
 
 void
-ICStubSpace::freeAllAfterMinorGC(JSRuntime* rt)
+ICStubSpace::freeAllAfterMinorGC(Zone* zone)
 {
-    rt->gc.freeAllLifoBlocksAfterMinorGC(&allocator_);
+    if (zone->isAtomsZone())
+        MOZ_ASSERT(allocator_.isEmpty());
+    else
+        zone->group()->freeAllLifoBlocksAfterMinorGC(&allocator_);
 }
 
 BaselineScript::BaselineScript(uint32_t prologueOffset, uint32_t epilogueOffset,
@@ -160,7 +163,7 @@ EnterBaseline(JSContext* cx, EnterJitData& data)
             data.osrFrame->clearRunningInJit();
     }
 
-    MOZ_ASSERT(!cx->runtime()->jitRuntime()->hasIonReturnOverride());
+    MOZ_ASSERT(!cx->hasIonReturnOverride());
 
     // Jit callers wrap primitive constructor return, except for derived
     // class constructors, which are forced to do it themselves.
@@ -174,7 +177,7 @@ EnterBaseline(JSContext* cx, EnterJitData& data)
     }
 
     // Release temporary buffer used for OSR into Ion.
-    cx->runtime()->getJitRuntime(cx)->freeOsrTempData();
+    cx->freeOsrTempData();
 
     MOZ_ASSERT_IF(data.result.isMagic(), data.result.isMagic(JS_ION_ERROR));
     return data.result.isMagic() ? JitExec_Error : JitExec_Ok;
@@ -256,7 +259,7 @@ jit::EnterBaselineAtBranch(JSContext* cx, InterpreterFrame* fp, jsbytecode* pc)
         }
     }
 
-    TraceLoggerThread* logger = TraceLoggerForMainThread(cx->runtime());
+    TraceLoggerThread* logger = TraceLoggerForCurrentThread(cx);
     TraceLogStopEvent(logger, TraceLogger_Interpreter);
     TraceLogStartEvent(logger, TraceLogger_Baseline);
 
@@ -275,7 +278,7 @@ jit::BaselineCompile(JSContext* cx, JSScript* script, bool forceDebugInstrumenta
     MOZ_ASSERT(script->canBaselineCompile());
     MOZ_ASSERT(IsBaselineEnabled(cx));
 
-    script->ensureNonLazyCanonicalFunction(cx);
+    script->ensureNonLazyCanonicalFunction();
 
     LifoAlloc alloc(TempAllocator::PreferredLifoChunkSize);
     TempAllocator* temp = alloc.new_<TempAllocator>(&alloc);
@@ -321,11 +324,16 @@ CanEnterBaselineJIT(JSContext* cx, HandleScript script, InterpreterFrame* osrFra
     if (script->nslots() > BaselineScript::MAX_JSSCRIPT_SLOTS)
         return Method_CantCompile;
 
-    if (!cx->compartment()->ensureJitCompartmentExists(cx))
-        return Method_Error;
-
     if (script->hasBaselineScript())
         return Method_Compiled;
+
+    // Check this before calling ensureJitCompartmentExists, so we're less
+    // likely to report OOM in JSRuntime::createJitRuntime.
+    if (!CanLikelyAllocateMoreExecutableMemory())
+        return Method_Skipped;
+
+    if (!cx->compartment()->ensureJitCompartmentExists(cx))
+        return Method_Error;
 
     // Check script warm-up counter.
     if (script->incWarmUpCounter() <= JitOptions.baselineWarmUpThreshold)
@@ -512,7 +520,7 @@ BaselineScript::Destroy(FreeOp* fop, BaselineScript* script)
      *
      * Defer freeing any allocated blocks until after the next minor GC.
      */
-    script->fallbackStubSpace_.freeAllAfterMinorGC(fop->runtime());
+    script->fallbackStubSpace_.freeAllAfterMinorGC(script->method()->zone());
 
     fop->delete_(script);
 }
@@ -981,14 +989,12 @@ BaselineScript::initTraceLogger(JSRuntime* runtime, JSScript* script,
     traceLoggerEngineEnabled_ = TraceLogTextIdEnabled(TraceLogger_Engine);
 #endif
 
-    TraceLoggerThread* logger = TraceLoggerForMainThread(runtime);
-
     MOZ_ASSERT(offsets.length() == numTraceLoggerToggleOffsets_);
     for (size_t i = 0; i < offsets.length(); i++)
         traceLoggerToggleOffsets()[i] = offsets[i].offset();
 
     if (TraceLogTextIdEnabled(TraceLogger_Engine) || TraceLogTextIdEnabled(TraceLogger_Scripts)) {
-        traceLoggerScriptEvent_ = TraceLoggerEvent(logger, TraceLogger_Scripts, script);
+        traceLoggerScriptEvent_ = TraceLoggerEvent(TraceLogger_Scripts, script);
         for (size_t i = 0; i < numTraceLoggerToggleOffsets_; i++) {
             CodeLocationLabel label(method_, CodeOffset(traceLoggerToggleOffsets()[i]));
             Assembler::ToggleToCmp(label);
@@ -1005,9 +1011,8 @@ BaselineScript::toggleTraceLoggerScripts(JSRuntime* runtime, JSScript* script, b
 
     // Patch the logging script textId to be correct.
     // When logging log the specific textId else the global Scripts textId.
-    TraceLoggerThread* logger = TraceLoggerForMainThread(runtime);
     if (enable && !traceLoggerScriptEvent_.hasPayload())
-        traceLoggerScriptEvent_ = TraceLoggerEvent(logger, TraceLogger_Scripts, script);
+        traceLoggerScriptEvent_ = TraceLoggerEvent(TraceLogger_Scripts, script);
 
     AutoWritableJitCode awjc(method());
 
@@ -1210,7 +1215,7 @@ jit::ToggleBaselineTraceLoggerEngine(JSRuntime* runtime, bool enable)
 #endif
 
 static void
-MarkActiveBaselineScripts(JSRuntime* rt, const JitActivationIterator& activation)
+MarkActiveBaselineScripts(JSContext* cx, const JitActivationIterator& activation)
 {
     for (jit::JitFrameIterator iter(activation); !iter.done(); ++iter) {
         switch (iter.type()) {
@@ -1228,7 +1233,7 @@ MarkActiveBaselineScripts(JSRuntime* rt, const JitActivationIterator& activation
             // Keep the baseline script around, since bailouts from the ion
             // jitcode might need to re-enter into the baseline jitcode.
             iter.script()->baselineScript()->setActive();
-            for (InlineFrameIterator inlineIter(rt, &iter); inlineIter.more(); ++inlineIter)
+            for (InlineFrameIterator inlineIter(cx, &iter); inlineIter.more(); ++inlineIter)
                 inlineIter.script()->baselineScript()->setActive();
             break;
           }
@@ -1240,9 +1245,11 @@ MarkActiveBaselineScripts(JSRuntime* rt, const JitActivationIterator& activation
 void
 jit::MarkActiveBaselineScripts(Zone* zone)
 {
-    JSRuntime* rt = zone->runtimeFromMainThread();
-    for (JitActivationIterator iter(rt); !iter.done(); ++iter) {
+    if (zone->isAtomsZone())
+        return;
+    JSContext* cx = TlsContext.get();
+    for (JitActivationIterator iter(cx, zone->group()->ownerContext()); !iter.done(); ++iter) {
         if (iter->compartment()->zone() == zone)
-            MarkActiveBaselineScripts(rt, iter);
+            MarkActiveBaselineScripts(cx, iter);
     }
 }

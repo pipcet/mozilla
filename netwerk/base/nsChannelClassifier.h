@@ -17,13 +17,15 @@ class nsIDocument;
 namespace mozilla {
 namespace net {
 
-class nsChannelClassifier final : public nsIURIClassifierCallback
+class nsChannelClassifier final : public nsIURIClassifierCallback,
+                                  public nsIObserver
 {
 public:
     explicit nsChannelClassifier(nsIChannel* aChannel);
 
     NS_DECL_ISUPPORTS
     NS_DECL_NSIURICLASSIFIERCALLBACK
+    NS_DECL_NSIOBSERVER
 
     // Calls nsIURIClassifier.Classify with the principal of the given channel,
     // and cancels the channel on a bad verdict.
@@ -57,6 +59,7 @@ private:
     nsresult ShouldEnableTrackingProtectionInternal(nsIChannel *aChannel,
                                                     bool *result);
 
+    bool AddonMayLoad(nsIChannel *aChannel, nsIURI *aUri);
 public:
     // If we are blocking tracking content, update the corresponding flag in
     // the respective docshell and call nsISecurityEventSink::onSecurityChange.

@@ -6,36 +6,6 @@
 
 "use strict";
 
-const { Ci } = require("chrome");
-const { KeyCodes } = require("devtools/client/shared/keycodes");
-const { Task } = require("devtools/shared/task");
-
-/**
- * Helper method to get a wrapped function which can be bound to as
- * an event listener directly and is executed only when data-key is
- * present in event.target.
- *
- * @param {function} callback - function to execute execute when data-key
- *                              is present in event.target.
- * @param {bool} onlySpaceOrReturn - flag to indicate if callback should only
- *                                   be called when the space or return button
- *                                   is pressed
- * @return {function} wrapped function with the target data-key as the first argument
- *                    and the event as the second argument.
- */
-function getKeyWithEvent(callback, onlySpaceOrReturn) {
-  return function (event) {
-    let key = event.target.getAttribute("data-key");
-    let filterKeyboardEvent = !onlySpaceOrReturn ||
-                              event.keyCode === KeyCodes.DOM_VK_SPACE ||
-                              event.keyCode === KeyCodes.DOM_VK_RETURN;
-
-    if (key && filterKeyboardEvent) {
-      callback.call(null, key);
-    }
-  };
-}
-
 /**
  * Extracts any urlencoded form data sections (e.g. "?foo=bar&baz=42") from a
  * POST request.
@@ -46,12 +16,11 @@ function getKeyWithEvent(callback, onlySpaceOrReturn) {
  * @param {function} getString - callback to retrieve a string from a LongStringGrip.
  * @return {array} a promise list that is resolved with the extracted form data.
  */
-const getFormDataSections = Task.async(function* (headers, uploadHeaders, postData,
-                                                    getString) {
+async function getFormDataSections(headers, uploadHeaders, postData, getString) {
   let formDataSections = [];
 
-  let { headers: requestHeaders } = headers;
-  let { headers: payloadHeaders } = uploadHeaders;
+  let requestHeaders = headers.headers;
+  let payloadHeaders = uploadHeaders ? uploadHeaders.headers : [];
   let allHeaders = [...payloadHeaders, ...requestHeaders];
 
   let contentTypeHeader = allHeaders.find(e => {
@@ -60,11 +29,11 @@ const getFormDataSections = Task.async(function* (headers, uploadHeaders, postDa
 
   let contentTypeLongString = contentTypeHeader ? contentTypeHeader.value : "";
 
-  let contentType = yield getString(contentTypeLongString);
+  let contentType = await getString(contentTypeLongString);
 
   if (contentType.includes("x-www-form-urlencoded")) {
     let postDataLongString = postData.postData.text;
-    let text = yield getString(postDataLongString);
+    let text = await getString(postDataLongString);
 
     for (let section of text.split(/\r\n|\r|\n/)) {
       // Before displaying it, make sure this section of the POST data
@@ -76,7 +45,21 @@ const getFormDataSections = Task.async(function* (headers, uploadHeaders, postDa
   }
 
   return formDataSections;
-});
+}
+
+/**
+ * Fetch headers full content from actor server
+ *
+ * @param {object} headers - a object presents headers data
+ * @param {function} getString - callback to retrieve a string from a LongStringGrip
+ * @return {object} a headers object with updated content payload
+ */
+async function fetchHeaders(headers, getString) {
+  for (let { value } of headers.headers) {
+    headers.headers.value = await getString(value);
+  }
+  return headers;
+}
 
 /**
  * Form a data: URI given a mime type, encoding, and some text.
@@ -90,7 +73,7 @@ const getFormDataSections = Task.async(function* (headers, uploadHeaders, postDa
 function formDataURI(mimeType, encoding, text) {
   if (!encoding) {
     encoding = "base64";
-    text = btoa(text);
+    text = btoa(unescape(encodeURIComponent(text)));
   }
   return "data:" + mimeType + ";" + encoding + "," + text;
 }
@@ -189,6 +172,37 @@ function getUrlHost(url) {
 }
 
 /**
+ * Extract several details fields from a URL at once.
+ */
+function getUrlDetails(url) {
+  let baseNameWithQuery = getUrlBaseNameWithQuery(url);
+  let host = getUrlHost(url);
+  let hostname = getUrlHostName(url);
+  let unicodeUrl = decodeUnicodeUrl(url);
+
+  // Mark local hosts specially, where "local" is  as defined in the W3C
+  // spec for secure contexts.
+  // http://www.w3.org/TR/powerful-features/
+  //
+  //  * If the name falls under 'localhost'
+  //  * If the name is an IPv4 address within 127.0.0.0/8
+  //  * If the name is an IPv6 address within ::1/128
+  //
+  // IPv6 parsing is a little sloppy; it assumes that the address has
+  // been validated before it gets here.
+  let isLocal = hostname.match(/(.+\.)?localhost$/) ||
+                hostname.match(/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}/) ||
+                hostname.match(/\[[0:]+1\]/);
+
+  return {
+    baseNameWithQuery,
+    host,
+    unicodeUrl,
+    isLocal
+  };
+}
+
+/**
  * Parse a url's query string into its components
  *
  * @param {string} query - query string of a url portion
@@ -208,42 +222,9 @@ function parseQueryString(query) {
   });
 }
 
-/**
- * Convert a nsIContentPolicy constant to a display string
- */
-const LOAD_CAUSE_STRINGS = {
-  [Ci.nsIContentPolicy.TYPE_INVALID]: "invalid",
-  [Ci.nsIContentPolicy.TYPE_OTHER]: "other",
-  [Ci.nsIContentPolicy.TYPE_SCRIPT]: "script",
-  [Ci.nsIContentPolicy.TYPE_IMAGE]: "img",
-  [Ci.nsIContentPolicy.TYPE_STYLESHEET]: "stylesheet",
-  [Ci.nsIContentPolicy.TYPE_OBJECT]: "object",
-  [Ci.nsIContentPolicy.TYPE_DOCUMENT]: "document",
-  [Ci.nsIContentPolicy.TYPE_SUBDOCUMENT]: "subdocument",
-  [Ci.nsIContentPolicy.TYPE_REFRESH]: "refresh",
-  [Ci.nsIContentPolicy.TYPE_XBL]: "xbl",
-  [Ci.nsIContentPolicy.TYPE_PING]: "ping",
-  [Ci.nsIContentPolicy.TYPE_XMLHTTPREQUEST]: "xhr",
-  [Ci.nsIContentPolicy.TYPE_OBJECT_SUBREQUEST]: "objectSubdoc",
-  [Ci.nsIContentPolicy.TYPE_DTD]: "dtd",
-  [Ci.nsIContentPolicy.TYPE_FONT]: "font",
-  [Ci.nsIContentPolicy.TYPE_MEDIA]: "media",
-  [Ci.nsIContentPolicy.TYPE_WEBSOCKET]: "websocket",
-  [Ci.nsIContentPolicy.TYPE_CSP_REPORT]: "csp",
-  [Ci.nsIContentPolicy.TYPE_XSLT]: "xslt",
-  [Ci.nsIContentPolicy.TYPE_BEACON]: "beacon",
-  [Ci.nsIContentPolicy.TYPE_FETCH]: "fetch",
-  [Ci.nsIContentPolicy.TYPE_IMAGESET]: "imageset",
-  [Ci.nsIContentPolicy.TYPE_WEB_MANIFEST]: "webManifest"
-};
-
-function loadCauseString(causeType) {
-  return LOAD_CAUSE_STRINGS[causeType] || "unknown";
-}
-
 module.exports = {
-  getKeyWithEvent,
   getFormDataSections,
+  fetchHeaders,
   formDataURI,
   writeHeaderText,
   decodeUnicodeUrl,
@@ -253,6 +234,6 @@ module.exports = {
   getUrlBaseNameWithQuery,
   getUrlHostName,
   getUrlHost,
+  getUrlDetails,
   parseQueryString,
-  loadCauseString,
 };

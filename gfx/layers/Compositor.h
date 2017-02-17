@@ -12,7 +12,7 @@
 #include "mozilla/gfx/2D.h"             // for DrawTarget
 #include "mozilla/gfx/MatrixFwd.h"      // for Matrix4x4
 #include "mozilla/gfx/Point.h"          // for IntSize, Point
-#include "mozilla/gfx/Polygon.h"        // for Polygon3D
+#include "mozilla/gfx/Polygon.h"        // for Polygon
 #include "mozilla/gfx/Rect.h"           // for Rect, IntRect
 #include "mozilla/gfx/Types.h"          // for Float
 #include "mozilla/gfx/Triangle.h"       // for Triangle, TexturedTriangle
@@ -135,6 +135,7 @@ class CompositorD3D11;
 class BasicCompositor;
 class TextureHost;
 class TextureReadLock;
+class WebRenderCompositorOGL;
 
 enum SurfaceInitMode
 {
@@ -312,14 +313,14 @@ public:
                     gfx::Float aOpacity,
                     const gfx::Matrix4x4& aTransform,
                     const gfx::Rect& aVisibleRect,
-                    const Maybe<gfx::Polygon3D>& aGeometry);
+                    const Maybe<gfx::Polygon>& aGeometry);
 
   void DrawGeometry(const gfx::Rect& aRect,
                     const gfx::IntRect& aClipRect,
                     const EffectChain &aEffectChain,
                     gfx::Float aOpacity,
                     const gfx::Matrix4x4& aTransform,
-                    const Maybe<gfx::Polygon3D>& aGeometry)
+                    const Maybe<gfx::Polygon>& aGeometry)
   {
     DrawGeometry(aRect, aClipRect, aEffectChain, aOpacity,
                  aTransform, aRect, aGeometry);
@@ -357,6 +358,11 @@ public:
                             const gfx::Rect& aVisibleRect)
   {
     MOZ_CRASH("Compositor::DrawTriangle is not implemented for the current platform!");
+  }
+
+  virtual bool SupportsLayerGeometry() const
+  {
+    return false;
   }
 
   /**
@@ -468,6 +474,7 @@ public:
   virtual CompositorD3D9* AsCompositorD3D9() { return nullptr; }
   virtual CompositorD3D11* AsCompositorD3D11() { return nullptr; }
   virtual BasicCompositor* AsBasicCompositor() { return nullptr; }
+  virtual WebRenderCompositorOGL* AsWebRenderCompositorOGL() { return nullptr; }
 
   /**
    * Each Compositor has a unique ID.
@@ -537,31 +544,10 @@ public:
     mScreenRotation = aRotation;
   }
 
-  TimeStamp GetCompositionTime() const {
-    return mCompositionTime;
-  }
-  void SetCompositionTime(TimeStamp aTimeStamp) {
-    mCompositionTime = aTimeStamp;
-    if (!mCompositionTime.IsNull() && !mCompositeUntilTime.IsNull() &&
-        mCompositionTime >= mCompositeUntilTime) {
-      mCompositeUntilTime = TimeStamp();
-    }
-  }
-
-  void CompositeUntil(TimeStamp aTimeStamp) {
-    if (mCompositeUntilTime.IsNull() ||
-        mCompositeUntilTime < aTimeStamp) {
-      mCompositeUntilTime = aTimeStamp;
-    }
-  }
-  TimeStamp GetCompositeUntilTime() const {
-    return mCompositeUntilTime;
-  }
-
   // A stale Compositor has no CompositorBridgeParent; it will not process
   // frames and should not be used.
   void SetInvalid();
-  bool IsValid() const;
+  virtual bool IsValid() const;
   CompositorBridgeParent* GetCompositorBridgeParent() const {
     return mParent;
   }
@@ -616,6 +602,21 @@ protected:
                                        gfx::Matrix4x4* aOutTransform,
                                        gfx::Rect* aOutLayerQuad = nullptr);
 
+  virtual void DrawTriangles(const nsTArray<gfx::TexturedTriangle>& aTriangles,
+                             const gfx::Rect& aRect,
+                             const gfx::IntRect& aClipRect,
+                             const EffectChain& aEffectChain,
+                             gfx::Float aOpacity,
+                             const gfx::Matrix4x4& aTransform,
+                             const gfx::Rect& aVisibleRect);
+
+  virtual void DrawPolygon(const gfx::Polygon& aPolygon,
+                           const gfx::Rect& aRect,
+                           const gfx::IntRect& aClipRect,
+                           const EffectChain& aEffectChain,
+                           gfx::Float aOpacity,
+                           const gfx::Matrix4x4& aTransform,
+                           const gfx::Rect& aVisibleRect);
 
   /**
    * An array of locks that will need to be unlocked after the next composition.
@@ -631,17 +632,6 @@ protected:
    * Last Composition end time.
    */
   TimeStamp mLastCompositionEndTime;
-
-  /**
-   * Render time for the current composition.
-   */
-  TimeStamp mCompositionTime;
-  /**
-   * When nonnull, during rendering, some compositable indicated that it will
-   * change its rendering at this time. In order not to miss it, we composite
-   * on every vsync until this time occurs (this is the latest such time).
-   */
-  TimeStamp mCompositeUntilTime;
 
   uint32_t mCompositorID;
   DiagnosticTypes mDiagnosticTypes;

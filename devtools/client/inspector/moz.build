@@ -17,7 +17,12 @@ DevToolsModules(
     'inspector-commands.js',
     'inspector-search.js',
     'panel.js',
+    'reducers.js',
+    'store.js',
     'toolsidebar.js',
 )
 
 BROWSER_CHROME_MANIFESTS += ['test/browser.ini']
+
+with Files('**'):
+    BUG_COMPONENT = ('Firefox', 'Developer Tools: Inspector')

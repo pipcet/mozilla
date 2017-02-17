@@ -6,7 +6,6 @@
 
 #include "GMPDecoderModule.h"
 #include "DecoderDoctorDiagnostics.h"
-#include "GMPAudioDecoder.h"
 #include "GMPVideoDecoder.h"
 #include "GMPUtils.h"
 #include "MediaDataDecoderProxy.h"
@@ -15,7 +14,6 @@
 #include "mozIGeckoMediaPluginService.h"
 #include "nsServiceManagerUtils.h"
 #include "mozilla/StaticMutex.h"
-#include "gmp-audio-decode.h"
 #include "gmp-video-decode.h"
 #include "MP4Decoder.h"
 #include "VPXDecoder.h"
@@ -34,7 +32,7 @@ GMPDecoderModule::~GMPDecoderModule()
 }
 
 static already_AddRefed<MediaDataDecoderProxy>
-CreateDecoderWrapper(MediaDataDecoderCallback* aCallback)
+CreateDecoderWrapper()
 {
   RefPtr<gmp::GeckoMediaPluginService> s(gmp::GeckoMediaPluginService::GetGeckoMediaPluginService());
   if (!s) {
@@ -44,7 +42,7 @@ CreateDecoderWrapper(MediaDataDecoderCallback* aCallback)
   if (!thread) {
     return nullptr;
   }
-  RefPtr<MediaDataDecoderProxy> decoder(new MediaDataDecoderProxy(thread.forget(), aCallback));
+  RefPtr<MediaDataDecoderProxy> decoder(new MediaDataDecoderProxy(thread.forget()));
   return decoder.forget();
 }
 
@@ -57,15 +55,8 @@ GMPDecoderModule::CreateVideoDecoder(const CreateDecoderParams& aParams)
     return nullptr;
   }
 
-  if (aParams.mDiagnostics) {
-    const Maybe<nsCString> preferredGMP = PreferredGMP(aParams.mConfig.mMimeType);
-    if (preferredGMP.isSome()) {
-      aParams.mDiagnostics->SetGMP(preferredGMP.value());
-    }
-  }
-
-  RefPtr<MediaDataDecoderProxy> wrapper = CreateDecoderWrapper(aParams.mCallback);
-  auto params = GMPVideoDecoderParams(aParams).WithCallback(wrapper);
+  RefPtr<MediaDataDecoderProxy> wrapper = CreateDecoderWrapper();
+  auto params = GMPVideoDecoderParams(aParams);
   wrapper->SetProxyTarget(new GMPVideoDecoder(params));
   return wrapper.forget();
 }
@@ -73,21 +64,7 @@ GMPDecoderModule::CreateVideoDecoder(const CreateDecoderParams& aParams)
 already_AddRefed<MediaDataDecoder>
 GMPDecoderModule::CreateAudioDecoder(const CreateDecoderParams& aParams)
 {
-  if (!aParams.mConfig.mMimeType.EqualsLiteral("audio/mp4a-latm")) {
-    return nullptr;
-  }
-
-  if (aParams.mDiagnostics) {
-    const Maybe<nsCString> preferredGMP = PreferredGMP(aParams.mConfig.mMimeType);
-    if (preferredGMP.isSome()) {
-      aParams.mDiagnostics->SetGMP(preferredGMP.value());
-    }
-  }
-
-  RefPtr<MediaDataDecoderProxy> wrapper = CreateDecoderWrapper(aParams.mCallback);
-  auto params = GMPAudioDecoderParams(aParams).WithCallback(wrapper);
-  wrapper->SetProxyTarget(new GMPAudioDecoder(params));
-  return wrapper.forget();
+  return nullptr;
 }
 
 PlatformDecoderModule::ConversionRequired
@@ -99,30 +76,6 @@ GMPDecoderModule::DecoderNeedsConversion(const TrackInfo& aConfig) const
   } else {
     return ConversionRequired::kNeedNone;
   }
-}
-
-/* static */
-const Maybe<nsCString>
-GMPDecoderModule::PreferredGMP(const nsACString& aMimeType)
-{
-  Maybe<nsCString> rv;
-  if (aMimeType.EqualsLiteral("audio/mp4a-latm")) {
-    switch (MediaPrefs::GMPAACPreferred()) {
-      case 1: rv.emplace(kEMEKeySystemClearkey); break;
-      case 2: rv.emplace(kEMEKeySystemPrimetime); break;
-      default: break;
-    }
-  }
-
-  if (MP4Decoder::IsH264(aMimeType)) {
-    switch (MediaPrefs::GMPH264Preferred()) {
-      case 1: rv.emplace(kEMEKeySystemClearkey); break;
-      case 2: rv.emplace(kEMEKeySystemPrimetime); break;
-      default: break;
-    }
-  }
-
-  return rv;
 }
 
 /* static */
@@ -149,11 +102,6 @@ GMPDecoderModule::SupportsMimeType(const nsACString& aMimeType,
                       { NS_LITERAL_CSTRING("vp8"), aGMP.value()});
   }
 
-  if (MP4Decoder::IsAAC(aMimeType)) {
-    return HaveGMPFor(NS_LITERAL_CSTRING(GMP_API_AUDIO_DECODER),
-                      { NS_LITERAL_CSTRING("aac"), aGMP.value()});
-  }
-
   return false;
 }
 
@@ -161,12 +109,7 @@ bool
 GMPDecoderModule::SupportsMimeType(const nsACString& aMimeType,
                                    DecoderDoctorDiagnostics* aDiagnostics) const
 {
-  const Maybe<nsCString> preferredGMP = PreferredGMP(aMimeType);
-  bool rv = SupportsMimeType(aMimeType, preferredGMP);
-  if (rv && aDiagnostics && preferredGMP.isSome()) {
-    aDiagnostics->SetGMP(preferredGMP.value());
-  }
-  return rv;
+  return false;
 }
 
 } // namespace mozilla

@@ -86,12 +86,22 @@ are not monotonic like calculations based on ``Date.now()``.
 
 If the monotonic clock failed, this will be ``-1``.
 
+Note that this currently does not behave consistently over our supported platforms:
+
+* On Windows this uses ``GetTickCount64()``, which does increase over sleep periods
+* On OS X this uses ``mach_absolute_time()``, which does not increase over sleep periods
+* On POSIX/Linux this uses ``clock_gettime(CLOCK_MONOTONIC, &ts)``, which should not increase over sleep time
+
+See `bug 1204823 <https://bugzilla.mozilla.org/show_bug.cgi?id=1204823>`_ for details.
+
 subsessionLength
 ~~~~~~~~~~~~~~~~
 The length of this subsession in seconds.
-This uses a monotonic clock, so this may mismatch with other measurements that are not monotonic (e.g. based on Date.now()).
+This uses a monotonic clock, so this may mismatch with other measurements that are not monotonic (e.g. based on ``Date.now()``).
 
 If ``sessionLength`` is ``-1``, the monotonic clock is not working.
+
+Also see the remarks for ``sessionLength`` on platform consistency.
 
 processes
 ---------
@@ -102,14 +112,21 @@ Structure:
 .. code-block:: js
 
     "processes" : {
-      ... other processes ...
+      // ... other processes ...
       "parent": {
         scalars: {...},
+        keyedScalars: {...},
+        events: {...},
       },
       "content": {
+        scalars: {...},
+        keyedScalars: {...},
         histograms: {...},
         keyedHistograms: {...},
       },
+      "gpu": {
+        // ...
+      }
     }
 
 histograms and keyedHistograms
@@ -118,9 +135,15 @@ This section contains histograms and keyed histograms accumulated on content pro
 
 This format was adopted in Firefox 51 via bug 1218576.
 
-scalars
-~~~~~~~
-This section contains the :doc:`../collection/scalars` that are valid for the current platform. Scalars are not created nor submitted if no data was added to them, and are only reported with subsession pings. Scalar data is only currently reported for the main process. Their type and format is described by the ``Scalars.yaml`` file. Its most recent version is available `here <https://dxr.mozilla.org/mozilla-central/source/toolkit/components/telemetry/Scalars.yaml>`_. The ``info.revision`` field indicates the revision of the file that describes the reported scalars.
+scalars and keyedScalars
+~~~~~~~~~~~~~~~~~~~~~~~~
+This section contains the :doc:`../collection/scalars` that are valid for the current platform. Scalars are only submitted if data was added to them, and are only reported with subsession pings. The recorded scalars are described in the `Scalars.yaml <https://dxr.mozilla.org/mozilla-central/source/toolkit/components/telemetry/Scalars.yaml>`_ file. The ``info.revision`` field indicates the revision of the file that describes the reported scalars.
+
+events
+~~~~~~
+This section contains the :ref:`eventtelemetry` that are recorded for the current subsession. Events are not always recorded, recording has to be enabled first for the Firefox session.
+
+The recorded events are defined in the `Events.yaml <https://dxr.mozilla.org/mozilla-central/source/toolkit/components/telemetry/Events.yaml>`_. The ``info.revision`` field indicates the revision of the file that describes the reported events.
 
 childPayloads
 -------------
@@ -215,7 +238,7 @@ Integer count of pending pings that are overdue.
 
 histograms
 ----------
-This section contains the histograms that are valid for the current platform. ``Flag`` and ``count`` histograms are always created and submitted, with their default value being respectively ``false`` and ``0``. Other histogram types (`see here <https://developer.mozilla.org/en-US/docs/Mozilla/Performance/Adding_a_new_Telemetry_probe#Choosing_a_Histogram_Type>`_) are not created nor submitted if no data was added to them. The type and format of the reported histograms is described by the ``Histograms.json`` file. Its most recent version is available `here <https://dxr.mozilla.org/mozilla-central/source/toolkit/components/telemetry/Histograms.json>`_. The ``info.revision`` field indicates the revision of the file that describes the reported histograms.
+This section contains the histograms that are valid for the current platform. ``Flag`` and ``count`` histograms are always created and submitted, with their default value being respectively ``false`` and ``0``. Other histogram types (see :ref:`choosing-histogram-type`) are not created nor submitted if no data was added to them. The type and format of the reported histograms is described by the ``Histograms.json`` file. Its most recent version is available `here <https://dxr.mozilla.org/mozilla-central/source/toolkit/components/telemetry/Histograms.json>`_. The ``info.revision`` field indicates the revision of the file that describes the reported histograms.
 
 keyedHistograms
 ---------------
@@ -266,7 +289,12 @@ Structure:
 
 capturedStacks
 --------------
-Contains information about stacks captured on demand via Telemetry API. This is similar to `chromeHangs`, but only stacks captured on the main thread of the parent process are reported. It reports precise C++ stacks are reported and is only available on Windows, either in Firefox Nightly or in builds using "--enable-profiling" switch.
+Contains information about stacks captured on demand via Telemetry API. For more
+information see :doc:`stack capture <../collection/stack-capture>`.
+
+This is similar to :ref:`chromeHangs`, but only Precise C++ stacks on the main thread of
+the parent process are reported. This data is only available on Windows, either
+in Firefox Nightly or in builds using ``--enable-profiling`` switch.
 
 Limits for captured stacks are the same as for chromeHangs (see below). Furthermore:
 
@@ -296,6 +324,8 @@ Structure:
       ],
       "captures": [["string-key", stack-index, count], ... ]
     }
+
+.. _chromeHangs:
 
 chromeHangs
 -----------

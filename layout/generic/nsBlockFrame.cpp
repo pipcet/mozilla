@@ -306,7 +306,7 @@ NS_NewBlockFormattingContext(nsIPresShell* aPresShell,
                              nsStyleContext* aStyleContext)
 {
   nsBlockFrame* blockFrame = NS_NewBlockFrame(aPresShell, aStyleContext);
-  blockFrame->AddStateBits(NS_BLOCK_FLOAT_MGR | NS_BLOCK_MARGIN_ROOT);
+  blockFrame->AddStateBits(NS_BLOCK_FORMATTING_CONTEXT_STATE_BITS);
   return blockFrame;
 }
 
@@ -490,12 +490,44 @@ nsBlockFrame::InvalidateFrameWithRect(const nsRect& aRect, uint32_t aDisplayItem
 }
 
 nscoord
-nsBlockFrame::GetLogicalBaseline(WritingMode aWritingMode) const
+nsBlockFrame::GetLogicalBaseline(WritingMode aWM) const
 {
-  nscoord result;
-  if (nsLayoutUtils::GetLastLineBaseline(aWritingMode, this, &result))
-    return result;
-  return nsFrame::GetLogicalBaseline(aWritingMode);
+  auto lastBaseline =
+    BaselineBOffset(aWM, BaselineSharingGroup::eLast, AlignmentContext::eInline);
+  return BSize(aWM) - lastBaseline;
+}
+
+bool
+nsBlockFrame::GetNaturalBaselineBOffset(mozilla::WritingMode aWM,
+                                        BaselineSharingGroup aBaselineGroup,
+                                        nscoord*             aBaseline) const
+{
+  if (aBaselineGroup == BaselineSharingGroup::eFirst) {
+    return nsLayoutUtils::GetFirstLineBaseline(aWM, this, aBaseline);
+  }
+
+  for (ConstReverseLineIterator line = LinesRBegin(), line_end = LinesREnd();
+       line != line_end; ++line) {
+    if (line->IsBlock()) {
+      nscoord offset;
+      nsIFrame* kid = line->mFirstChild;
+      if (kid->GetVerticalAlignBaseline(aWM, &offset)) {
+        // Ignore relative positioning for baseline calculations.
+        const nsSize& sz = line->mContainerSize;
+        offset += kid->GetLogicalNormalPosition(aWM, sz).B(aWM);
+        *aBaseline = BSize(aWM) - offset;
+        return true;
+      }
+    } else {
+      // XXX Is this the right test?  We have some bogus empty lines
+      // floating around, but IsEmpty is perhaps too weak.
+      if (line->BSize() != 0 || !line->IsEmpty()) {
+        *aBaseline = BSize(aWM) - (line->BStart() + line->GetLogicalAscent());
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 nscoord
@@ -806,9 +838,14 @@ nsBlockFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
       AutoNoisyIndenter lineindent(gNoisyIntrinsic);
 #endif
       if (line->IsBlock()) {
+        StyleClear breakType;
         if (!data.mLineIsEmpty || BlockCanIntersectFloats(line->mFirstChild)) {
-          data.ForceBreak();
+          breakType = StyleClear::Both;
+        } else {
+          breakType = line->mFirstChild->
+            StyleDisplay()->PhysicalBreakType(data.mLineContainerWM);
         }
+        data.ForceBreak(breakType);
         data.mCurrentLine = nsLayoutUtils::IntrinsicForContainer(aRenderingContext,
                         line->mFirstChild, nsLayoutUtils::PREF_ISIZE);
         data.ForceBreak();
@@ -1074,7 +1111,7 @@ nsBlockFrame::Reflow(nsPresContext*           aPresContext,
 
   const ReflowInput *reflowInput = &aReflowInput;
   WritingMode wm = aReflowInput.GetWritingMode();
-  nscoord consumedBSize = GetConsumedBSize();
+  nscoord consumedBSize = ConsumedBSize(wm);
   nscoord effectiveComputedBSize = GetEffectiveComputedBSize(aReflowInput,
                                                              consumedBSize);
   Maybe<ReflowInput> mutableReflowInput;
@@ -1231,7 +1268,7 @@ nsBlockFrame::Reflow(nsPresContext*           aPresContext,
   // we need to continue, too.
   if (NS_UNCONSTRAINEDSIZE != reflowInput->AvailableBSize() &&
       NS_FRAME_IS_COMPLETE(state.mReflowStatus) &&
-      state.mFloatManager->ClearContinues(FindTrailingClear())) {
+      state.FloatManager()->ClearContinues(FindTrailingClear())) {
     NS_FRAME_SET_INCOMPLETE(state.mReflowStatus);
   }
 
@@ -1421,12 +1458,6 @@ nsBlockFrame::Reflow(nsPresContext*           aPresContext,
 
   FinishAndStoreOverflow(&aMetrics);
 
-  // Clear the float manager pointer in the block reflow state so we
-  // don't waste time translating the coordinate system back on a dead
-  // float manager.
-  if (needFloatManager)
-    state.mFloatManager = nullptr;
-
   aStatus = state.mReflowStatus;
 
 #ifdef DEBUG
@@ -1591,7 +1622,7 @@ nsBlockFrame::ComputeFinalSize(const ReflowInput& aReflowInput,
                                      aState.mBCoord + nonCarriedOutBDirMargin);
       // ... but don't take up more block size than is available
       nscoord effectiveComputedBSize =
-        GetEffectiveComputedBSize(aReflowInput, aState.GetConsumedBSize());
+        GetEffectiveComputedBSize(aReflowInput, aState.ConsumedBSize());
       finalSize.BSize(wm) =
         std::min(finalSize.BSize(wm),
                  borderPadding.BStart(wm) + effectiveComputedBSize);
@@ -2002,7 +2033,7 @@ nsBlockFrame::PropagateFloatDamage(BlockReflowInput& aState,
                                    nsLineBox* aLine,
                                    nscoord aDeltaBCoord)
 {
-  nsFloatManager *floatManager = aState.mReflowInput.mFloatManager;
+  nsFloatManager* floatManager = aState.FloatManager();
   NS_ASSERTION((aState.mReflowInput.mParentReflowInput &&
                 aState.mReflowInput.mParentReflowInput->mFloatManager == floatManager) ||
                 aState.mReflowInput.mBlockDelta == 0, "Bad block delta passed in");
@@ -3415,7 +3446,7 @@ nsBlockFrame::ReflowBlockFrame(BlockReflowInput& aState,
 
       // Reflow the block into the available space
       if (mayNeedRetry || replacedBlock) {
-        aState.mFloatManager->PushState(&floatManagerState);
+        aState.FloatManager()->PushState(&floatManagerState);
       }
 
       if (mayNeedRetry) {
@@ -3491,7 +3522,7 @@ nsBlockFrame::ReflowBlockFrame(BlockReflowInput& aState,
       }
 
       // We need another reflow.
-      aState.mFloatManager->PopState(&floatManagerState);
+      aState.FloatManager()->PopState(&floatManagerState);
 
       if (!treatWithClearance && !applyBStartMargin &&
           aState.mReflowInput.mDiscoveredClearance) {
@@ -3523,7 +3554,7 @@ nsBlockFrame::ReflowBlockFrame(BlockReflowInput& aState,
     } while (true);
 
     if (mayNeedRetry && clearanceFrame) {
-      aState.mFloatManager->PopState(&floatManagerState);
+      aState.FloatManager()->PopState(&floatManagerState);
       aState.mBCoord = startingBCoord;
       aState.mPrevBEndMargin = incomingMargin;
       continue;
@@ -3776,7 +3807,7 @@ nsBlockFrame::ReflowInlineFrames(BlockReflowInput& aState,
       gfxBreakPriority forceBreakPriority = gfxBreakPriority::eNoBreak;
       do {
         nsFloatManager::SavedState floatManagerState;
-        aState.mReflowInput.mFloatManager->PushState(&floatManagerState);
+        aState.FloatManager()->PushState(&floatManagerState);
 
         // Once upon a time we allocated the first 30 nsLineLayout objects
         // on the stack, and then we switched to the heap.  At that time
@@ -3786,7 +3817,7 @@ nsBlockFrame::ReflowInlineFrames(BlockReflowInput& aState,
         // smaller, the complexity of 2 different ways of allocating
         // no longer makes sense.  Now we always allocate on the stack.
         nsLineLayout lineLayout(aState.mPresContext,
-                                aState.mReflowInput.mFloatManager,
+                                aState.FloatManager(),
                                 &aState.mReflowInput, &aLine, nullptr);
         lineLayout.Init(&aState, aState.mMinLineHeight, aState.mLineNumber);
         if (forceBreakInFrame) {
@@ -3812,7 +3843,7 @@ nsBlockFrame::ReflowInlineFrames(BlockReflowInput& aState,
             forceBreakInFrame = nullptr;
           }
           // restore the float manager state
-          aState.mReflowInput.mFloatManager->PopState(&floatManagerState);
+          aState.FloatManager()->PopState(&floatManagerState);
           // Clear out float lists
           aState.mCurrentLineFloats.DeleteAll();
           aState.mBelowCurrentLineFloats.DeleteAll();
@@ -3861,7 +3892,7 @@ nsBlockFrame::DoReflowInlineFrames(BlockReflowInput& aState,
 #endif
 
   WritingMode outerWM = aState.mReflowInput.GetWritingMode();
-  WritingMode lineWM = GetWritingMode(aLine->mFirstChild);
+  WritingMode lineWM = WritingModeForLine(outerWM, aLine->mFirstChild);
   LogicalRect lineRect =
     aFloatAvailableSpace.mRect.ConvertTo(lineWM, outerWM,
                                          aState.ContainerSize());
@@ -4012,7 +4043,7 @@ nsBlockFrame::DoReflowInlineFrames(BlockReflowInput& aState,
       // line; if we have, then the GetFloatAvailableSpace call is wrong
       // and needs to happen after the caller pops the space manager
       // state.
-      aState.mFloatManager->AssertStateMatches(aFloatStateBeforeLine);
+      aState.FloatManager()->AssertStateMatches(aFloatStateBeforeLine);
       aState.mBCoord += aFloatAvailableSpace.mRect.BSize(outerWM);
       aFloatAvailableSpace = aState.GetFloatAvailableSpace();
     } else {
@@ -4025,7 +4056,7 @@ nsBlockFrame::DoReflowInlineFrames(BlockReflowInput& aState,
         // line; if we have, then the GetFloatAvailableSpace call is wrong
         // and needs to happen after the caller pops the space manager
         // state.
-        aState.mFloatManager->AssertStateMatches(aFloatStateBeforeLine);
+        aState.FloatManager()->AssertStateMatches(aFloatStateBeforeLine);
         aFloatAvailableSpace = aState.GetFloatAvailableSpace();
       } else {
         // There's nowhere to retry placing the line, so we want to push
@@ -4286,10 +4317,10 @@ nsBlockFrame::SplitFloat(BlockReflowInput& aState,
   StyleFloat floatStyle =
     aFloat->StyleDisplay()->PhysicalFloats(aState.mReflowInput.GetWritingMode());
   if (floatStyle == StyleFloat::Left) {
-    aState.mFloatManager->SetSplitLeftFloatAcrossBreak();
+    aState.FloatManager()->SetSplitLeftFloatAcrossBreak();
   } else {
     MOZ_ASSERT(floatStyle == StyleFloat::Right, "Unexpected float side!");
-    aState.mFloatManager->SetSplitRightFloatAcrossBreak();
+    aState.FloatManager()->SetSplitRightFloatAcrossBreak();
   }
 
   aState.AppendPushedFloatChain(nextInFlow);
@@ -6875,6 +6906,7 @@ nsBlockFrame::Init(nsIContent*       aContent,
     AddStateBits(NS_BLOCK_NEEDS_BIDI_RESOLUTION);
   }
 
+  // A display:flow-root box establishes a block formatting context.
   // If a box has a different block flow direction than its containing block:
   // ...
   //   If the box is a block container, then it establishes a new block
@@ -6882,10 +6914,11 @@ nsBlockFrame::Init(nsIContent*       aContent,
   // (http://dev.w3.org/csswg/css-writing-modes/#block-flow)
   // If the box has contain: paint (or contain: strict), then it should also
   // establish a formatting context.
-  if ((GetParent() && StyleVisibility()->mWritingMode !=
+  if (StyleDisplay()->mDisplay == mozilla::StyleDisplay::FlowRoot ||
+      (GetParent() && StyleVisibility()->mWritingMode !=
                       GetParent()->StyleVisibility()->mWritingMode) ||
       StyleDisplay()->IsContainPaint()) {
-    AddStateBits(NS_BLOCK_FLOAT_MGR | NS_BLOCK_MARGIN_ROOT);
+    AddStateBits(NS_BLOCK_FORMATTING_CONTEXT_STATE_BITS);
   }
 
   if ((GetStateBits() &
@@ -7246,7 +7279,7 @@ nsBlockFrame::CheckFloats(BlockReflowInput& aState)
     // because we know from here on the float manager will only be
     // used for its XMost and YMost, not to place new floats and
     // lines.
-    aState.mFloatManager->RemoveTrailingRegions(oofs->FirstChild());
+    aState.FloatManager()->RemoveTrailingRegions(oofs->FirstChild());
   }
 }
 

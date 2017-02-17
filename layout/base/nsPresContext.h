@@ -40,7 +40,6 @@
 #include "nsIMessageManager.h"
 #include "mozilla/RestyleLogging.h"
 #include "Units.h"
-#include "mozilla/RestyleManagerHandle.h"
 #include "prenv.h"
 #include "mozilla/StaticPresData.h"
 #include "mozilla/StyleBackendType.h"
@@ -73,10 +72,14 @@ namespace mozilla {
 class EffectCompositor;
 class EventStateManager;
 class CounterStyleManager;
+class RestyleManager;
 namespace layers {
 class ContainerLayer;
 class LayerManager;
 } // namespace layers
+namespace dom {
+class Element;
+} // namespace dom
 } // namespace mozilla
 
 // supported values for cached bool types
@@ -144,7 +147,6 @@ public:
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_NSIOBSERVER
-  NS_DECL_AND_IMPL_ZEROING_OPERATOR_NEW
   NS_DECL_CYCLE_COLLECTION_CLASS(nsPresContext)
   MOZ_DECLARE_WEAKREFERENCE_TYPENAME(nsPresContext)
 
@@ -229,7 +231,7 @@ public:
   }
 
 #ifdef MOZILLA_INTERNAL_API
-  mozilla::StyleSetHandle StyleSet() { return GetPresShell()->StyleSet(); }
+  mozilla::StyleSetHandle StyleSet() const { return GetPresShell()->StyleSet(); }
 
   nsFrameManager* FrameManager()
     { return PresShell()->FrameManager(); }
@@ -243,12 +245,12 @@ public:
 
   nsRefreshDriver* RefreshDriver() { return mRefreshDriver; }
 
-  mozilla::RestyleManagerHandle RestyleManager() {
+  mozilla::RestyleManager* RestyleManager() {
     MOZ_ASSERT(mRestyleManager);
     return mRestyleManager;
   }
 
-  mozilla::CounterStyleManager* CounterStyleManager() {
+  mozilla::CounterStyleManager* CounterStyleManager() const {
     return mCounterStyleManager;
   }
 #endif
@@ -544,12 +546,12 @@ public:
   float GetPrintPreviewScale() { return mPPScale; }
   void SetPrintPreviewScale(float aScale) { mPPScale = aScale; }
 
-  nsDeviceContext* DeviceContext() { return mDeviceContext; }
+  nsDeviceContext* DeviceContext() const { return mDeviceContext; }
   mozilla::EventStateManager* EventStateManager() { return mEventManager; }
   nsIAtom* GetLanguageFromCharset() const { return mLanguage; }
   already_AddRefed<nsIAtom> GetContentLanguage() const;
 
-  float TextZoom() { return mTextZoom; }
+  float TextZoom() const { return mTextZoom; }
   void SetTextZoom(float aZoom) {
     MOZ_ASSERT(aZoom > 0.0f, "invalid zoom factor");
     if (aZoom == mTextZoom)
@@ -722,6 +724,12 @@ public:
   }
 
   /**
+   * Check whether the given element would propagate its scrollbar styles to the
+   * viewport in non-paginated mode.  Must only be called if IsPaginated().
+   */
+  bool ElementWouldPropagateScrollbarStyles(mozilla::dom::Element* aElement);
+
+  /**
    * Set and get methods for controlling the background drawing
   */
   bool GetBackgroundImageDraw() const { return mDrawImageBackground; }
@@ -783,6 +791,21 @@ public:
    *  @lina 05/02/2000
    */
   bool IsVisualMode() const { return mIsVisual; }
+
+  enum class InteractionType : uint32_t {
+    eClickInteraction,
+    eKeyInteraction,
+    eMouseMoveInteraction,
+    eScrollInteraction
+  };
+
+  void RecordInteractionTime(InteractionType aType,
+                             const mozilla::TimeStamp& aTimeStamp);
+
+  void DisableInteractionTimeRecording()
+  {
+    mInteractionTimeEnabled = false;
+  }
 
 //Mohamed
 
@@ -930,7 +953,7 @@ public:
 
   bool             SuppressingResizeReflow() const { return mSuppressResizeReflow; }
 
-  gfxUserFontSet* GetUserFontSet();
+  gfxUserFontSet* GetUserFontSet(bool aFlushUserFontSet = true);
 
   // Should be called whenever the set of fonts available in the user
   // font set changes (e.g., because a new font loads, or because the
@@ -955,7 +978,8 @@ public:
   // aFlags are nsIPresShell::PAINT_ flags
   void NotifyDidPaintForSubtree(uint32_t aFlags, uint64_t aTransactionId = 0,
                                 const mozilla::TimeStamp& aTimeStamp = mozilla::TimeStamp());
-  void FireDOMPaintEvent(nsInvalidateRequestList* aList, uint64_t aTransactionId);
+  void FireDOMPaintEvent(nsInvalidateRequestList* aList, uint64_t aTransactionId,
+                         mozilla::TimeStamp aTimeStamp = mozilla::TimeStamp());
 
   // Callback for catching invalidations in ContainerLayers
   // Passed to LayerProperties::ComputeDifference
@@ -1218,6 +1242,7 @@ protected:
   // Creates a one-shot timer with the given aCallback & aDelay.
   // Returns a refcounted pointer to the timer (or nullptr on failure).
   already_AddRefed<nsITimer> CreateTimer(nsTimerCallbackFunc aCallback,
+                                         const char* aName,
                                          uint32_t aDelay);
 
   // IMPORTANT: The ownership implicit in the following member variables
@@ -1239,7 +1264,7 @@ protected:
   RefPtr<mozilla::EffectCompositor> mEffectCompositor;
   RefPtr<nsTransitionManager> mTransitionManager;
   RefPtr<nsAnimationManager> mAnimationManager;
-  mozilla::RestyleManagerHandle::RefPtr mRestyleManager;
+  RefPtr<mozilla::RestyleManager> mRestyleManager;
   RefPtr<mozilla::CounterStyleManager> mCounterStyleManager;
   nsIAtom* MOZ_UNSAFE_REF("always a static atom") mMedium; // initialized by subclass ctors
   nsCOMPtr<nsIAtom> mMediaEmulated;
@@ -1335,6 +1360,15 @@ protected:
   uint64_t              mFramesReflowed;
 
   mozilla::TimeStamp    mReflowStartTime;
+
+  // Time of various first interaction types, used to report time from
+  // first paint of the top level content pres shell to first interaction.
+  mozilla::TimeStamp    mFirstNonBlankPaintTime;
+  mozilla::TimeStamp    mFirstClickTime;
+  mozilla::TimeStamp    mFirstKeyTime;
+  mozilla::TimeStamp    mFirstMouseMoveTime;
+  mozilla::TimeStamp    mFirstScrollTime;
+  bool                  mInteractionTimeEnabled;
 
   // last time we did a full style flush
   mozilla::TimeStamp    mLastStyleUpdateForAllAnimations;
@@ -1492,6 +1526,8 @@ public:
    * This needs to be called even when aFrame is a popup, since although
    * windowed plugins aren't allowed in popups, windowless plugins are
    * and ComputePluginGeometryUpdates needs to be called for them.
+   * aBuilder and aList can be null. This indicates that all plugins are
+   * hidden because we're in a background tab.
    */
   void ComputePluginGeometryUpdates(nsIFrame* aFrame,
                                     nsDisplayListBuilder* aBuilder,
@@ -1521,9 +1557,6 @@ public:
 
   /**
    * Get the current DOM generation counter.
-   *
-   * See nsFrameManagerBase::GetGlobalGenerationNumber() for a
-   * global generation number.
    */
   uint32_t GetDOMGeneration() { return mDOMGeneration; }
 
@@ -1553,7 +1586,9 @@ protected:
 
   class RunWillPaintObservers : public mozilla::Runnable {
   public:
-    explicit RunWillPaintObservers(nsRootPresContext* aPresContext) : mPresContext(aPresContext) {}
+    explicit RunWillPaintObservers(nsRootPresContext* aPresContext)
+      : Runnable("nsPresContextType::RunWillPaintObservers")
+      , mPresContext(aPresContext) {}
     void Revoke() { mPresContext = nullptr; }
     NS_IMETHOD Run() override
     {

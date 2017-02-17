@@ -106,7 +106,10 @@ var SessionHistoryInternal = {
       // record it. For about:blank we explicitly want an empty array without
       // an 'index' property to denote that there are no history entries.
       if (uri != "about:blank" || (body && body.hasChildNodes())) {
-        data.entries.push({ url: uri });
+        data.entries.push({
+          url: uri,
+          triggeringPrincipal_base64: Utils.SERIALIZED_SYSTEMPRINCIPAL
+        });
         data.index = 1;
       }
     }
@@ -426,29 +429,16 @@ var SessionHistoryInternal = {
     // FF55 will remove the triggeringPrincipal_b64, see Bug 1301666.
     if (entry.triggeringPrincipal_base64 || entry.principalToInherit_base64) {
       if (entry.triggeringPrincipal_base64) {
-        try {
-          shEntry.triggeringPrincipal =
-            Utils.deserializePrincipal(entry.triggeringPrincipal_base64);
-        } catch (e) {
-          debug(e);
-        }
+        shEntry.triggeringPrincipal =
+          Utils.deserializePrincipal(entry.triggeringPrincipal_base64);
       }
       if (entry.principalToInherit_base64) {
-        try {
-          shEntry.principalToInherit =
-            Utils.deserializePrincipal(entry.principalToInherit_base64);
-        } catch (e) {
-          debug(e);
-        }
+        shEntry.principalToInherit =
+          Utils.deserializePrincipal(entry.principalToInherit_base64);
       }
     } else if (entry.triggeringPrincipal_b64) {
-      try {
-        shEntry.triggeringPrincipal = Utils.deserializePrincipal(entry.triggeringPrincipal_b64);
-        shEntry.principalToInherit = shEntry.triggeringPrincipal;
-      }
-      catch (e) {
-        debug(e);
-      }
+      shEntry.triggeringPrincipal = Utils.deserializePrincipal(entry.triggeringPrincipal_b64);
+      shEntry.principalToInherit = shEntry.triggeringPrincipal;
     }
 
     if (entry.children && shEntry instanceof Ci.nsISHContainer) {

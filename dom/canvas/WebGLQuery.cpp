@@ -5,6 +5,7 @@
 
 #include "WebGLQuery.h"
 
+#include "gfxPrefs.h"
 #include "GLContext.h"
 #include "mozilla/dom/WebGL2RenderingContextBinding.h"
 #include "nsContentUtils.h"
@@ -136,8 +137,7 @@ WebGLQuery::GetQueryParameter(GLenum pname, JS::MutableHandleValue retval) const
         break;
 
     default:
-        mContext->ErrorInvalidEnum("%s: Invalid pname: %s", funcName,
-                                   mContext->EnumName(pname));
+        mContext->ErrorInvalidEnumArg(funcName, "pname", pname);
         return;
     }
 

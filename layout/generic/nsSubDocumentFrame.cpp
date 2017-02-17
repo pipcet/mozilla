@@ -113,6 +113,8 @@ nsSubDocumentFrame::Init(nsIContent*       aContent,
 
   static bool addedShowPreviousPage = false;
   if (!addedShowPreviousPage) {
+    // If layout.show_previous_page is true then during loading of a new page we
+    // will draw the previous page if the new page has painting suppressed.
     Preferences::AddBoolVarCache(&sShowPreviousPage, "layout.show_previous_page", true);
     addedShowPreviousPage = true;
   }
@@ -319,7 +321,7 @@ WrapBackgroundColorInOwnLayer(nsDisplayListBuilder* aBuilder,
     if (item->GetType() == nsDisplayItem::TYPE_BACKGROUND_COLOR) {
       nsDisplayList tmpList;
       tmpList.AppendToTop(item);
-      item = new (aBuilder) nsDisplayOwnLayer(aBuilder, aFrame, &tmpList);
+      item = new (aBuilder) nsDisplayOwnLayer(aBuilder, aFrame, &tmpList, aBuilder->CurrentActiveScrolledRoot());
     }
     tempItems.AppendToTop(item);
   }
@@ -454,7 +456,7 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       // the layer we will construct will be clipped by the current clip.
       // In fact for nsDisplayZoom propagating it down would be incorrect since
       // nsDisplayZoom changes the meaning of appunits.
-      nestedClipState.EnterStackingContextContents(true);
+      nestedClipState.Clear();
     }
 
     if (subdocRootFrame) {
@@ -911,7 +913,7 @@ public:
     // Note it can be unsafe to flush if we've destroyed the presentation
     // for some other reason, like if we're shutting down.
     if (!mPresShell->IsDestroying()) {
-      mPresShell->FlushPendingNotifications(Flush_Frames);
+      mPresShell->FlushPendingNotifications(FlushType::Frames);
     }
 
     // Either the frame has been constructed by now, or it never will be,

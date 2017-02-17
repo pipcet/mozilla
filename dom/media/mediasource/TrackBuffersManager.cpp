@@ -23,15 +23,15 @@
 
 extern mozilla::LogModule* GetMediaSourceLog();
 
-#define MSE_DEBUG(arg, ...) MOZ_LOG(GetMediaSourceLog(), mozilla::LogLevel::Debug, ("TrackBuffersManager(%p:%s)::%s: " arg, this, mType.get(), __func__, ##__VA_ARGS__))
-#define MSE_DEBUGV(arg, ...) MOZ_LOG(GetMediaSourceLog(), mozilla::LogLevel::Verbose, ("TrackBuffersManager(%p:%s)::%s: " arg, this, mType.get(), __func__, ##__VA_ARGS__))
+#define MSE_DEBUG(arg, ...) MOZ_LOG(GetMediaSourceLog(), mozilla::LogLevel::Debug, ("TrackBuffersManager(%p:%s)::%s: " arg, this, mType.OriginalString().Data(), __func__, ##__VA_ARGS__))
+#define MSE_DEBUGV(arg, ...) MOZ_LOG(GetMediaSourceLog(), mozilla::LogLevel::Verbose, ("TrackBuffersManager(%p:%s)::%s: " arg, this, mType.OriginalString().Data(), __func__, ##__VA_ARGS__))
 
 mozilla::LogModule* GetMediaSourceSamplesLog()
 {
   static mozilla::LazyLogModule sLogModule("MediaSourceSamples");
   return sLogModule;
 }
-#define SAMPLE_DEBUG(arg, ...) MOZ_LOG(GetMediaSourceSamplesLog(), mozilla::LogLevel::Debug, ("TrackBuffersManager(%p:%s)::%s: " arg, this, mType.get(), __func__, ##__VA_ARGS__))
+#define SAMPLE_DEBUG(arg, ...) MOZ_LOG(GetMediaSourceSamplesLog(), mozilla::LogLevel::Debug, ("TrackBuffersManager(%p:%s)::%s: " arg, this, mType.OriginalString().Data(), __func__, ##__VA_ARGS__))
 
 namespace mozilla {
 
@@ -85,7 +85,7 @@ private:
 };
 
 TrackBuffersManager::TrackBuffersManager(MediaSourceDecoder* aParentDecoder,
-                                         const nsACString& aType)
+                                         const MediaContainerType& aType)
   : mInputBuffer(new MediaByteBuffer)
   , mBufferFull(false)
   , mFirstInitializationSegmentReceived(false)
@@ -96,11 +96,12 @@ TrackBuffersManager::TrackBuffersManager(MediaSourceDecoder* aParentDecoder,
   , mProcessedInput(0)
   , mTaskQueue(aParentDecoder->GetDemuxer()->GetTaskQueue())
   , mParentDecoder(new nsMainThreadPtrHolder<MediaSourceDecoder>(aParentDecoder, false /* strict */))
+  , mAbstractMainThread(aParentDecoder->AbstractMainThread())
   , mEnded(false)
   , mVideoEvictionThreshold(Preferences::GetUint("media.mediasource.eviction_threshold.video",
                                                  100 * 1024 * 1024))
   , mAudioEvictionThreshold(Preferences::GetUint("media.mediasource.eviction_threshold.audio",
-                                                 10 * 1024 * 1024))
+                                                 20 * 1024 * 1024))
   , mEvictionState(EvictionState::NO_EVICTION_NEEDED)
   , mMonitor("TrackBuffersManager")
 {
@@ -273,10 +274,10 @@ TrackBuffersManager::EvictData(const TimeUnit& aPlaybackTime, int64_t aSize)
   const uint32_t canEvict =
     Evictable(HasVideo() ? TrackInfo::kVideoTrack : TrackInfo::kAudioTrack);
 
-  MSE_DEBUG(
-    "buffered=%lldkB, eviction threshold=%ukB, evict=%lldkB canevict=%ukB",
-    GetSize() / 1024, EvictionThreshold() / 1024, toEvict / 1024,
-    canEvict / 1024);
+  MSE_DEBUG("currentTime=%lld buffered=%lldkB, eviction threshold=%ukB, "
+            "evict=%lldkB canevict=%ukB",
+            aPlaybackTime.ToMicroseconds(), GetSize() / 1024,
+            EvictionThreshold() / 1024, toEvict / 1024, canEvict / 1024);
 
   if (toEvict <= 0) {
     mEvictionState = EvictionState::NO_EVICTION_NEEDED;
@@ -295,7 +296,9 @@ TrackBuffersManager::EvictData(const TimeUnit& aPlaybackTime, int64_t aSize)
     mEvictionState = EvictionState::EVICTION_NEEDED;
     result = EvictDataResult::NO_DATA_EVICTED;
   }
-  MSE_DEBUG("Reached our size limit, schedule eviction of %lld bytes", toEvict);
+  MSE_DEBUG(
+    "Reached our size limit, schedule eviction of %lld bytes (%s)", toEvict,
+    result == EvictDataResult::BUFFER_FULL ? "buffer full" : "no data evicted");
   QueueTask(new EvictDataTask(aPlaybackTime, toEvict));
 
   return result;
@@ -442,7 +445,7 @@ TrackBuffersManager::DoEvictData(const TimeUnit& aPlaybackTime,
       }
       partialEvict = 0;
     }
-    if (frame->mTime >= lowerLimit.ToMicroseconds()) {
+    if (frame->GetEndTime() >= lowerLimit.ToMicroseconds()) {
       break;
     }
     partialEvict += frame->ComputedSizeOfIncludingThis();
@@ -731,20 +734,21 @@ TrackBuffersManager::SegmentParserLoop()
 
       // 3. If the input buffer contains one or more complete coded frames, then run the coded frame processing algorithm.
       RefPtr<TrackBuffersManager> self = this;
-      mProcessingRequest.Begin(CodedFrameProcessing()
-          ->Then(GetTaskQueue(), __func__,
-                 [self] (bool aNeedMoreData) {
-                   self->mProcessingRequest.Complete();
-                   if (aNeedMoreData) {
-                     self->NeedMoreData();
-                   } else {
-                     self->ScheduleSegmentParserLoop();
-                   }
-                 },
-                 [self] (const MediaResult& aRejectValue) {
-                   self->mProcessingRequest.Complete();
-                   self->RejectAppend(aRejectValue, __func__);
-                 }));
+      CodedFrameProcessing()
+        ->Then(GetTaskQueue(), __func__,
+               [self] (bool aNeedMoreData) {
+                 self->mProcessingRequest.Complete();
+                 if (aNeedMoreData) {
+                   self->NeedMoreData();
+                 } else {
+                   self->ScheduleSegmentParserLoop();
+                 }
+               },
+               [self] (const MediaResult& aRejectValue) {
+                 self->mProcessingRequest.Complete();
+                 self->RejectAppend(aRejectValue, __func__);
+               })
+        ->Track(mProcessingRequest);
       return;
     }
   }
@@ -807,15 +811,15 @@ TrackBuffersManager::CreateDemuxerforMIMEType()
 {
   ShutdownDemuxers();
 
-  if (mType.LowerCaseEqualsLiteral("video/webm") ||
-      mType.LowerCaseEqualsLiteral("audio/webm")) {
+  if (mType.Type() == MEDIAMIMETYPE("video/webm") ||
+      mType.Type() == MEDIAMIMETYPE("audio/webm")) {
     mInputDemuxer = new WebMDemuxer(mCurrentInputBuffer, true /* IsMediaSource*/ );
     return;
   }
 
 #ifdef MOZ_FMP4
-  if (mType.LowerCaseEqualsLiteral("video/mp4") ||
-      mType.LowerCaseEqualsLiteral("audio/mp4")) {
+  if (mType.Type() == MEDIAMIMETYPE("video/mp4")
+      || mType.Type() == MEDIAMIMETYPE("audio/mp4")) {
     mInputDemuxer = new MP4Demuxer(mCurrentInputBuffer);
     return;
   }
@@ -840,11 +844,12 @@ TrackBuffersManager::ResetDemuxingState()
     RejectAppend(NS_ERROR_FAILURE, __func__);
     return;
   }
-  mDemuxerInitRequest.Begin(mInputDemuxer->Init()
-                      ->Then(GetTaskQueue(), __func__,
-                             this,
-                             &TrackBuffersManager::OnDemuxerResetDone,
-                             &TrackBuffersManager::OnDemuxerInitFailed));
+  mInputDemuxer->Init()
+    ->Then(GetTaskQueue(), __func__,
+           this,
+           &TrackBuffersManager::OnDemuxerResetDone,
+           &TrackBuffersManager::OnDemuxerInitFailed)
+    ->Track(mDemuxerInitRequest);
 }
 
 void
@@ -914,11 +919,12 @@ TrackBuffersManager::InitializationSegmentReceived()
     RejectAppend(NS_ERROR_DOM_NOT_SUPPORTED_ERR, __func__);
     return;
   }
-  mDemuxerInitRequest.Begin(mInputDemuxer->Init()
-                      ->Then(GetTaskQueue(), __func__,
-                             this,
-                             &TrackBuffersManager::OnDemuxerInitDone,
-                             &TrackBuffersManager::OnDemuxerInitFailed));
+  mInputDemuxer->Init()
+    ->Then(GetTaskQueue(), __func__,
+           this,
+           &TrackBuffersManager::OnDemuxerInitDone,
+           &TrackBuffersManager::OnDemuxerInitFailed)
+    ->Track(mDemuxerInitRequest);
 }
 
 void
@@ -957,10 +963,10 @@ TrackBuffersManager::OnDemuxerInitDone(nsresult)
   int64_t duration = std::max(videoDuration, audioDuration);
   // 1. Update the duration attribute if it currently equals NaN.
   // Those steps are performed by the MediaSourceDecoder::SetInitialDuration
-  AbstractThread::MainThread()->Dispatch(NewRunnableMethod<int64_t>
-                                         (mParentDecoder,
-                                          &MediaSourceDecoder::SetInitialDuration,
-                                          duration ? duration : -1));
+  mAbstractMainThread->Dispatch(NewRunnableMethod<int64_t>
+                                (mParentDecoder.get(),
+                                &MediaSourceDecoder::SetInitialDuration,
+                                duration ? duration : -1));
 
   // 2. If the initialization segment has no audio, video, or text tracks, then
   // run the append error algorithm with the decode error parameter set to true
@@ -1031,7 +1037,7 @@ TrackBuffersManager::OnDemuxerInitDone(nsresult)
       //   11. Queue a task to fire a trusted event named addtrack, that does not bubble and is not cancelable, and that uses the TrackEvent interface, at the AudioTrackList object referenced by the audioTracks attribute on the HTMLMediaElement.
       mAudioTracks.mBuffers.AppendElement(TrackBuffer());
       // 10. Add the track description for this track to the track buffer.
-      mAudioTracks.mInfo = new SharedTrackInfo(info.mAudio, streamID);
+      mAudioTracks.mInfo = new TrackInfoSharedPtr(info.mAudio, streamID);
       mAudioTracks.mLastInfo = mAudioTracks.mInfo;
     }
 
@@ -1063,7 +1069,7 @@ TrackBuffersManager::OnDemuxerInitDone(nsresult)
       //   11. Queue a task to fire a trusted event named addtrack, that does not bubble and is not cancelable, and that uses the TrackEvent interface, at the VideoTrackList object referenced by the videoTracks attribute on the HTMLMediaElement.
       mVideoTracks.mBuffers.AppendElement(TrackBuffer());
       // 10. Add the track description for this track to the track buffer.
-      mVideoTracks.mInfo = new SharedTrackInfo(info.mVideo, streamID);
+      mVideoTracks.mInfo = new TrackInfoSharedPtr(info.mVideo, streamID);
       mVideoTracks.mLastInfo = mVideoTracks.mInfo;
     }
     // 4. For each text track in the initialization segment, run following steps:
@@ -1076,8 +1082,8 @@ TrackBuffersManager::OnDemuxerInitDone(nsresult)
     // 6. Set first initialization segment received flag to true.
     mFirstInitializationSegmentReceived = true;
   } else {
-    mAudioTracks.mLastInfo = new SharedTrackInfo(info.mAudio, streamID);
-    mVideoTracks.mLastInfo = new SharedTrackInfo(info.mVideo, streamID);
+    mAudioTracks.mLastInfo = new TrackInfoSharedPtr(info.mAudio, streamID);
+    mVideoTracks.mLastInfo = new TrackInfoSharedPtr(info.mVideo, streamID);
   }
 
   UniquePtr<EncryptionInfo> crypto = mInputDemuxer->GetCrypto();
@@ -1198,10 +1204,11 @@ TrackBuffersManager::DoDemuxVideo()
     DoDemuxAudio();
     return;
   }
-  mVideoTracks.mDemuxRequest.Begin(mVideoTracks.mDemuxer->GetSamples(-1)
-                             ->Then(GetTaskQueue(), __func__, this,
-                                    &TrackBuffersManager::OnVideoDemuxCompleted,
-                                    &TrackBuffersManager::OnVideoDemuxFailed));
+  mVideoTracks.mDemuxer->GetSamples(-1)
+    ->Then(GetTaskQueue(), __func__, this,
+           &TrackBuffersManager::OnVideoDemuxCompleted,
+           &TrackBuffersManager::OnVideoDemuxFailed)
+    ->Track(mVideoTracks.mDemuxRequest);
 }
 
 void
@@ -1222,10 +1229,11 @@ TrackBuffersManager::DoDemuxAudio()
     CompleteCodedFrameProcessing();
     return;
   }
-  mAudioTracks.mDemuxRequest.Begin(mAudioTracks.mDemuxer->GetSamples(-1)
-                             ->Then(GetTaskQueue(), __func__, this,
-                                    &TrackBuffersManager::OnAudioDemuxCompleted,
-                                    &TrackBuffersManager::OnAudioDemuxFailed));
+  mAudioTracks.mDemuxer->GetSamples(-1)
+    ->Then(GetTaskQueue(), __func__, this,
+           &TrackBuffersManager::OnAudioDemuxCompleted,
+           &TrackBuffersManager::OnAudioDemuxFailed)
+    ->Track(mAudioTracks.mDemuxRequest);
 }
 
 void
@@ -1311,13 +1319,14 @@ TrackBuffersManager::CompleteCodedFrameProcessing()
 
   // 6. Remove the media segment bytes from the beginning of the input buffer.
   // Clear our demuxer from any already processed data.
-  int64_t safeToEvict = std::min(
-    HasVideo()
-      ? mVideoTracks.mDemuxer->GetEvictionOffset(mVideoTracks.mLastParsedEndTime)
-      : INT64_MAX,
-    HasAudio()
-      ? mAudioTracks.mDemuxer->GetEvictionOffset(mAudioTracks.mLastParsedEndTime)
-      : INT64_MAX);
+  int64_t safeToEvict = std::min(HasVideo()
+                                 ? mVideoTracks.mDemuxer->GetEvictionOffset(
+                                     mVideoTracks.mLastParsedEndTime)
+                                 : INT64_MAX,
+                                 HasAudio()
+                                 ? mAudioTracks.mDemuxer->GetEvictionOffset(
+                                     mAudioTracks.mLastParsedEndTime)
+                                 : INT64_MAX);
   ErrorResult rv;
   mCurrentInputBuffer->EvictBefore(safeToEvict, rv);
   if (rv.Failed()) {
@@ -1390,8 +1399,10 @@ TrackBuffersManager::ProcessFrames(TrackBuffer& aSamples, TrackData& aTrackData)
   // Let presentation timestamp equal 0.
   // Otherwise
   // Let presentation timestamp be a double precision floating point representation of the coded frame's presentation timestamp in seconds.
-  TimeUnit presentationTimestamp = mSourceBufferAttributes->mGenerateTimestamps
-    ? TimeUnit() : TimeUnit::FromMicroseconds(aSamples[0]->mTime);
+  TimeUnit presentationTimestamp =
+    mSourceBufferAttributes->mGenerateTimestamps
+    ? TimeUnit()
+    : TimeUnit::FromMicroseconds(aSamples[0]->mTime);
 
   // 3. If mode equals "sequence" and group start timestamp is set, then run the following steps:
   CheckSequenceDiscontinuity(presentationTimestamp);
@@ -1404,12 +1415,13 @@ TrackBuffersManager::ProcessFrames(TrackBuffer& aSamples, TrackData& aTrackData)
   // of +- mLongestFrameDuration on the append window start.
   // We only apply the leeway with the default append window start of 0
   // otherwise do as per spec.
-  TimeInterval targetWindow = mAppendWindow.mStart != TimeUnit::FromSeconds(0)
+  TimeInterval targetWindow =
+    mAppendWindow.mStart != TimeUnit::FromSeconds(0)
     ? mAppendWindow
     : TimeInterval(mAppendWindow.mStart, mAppendWindow.mEnd,
                    trackBuffer.mLastFrameDuration.isSome()
-                     ? trackBuffer.mLongestFrameDuration
-                     : TimeUnit::FromMicroseconds(aSamples[0]->mDuration));
+                   ? trackBuffer.mLongestFrameDuration
+                   : TimeUnit::FromMicroseconds(aSamples[0]->mDuration));
 
   TimeIntervals samplesRange;
   uint32_t sizeNewSamples = 0;
@@ -1476,13 +1488,12 @@ TrackBuffersManager::ProcessFrames(TrackBuffer& aSamples, TrackData& aTrackData)
 
     TimeInterval sampleInterval =
       mSourceBufferAttributes->mGenerateTimestamps
-        ? TimeInterval(timestampOffset, timestampOffset + sampleDuration)
-        : TimeInterval(timestampOffset + sampleTime,
-                       timestampOffset + sampleTime + sampleDuration);
-    TimeUnit decodeTimestamp =
-      mSourceBufferAttributes->mGenerateTimestamps
-        ? timestampOffset
-        : timestampOffset + sampleTimecode;
+      ? TimeInterval(timestampOffset, timestampOffset + sampleDuration)
+      : TimeInterval(timestampOffset + sampleTime,
+                     timestampOffset + sampleTime + sampleDuration);
+    TimeUnit decodeTimestamp = mSourceBufferAttributes->mGenerateTimestamps
+                               ? timestampOffset
+                               : timestampOffset + sampleTimecode;
 
     // 6. If last decode timestamp for track buffer is set and decode timestamp is less than last decode timestamp:
     // OR
@@ -1517,8 +1528,8 @@ TrackBuffersManager::ProcessFrames(TrackBuffer& aSamples, TrackData& aTrackData)
       // Rather that restarting the process for the frame, we run the first
       // steps again instead.
       // 3. If mode equals "sequence" and group start timestamp is set, then run the following steps:
-      TimeUnit presentationTimestamp = mSourceBufferAttributes->mGenerateTimestamps
-        ? TimeUnit() : sampleTime;
+      TimeUnit presentationTimestamp =
+        mSourceBufferAttributes->mGenerateTimestamps ? TimeUnit() : sampleTime;
       CheckSequenceDiscontinuity(presentationTimestamp);
 
       if (!sample->mKeyframe) {
@@ -1530,13 +1541,12 @@ TrackBuffersManager::ProcessFrames(TrackBuffer& aSamples, TrackData& aTrackData)
         timestampOffset = mSourceBufferAttributes->GetTimestampOffset();
         sampleInterval =
           mSourceBufferAttributes->mGenerateTimestamps
-            ? TimeInterval(timestampOffset, timestampOffset + sampleDuration)
-            : TimeInterval(timestampOffset + sampleTime,
-                           timestampOffset + sampleTime + sampleDuration);
-        decodeTimestamp =
-          mSourceBufferAttributes->mGenerateTimestamps
-            ? timestampOffset
-            : timestampOffset + sampleTimecode;
+          ? TimeInterval(timestampOffset, timestampOffset + sampleDuration)
+          : TimeInterval(timestampOffset + sampleTime,
+                         timestampOffset + sampleTime + sampleDuration);
+        decodeTimestamp = mSourceBufferAttributes->mGenerateTimestamps
+                          ? timestampOffset
+                          : timestampOffset + sampleTimecode;
       }
       trackBuffer.mNeedRandomAccessPoint = false;
       needDiscontinuityCheck = false;
@@ -1691,8 +1701,8 @@ TrackBuffersManager::InsertFrames(TrackBuffer& aSamples,
 
   if (intersection.Length()) {
     if (aSamples[0]->mKeyframe &&
-        (mType.LowerCaseEqualsLiteral("video/webm") ||
-         mType.LowerCaseEqualsLiteral("audio/webm"))) {
+        (mType.Type() == MEDIAMIMETYPE("video/webm")
+         || mType.Type() == MEDIAMIMETYPE("audio/webm"))) {
       // We are starting a new GOP, we do not have to worry about breaking an
       // existing current coded frame group. Reset the next insertion index
       // so the search for when to start our frames removal can be exhaustive.

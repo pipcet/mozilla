@@ -1594,7 +1594,8 @@ nsHttpConnection::Version()
 //-----------------------------------------------------------------------------
 
 void
-nsHttpConnection::CloseTransaction(nsAHttpTransaction *trans, nsresult reason)
+nsHttpConnection::CloseTransaction(nsAHttpTransaction *trans, nsresult reason,
+                                   bool aIsShutdown)
 {
     LOG(("nsHttpConnection::CloseTransaction[this=%p trans=%p reason=%x]\n",
         this, trans, reason));
@@ -1630,7 +1631,7 @@ nsHttpConnection::CloseTransaction(nsAHttpTransaction *trans, nsresult reason)
     }
 
     if (NS_FAILED(reason) && (reason != NS_BINDING_RETARGETED)) {
-        Close(reason);
+        Close(reason, aIsShutdown);
     }
 
     // flag the connection as reused here for convenience sake.  certainly
@@ -1689,7 +1690,12 @@ nsHttpConnection::OnSocketWritable()
     uint32_t transactionBytes;
     bool again = true;
 
+    // Prevent STS thread from being blocked by single OnOutputStreamReady callback.
+    const uint32_t maxWriteAttempts = 128;
+    uint32_t writeAttempts = 0;
+
     do {
+        ++writeAttempts;
         rv = mSocketOutCondition = NS_OK;
         transactionBytes = 0;
 
@@ -1777,6 +1783,10 @@ nsHttpConnection::OnSocketWritable()
 
                 rv = ResumeRecv(); // start reading
             }
+            again = false;
+        } else if (writeAttempts >= maxWriteAttempts) {
+            LOG(("  yield for other transactions\n"));
+            rv = mSocketOut->AsyncWait(this, 0, 0, nullptr); // continue writing
             again = false;
         }
         // write more to the socket until error or end-of-request...

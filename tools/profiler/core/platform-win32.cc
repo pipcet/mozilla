@@ -29,18 +29,10 @@
 #include <windows.h>
 #include <mmsystem.h>
 #include <process.h>
-#include "platform.h"
-#include "GeckoSampler.h"
-#include "ThreadResponsiveness.h"
 #include "ProfileEntry.h"
 
 // Memory profile
 #include "nsMemoryReporterManager.h"
-
-#ifdef MOZ_STACKWALKING
-#include "mozilla/StackWalk_windows.h"
-#endif
-
 
 class PlatformData {
  public:
@@ -49,7 +41,8 @@ class PlatformData {
   // going to use it in the sampler thread. Using GetThreadHandle() will
   // not work in this case. We're using OpenThread because DuplicateHandle
   // for some reason doesn't work in Chrome's sandbox.
-  PlatformData(int aThreadId) : profiled_thread_(OpenThread(THREAD_GET_CONTEXT |
+  explicit PlatformData(int aThreadId) : profiled_thread_(OpenThread(
+                                               THREAD_GET_CONTEXT |
                                                THREAD_SUSPEND_RESUME |
                                                THREAD_QUERY_INFORMATION,
                                                false,
@@ -68,103 +61,136 @@ class PlatformData {
   HANDLE profiled_thread_;
 };
 
-/* static */ PlatformData*
-Sampler::AllocPlatformData(int aThreadId)
+UniquePlatformData
+AllocPlatformData(int aThreadId)
 {
-  return new PlatformData(aThreadId);
+  return UniquePlatformData(new PlatformData(aThreadId));
 }
 
-/* static */ void
-Sampler::FreePlatformData(PlatformData* aData)
+void
+PlatformDataDestructor::operator()(PlatformData* aData)
 {
   delete aData;
 }
 
 uintptr_t
-Sampler::GetThreadHandle(PlatformData* aData)
+GetThreadHandle(PlatformData* aData)
 {
   return (uintptr_t) aData->profiled_thread();
 }
 
-class SamplerThread : public Thread {
+static const HANDLE kNoThread = INVALID_HANDLE_VALUE;
+
+// The sampler thread controls sampling and runs whenever the profiler is
+// active. It periodically runs through all registered threads, finds those
+// that should be sampled, then pauses and samples them.
+class SamplerThread
+{
  public:
-  SamplerThread(double interval, Sampler* sampler)
-      : Thread("SamplerThread")
-      , sampler_(sampler)
-      , interval_(interval)
+  explicit SamplerThread(double interval)
+    : mThread(kNoThread)
+    , mInterval(interval)
   {
-    interval_ = floor(interval + 0.5);
-    if (interval_ <= 0) {
-      interval_ = 1;
+    mInterval = floor(interval + 0.5);
+    if (mInterval <= 0) {
+      mInterval = 1;
     }
   }
 
-  static void StartSampler(Sampler* sampler) {
-    if (instance_ == NULL) {
-      instance_ = new SamplerThread(sampler->interval(), sampler);
-      instance_->Start();
-    } else {
-      ASSERT(instance_->interval_ == sampler->interval());
+  ~SamplerThread() {
+    // Close our own handle for the thread.
+    if (mThread != kNoThread) {
+      CloseHandle(mThread);
     }
+  }
+
+  static unsigned int __stdcall ThreadEntry(void* aArg) {
+    SamplerThread* thread = reinterpret_cast<SamplerThread*>(aArg);
+    thread->Run();
+    return 0;
+  }
+
+  // Create a new thread. It is important to use _beginthreadex() instead of
+  // the Win32 function CreateThread(), because the CreateThread() does not
+  // initialize thread-specific structures in the C runtime library.
+  void Start() {
+    mThread = reinterpret_cast<HANDLE>(
+        _beginthreadex(NULL,
+                       /* stack_size */ 0,
+                       ThreadEntry,
+                       this,
+                       /* initflag */ 0,
+                       (unsigned int*) &mThreadId));
+  }
+
+  void Join() {
+    if (mThreadId != Thread::GetCurrentId()) {
+      WaitForSingleObject(mThread, INFINITE);
+    }
+  }
+
+  static void StartSampler() {
+    MOZ_RELEASE_ASSERT(NS_IsMainThread());
+    MOZ_RELEASE_ASSERT(!mInstance);
+
+    mInstance = new SamplerThread(gInterval);
+    mInstance->Start();
   }
 
   static void StopSampler() {
-    instance_->Join();
-    delete instance_;
-    instance_ = NULL;
+    MOZ_RELEASE_ASSERT(NS_IsMainThread());
+
+    mInstance->Join();
+    delete mInstance;
+    mInstance = NULL;
   }
 
-  // Implement Thread::Run().
-  virtual void Run() {
+  void Run() {
+    // This function runs on the sampler thread.
 
     // By default we'll not adjust the timer resolution which tends to be around
     // 16ms. However, if the requested interval is sufficiently low we'll try to
     // adjust the resolution to match.
-    if (interval_ < 10)
-        ::timeBeginPeriod(interval_);
+    if (mInterval < 10)
+        ::timeBeginPeriod(mInterval);
 
-    while (sampler_->IsActive()) {
-      sampler_->DeleteExpiredMarkers();
+    while (gIsActive) {
+      gBuffer->deleteExpiredStoredMarkers();
 
-      if (!sampler_->IsPaused()) {
-        ::MutexAutoLock lock(*Sampler::sRegisteredThreadsMutex);
-        std::vector<ThreadInfo*> threads =
-          sampler_->GetRegisteredThreads();
+      if (!gIsPaused) {
+        mozilla::StaticMutexAutoLock lock(gRegisteredThreadsMutex);
+
         bool isFirstProfiledThread = true;
-        for (uint32_t i = 0; i < threads.size(); i++) {
-          ThreadInfo* info = threads[i];
+        for (uint32_t i = 0; i < gRegisteredThreads->size(); i++) {
+          ThreadInfo* info = (*gRegisteredThreads)[i];
 
           // This will be null if we're not interested in profiling this thread.
-          if (!info->Profile() || info->IsPendingDelete())
-            continue;
-
-          PseudoStack::SleepState sleeping = info->Stack()->observeSleeping();
-          if (sleeping == PseudoStack::SLEEPING_AGAIN) {
-            info->Profile()->DuplicateLastSample();
+          if (!info->hasProfile() || info->IsPendingDelete()) {
             continue;
           }
 
-          info->Profile()->GetThreadResponsiveness()->Update();
+          if (info->Stack()->CanDuplicateLastSampleDueToSleep()) {
+            info->DuplicateLastSample();
+            continue;
+          }
 
-          ThreadProfile* thread_profile = info->Profile();
+          info->UpdateThreadResponsiveness();
 
-          SampleContext(sampler_, thread_profile, isFirstProfiledThread);
+          SampleContext(info, isFirstProfiledThread);
           isFirstProfiledThread = false;
         }
       }
-      OS::Sleep(interval_);
+      OS::Sleep(mInterval);
     }
 
     // disable any timer resolution changes we've made
-    if (interval_ < 10)
-        ::timeEndPeriod(interval_);
+    if (mInterval < 10)
+        ::timeEndPeriod(mInterval);
   }
 
-  void SampleContext(Sampler* sampler, ThreadProfile* thread_profile,
-                     bool isFirstProfiledThread)
+  void SampleContext(ThreadInfo* aThreadInfo, bool isFirstProfiledThread)
   {
-    uintptr_t thread = Sampler::GetThreadHandle(
-                               thread_profile->GetPlatformData());
+    uintptr_t thread = GetThreadHandle(aThreadInfo->GetPlatformData());
     HANDLE profiled_thread = reinterpret_cast<HANDLE>(thread);
     if (profiled_thread == NULL)
       return;
@@ -178,9 +204,9 @@ class SamplerThread : public Thread {
 
     // Grab the timestamp before pausing the thread, to avoid deadlocks.
     sample->timestamp = mozilla::TimeStamp::Now();
-    sample->threadProfile = thread_profile;
+    sample->threadInfo = aThreadInfo;
 
-    if (isFirstProfiledThread && Sampler::GetActiveSampler()->ProfileMemory()) {
+    if (isFirstProfiledThread && gProfileMemory) {
       sample->rssMemory = nsMemoryReporterManager::ResidentFast();
     } else {
       sample->rssMemory = 0;
@@ -209,31 +235,6 @@ class SamplerThread : public Thread {
       return;
     }
 
-#ifdef MOZ_STACKWALKING
-    // Threads that may invoke JS require extra attention. Since, on windows,
-    // the jits also need to modify the same dynamic function table that we need
-    // to get a stack trace, we have to be wary of that to avoid deadlock.
-    //
-    // When embedded in Gecko, for threads that aren't the main thread,
-    // CanInvokeJS consults an unlocked value in the nsIThread, so we must
-    // consult this after suspending the profiled thread to avoid racing
-    // against a value change.
-    if (thread_profile->CanInvokeJS()) {
-      if (!TryAcquireStackWalkWorkaroundLock()) {
-        ResumeThread(profiled_thread);
-        return;
-      }
-
-      // It is safe to immediately drop the lock. We only need to contend with
-      // the case in which the profiled thread held needed system resources.
-      // If the profiled thread had held those resources, the trylock would have
-      // failed. Anyone else who grabs those resources will continue to make
-      // progress, since those threads are not suspended. Because of this,
-      // we cannot deadlock with them, and should let them run as they please.
-      ReleaseStackWalkWorkaroundLock();
-    }
-#endif
-
 #if V8_HOST_ARCH_X64
     sample->pc = reinterpret_cast<Address>(context.Rip);
     sample->sp = reinterpret_cast<Address>(context.Rsp);
@@ -245,92 +246,45 @@ class SamplerThread : public Thread {
 #endif
 
     sample->context = &context;
-    sampler->Tick(sample);
+
+    Tick(sample);
 
     ResumeThread(profiled_thread);
   }
 
-  Sampler* sampler_;
-  int interval_; // units: ms
+private:
+  HANDLE mThread;
+  Thread::tid_t mThreadId;
+
+  int mInterval; // units: ms
 
   // Protects the process wide state below.
-  static SamplerThread* instance_;
+  static SamplerThread* mInstance;
 
-  DISALLOW_COPY_AND_ASSIGN(SamplerThread);
+  SamplerThread(const SamplerThread&) = delete;
+  void operator=(const SamplerThread&) = delete;
 };
 
-SamplerThread* SamplerThread::instance_ = NULL;
+SamplerThread* SamplerThread::mInstance = NULL;
 
+static void
+PlatformStart()
+{
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
-Sampler::Sampler(double interval, bool profiling, int entrySize)
-    : interval_(interval),
-      profiling_(profiling),
-      paused_(false),
-      active_(false),
-      entrySize_(entrySize) {
+  MOZ_ASSERT(!gIsActive);
+  gIsActive = true;
+  SamplerThread::StartSampler();
 }
 
-Sampler::~Sampler() {
-  ASSERT(!IsActive());
-}
+static void
+PlatformStop()
+{
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
-void Sampler::Start() {
-  ASSERT(!IsActive());
-  SetActive(true);
-  SamplerThread::StartSampler(this);
-}
-
-void Sampler::Stop() {
-  ASSERT(IsActive());
-  SetActive(false);
+  MOZ_ASSERT(gIsActive);
+  gIsActive = false;
   SamplerThread::StopSampler();
-}
-
-
-static const HANDLE kNoThread = INVALID_HANDLE_VALUE;
-
-static unsigned int __stdcall ThreadEntry(void* arg) {
-  Thread* thread = reinterpret_cast<Thread*>(arg);
-  thread->Run();
-  return 0;
-}
-
-// Initialize a Win32 thread object. The thread has an invalid thread
-// handle until it is started.
-Thread::Thread(const char* name)
-    : stack_size_(0) {
-  thread_ = kNoThread;
-  set_name(name);
-}
-
-void Thread::set_name(const char* name) {
-  strncpy(name_, name, sizeof(name_));
-  name_[sizeof(name_) - 1] = '\0';
-}
-
-// Close our own handle for the thread.
-Thread::~Thread() {
-  if (thread_ != kNoThread) CloseHandle(thread_);
-}
-
-// Create a new thread. It is important to use _beginthreadex() instead of
-// the Win32 function CreateThread(), because the CreateThread() does not
-// initialize thread specific structures in the C runtime library.
-void Thread::Start() {
-  thread_ = reinterpret_cast<HANDLE>(
-      _beginthreadex(NULL,
-                     static_cast<unsigned>(stack_size_),
-                     ThreadEntry,
-                     this,
-                     0,
-                     (unsigned int*) &thread_id_));
-}
-
-// Wait for thread to terminate.
-void Thread::Join() {
-  if (thread_id_ != GetCurrentId()) {
-    WaitForSingleObject(thread_, INFINITE);
-  }
 }
 
 /* static */ Thread::tid_t
@@ -344,71 +298,6 @@ void OS::Startup() {
 
 void OS::Sleep(int milliseconds) {
   ::Sleep(milliseconds);
-}
-
-bool Sampler::RegisterCurrentThread(const char* aName,
-                                    PseudoStack* aPseudoStack,
-                                    bool aIsMainThread, void* stackTop)
-{
-  if (!Sampler::sRegisteredThreadsMutex)
-    return false;
-
-
-  ::MutexAutoLock lock(*Sampler::sRegisteredThreadsMutex);
-
-  int id = GetCurrentThreadId();
-
-  for (uint32_t i = 0; i < sRegisteredThreads->size(); i++) {
-    ThreadInfo* info = sRegisteredThreads->at(i);
-    if (info->ThreadId() == id && !info->IsPendingDelete()) {
-      // Thread already registered. This means the first unregister will be
-      // too early.
-      ASSERT(false);
-      return false;
-    }
-  }
-
-  set_tls_stack_top(stackTop);
-
-  ThreadInfo* info = new StackOwningThreadInfo(aName, id,
-    aIsMainThread, aPseudoStack, stackTop);
-
-  if (sActiveSampler) {
-    sActiveSampler->RegisterThread(info);
-  }
-
-  sRegisteredThreads->push_back(info);
-
-  return true;
-}
-
-void Sampler::UnregisterCurrentThread()
-{
-  if (!Sampler::sRegisteredThreadsMutex)
-    return;
-
-  tlsStackTop.set(nullptr);
-
-  ::MutexAutoLock lock(*Sampler::sRegisteredThreadsMutex);
-
-  int id = GetCurrentThreadId();
-
-  for (uint32_t i = 0; i < sRegisteredThreads->size(); i++) {
-    ThreadInfo* info = sRegisteredThreads->at(i);
-    if (info->ThreadId() == id && !info->IsPendingDelete()) {
-      if (profiler_is_active()) {
-        // We still want to show the results of this thread if you
-        // save the profile shortly after a thread is terminated.
-        // For now we will defer the delete to profile stop.
-        info->SetPendingDelete();
-        break;
-      } else {
-        delete info;
-        sRegisteredThreads->erase(sRegisteredThreads->begin() + i);
-        break;
-      }
-    }
-  }
 }
 
 void TickSample::PopulateContext(void* aContext)

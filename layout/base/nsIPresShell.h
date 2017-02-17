@@ -22,6 +22,7 @@
 
 #include "mozilla/ArenaObjectID.h"
 #include "mozilla/EventForwards.h"
+#include "mozilla/FlushType.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/StyleSetHandle.h"
@@ -39,7 +40,6 @@
 #include "nsFrameManagerBase.h"
 #include "nsRect.h"
 #include "nsRegionFwd.h"
-#include "mozFlushType.h"
 #include "nsWeakReference.h"
 #include <stdio.h> // for FILE definition
 #include "nsChangeHint.h"
@@ -194,6 +194,8 @@ protected:
   typedef uint8_t RenderFlags; // for storing the above flags
 
 public:
+  nsIPresShell();
+
   /**
    * All callers are responsible for calling |Destroy| after calling
    * |EndObservingDocument|.  It needs to be separate only because form
@@ -580,8 +582,37 @@ public:
    *
    * @param aType the type of notifications to flush
    */
-  virtual void FlushPendingNotifications(mozFlushType aType) = 0;
+  virtual void FlushPendingNotifications(mozilla::FlushType aType) = 0;
   virtual void FlushPendingNotifications(mozilla::ChangesToFlush aType) = 0;
+
+  /**
+   * Whether we might need a flush for the given flush type.  If this
+   * function returns false, we definitely don't need to flush.
+   *
+   * @param aFlushType The flush type to check.  This must be
+   *   >= FlushType::Style.  This also returns true if a throttled
+   *   animation flush is required.
+   */
+  bool NeedFlush(mozilla::FlushType aType) const
+  {
+    // We check mInFlush to handle re-entrant calls to FlushPendingNotifications
+    // by reporting that we always need a flush in that case.  Otherwise,
+    // we could end up missing needed flushes, since we clear the mNeedXXXFlush
+    // flags at the top of FlushPendingNotifications.
+    MOZ_ASSERT(aType >= mozilla::FlushType::Style);
+    return mNeedStyleFlush ||
+           (mNeedLayoutFlush &&
+            aType >= mozilla::FlushType::InterruptibleLayout) ||
+           aType >= mozilla::FlushType::Display ||
+           mNeedThrottledAnimationFlush ||
+           mInFlush;
+  }
+
+  inline void SetNeedStyleFlush();
+  inline void SetNeedLayoutFlush();
+  inline void SetNeedThrottledAnimationFlush();
+
+  bool NeedStyleFlush() { return mNeedStyleFlush; }
 
   /**
    * Callbacks will be called even if reflow itself fails for
@@ -867,13 +898,6 @@ public:
                                                         nsEventStatus* aStatus) = 0;
 
   /**
-   * Dispatch AfterKeyboardEvent with specific target.
-   */
-  virtual void DispatchAfterKeyboardEvent(nsINode* aTarget,
-                                          const mozilla::WidgetKeyboardEvent& aEvent,
-                                          bool aEmbeddedCancelled) = 0;
-
-  /**
    * Return whether or not the event is valid to be dispatched
    */
   virtual bool CanDispatchEvent(
@@ -1005,8 +1029,7 @@ public:
 
 #ifdef DEBUG
   // Debugging hooks
-  virtual void ListStyleContexts(nsIFrame *aRootFrame, FILE *out,
-                                 int32_t aIndent = 0) = 0;
+  virtual void ListStyleContexts(FILE *out, int32_t aIndent = 0) = 0;
 
   virtual void ListStyleSheets(FILE *out, int32_t aIndent = 0) = 0;
   virtual void VerifyStyleTree() = 0;
@@ -1625,13 +1648,13 @@ public:
    */
 protected:
   virtual bool AddRefreshObserverExternal(nsARefreshObserver* aObserver,
-                                          mozFlushType aFlushType);
+                                          mozilla::FlushType aFlushType);
   bool AddRefreshObserverInternal(nsARefreshObserver* aObserver,
-                                  mozFlushType aFlushType);
+                                  mozilla::FlushType aFlushType);
   virtual bool RemoveRefreshObserverExternal(nsARefreshObserver* aObserver,
-                                             mozFlushType aFlushType);
+                                             mozilla::FlushType aFlushType);
   bool RemoveRefreshObserverInternal(nsARefreshObserver* aObserver,
-                                     mozFlushType aFlushType);
+                                     mozilla::FlushType aFlushType);
 
   /**
    * Do computations necessary to determine if font size inflation is enabled.
@@ -1656,7 +1679,7 @@ protected:
 
 public:
   bool AddRefreshObserver(nsARefreshObserver* aObserver,
-                          mozFlushType aFlushType) {
+                          mozilla::FlushType aFlushType) {
 #ifdef MOZILLA_INTERNAL_API
     return AddRefreshObserverInternal(aObserver, aFlushType);
 #else
@@ -1665,7 +1688,7 @@ public:
   }
 
   bool RemoveRefreshObserver(nsARefreshObserver* aObserver,
-                             mozFlushType aFlushType) {
+                             mozilla::FlushType aFlushType) {
 #ifdef MOZILLA_INTERNAL_API
     return RemoveRefreshObserverInternal(aObserver, aFlushType);
 #else
@@ -1716,9 +1739,7 @@ public:
 
   void SyncWindowProperties(nsView* aView);
 
-#ifdef ANDROID
-  virtual nsIDocument* GetTouchEventTargetDocument() = 0;
-#endif
+  virtual nsIDocument* GetPrimaryContentDocument() = 0;
 
 protected:
   friend class nsRefreshDriver;
@@ -1753,11 +1774,6 @@ protected:
   // posted messages are processed before other messages when the modal
   // moving/sizing loop is running, see bug 491700 for details.
   nsCOMPtr<nsITimer>        mReflowContinueTimer;
-
-#ifdef MOZ_B2G
-  // Forward hardware key events to the input-method-app
-  nsCOMPtr<nsIHardwareKeyHandler> mHardwareKeyHandler;
-#endif // MOZ_B2G
 
 #ifdef DEBUG
   nsIFrame*                 mDrawEventTargetFrame;
@@ -1818,6 +1834,16 @@ protected:
   bool                      mSuppressInterruptibleReflows : 1;
   bool                      mScrollPositionClampingScrollPortSizeSet : 1;
 
+  // True if a layout flush might not be a no-op
+  bool mNeedLayoutFlush : 1;
+
+  // True if a style flush might not be a no-op
+  bool mNeedStyleFlush : 1;
+
+  // True if there are throttled animations that would be processed when
+  // performing a flush with mFlushAnimations == true.
+  bool mNeedThrottledAnimationFlush : 1;
+
   uint32_t                  mPresShellId;
 
   // List of subtrees rooted at style scope roots that need to be restyled.
@@ -1848,6 +1874,10 @@ protected:
   // to true, so we can avoid any paint calls for widget related to this
   // presshell.
   bool mIsNeverPainting;
+
+  // Whether we're currently under a FlushPendingNotifications.
+  // This is used to handle flush reentry correctly.
+  bool mInFlush;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsIPresShell, NS_IPRESSHELL_IID)

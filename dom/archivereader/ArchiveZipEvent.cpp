@@ -11,6 +11,7 @@
 #include "nsCExternalHandlerService.h"
 
 #include "mozilla/UniquePtr.h"
+#include "nsIInputStream.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -28,12 +29,10 @@ ArchiveZipItem::ArchiveZipItem(const char* aFilename,
   mCentralStruct(aCentralStruct),
   mEncoding(aEncoding)
 {
-  MOZ_COUNT_CTOR(ArchiveZipItem);
 }
 
 ArchiveZipItem::~ArchiveZipItem()
 {
-  MOZ_COUNT_DTOR(ArchiveZipItem);
 }
 
 nsresult

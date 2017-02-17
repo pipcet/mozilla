@@ -12,10 +12,10 @@
 #ifndef nsRefreshDriver_h_
 #define nsRefreshDriver_h_
 
+#include "mozilla/FlushType.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Vector.h"
 #include "mozilla/WeakPtr.h"
-#include "mozFlushType.h"
 #include "nsTObserverArray.h"
 #include "nsTArray.h"
 #include "nsTHashtable.h"
@@ -54,8 +54,7 @@ public:
   //
   // The refresh driver does NOT hold references to refresh observers
   // except while it is notifying them.
-  NS_IMETHOD_(MozExternalRefCountType) AddRef(void) = 0;
-  NS_IMETHOD_(MozExternalRefCountType) Release(void) = 0;
+  NS_INLINE_DECL_PURE_VIRTUAL_REFCOUNTING
 
   virtual void WillRefresh(mozilla::TimeStamp aTime) = 0;
 };
@@ -113,7 +112,7 @@ public:
    *     doesn't require current position data or isn't currently
    *     painting, and, correspondingly, which get notified when there
    *     is a flush during such suppression
-   * and it must be either Flush_Style, Flush_Layout, or Flush_Display.
+   * and it must be FlushType::Style, FlushType::Layout, or FlushType::Display.
    *
    * The refresh driver does NOT own a reference to these observers;
    * they must remove themselves before they are destroyed.
@@ -121,9 +120,9 @@ public:
    * The observer will be called even if there is no other activity.
    */
   bool AddRefreshObserver(nsARefreshObserver *aObserver,
-                          mozFlushType aFlushType);
+                          mozilla::FlushType aFlushType);
   bool RemoveRefreshObserver(nsARefreshObserver *aObserver,
-                             mozFlushType aFlushType);
+                             mozilla::FlushType aFlushType);
 
   /**
    * Add an observer that will be called after each refresh. The caller
@@ -288,7 +287,7 @@ public:
    * Check whether the given observer is an observer for the given flush type
    */
   bool IsRefreshObserver(nsARefreshObserver *aObserver,
-                         mozFlushType aFlushType);
+                         mozilla::FlushType aFlushType);
 #endif
 
   /**
@@ -399,7 +398,7 @@ private:
 
   uint32_t ObserverCount() const;
   uint32_t ImageRequestCount() const;
-  ObserverArray& ArrayFor(mozFlushType aFlushType);
+  ObserverArray& ArrayFor(mozilla::FlushType aFlushType);
   // Trigger a refresh immediately, if haven't been disconnected or frozen.
   void DoRefresh();
 
@@ -408,7 +407,6 @@ private:
   static double GetThrottledTimerInterval();
 
   static mozilla::TimeDuration GetMinRecomputeVisibilityInterval();
-  static mozilla::TimeDuration GetMinNotifyIntersectionObserversInterval();
 
   bool HaveFrameRequestCallbacks() const {
     return mFrameRequestCallbackDocs.Length() != 0;
@@ -419,8 +417,8 @@ private:
   mozilla::RefreshDriverTimer* ChooseTimer() const;
   mozilla::RefreshDriverTimer* mActiveTimer;
 
-  ProfilerBacktrace* mReflowCause;
-  ProfilerBacktrace* mStyleCause;
+  UniqueProfilerBacktrace mReflowCause;
+  UniqueProfilerBacktrace mStyleCause;
 
   // nsPresContext passed in constructor and unset in Disconnect.
   mozilla::WeakPtr<nsPresContext> mPresContext;
@@ -443,8 +441,6 @@ private:
   // interval, we only recompute visibility when we've seen a layout or style
   // flush since the last time we did it.
   const mozilla::TimeDuration mMinRecomputeVisibilityInterval;
-
-  const mozilla::TimeDuration mMinNotifyIntersectionObserversInterval;
 
   bool mThrottled;
   bool mNeedToRecomputeVisibility;
@@ -476,7 +472,6 @@ private:
   mozilla::TimeStamp mTickStart;
   mozilla::TimeStamp mNextThrottledFrameRequestTick;
   mozilla::TimeStamp mNextRecomputeVisibilityTick;
-  mozilla::TimeStamp mNextNotifyIntersectionObserversTick;
 
   // separate arrays for each flush type we support
   ObserverArray mObservers[3];

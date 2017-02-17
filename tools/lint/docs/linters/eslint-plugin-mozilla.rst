@@ -2,6 +2,23 @@
 Mozilla ESLint Plugin
 =====================
 
+Environments
+============
+
+chrome-worker
+-------------
+
+Defines the environment for chrome workers. This differs from normal workers by
+the fact that `ctypes` can be accessed as well.
+
+Rules
+=====
+
+avoid-removeChild
+-----------------
+
+Rejects using element.parentNode.removeChild(element) when element.remove()
+can be used instead.
 
 balanced-listeners
 ------------------
@@ -10,12 +27,13 @@ Checks that for every occurence of 'addEventListener' or 'on' there is an
 occurence of 'removeEventListener' or 'off' with the same event name.
 
 
-components-imports
-------------------
+import-globals
+--------------
 
 Checks the filename of imported files e.g. ``Cu.import("some/path/Blah.jsm")``
 adds Blah to the global scope.
 
+Note: uses modules.json for a list of globals listed in each file.
 
 import-browserjs-globals
 ------------------------
@@ -113,6 +131,29 @@ Rejects calls to "Cu.import" that do not supply a second argument (meaning they
 add the exported properties into global scope).
 
 
+no-import-into-var-and-global
+-----------------------------
+
+Reject use of ``Cu.import`` (or ``Components.utils.import``) where it attempts to
+import into a var and into the global scope at the same time, e.g.
+
+``var foo = Cu.import("path.jsm", this);``
+
+This is considered bad practice as it is confusing as to what is actually being
+imported.
+
+no-useless-parameters
+---------------------
+
+Reject common XPCOM methods called with useless optional parameters (eg.
+``Services.io.newURI(url, null, null)``, or non-existent parameters (eg.
+``Services.obs.removeObserver(name, observer, false)``).
+
+no-useless-removeEventListener
+------------------------------
+
+Reject calls to removeEventListener where {once: true} could be used instead.
+
 reject-importGlobalProperties
 -----------------------------
 
@@ -138,6 +179,11 @@ object is assigned to another variable e.g.::
 
    var b = gBrowser;
    b.content // Would not be detected as a CPOW.
+
+use-ownerGlobal
+---------------
+
+Require .ownerGlobal instead of .ownerDocument.defaultView.
 
 
 var-only-at-top-level
@@ -172,3 +218,15 @@ Example configuration::
      "mozilla/var-only-at-top-level": 1,
      "mozilla/no-cpows-in-tests": 1,
    }
+
+Running Tests
+=============
+
+The rules have some self tests (see bug 1219152), these can be run via:
+
+```
+cd tools/lint/eslint/eslint-plugin-mozilla
+npm run test
+```
+
+(assuming `./mach eslint --setup` has already been run).

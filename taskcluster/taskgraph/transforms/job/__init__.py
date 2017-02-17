@@ -15,7 +15,11 @@ import copy
 import logging
 import os
 
-from taskgraph.transforms.base import get_keyed_by, validate_schema, TransformSequence
+from taskgraph.transforms.base import TransformSequence
+from taskgraph.util.schema import (
+    validate_schema,
+    resolve_keyed_by,
+)
 from taskgraph.transforms.task import task_description_schema
 from voluptuous import (
     Any,
@@ -104,7 +108,7 @@ def expand_platforms(config, jobs):
 
 
 @transforms.add
-def resolve_keyed_by(config, jobs):
+def handle_keyed_by(config, jobs):
     fields = [
         'worker-type',
         'worker',
@@ -112,7 +116,7 @@ def resolve_keyed_by(config, jobs):
 
     for job in jobs:
         for field in fields:
-            job[field] = get_keyed_by(item=job, field=field, item_name=job['name'])
+            resolve_keyed_by(job, field, item_name=job['name'])
         yield job
 
 

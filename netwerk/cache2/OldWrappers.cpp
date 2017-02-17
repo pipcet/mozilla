@@ -41,14 +41,12 @@ class DoomCallbackSynchronizer : public Runnable
 public:
   explicit DoomCallbackSynchronizer(nsICacheEntryDoomCallback* cb) : mCB(cb)
   {
-    MOZ_COUNT_CTOR(DoomCallbackSynchronizer);
   }
   nsresult Dispatch();
 
 private:
   virtual ~DoomCallbackSynchronizer()
   {
-    MOZ_COUNT_DTOR(DoomCallbackSynchronizer);
   }
 
   NS_DECL_NSIRUNNABLE
@@ -94,13 +92,11 @@ class DoomCallbackWrapper : public nsICacheListener
 
   explicit DoomCallbackWrapper(nsICacheEntryDoomCallback* cb) : mCB(cb)
   {
-    MOZ_COUNT_CTOR(DoomCallbackWrapper);
   }
 
 private:
   virtual ~DoomCallbackWrapper()
   {
-    MOZ_COUNT_DTOR(DoomCallbackWrapper);
   }
 
   nsCOMPtr<nsICacheEntryDoomCallback> mCB;
@@ -143,8 +139,6 @@ _OldVisitCallbackWrapper::~_OldVisitCallbackWrapper()
   if (mVisitEntries) {
     mCB->OnCacheEntryVisitCompleted();
   }
-
-  MOZ_COUNT_DTOR(_OldVisitCallbackWrapper);
 }
 
 NS_IMETHODIMP _OldVisitCallbackWrapper::VisitDevice(const char * deviceID,
@@ -268,7 +262,8 @@ NS_IMETHODIMP _OldVisitCallbackWrapper::VisitEntry(const char * deviceID,
 
   // Send them to the consumer.
   rv = mCB->OnCacheEntryInfo(
-    uri, enhanceId, (int64_t)dataSize, fetchCount, lastModified, expirationTime, false);
+    uri, enhanceId, (int64_t)dataSize, fetchCount, lastModified,
+    expirationTime, false, mLoadInfo);
 
   *_retval = NS_SUCCEEDED(rv);
   return NS_OK;
@@ -349,20 +344,17 @@ _OldGetDiskConsumption::VisitEntry(const char * deviceID,
 _OldCacheEntryWrapper::_OldCacheEntryWrapper(nsICacheEntryDescriptor* desc)
 : mOldDesc(desc), mOldInfo(desc)
 {
-  MOZ_COUNT_CTOR(_OldCacheEntryWrapper);
   LOG(("Creating _OldCacheEntryWrapper %p for descriptor %p", this, desc));
 }
 
 _OldCacheEntryWrapper::_OldCacheEntryWrapper(nsICacheEntryInfo* info)
 : mOldDesc(nullptr), mOldInfo(info)
 {
-  MOZ_COUNT_CTOR(_OldCacheEntryWrapper);
   LOG(("Creating _OldCacheEntryWrapper %p for info %p", this, info));
 }
 
 _OldCacheEntryWrapper::~_OldCacheEntryWrapper()
 {
-  MOZ_COUNT_DTOR(_OldCacheEntryWrapper);
   LOG(("Destroying _OldCacheEntryWrapper %p for descriptor %p", this, mOldInfo.get()));
 }
 
@@ -533,7 +525,7 @@ GetCacheSessionNameForStoragePolicy(
         nsCSubstring const &scheme,
         nsCacheStoragePolicy storagePolicy,
         bool isPrivate,
-        NeckoOriginAttributes const *originAttribs,
+        OriginAttributes const *originAttribs,
         nsACString& sessionName)
 {
   MOZ_ASSERT(!isPrivate || storagePolicy == nsICache::STORE_IN_MEMORY);
@@ -680,13 +672,11 @@ _OldCacheLoad::_OldCacheLoad(nsCSubstring const& aScheme,
   , mRunCount(0)
   , mAppCache(aAppCache)
 {
-  MOZ_COUNT_CTOR(_OldCacheLoad);
 }
 
 _OldCacheLoad::~_OldCacheLoad()
 {
   ProxyReleaseMainThread(mAppCache);
-  MOZ_COUNT_DTOR(_OldCacheLoad);
 }
 
 nsresult _OldCacheLoad::Start()
@@ -907,12 +897,10 @@ _OldStorage::_OldStorage(nsILoadContextInfo* aInfo,
 , mLookupAppCache(aLookupAppCache)
 , mOfflineStorage(aOfflineStorage)
 {
-  MOZ_COUNT_CTOR(_OldStorage);
 }
 
 _OldStorage::~_OldStorage()
 {
-  MOZ_COUNT_DTOR(_OldStorage);
 }
 
 NS_IMETHODIMP _OldStorage::AsyncOpenURI(nsIURI *aURI,

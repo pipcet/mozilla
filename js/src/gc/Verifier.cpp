@@ -101,8 +101,8 @@ class js::VerifyPreTracer final : public JS::CallbackTracer
     NodeMap nodemap;
 
     explicit VerifyPreTracer(JSRuntime* rt)
-      : JS::CallbackTracer(rt), noggc(rt), number(rt->gc.gcNumber()), count(0), curnode(nullptr),
-        root(nullptr), edgeptr(nullptr), term(nullptr)
+      : JS::CallbackTracer(rt), noggc(TlsContext.get()), number(rt->gc.gcNumber()),
+        count(0), curnode(nullptr), root(nullptr), edgeptr(nullptr), term(nullptr)
     {}
 
     ~VerifyPreTracer() {
@@ -118,6 +118,10 @@ void
 VerifyPreTracer::onChild(const JS::GCCellPtr& thing)
 {
     MOZ_ASSERT(!IsInsideNursery(thing.asCell()));
+
+    // Skip things in other runtimes.
+    if (thing.asCell()->asTenured().runtimeFromAnyThread() != runtime())
+        return;
 
     edgeptr += sizeof(EdgeValue);
     if (edgeptr >= term) {
@@ -175,7 +179,7 @@ gc::GCRuntime::startVerifyPreBarriers()
     if (verifyPreData || isIncrementalGCInProgress())
         return;
 
-    if (IsIncrementalGCUnsafe(rt) != AbortReason::None || rt->keepAtoms())
+    if (IsIncrementalGCUnsafe(rt) != AbortReason::None || TlsContext.get()->keepAtoms || rt->hasHelperThreadZones())
         return;
 
     number++;
@@ -184,12 +188,12 @@ gc::GCRuntime::startVerifyPreBarriers()
     if (!trc)
         return;
 
-    AutoPrepareForTracing prep(rt->contextFromMainThread(), WithAtoms);
+    AutoPrepareForTracing prep(TlsContext.get(), WithAtoms);
 
     for (auto chunk = allNonEmptyChunks(); !chunk.done(); chunk.next())
         chunk->bitmap.clear();
 
-    gcstats::AutoPhase ap(stats, gcstats::PHASE_TRACE_HEAP);
+    gcstats::AutoPhase ap(stats(), gcstats::PHASE_TRACE_HEAP);
 
     const size_t size = 64 * 1024 * 1024;
     trc->root = (VerifyNode*)js_malloc(size);
@@ -235,11 +239,10 @@ gc::GCRuntime::startVerifyPreBarriers()
     marker.start();
 
     for (ZonesIter zone(rt, WithAtoms); !zone.done(); zone.next()) {
+        MOZ_ASSERT(!zone->usedByHelperThread());
         PurgeJITCaches(zone);
-        if (!zone->usedByExclusiveThread) {
-            zone->setNeedsIncrementalBarrier(true, Zone::UpdateJit);
-            zone->arenas.purge();
-        }
+        zone->setNeedsIncrementalBarrier(true, Zone::UpdateJit);
+        zone->arenas.purge();
     }
 
     return;
@@ -274,6 +277,10 @@ static const uint32_t MAX_VERIFIER_EDGES = 1000;
 void
 CheckEdgeTracer::onChild(const JS::GCCellPtr& thing)
 {
+    // Skip things in other runtimes.
+    if (thing.asCell()->asTenured().runtimeFromAnyThread() != runtime())
+        return;
+
     /* Avoid n^2 behavior. */
     if (node->count > MAX_VERIFIER_EDGES)
         return;
@@ -319,7 +326,7 @@ gc::GCRuntime::endVerifyPreBarriers()
 
     MOZ_ASSERT(!JS::IsGenerationalGCEnabled(rt));
 
-    AutoPrepareForTracing prep(rt->contextFromMainThread(), SkipAtoms);
+    AutoPrepareForTracing prep(rt->activeContextFromOwnThread(), SkipAtoms);
 
     bool compartmentCreated = false;
 
@@ -342,7 +349,11 @@ gc::GCRuntime::endVerifyPreBarriers()
     verifyPreData = nullptr;
     incrementalState = State::NotActive;
 
-    if (!compartmentCreated && IsIncrementalGCUnsafe(rt) == AbortReason::None && !rt->keepAtoms()) {
+    if (!compartmentCreated &&
+        IsIncrementalGCUnsafe(rt) == AbortReason::None &&
+        !TlsContext.get()->keepAtoms &&
+        !rt->hasHelperThreadZones())
+    {
         CheckEdgeTracer cetrc(rt);
 
         /* Start after the roots. */
@@ -401,7 +412,7 @@ gc::GCRuntime::maybeVerifyPreBarriers(bool always)
     if (!hasZealMode(ZealMode::VerifierPre))
         return;
 
-    if (rt->mainThread.suppressGC)
+    if (TlsContext.get()->suppressGC)
         return;
 
     if (verifyPreData) {
@@ -425,7 +436,7 @@ void
 js::gc::GCRuntime::finishVerifier()
 {
     if (verifyPreData) {
-        js_delete(verifyPreData);
+        js_delete(verifyPreData.ref());
         verifyPreData = nullptr;
     }
 }

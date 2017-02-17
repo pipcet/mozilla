@@ -309,7 +309,13 @@ UDPSocketParent::ConnectInternal(const nsCString& aHost, const uint16_t& aPort)
   nsresult rv;
 
   UDPSOCKET_LOG(("%s: %s:%u", __FUNCTION__, nsCString(aHost).get(), aPort));
+
+  if (!mSocket) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
   PRNetAddr prAddr;
+  memset(&prAddr, 0, sizeof(prAddr));
   PR_InitializeNetAddr(PR_IpAddrAny, aPort, &prAddr);
   PRStatus status = PR_StringToNetAddr(aHost.BeginReading(), &prAddr);
   if (status != PR_SUCCESS) {
@@ -331,7 +337,11 @@ mozilla::ipc::IPCResult
 UDPSocketParent::RecvOutgoingData(const UDPData& aData,
                                   const UDPSocketAddr& aAddr)
 {
-  MOZ_ASSERT(mSocket);
+  if (!mSocket) {
+    NS_WARNING("sending socket is closed");
+    FireInternalError(__LINE__);
+    return IPC_OK();
+  }
 
   nsresult rv;
   if (mFilter) {

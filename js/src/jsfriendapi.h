@@ -275,6 +275,14 @@ FormatStackDump(JSContext* cx, char* buf, bool showArgs, bool showLocals, bool s
 extern JS_FRIEND_API(bool)
 ForceLexicalInitialization(JSContext *cx, HandleObject obj);
 
+/**
+ * Whether we are poisoning unused/released data for error detection. Governed
+ * by the JS_GC_POISONING #ifdef as well as the $JSGC_DISABLE_POISONING
+ * environment variable.
+ */
+extern JS_FRIEND_API(int)
+IsGCPoisoning();
+
 } // namespace JS
 
 /**
@@ -364,61 +372,8 @@ extern JS_FRIEND_DATA(const js::ObjectOps) ProxyObjectOps;
 #define PROXY_CLASS_DEF(name, flags) \
   PROXY_CLASS_WITH_EXT(name, flags, &js::ProxyClassExtension)
 
-/*
- * Proxy stubs, similar to JS_*Stub, for embedder proxy class definitions.
- *
- * NB: Should not be called directly.
- */
-
-extern JS_FRIEND_API(bool)
-proxy_LookupProperty(JSContext* cx, JS::HandleObject obj, JS::HandleId id, JS::MutableHandleObject objp,
-                    JS::MutableHandle<Shape*> propp);
-extern JS_FRIEND_API(bool)
-proxy_DefineProperty(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
-                     JS::Handle<JS::PropertyDescriptor> desc,
-                     JS::ObjectOpResult& result);
-extern JS_FRIEND_API(bool)
-proxy_HasProperty(JSContext* cx, JS::HandleObject obj, JS::HandleId id, bool* foundp);
-extern JS_FRIEND_API(bool)
-proxy_GetProperty(JSContext* cx, JS::HandleObject obj, JS::HandleValue receiver, JS::HandleId id,
-                  JS::MutableHandleValue vp);
-extern JS_FRIEND_API(bool)
-proxy_SetProperty(JSContext* cx, JS::HandleObject obj, JS::HandleId id, JS::HandleValue bp,
-                  JS::HandleValue receiver, JS::ObjectOpResult& result);
-extern JS_FRIEND_API(bool)
-proxy_GetOwnPropertyDescriptor(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
-                               JS::MutableHandle<JS::PropertyDescriptor> desc);
-extern JS_FRIEND_API(bool)
-proxy_DeleteProperty(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
-                     JS::ObjectOpResult& result);
-
-extern JS_FRIEND_API(void)
-proxy_Trace(JSTracer* trc, JSObject* obj);
 extern JS_FRIEND_API(JSObject*)
 proxy_WeakmapKeyDelegate(JSObject* obj);
-extern JS_FRIEND_API(bool)
-proxy_Convert(JSContext* cx, JS::HandleObject proxy, JSType hint, JS::MutableHandleValue vp);
-extern JS_FRIEND_API(void)
-proxy_Finalize(FreeOp* fop, JSObject* obj);
-extern JS_FRIEND_API(void)
-proxy_ObjectMoved(JSObject* obj, const JSObject* old);
-extern JS_FRIEND_API(bool)
-proxy_HasInstance(JSContext* cx, JS::HandleObject proxy, JS::MutableHandleValue v, bool* bp);
-extern JS_FRIEND_API(bool)
-proxy_Call(JSContext* cx, unsigned argc, JS::Value* vp);
-extern JS_FRIEND_API(bool)
-proxy_Construct(JSContext* cx, unsigned argc, JS::Value* vp);
-extern JS_FRIEND_API(JSObject*)
-proxy_innerObject(JSObject* obj);
-extern JS_FRIEND_API(bool)
-proxy_Watch(JSContext* cx, JS::HandleObject obj, JS::HandleId id, JS::HandleObject callable);
-extern JS_FRIEND_API(bool)
-proxy_Unwatch(JSContext* cx, JS::HandleObject obj, JS::HandleId id);
-extern JS_FRIEND_API(bool)
-proxy_GetElements(JSContext* cx, JS::HandleObject proxy, uint32_t begin, uint32_t end,
-                  ElementAdder* adder);
-extern JS_FRIEND_API(JSString*)
-proxy_FunToString(JSContext* cx, JS::HandleObject proxy, unsigned indent);
 
 /**
  * A class of objects that return source code on demand.
@@ -612,6 +567,7 @@ struct String
     static const uint32_t INLINE_CHARS_BIT = JS_BIT(2);
     static const uint32_t LATIN1_CHARS_BIT = JS_BIT(6);
     static const uint32_t ROPE_FLAGS       = 0;
+    static const uint32_t EXTERNAL_FLAGS   = JS_BIT(5);
     static const uint32_t TYPE_FLAGS_MASK  = JS_BIT(6) - 1;
     uint32_t flags;
     uint32_t length;
@@ -621,6 +577,7 @@ struct String
         JS::Latin1Char inlineStorageLatin1[1];
         char16_t inlineStorageTwoByte[1];
     };
+    const JSStringFinalizer* externalFinalizer;
 };
 
 } /* namespace shadow */
@@ -761,7 +718,7 @@ SetReservedSlot(JSObject* obj, size_t slot, const JS::Value& value)
 {
     MOZ_ASSERT(slot < JSCLASS_RESERVED_SLOTS(GetObjectClass(obj)));
     shadow::Object* sobj = reinterpret_cast<shadow::Object*>(obj);
-    if (sobj->slotRef(slot).isMarkable() || value.isMarkable())
+    if (sobj->slotRef(slot).isGCThing() || value.isGCThing())
         SetReservedOrProxyPrivateSlotWithBarrier(obj, slot, value);
     else
         sobj->slotRef(slot) = value;
@@ -873,6 +830,21 @@ MOZ_ALWAYS_INLINE const char16_t*
 GetTwoByteAtomChars(const JS::AutoCheckCannotGC& nogc, JSAtom* atom)
 {
     return GetTwoByteLinearStringChars(nogc, AtomToLinearString(atom));
+}
+
+MOZ_ALWAYS_INLINE bool
+IsExternalString(JSString* str, const JSStringFinalizer** fin, const char16_t** chars)
+{
+    using shadow::String;
+    String* s = reinterpret_cast<String*>(str);
+
+    if ((s->flags & String::TYPE_FLAGS_MASK) != String::EXTERNAL_FLAGS)
+        return false;
+
+    MOZ_ASSERT(JS_IsExternalString(str));
+    *fin = s->externalFinalizer;
+    *chars = s->nonInlineCharsTwoByte;
+    return true;
 }
 
 JS_FRIEND_API(JSLinearString*)
@@ -993,9 +965,9 @@ JS_FRIEND_API(bool)
 RunningWithTrustedPrincipals(JSContext* cx);
 
 inline uintptr_t
-GetNativeStackLimit(JSContext* cx, StackKind kind, int extraAllowance = 0)
+GetNativeStackLimit(JSContext* cx, JS::StackKind kind, int extraAllowance = 0)
 {
-    uintptr_t limit = ContextFriendFields::get(cx)->nativeStackLimit[kind];
+    uintptr_t limit = JS::RootingContext::get(cx)->nativeStackLimit[kind];
 #if JS_STACK_GROWTH_DIRECTION > 0
     limit += extraAllowance;
 #else
@@ -1007,8 +979,8 @@ GetNativeStackLimit(JSContext* cx, StackKind kind, int extraAllowance = 0)
 inline uintptr_t
 GetNativeStackLimit(JSContext* cx, int extraAllowance = 0)
 {
-    StackKind kind = RunningWithTrustedPrincipals(cx) ? StackForTrustedScript
-                                                      : StackForUntrustedScript;
+    JS::StackKind kind = RunningWithTrustedPrincipals(cx) ? JS::StackForTrustedScript
+                                                          : JS::StackForUntrustedScript;
     return GetNativeStackLimit(cx, kind, extraAllowance);
 }
 
@@ -1060,16 +1032,16 @@ GetNativeStackLimit(JSContext* cx, int extraAllowance = 0)
     JS_END_MACRO
 
 #define JS_CHECK_SYSTEM_RECURSION(cx, onerror)                                  \
-    JS_CHECK_RECURSION_LIMIT(cx, js::GetNativeStackLimit(cx, js::StackForSystemCode), onerror)
+    JS_CHECK_RECURSION_LIMIT(cx, js::GetNativeStackLimit(cx, JS::StackForSystemCode), onerror)
 
 #define JS_CHECK_RECURSION_CONSERVATIVE(cx, onerror)                            \
     JS_CHECK_RECURSION_LIMIT(cx,                                                \
-                             js::GetNativeStackLimit(cx, js::StackForUntrustedScript, -1024 * int(sizeof(size_t))), \
+                             js::GetNativeStackLimit(cx, JS::StackForUntrustedScript, -1024 * int(sizeof(size_t))), \
                              onerror)
 
 #define JS_CHECK_RECURSION_CONSERVATIVE_DONT_REPORT(cx, onerror)                \
     JS_CHECK_RECURSION_LIMIT_DONT_REPORT(cx,                                    \
-                                         js::GetNativeStackLimit(cx, js::StackForUntrustedScript, -1024 * int(sizeof(size_t))), \
+                                         js::GetNativeStackLimit(cx, JS::StackForUntrustedScript, -1024 * int(sizeof(size_t))), \
                                          onerror)
 
 JS_FRIEND_API(void)
@@ -2773,9 +2745,6 @@ SetPropertyIgnoringNamedGetter(JSContext* cx, JS::HandleObject obj, JS::HandleId
                                JS::Handle<JS::PropertyDescriptor> ownDesc,
                                JS::ObjectOpResult& result);
 
-JS_FRIEND_API(void)
-ReportASCIIErrorWithId(JSContext* cx, const char* msg, JS::HandleId id);
-
 // This function is for one specific use case, please don't use this for anything else!
 extern JS_FRIEND_API(bool)
 ExecuteInGlobalAndReturnScope(JSContext* cx, JS::HandleObject obj, JS::HandleScript script,
@@ -2906,6 +2875,37 @@ ToWindowProxyIfWindow(JSObject* obj);
  */
 extern JS_FRIEND_API(JSObject*)
 ToWindowIfWindowProxy(JSObject* obj);
+
+// Create and add the Intl.PluralRules constructor function to the provided
+// object.  This function throws if called more than once per realm/global
+// object.
+extern bool
+AddPluralRulesConstructor(JSContext* cx, JS::Handle<JSObject*> intl);
+
+class MOZ_STACK_CLASS JS_FRIEND_API(AutoAssertNoContentJS)
+{
+  public:
+    explicit AutoAssertNoContentJS(JSContext* cx);
+    ~AutoAssertNoContentJS();
+
+  private:
+    JSContext* context_;
+    bool prevAllowContentJS_;
+};
+
+// Turn on assertions so that we assert that
+//     !comp->validAccessPtr || *comp->validAccessPtr
+// is true for every |comp| that we run JS code in. The compartment's validAccessPtr
+// is set via SetCompartmentValidAccessPtr.
+extern JS_FRIEND_API(void)
+EnableAccessValidation(JSContext* cx, bool enabled);
+
+// See EnableAccessValidation above. The caller must guarantee that accessp will
+// live at least as long as |global| is alive. The JS engine reads accessp from
+// threads that are allowed to run code on |global|, so all changes to *accessp
+// should be made from whichever thread owns |global| at a given time.
+extern JS_FRIEND_API(void)
+SetCompartmentValidAccessPtr(JSContext* cx, JS::HandleObject global, bool* accessp);
 
 } /* namespace js */
 

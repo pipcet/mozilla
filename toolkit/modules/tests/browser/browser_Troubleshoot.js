@@ -35,8 +35,7 @@ var tests = [
       try {
         validateObject(snapshot, SNAPSHOT_SCHEMA);
         ok(true, "The snapshot should conform to the schema.");
-      }
-      catch (err) {
+      } catch (err) {
         ok(false, "Schema mismatch, " + err);
       }
       done();
@@ -226,9 +225,6 @@ const SNAPSHOT_SCHEMA = {
         windowLayerManagerRemote: {
           type: "boolean",
         },
-        supportsHardwareH264: {
-          type: "string",
-        },
         currentAudioBackend: {
           type: "string",
         },
@@ -298,10 +294,28 @@ const SNAPSHOT_SCHEMA = {
         clearTypeParameters: {
           type: "string",
         },
-        webglRenderer: {
+        webgl1Renderer: {
+          type: "string",
+        },
+        webgl1Version: {
+          type: "string",
+        },
+        webgl1Extensions: {
+          type: "string",
+        },
+        webgl1WSIInfo: {
           type: "string",
         },
         webgl2Renderer: {
+          type: "string",
+        },
+        webgl2Version: {
+          type: "string",
+        },
+        webgl2Extensions: {
+          type: "string",
+        },
+        webgl2WSIInfo: {
           type: "string",
         },
         info: {
