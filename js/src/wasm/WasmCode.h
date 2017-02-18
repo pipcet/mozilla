@@ -430,24 +430,6 @@ struct CustomSection
 
 typedef Vector<CustomSection, 0, SystemAllocPolicy> CustomSectionVector;
 
-// CustomSection represents a custom section in the bytecode which can be
-// extracted via Module.customSections. The (offset, length) pair does not
-// include the custom section name.
-
-struct CustomSection
-{
-    NameInBytecode name;
-    uint32_t offset;
-    uint32_t length;
-
-    CustomSection() = default;
-    CustomSection(NameInBytecode name, uint32_t offset, uint32_t length)
-      : name(name), offset(offset), length(length)
-    {}
-};
-
-typedef Vector<CustomSection, 0, SystemAllocPolicy> CustomSectionVector;
-
 // Metadata holds all the data that is needed to describe compiled wasm code
 // at runtime (as opposed to data that is only used to statically link or
 // instantiate a module).
