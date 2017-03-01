@@ -684,6 +684,16 @@ class FunctionCompiler
         return ins;
     }
 
+    template <class T>
+    MDefinition* truncate_notrap(MDefinition* op, bool isUnsigned)
+    {
+        if (inDeadCode())
+            return nullptr;
+        auto* ins = T::New(alloc(), op, isUnsigned);
+        curBlock_->add(ins);
+        return ins;
+    }
+
     MDefinition* compare(MDefinition* lhs, MDefinition* rhs, JSOp op, MCompare::CompareType type)
     {
         if (inDeadCode())
@@ -1829,6 +1839,18 @@ EmitCallArgs(FunctionCompiler& f, const Sig& sig, const DefVector& args, TlsUsag
     return f.finishCall(call, tls);
 }
 
+template <typename MIRClass>
+static bool
+EmitUnaryWithType(FunctionCompiler& f, ValType operandType, MIRType mirType)
+{
+    MDefinition* input;
+    if (!f.iter().readUnary(operandType, &input))
+        return false;
+
+    f.iter().setResult(f.unary<MIRClass>(input, mirType));
+    return true;
+}
+
 static bool
 EmitCall(FunctionCompiler& f)
 {
@@ -1841,6 +1863,40 @@ EmitCall(FunctionCompiler& f)
 
     if (f.inDeadCode())
         return true;
+
+    if (funcIndex < f.env().intrinsics.length()) {
+        const char* mod = f.env().intrinsics[funcIndex].module.get();
+        const char* field = f.env().intrinsics[funcIndex].field.get();
+        if (strcmp(mod, "libc") == 0 && strcmp(field, "sqrt") == 0) {
+            f.iter().setResult(f.unary<MSqrt>(args[0], MIRType::Double));
+            return true;
+        } else if (strcmp(mod, "wasm") == 0 && strcmp(field, "i32.trunc_s/f32/notrap")) {
+            f.iter().setResult(f.truncate_notrap<MWasmTruncateToInt32Notrap>(args[0], false));
+            return true;
+        } else if (strcmp(mod, "wasm") == 0 && strcmp(field, "i32.trunc_u/f32/notrap")) {
+            f.iter().setResult(f.truncate_notrap<MWasmTruncateToInt32Notrap>(args[0], true));
+            return true;
+        } else if (strcmp(mod, "wasm") == 0 && strcmp(field, "i32.trunc_s/f64/notrap")) {
+            f.iter().setResult(f.truncate_notrap<MWasmTruncateToInt32Notrap>(args[0], false));
+            return true;
+        } else if (strcmp(mod, "wasm") == 0 && strcmp(field, "i32.trunc_u/f64/notrap")) {
+            f.iter().setResult(f.truncate_notrap<MWasmTruncateToInt32Notrap>(args[0], true));
+            return true;
+        } else if (strcmp(mod, "wasm") == 0 && strcmp(field, "i64.trunc_s/f32/notrap")) {
+            f.iter().setResult(f.truncate_notrap<MWasmTruncateToInt64Notrap>(args[0], false));
+            return true;
+        } else if (strcmp(mod, "wasm") == 0 && strcmp(field, "i64.trunc_u/f32/notrap")) {
+            f.iter().setResult(f.truncate_notrap<MWasmTruncateToInt64Notrap>(args[0], true));
+            return true;
+        } else if (strcmp(mod, "wasm") == 0 && strcmp(field, "i64.trunc_s/f64/notrap")) {
+            f.iter().setResult(f.truncate_notrap<MWasmTruncateToInt64Notrap>(args[0], false));
+            return true;
+        } else if (strcmp(mod, "wasm") == 0 && strcmp(field, "i64.trunc_u/f64/notrap")) {
+            f.iter().setResult(f.truncate_notrap<MWasmTruncateToInt64Notrap>(args[0], true));
+            return true;
+        }
+
+    }
 
     const Sig& sig = *f.env().funcSigs[funcIndex];
     bool import = f.env().funcIsImport(funcIndex);
@@ -2044,18 +2100,6 @@ EmitConversion(FunctionCompiler& f, ValType operandType, ValType resultType)
         return false;
 
     f.iter().setResult(f.unary<MIRClass>(input));
-    return true;
-}
-
-template <typename MIRClass>
-static bool
-EmitUnaryWithType(FunctionCompiler& f, ValType operandType, MIRType mirType)
-{
-    MDefinition* input;
-    if (!f.iter().readUnary(operandType, &input))
-        return false;
-
-    f.iter().setResult(f.unary<MIRClass>(input, mirType));
     return true;
 }
 

@@ -479,6 +479,16 @@ LIRGeneratorX64::visitWasmTruncateToInt64(MWasmTruncateToInt64* ins)
 }
 
 void
+LIRGeneratorX64::visitWasmTruncateToInt64Notrap(MWasmTruncateToInt64Notrap* ins)
+{
+    MDefinition* opd = ins->input();
+    MOZ_ASSERT(opd->type() == MIRType::Double || opd->type() == MIRType::Float32);
+
+    LDefinition maybeTemp = ins->isUnsigned() ? tempDouble() : LDefinition::BogusTemp();
+    defineInt64(new(alloc()) LWasmTruncateToInt64Notrap(useRegister(opd), maybeTemp), ins);
+}
+
+void
 LIRGeneratorX64::visitInt64ToFloatingPoint(MInt64ToFloatingPoint* ins)
 {
     MDefinition* opd = ins->input();

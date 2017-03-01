@@ -249,6 +249,7 @@ class CodeGeneratorX86Shared : public CodeGeneratorShared
     virtual void visitMemoryBarrier(LMemoryBarrier* ins);
     virtual void visitWasmAddOffset(LWasmAddOffset* lir);
     virtual void visitWasmTruncateToInt32(LWasmTruncateToInt32* lir);
+    virtual void visitWasmTruncateToInt32Notrap(LWasmTruncateToInt32Notrap* lir);
     virtual void visitAtomicTypedArrayElementBinop(LAtomicTypedArrayElementBinop* lir);
     virtual void visitAtomicTypedArrayElementBinopForEffect(LAtomicTypedArrayElementBinopForEffect* lir);
     virtual void visitCompareExchangeTypedArrayElement(LCompareExchangeTypedArrayElement* lir);

@@ -779,6 +779,7 @@ class AstModule : public AstNode
     SigMap               sigMap_;
     ImportVector         imports_;
     NameVector           funcImportNames_;
+    size_t               numIntrinsics_;
     AstResizableVector   tables_;
     AstResizableVector   memories_;
     ExportVector         exports_;
@@ -795,6 +796,7 @@ class AstModule : public AstNode
         sigMap_(lifo),
         imports_(lifo),
         funcImportNames_(lifo),
+        numIntrinsics_(0),
         tables_(lifo),
         memories_(lifo),
         exports_(lifo),
@@ -882,6 +884,11 @@ class AstModule : public AstNode
             if (!funcImportNames_.append(imp->name()))
                 return false;
             break;
+          case DefinitionKind::Intrinsic:
+            if (!funcImportNames_.append(imp->name()))
+                return false;
+            numIntrinsics_++;
+            break;
           case DefinitionKind::Table:
             if (!tables_.append(AstResizable(imp->limits(), true)))
                 return false;
@@ -901,6 +908,9 @@ class AstModule : public AstNode
     }
     const NameVector& funcImportNames() const {
         return funcImportNames_;
+    }
+    size_t numFuncInlinables() const {
+        return numIntrinsics_;
     }
     size_t numFuncImports() const {
         return funcImportNames_.length();

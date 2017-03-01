@@ -169,6 +169,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitToInt32(MToInt32* convert);
     void visitTruncateToInt32(MTruncateToInt32* truncate);
     void visitWasmTruncateToInt32(MWasmTruncateToInt32* truncate);
+    void visitWasmTruncateToInt32Notrap(MWasmTruncateToInt32Notrap* truncate);
     void visitWrapInt64ToInt32(MWrapInt64ToInt32* ins);
     void visitToString(MToString* convert);
     void visitToObjectOrNull(MToObjectOrNull* convert);

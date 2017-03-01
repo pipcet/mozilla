@@ -412,6 +412,7 @@
     _(AsmJSAtomicBinopHeap)         \
     _(AsmJSAtomicBinopHeapForEffect)\
     _(WasmTruncateToInt32)          \
+    _(WasmTruncateToInt32Notrap)    \
     _(WasmTrap)                     \
     _(WasmReinterpret)              \
     _(WasmReinterpretToI64)         \

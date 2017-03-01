@@ -5471,6 +5471,34 @@ class MWasmTruncateToInt64
     }
 };
 
+class MWasmTruncateToInt64Notrap
+  : public MUnaryInstruction,
+    public NoTypePolicy::Data
+{
+    bool isUnsigned_;
+
+    MWasmTruncateToInt64Notrap(MDefinition* def, bool isUnsigned)
+      : MUnaryInstruction(def),
+        isUnsigned_(isUnsigned)
+    {
+        setResultType(MIRType::Int64);
+    }
+
+  public:
+    INSTRUCTION_HEADER(WasmTruncateToInt64Notrap)
+    TRIVIAL_NEW_WRAPPERS
+
+    bool isUnsigned() const { return isUnsigned_; }
+
+    bool congruentTo(const MDefinition* ins) const override {
+        return congruentIfOperandsEqual(ins) &&
+               ins->toWasmTruncateToInt64Notrap()->isUnsigned() == isUnsigned_;
+    }
+    AliasSet getAliasSet() const override {
+        return AliasSet::None();
+    }
+};
+
 // Truncate a value to an int32, with wasm semantics: this will trap when the
 // value is out of range.
 class MWasmTruncateToInt32
@@ -5503,6 +5531,37 @@ class MWasmTruncateToInt32
     bool congruentTo(const MDefinition* ins) const override {
         return congruentIfOperandsEqual(ins) &&
                ins->toWasmTruncateToInt32()->isUnsigned() == isUnsigned_;
+    }
+
+    AliasSet getAliasSet() const override {
+        return AliasSet::None();
+    }
+};
+
+class MWasmTruncateToInt32Notrap
+  : public MUnaryInstruction,
+    public NoTypePolicy::Data
+{
+    bool isUnsigned_;
+
+    explicit MWasmTruncateToInt32Notrap(MDefinition* def, bool isUnsigned)
+      : MUnaryInstruction(def), isUnsigned_(isUnsigned)
+    {
+        setResultType(MIRType::Int32);
+    }
+
+  public:
+    INSTRUCTION_HEADER(WasmTruncateToInt32Notrap)
+    TRIVIAL_NEW_WRAPPERS
+
+    bool isUnsigned() const {
+        return isUnsigned_;
+    }
+    MDefinition* foldsTo(TempAllocator& alloc) override;
+
+    bool congruentTo(const MDefinition* ins) const override {
+        return congruentIfOperandsEqual(ins) &&
+               ins->toWasmTruncateToInt32Notrap()->isUnsigned() == isUnsigned_;
     }
 
     AliasSet getAliasSet() const override {

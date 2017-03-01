@@ -177,6 +177,25 @@ class LWasmTruncateToInt64 : public LInstructionHelper<1, 1, 1>
     }
 };
 
+class LWasmTruncateToInt64Notrap : public LInstructionHelper<1, 1, 1>
+{
+  public:
+    LIR_HEADER(WasmTruncateToInt64Notrap);
+
+    LWasmTruncateToInt64Notrap(const LAllocation& in, const LDefinition& temp) {
+        setOperand(0, in);
+        setTemp(0, temp);
+    }
+
+    MWasmTruncateToInt64Notrap* mir() const {
+        return mir_->toWasmTruncateToInt64Notrap();
+    }
+
+    const LDefinition* temp() {
+        return getTemp(0);
+    }
+};
+
 } // namespace jit
 } // namespace js
 

@@ -474,6 +474,35 @@ CodeGeneratorX86Shared::visitWasmTruncateToInt32(LWasmTruncateToInt32* lir)
     masm.bind(ool->rejoin());
 }
 
+void
+CodeGeneratorX86Shared::visitWasmTruncateToInt32Notrap(LWasmTruncateToInt32Notrap* lir)
+{
+    FloatRegister input = ToFloatRegister(lir->input());
+    Register output = ToRegister(lir->output());
+
+    MWasmTruncateToInt32Notrap* mir = lir->mir();
+    MIRType inputType = mir->input()->type();
+
+    MOZ_ASSERT(inputType == MIRType::Double || inputType == MIRType::Float32);
+
+    if (mir->isUnsigned()) {
+        if (inputType == MIRType::Double)
+            masm.wasmTruncateDoubleToUInt32Notrap(input, output);
+        else if (inputType == MIRType::Float32)
+            masm.wasmTruncateFloat32ToUInt32Notrap(input, output);
+        else
+            MOZ_CRASH("unexpected type");
+        return;
+    }
+
+    if (inputType == MIRType::Double)
+        masm.wasmTruncateDoubleToInt32Notrap(input, output);
+    else if (inputType == MIRType::Float32)
+        masm.wasmTruncateFloat32ToInt32Notrap(input, output);
+    else
+        MOZ_CRASH("unexpected type");
+}
+
 bool
 CodeGeneratorX86Shared::generateOutOfLineCode()
 {

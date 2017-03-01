@@ -822,6 +822,18 @@ MacroAssembler::wasmTruncateFloat32ToInt32(FloatRegister input, Register output,
 }
 
 void
+MacroAssembler::wasmTruncateDoubleToInt32Notrap(FloatRegister input, Register output)
+{
+    vcvttsd2si(input, output);
+}
+
+void
+MacroAssembler::wasmTruncateFloat32ToInt32Notrap(FloatRegister input, Register output)
+{
+    vcvttss2si(input, output);
+}
+
+void
 MacroAssembler::outOfLineWasmTruncateDoubleToInt32(FloatRegister input, bool isUnsigned,
                                                    wasm::TrapOffset off, Label* rejoin)
 {

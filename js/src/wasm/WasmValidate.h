@@ -46,6 +46,7 @@ struct ModuleEnvironment
     GlobalDescVector          globals;
     TableDescVector           tables;
     Uint32Vector              asmJSSigToTableIndex;
+    ImportVector              intrinsics;
     ImportVector              imports;
     ExportVector              exports;
     Maybe<uint32_t>           startFuncIndex;
@@ -92,7 +93,8 @@ struct ModuleEnvironment
         return kind == ModuleKind::AsmJS;
     }
     bool funcIsImport(uint32_t funcIndex) const {
-        return funcIndex < funcImportGlobalDataOffsets.length();
+        return funcIndex >= intrinsics.length() &&
+            funcIndex < funcImportGlobalDataOffsets.length();
     }
     uint32_t funcIndexToSigIndex(uint32_t funcIndex) const {
         return funcSigs[funcIndex] - sigs.begin();

@@ -54,6 +54,7 @@ class CodeGeneratorX64 : public CodeGeneratorX86Shared
     void visitWrapInt64ToInt32(LWrapInt64ToInt32* lir);
     void visitExtendInt32ToInt64(LExtendInt32ToInt64* lir);
     void visitWasmTruncateToInt64(LWasmTruncateToInt64* lir);
+    void visitWasmTruncateToInt64Notrap(LWasmTruncateToInt64Notrap* lir);
     void visitInt64ToFloatingPoint(LInt64ToFloatingPoint* lir);
     void visitLoadTypedArrayElementStatic(LLoadTypedArrayElementStatic* ins);
     void visitStoreTypedArrayElementStatic(LStoreTypedArrayElementStatic* ins);

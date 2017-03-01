@@ -1423,6 +1423,12 @@ class MacroAssembler : public MacroAssemblerSpecific
     void wasmTruncateFloat32ToInt32(FloatRegister input, Register output, Label* oolEntry) DEFINED_ON(x86_shared, arm);
     void outOfLineWasmTruncateFloat32ToInt32(FloatRegister input, bool isUnsigned, wasm::TrapOffset off, Label* rejoin) DEFINED_ON(x86_shared);
 
+    void wasmTruncateDoubleToUInt32Notrap(FloatRegister input, Register output) DEFINED_ON(x64);
+    void wasmTruncateDoubleToInt32Notrap(FloatRegister input, Register output) DEFINED_ON(x86_shared);
+
+    void wasmTruncateFloat32ToUInt32Notrap(FloatRegister input, Register output) DEFINED_ON(x64);
+    void wasmTruncateFloat32ToInt32Notrap(FloatRegister input, Register output) DEFINED_ON(x86_shared);
+
     void outOfLineWasmTruncateDoubleToInt64(FloatRegister input, bool isUnsigned, wasm::TrapOffset off, Label* rejoin) DEFINED_ON(x86_shared);
     void outOfLineWasmTruncateFloat32ToInt64(FloatRegister input, bool isUnsigned, wasm::TrapOffset off, Label* rejoin) DEFINED_ON(x86_shared);
 

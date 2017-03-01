@@ -311,7 +311,9 @@ namespace jit {
     _(WasmSelect)                                                           \
     _(WasmReinterpret)                                                      \
     _(WasmFloatConstant)                                                    \
-    _(WasmTruncateToInt64)
+    _(WasmTruncateToInt64)                                                  \
+    _(WasmTruncateToInt32Notrap)                                            \
+    _(WasmTruncateToInt64Notrap)
 
 // Forward declarations of MIR types.
 #define FORWARD_DECLARE(op) class M##op;

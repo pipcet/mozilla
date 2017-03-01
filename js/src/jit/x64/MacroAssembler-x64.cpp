@@ -235,6 +235,70 @@ MacroAssemblerX64::wasmTruncateFloat32ToUInt64(FloatRegister input, Register64 o
 }
 
 void
+MacroAssemblerX64::wasmTruncateDoubleToInt64Notrap(FloatRegister input, Register64 output, FloatRegister tempReg)
+{
+    vcvttsd2sq(input, output.reg);
+}
+
+void
+MacroAssemblerX64::wasmTruncateFloat32ToInt64Notrap(FloatRegister input, Register64 output, FloatRegister tempReg)
+{
+    vcvttss2sq(input, output.reg);
+}
+
+void
+MacroAssemblerX64::wasmTruncateDoubleToUInt64Notrap(FloatRegister input, Register64 output, FloatRegister tempReg)
+{
+    // If the input < INT64_MAX, vcvttsd2sq will do the right thing, so
+    // we use it directly. Else, we subtract INT64_MAX, convert to int64,
+    // and then add INT64_MAX to the result.
+
+    Label isLarge;
+    Label oolRejoin;
+
+    ScratchDoubleScope scratch(asMasm());
+    loadConstantDouble(double(0x8000000000000000), scratch);
+    asMasm().branchDouble(Assembler::DoubleGreaterThanOrEqual, input, scratch, &isLarge);
+    vcvttsd2sq(input, output.reg);
+    jump(&oolRejoin);
+
+    bind(&isLarge);
+
+    moveDouble(input, tempReg);
+    vsubsd(scratch, tempReg, tempReg);
+    vcvttsd2sq(tempReg, output.reg);
+    asMasm().or64(Imm64(0x8000000000000000), output);
+
+    bind(&oolRejoin);
+}
+
+void
+MacroAssemblerX64::wasmTruncateFloat32ToUInt64Notrap(FloatRegister input, Register64 output, FloatRegister tempReg)
+{
+    // If the input < INT64_MAX, vcvttss2sq will do the right thing, so
+    // we use it directly. Else, we subtract INT64_MAX, convert to int64,
+    // and then add INT64_MAX to the result.
+
+    Label isLarge;
+    Label oolRejoin;
+
+    ScratchFloat32Scope scratch(asMasm());
+    loadConstantFloat32(float(0x8000000000000000), scratch);
+    asMasm().branchFloat(Assembler::DoubleGreaterThanOrEqual, input, scratch, &isLarge);
+    vcvttss2sq(input, output.reg);
+    jump(&oolRejoin);
+
+    bind(&isLarge);
+
+    moveFloat32(input, tempReg);
+    vsubss(scratch, tempReg, tempReg);
+    vcvttss2sq(tempReg, output.reg);
+    asMasm().or64(Imm64(0x8000000000000000), output);
+
+    bind(&oolRejoin);
+}
+
+void
 MacroAssemblerX64::bindOffsets(const MacroAssemblerX86Shared::UsesVector& uses)
 {
     for (CodeOffset use : uses) {
@@ -861,6 +925,18 @@ MacroAssembler::wasmTruncateFloat32ToUInt32(FloatRegister input, Register output
     move32(Imm32(0xffffffff), scratch);
     cmpq(scratch, output);
     j(Assembler::Above, oolEntry);
+}
+
+void
+MacroAssembler::wasmTruncateDoubleToUInt32Notrap(FloatRegister input, Register output)
+{
+    vcvttsd2sq(input, output);
+}
+
+void
+MacroAssembler::wasmTruncateFloat32ToUInt32Notrap(FloatRegister input, Register output)
+{
+    vcvttss2sq(input, output);
 }
 
 //}}} check_macroassembler_style

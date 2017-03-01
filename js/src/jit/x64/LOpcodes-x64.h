@@ -18,6 +18,7 @@
     _(SimdValueInt32x4)             \
     _(SimdValueFloat32x4)           \
     _(UDivOrMod)                    \
-    _(UDivOrModConstant)
+    _(UDivOrModConstant)            \
+    _(WasmTruncateToInt64Notrap)
 
 #endif /* jit_x64_LOpcodes_x64_h */

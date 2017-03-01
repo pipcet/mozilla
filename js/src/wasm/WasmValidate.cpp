@@ -879,6 +879,16 @@ DecodeImport(Decoder& d, ModuleEnvironment* env)
             return d.fail("too many functions");
         break;
       }
+      case DefinitionKind::Intrinsic: {
+        uint32_t sigIndex;
+        if (!DecodeSignatureIndex(d, env->sigs, &sigIndex))
+            return false;
+        if (!env->funcSigs.append(&env->sigs[sigIndex]))
+            return false;
+        if (env->funcSigs.length() > MaxFuncs)
+            return d.fail("too many functions");
+        break;
+      }
       case DefinitionKind::Table: {
         if (!DecodeTableLimits(d, &env->tables))
             return false;
@@ -935,7 +945,69 @@ DecodeImportSection(Decoder& d, ModuleEnvironment* env)
         return false;
 
     // The global data offsets will be filled in by ModuleGenerator::init.
-    if (!env->funcImportGlobalDataOffsets.resize(env->funcSigs.length()))
+    if (!env->funcImportGlobalDataOffsets.resize(env->funcSigs.length() - env->intrinsics.length()))
+        return false;
+
+    return true;
+}
+
+static bool
+DecodeIntrinsic(Decoder& d, ModuleEnvironment* env)
+{
+    UniqueChars moduleName = DecodeName(d);
+    if (!moduleName)
+        return d.fail("expected valid intrinsic module name");
+
+    UniqueChars funcName = DecodeName(d);
+    if (!funcName)
+        return d.fail("expected valid intrinsic func name");
+
+    uint32_t rawImportKind;
+    if (!d.readVarU32(&rawImportKind))
+        return d.fail("failed to read import kind");
+
+    DefinitionKind importKind = DefinitionKind(rawImportKind);
+
+    switch (importKind) {
+      case DefinitionKind::Intrinsic: {
+        uint32_t sigIndex;
+        if (!DecodeSignatureIndex(d, env->sigs, &sigIndex))
+            return false;
+        if (env->funcSigs.length() > MaxFuncs)
+            return d.fail("too many functions");
+        if (!env->funcSigs.append(&env->sigs[sigIndex]))
+            return false;
+        break;
+      }
+      default:
+        return d.fail("unsupported import kind");
+    }
+
+    return env->intrinsics.emplaceBack(Move(moduleName), Move(funcName), importKind);
+}
+
+static bool
+DecodeIntrinsicSection(Decoder& d, ModuleEnvironment* env)
+{
+    uint32_t sectionStart, sectionSize;
+    if (!d.startSection(SectionId::Intrinsic, env, &sectionStart, &sectionSize, "intrinsic"))
+        return false;
+    if (sectionStart == Decoder::NotStarted)
+        return true;
+
+    uint32_t numIntrinsics;
+    if (!d.readVarU32(&numIntrinsics))
+        return d.fail("failed to read number of intrinsic definitions");
+
+    if (numIntrinsics > MaxIntrinsics)
+        return d.fail("too many intrinsics");
+
+    for (uint32_t i = 0; i < numIntrinsics; i++) {
+        if (!DecodeIntrinsic(d, env))
+            return false;
+    }
+
+    if (!d.finishSection(sectionStart, sectionSize, "intrinsic"))
         return false;
 
     return true;
@@ -966,7 +1038,12 @@ DecodeFunctionSection(Decoder& d, ModuleEnvironment* env)
         uint32_t sigIndex;
         if (!DecodeSignatureIndex(d, env->sigs, &sigIndex))
             return false;
-        env->funcSigs.infallibleAppend(&env->sigs[sigIndex]);
+        if (i < env->intrinsics.length()) {
+            if (!(*(env->funcSigs[i]) == env->sigs[sigIndex]))
+                d.fail("intrinsic function signature mismatch");
+        } else {
+            env->funcSigs.infallibleAppend(&env->sigs[sigIndex]);
+        }
     }
 
     if (!d.finishSection(sectionStart, sectionSize, "function"))
@@ -1349,6 +1426,9 @@ wasm::DecodeModuleEnvironment(Decoder& d, ModuleEnvironment* env)
         return false;
 
     if (!DecodeTypeSection(d, env))
+        return false;
+
+    if (!DecodeIntrinsicSection(d, env))
         return false;
 
     if (!DecodeImportSection(d, env))

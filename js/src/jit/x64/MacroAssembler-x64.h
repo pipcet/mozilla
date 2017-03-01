@@ -883,6 +883,12 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     void wasmTruncateFloat32ToUInt64(FloatRegister input, Register64 output, Label* oolEntry,
                                      Label* oolRejoin, FloatRegister tempDouble);
 
+    void wasmTruncateDoubleToInt64Notrap(FloatRegister input, Register64 output, FloatRegister tempDouble);
+    void wasmTruncateDoubleToUInt64Notrap(FloatRegister input, Register64 output, FloatRegister tempDouble);
+
+    void wasmTruncateFloat32ToInt64Notrap(FloatRegister input, Register64 output, FloatRegister tempDouble);
+    void wasmTruncateFloat32ToUInt64Notrap(FloatRegister input, Register64 output, FloatRegister tempDouble);
+
     void loadWasmGlobalPtr(uint32_t globalDataOffset, Register dest) {
         loadPtr(Address(WasmTlsReg, offsetof(wasm::TlsData, globalArea) + globalDataOffset), dest);
     }

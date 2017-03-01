@@ -4420,6 +4420,20 @@ class LWasmTruncateToInt32 : public LInstructionHelper<1, 1, 0>
     }
 };
 
+class LWasmTruncateToInt32Notrap : public LInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(WasmTruncateToInt32Notrap)
+
+    explicit LWasmTruncateToInt32Notrap(const LAllocation& in) {
+        setOperand(0, in);
+    }
+
+    MWasmTruncateToInt32Notrap* mir() const {
+        return mir_->toWasmTruncateToInt32Notrap();
+    }
+};
+
 class LWrapInt64ToInt32 : public LInstructionHelper<1, INT64_PIECES, 0>
 {
   public:

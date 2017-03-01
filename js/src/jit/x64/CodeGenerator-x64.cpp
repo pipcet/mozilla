@@ -734,6 +734,32 @@ CodeGeneratorX64::visitWasmTruncateToInt64(LWasmTruncateToInt64* lir)
 }
 
 void
+CodeGeneratorX64::visitWasmTruncateToInt64Notrap(LWasmTruncateToInt64Notrap* lir)
+{
+    FloatRegister input = ToFloatRegister(lir->input());
+    Register64 output = ToOutRegister64(lir);
+
+    MWasmTruncateToInt64Notrap* mir = lir->mir();
+    MIRType inputType = mir->input()->type();
+
+    MOZ_ASSERT(inputType == MIRType::Double || inputType == MIRType::Float32);
+
+    FloatRegister temp = mir->isUnsigned() ? ToFloatRegister(lir->temp()) : InvalidFloatReg;
+
+    if (inputType == MIRType::Double) {
+        if (mir->isUnsigned())
+            masm.wasmTruncateDoubleToUInt64Notrap(input, output, temp);
+        else
+            masm.wasmTruncateDoubleToInt64Notrap(input, output, temp);
+    } else {
+        if (mir->isUnsigned())
+            masm.wasmTruncateFloat32ToUInt64Notrap(input, output, temp);
+        else
+            masm.wasmTruncateFloat32ToInt64Notrap(input, output, temp);
+    }
+}
+
+void
 CodeGeneratorX64::visitInt64ToFloatingPoint(LInt64ToFloatingPoint* lir)
 {
     Register64 input = ToRegister64(lir->getInt64Operand(0));

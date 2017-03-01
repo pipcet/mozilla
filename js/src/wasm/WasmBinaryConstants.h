@@ -46,7 +46,8 @@ enum class SectionId
     Start                                = 8,
     Elem                                 = 9,
     Code                                 = 10,
-    Data                                 = 11
+    Data                                 = 11,
+    Intrinsic                            = 15, // to be renumbered
 };
 
 enum class TypeCode
@@ -104,7 +105,8 @@ enum class DefinitionKind
     Function                             = 0x00,
     Table                                = 0x01,
     Memory                               = 0x02,
-    Global                               = 0x03
+    Global                               = 0x03,
+    Intrinsic                            = 0x04,
 };
 
 enum class GlobalTypeImmediate
@@ -448,6 +450,7 @@ enum class Telemetry
 
 static const unsigned MaxTypes               =  1000000;
 static const unsigned MaxFuncs               =  1000000;
+static const unsigned MaxIntrinsics          =  1000000;
 static const unsigned MaxImports             =   100000;
 static const unsigned MaxExports             =   100000;
 static const unsigned MaxGlobals             =  1000000;
