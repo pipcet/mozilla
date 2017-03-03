@@ -23,6 +23,8 @@ const SUPPORTED_HEADERS = [
   "Access-Control-Request-Headers",
   "Access-Control-Request-Method",
   "Age",
+  "Allow",
+  "Authorization",
   "Cache-Control",
   "Connection",
   "Content-Disposition",
@@ -30,6 +32,7 @@ const SUPPORTED_HEADERS = [
   "Content-Language",
   "Content-Length",
   "Content-Location",
+  "Content-Range",
   "Content-Security-Policy",
   "Content-Security-Policy-Report-Only",
   "Content-Type",
@@ -38,7 +41,9 @@ const SUPPORTED_HEADERS = [
   "DNT",
   "Date",
   "ETag",
+  "Expect",
   "Expires",
+  "Forwarded",
   "From",
   "Host",
   "If-Match",
@@ -47,12 +52,16 @@ const SUPPORTED_HEADERS = [
   "If-Range",
   "If-Unmodified-Since",
   "Keep-Alive",
+  "Large-Allocation",
   "Last-Modified",
   "Location",
   "Origin",
   "Pragma",
+  "Proxy-Authenticate",
+  "Proxy-Authorization",
   "Public-Key-Pins",
   "Public-Key-Pins-Report-Only",
+  "Range",
   "Referer",
   "Referrer-Policy",
   "Retry-After",
@@ -68,12 +77,71 @@ const SUPPORTED_HEADERS = [
   "User-Agent",
   "Vary",
   "Via",
+  "WWW-Authenticate",
   "Warning",
   "X-Content-Type-Options",
   "X-DNS-Prefetch-Control",
+  "X-Forwarded-For",
+  "X-Forwarded-Host",
+  "X-Forwarded-Proto",
   "X-Frame-Options",
   "X-XSS-Protection"
 ];
+
+/**
+ * A mapping of HTTP status codes to external documentation. Any code included
+ * here will show a MDN link alongside it.
+ */
+const SUPPORTED_HTTP_CODES = [
+    "100",
+    "101",
+    "200",
+    "201",
+    "202",
+    "203",
+    "204",
+    "205",
+    "206",
+    "300",
+    "301",
+    "302",
+    "303",
+    "304",
+    "307",
+    "308",
+    "400",
+    "401",
+    "403",
+    "404",
+    "405",
+    "406",
+    "407",
+    "408",
+    "409",
+    "410",
+    "411",
+    "412",
+    "413",
+    "414",
+    "415",
+    "416",
+    "417",
+    "426",
+    "428",
+    "429",
+    "431",
+    "451",
+    "500",
+    "501",
+    "502",
+    "503",
+    "504",
+    "505",
+    "511"
+];
+
+const GA_PARAMS =
+  "?utm_source=mozilla&utm_medium=devtools-netmonitor&utm_campaign=default";
 
 /**
  * Get the MDN URL for the specified header.
@@ -87,9 +155,22 @@ function getHeadersURL(header) {
   let idx = SUPPORTED_HEADERS.findIndex(item =>
     item.toLowerCase() === lowerCaseHeader);
   return idx > -1 ?
-    `https://developer.mozilla.org/docs/Web/HTTP/Headers/${SUPPORTED_HEADERS[idx]}?utm_source=mozilla&utm_medium=devtools-netmonitor&utm_campaign=default` : null;
+    `https://developer.mozilla.org/docs/Web/HTTP/Headers/${SUPPORTED_HEADERS[idx] + GA_PARAMS}` : null;
+}
+
+/**
+ * Get the MDN URL for the specified HTTP status code.
+ *
+ * @param {string} HTTP status code for the baseURL to use.
+ *
+ * @return {string} The MDN URL for the HTTP status code, or null if not available.
+ */
+function getHTTPStatusCodeURL(statusCode) {
+  let idx = SUPPORTED_HTTP_CODES.indexOf(statusCode);
+  return idx > -1 ? `https://developer.mozilla.org/docs/Web/HTTP/Status/${SUPPORTED_HTTP_CODES[idx] + GA_PARAMS}` : null;
 }
 
 module.exports = {
   getHeadersURL,
+  getHTTPStatusCodeURL,
 };

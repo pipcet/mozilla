@@ -55,6 +55,7 @@
 #include "nsILoadContext.h"
 #include "nsILoadGroupChild.h"
 #include "nsIDOMDocument.h"
+#include "nsIDocShell.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -279,6 +280,11 @@ private:
       surfacePathPrefix.AppendInt(counter.Key().Size().width);
       surfacePathPrefix.Append("x");
       surfacePathPrefix.AppendInt(counter.Key().Size().height);
+
+      if (counter.Values().SharedHandles() > 0) {
+        surfacePathPrefix.Append(", shared:");
+        surfacePathPrefix.AppendInt(uint32_t(counter.Values().SharedHandles()));
+      }
 
       if (counter.Type() == SurfaceMemoryCounterType::NORMAL) {
         PlaybackType playback = counter.Key().Playback();
@@ -582,6 +588,19 @@ ShouldLoadCachedImage(imgRequest* aImgRequest,
   // We call all Content Policies above, but we also have to call mcb
   // individually to check the intermediary redirect hops are secure.
   if (insecureRedirect) {
+    // Bug 1314356: If the image ended up in the cache upgraded by HSTS and the page
+    // uses upgrade-inscure-requests it had an insecure redirect (http->https).
+    // We need to invalidate the image and reload it because mixed content blocker
+    // only bails if upgrade-insecure-requests is set on the doc and the resource
+    // load is http: which would result in an incorrect mixed content warning.
+    nsCOMPtr<nsIDocShell> docShell = NS_CP_GetDocShellFromContext(aLoadingContext);
+    if (docShell) {
+      nsIDocument* document = docShell->GetDocument();
+      if (document && document->GetUpgradeInsecureRequests(false)) {
+        return false;
+      }
+    }
+
     if (!nsContentUtils::IsSystemPrincipal(aLoadingPrincipal)) {
       // Set the requestingLocation from the aLoadingPrincipal.
       nsCOMPtr<nsIURI> requestingLocation;
@@ -2216,8 +2235,8 @@ imgLoader::LoadImage(nsIURI* aURI,
 
     if (NS_FAILED(openRes)) {
       MOZ_LOG(gImgLog, LogLevel::Debug,
-             ("[this=%p] imgLoader::LoadImage -- AsyncOpen2() failed: 0x%x\n",
-              this, openRes));
+             ("[this=%p] imgLoader::LoadImage -- AsyncOpen2() failed: 0x%" PRIx32 "\n",
+              this, static_cast<uint32_t>(openRes)));
       request->CancelAndAbort(openRes);
       return openRes;
     }
@@ -2683,9 +2702,9 @@ ProxyListener::CheckListenerChain()
     rv = retargetableListener->CheckListenerChain();
   }
   MOZ_LOG(gImgLog, LogLevel::Debug,
-         ("ProxyListener::CheckListenerChain %s [this=%p listener=%p rv=%x]",
+         ("ProxyListener::CheckListenerChain %s [this=%p listener=%p rv=%" PRIx32 "]",
           (NS_SUCCEEDED(rv) ? "success" : "failure"),
-          this, (nsIStreamListener*)mDestListener, rv));
+          this, (nsIStreamListener*)mDestListener, static_cast<uint32_t>(rv)));
   return rv;
 }
 
@@ -2905,8 +2924,8 @@ imgCacheValidator::CheckListenerChain()
     rv = retargetableListener->CheckListenerChain();
   }
   MOZ_LOG(gImgLog, LogLevel::Debug,
-         ("[this=%p] imgCacheValidator::CheckListenerChain -- rv %d=%s",
-          this, NS_SUCCEEDED(rv) ? "succeeded" : "failed", rv));
+         ("[this=%p] imgCacheValidator::CheckListenerChain -- rv %" PRId32 "=%s",
+          this, static_cast<uint32_t>(rv), NS_SUCCEEDED(rv) ? "succeeded" : "failed"));
   return rv;
 }
 

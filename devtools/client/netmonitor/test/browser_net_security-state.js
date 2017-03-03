@@ -19,18 +19,14 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(CUSTOM_GET_URL);
   let { document, gStore, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/actions/index");
-  let {
-    getDisplayedRequests,
-    getSortedRequests,
-  } = windowRequire("devtools/client/netmonitor/selectors/index");
 
   gStore.dispatch(Actions.batchEnable(false));
 
   yield performRequests();
 
   for (let subitemNode of Array.from(document.querySelectorAll(
-    "requests-menu-subitem.requests-menu-security-and-domain"))) {
-    let domain = subitemNode.querySelector(".requests-menu-domain").textContent;
+    "requests-list-subitem.requests-list-security-and-domain"))) {
+    let domain = subitemNode.querySelector(".requests-list-domain").textContent;
 
     info("Found a request to " + domain);
     ok(domain in EXPECTED_SECURITY_STATES, "Domain " + domain + " was expected.");

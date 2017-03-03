@@ -18,18 +18,13 @@ add_task(function* () {
 
   let { document, gStore, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/actions/index");
-  let { EVENTS } = windowRequire("devtools/client/netmonitor/events");
-  let {
-    getDisplayedRequests,
-    getSortedRequests,
-  } = windowRequire("devtools/client/netmonitor/selectors/index");
 
   gStore.dispatch(Actions.batchEnable(false));
 
   is(document.querySelector(".network-details-panel-toggle").hasAttribute("disabled"),
     true,
     "The pane toggle button should be disabled when the frontend is opened.");
-  ok(document.querySelector("#requests-menu-empty-notice"),
+  ok(document.querySelector(".request-list-empty-notice"),
     "An empty notice should be displayed when the frontend is opened.");
   is(gStore.getState().requests.requests.size, 0,
     "The requests menu should be empty when the frontend is opened.");
@@ -41,7 +36,7 @@ add_task(function* () {
   is(document.querySelector(".network-details-panel-toggle").hasAttribute("disabled"),
     false,
     "The pane toggle button should be enabled after the first request.");
-  ok(!document.querySelector("#requests-menu-empty-notice"),
+  ok(!document.querySelector(".request-list-empty-notice"),
     "The empty notice should be hidden after the first request.");
   is(gStore.getState().requests.requests.size, 1,
     "The requests menu should not be empty after the first request.");
@@ -53,7 +48,7 @@ add_task(function* () {
   is(document.querySelector(".network-details-panel-toggle").hasAttribute("disabled"),
     false,
     "The pane toggle button should be still be enabled after a reload.");
-  ok(!document.querySelector("#requests-menu-empty-notice"),
+  ok(!document.querySelector(".request-list-empty-notice"),
     "The empty notice should be still hidden after a reload.");
   is(gStore.getState().requests.requests.size, 1,
     "The requests menu should not be empty after a reload.");
@@ -65,7 +60,7 @@ add_task(function* () {
   is(document.querySelector(".network-details-panel-toggle").hasAttribute("disabled"),
     true,
     "The pane toggle button should be disabled when after clear.");
-  ok(document.querySelector("#requests-menu-empty-notice"),
+  ok(document.querySelector(".request-list-empty-notice"),
     "An empty notice should be displayed again after clear.");
   is(gStore.getState().requests.requests.size, 0,
     "The requests menu should be empty after clear.");

@@ -19,21 +19,15 @@
 #include "signaling/src/jsep/JsepTransport.h"
 #include "signaling/src/common/PtrVector.h"
 
-#if !defined(MOZILLA_EXTERNAL_LINKAGE)
 #include "MediaStreamTrack.h"
 #include "nsIPrincipal.h"
 #include "nsIDocument.h"
 #include "mozilla/Preferences.h"
 #include "MediaEngine.h"
-#endif
 
-#ifdef MOZILLA_INTERNAL_API
 #include "mozilla/Preferences.h"
-#endif
 
-#if !defined(MOZILLA_EXTERNAL_LINKAGE)
 #include "WebrtcGmpVideoCodec.h"
-#endif
 
 #include <stdlib.h>
 
@@ -141,6 +135,10 @@ JsepCodecDescToCodecConfig(const JsepCodecDescription& aCodec,
   configRaw->mCcmFbTypes = desc.mCcmFbTypes;
   configRaw->mRembFbSet = desc.RtcpFbRembIsSet();
   configRaw->mFECFbSet = desc.mFECEnabled;
+  if (desc.mFECEnabled) {
+    configRaw->mREDPayloadType = desc.mREDPayloadType;
+    configRaw->mULPFECPayloadType = desc.mULPFECPayloadType;
+  }
 
   *aConfig = configRaw;
   return NS_OK;
@@ -332,8 +330,8 @@ MediaPipelineFactory::GetTransportParameters(
 {
   *aLevelOut = aTrackPair.mLevel;
 
-  size_t transportLevel = aTrackPair.mBundleLevel.isSome() ?
-                          *aTrackPair.mBundleLevel :
+  size_t transportLevel = aTrackPair.HasBundleLevel() ?
+                          aTrackPair.BundleLevel() :
                           aTrackPair.mLevel;
 
   nsresult rv = CreateOrGetTransportFlow(
@@ -352,7 +350,7 @@ MediaPipelineFactory::GetTransportParameters(
     MOZ_ASSERT(aRtcpOut);
   }
 
-  if (aTrackPair.mBundleLevel.isSome()) {
+  if (aTrackPair.HasBundleLevel()) {
     bool receiving = aTrack.GetDirection() == sdp::kRecv;
 
     *aFilterOut = new MediaPipelineFilter;
@@ -382,13 +380,11 @@ MediaPipelineFactory::CreateOrUpdateMediaPipeline(
     const JsepTrackPair& aTrackPair,
     const JsepTrack& aTrack)
 {
-#if !defined(MOZILLA_EXTERNAL_LINKAGE)
   // The GMP code is all the way on the other side of webrtc.org, and it is not
   // feasible to plumb this information all the way through. So, we set it (for
   // the duration of this call) in a global variable. This allows the GMP code
   // to report errors to the PC.
   WebrtcGmpPCHandleSetter setter(mPC->GetHandle());
-#endif
 
   MOZ_ASSERT(aTrackPair.mRtpTransport);
 
@@ -450,6 +446,7 @@ MediaPipelineFactory::CreateOrUpdateMediaPipeline(
     if (NS_FAILED(rv)) {
       return rv;
     }
+    conduit->SetPCHandle(mPC->GetHandle());
   } else {
     // We've created the TransportFlow, nothing else to do here.
     return NS_OK;
@@ -638,7 +635,6 @@ MediaPipelineFactory::CreateMediaPipelineSending(
       aRtcpFlow,
       aFilter);
 
-#if !defined(MOZILLA_EXTERNAL_LINKAGE)
   // implement checking for peerIdentity (where failure == black/silence)
   nsIDocument* doc = mPC->GetWindow()->GetExtantDoc();
   if (doc) {
@@ -649,7 +645,6 @@ MediaPipelineFactory::CreateMediaPipelineSending(
     MOZ_MTLOG(ML_ERROR, "Cannot initialize pipeline without attached doc");
     return NS_ERROR_FAILURE; // Don't remove this till we know it's safe.
   }
-#endif
 
   rv = pipeline->Init();
   if (NS_FAILED(rv)) {
@@ -845,11 +840,9 @@ MediaPipelineFactory::GetOrCreateVideoConduit(
     // NOTE(pkerr) - this is new behavior. Needed because the CreateVideoReceiveStream
     // method of the Call API will assert (in debug) and fail if a value is not provided
     // for the remote_ssrc that will be used by the far-end sender.
-    if (ssrcs->empty()) {
-      MOZ_MTLOG(ML_ERROR, "No SSRC set for receive track");
-      return NS_ERROR_FAILURE;
+    if (!ssrcs->empty()) {
+      conduit->SetRemoteSSRC(ssrcs->front());
     }
-    conduit->SetRemoteSSRC(ssrcs->front());
 
     if (!extmaps.empty()) {
       conduit->AddLocalRTPExtensions(false, extmaps);
@@ -898,7 +891,6 @@ nsresult
 MediaPipelineFactory::ConfigureVideoCodecMode(const JsepTrack& aTrack,
                                               VideoSessionConduit& aConduit)
 {
-#if !defined(MOZILLA_EXTERNAL_LINKAGE)
   RefPtr<LocalSourceStreamInfo> stream =
     mPCMedia->GetLocalStreamByTrackId(aTrack.GetTrackId());
 
@@ -936,7 +928,6 @@ MediaPipelineFactory::ConfigureVideoCodecMode(const JsepTrack& aTrack,
     return NS_ERROR_FAILURE;
   }
 
-#endif
   return NS_OK;
 }
 

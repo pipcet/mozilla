@@ -130,7 +130,7 @@ pub trait DomTraversal<E: TElement> : Sync {
         if let Some(mut data) = root.mutate_data() {
             if let Some(r) = data.get_restyle_mut() {
                 debug_assert!(root.next_sibling_element().is_none());
-                let _later_siblings = r.expand_snapshot(root, stylist);
+                let _later_siblings = r.compute_final_hint(root, stylist);
             }
         }
 
@@ -414,8 +414,9 @@ pub fn recalc_style_at<E, D>(traversal: &D,
 {
     context.thread_local.begin_element(element, &data);
     context.thread_local.statistics.elements_traversed += 1;
-    debug_assert!(data.get_restyle().map_or(true, |r| r.snapshot.is_none()),
-                  "Snapshots should be expanded by the caller");
+    debug_assert!(data.get_restyle().map_or(true, |r| {
+        r.snapshot.is_none() && !r.has_sibling_invalidations()
+    }), "Should've computed the final hint and handled later_siblings already");
 
     let compute_self = !data.has_current_styles();
     let mut inherited_style_changed = false;
@@ -455,7 +456,10 @@ pub fn recalc_style_at<E, D>(traversal: &D,
     // Preprocess children, propagating restyle hints and handling sibling relationships.
     if traversal.should_traverse_children(&mut context.thread_local, element, &data, DontLog) &&
        (element.has_dirty_descendants() || !propagated_hint.is_empty() || inherited_style_changed) {
-        preprocess_children(traversal, element, propagated_hint, inherited_style_changed);
+        let damage_handled = data.get_restyle().map_or(RestyleDamage::empty(), |r| {
+            r.damage_handled() | r.damage.handled_for_descendants()
+        });
+        preprocess_children(traversal, element, propagated_hint, damage_handled, inherited_style_changed);
     }
 
     // Make sure the dirty descendants bit is not set for the root of a
@@ -557,6 +561,7 @@ fn compute_style<E, D>(_traversal: &D,
 fn preprocess_children<E, D>(traversal: &D,
                              element: E,
                              mut propagated_hint: StoredRestyleHint,
+                             damage_handled: RestyleDamage,
                              parent_inherited_style_changed: bool)
     where E: TElement,
           D: DomTraversal<E>
@@ -580,8 +585,7 @@ fn preprocess_children<E, D>(traversal: &D,
         // any reason to create one, avoid the useless allocation and move on to
         // the next child.
         if propagated_hint.is_empty() && !parent_inherited_style_changed &&
-           !child_data.has_restyle()
-        {
+           damage_handled.is_empty() && !child_data.has_restyle() {
             continue;
         }
         let mut restyle_data = child_data.ensure_restyle();
@@ -591,12 +595,15 @@ fn preprocess_children<E, D>(traversal: &D,
             restyle_data.hint.insert(&propagated_hint);
         }
 
-        // Handle element snapshots.
+        // Handle element snapshots and sibling restyle hints.
         let stylist = &traversal.shared_context().stylist;
-        let later_siblings = restyle_data.expand_snapshot(child, stylist);
+        let later_siblings = restyle_data.compute_final_hint(child, stylist);
         if later_siblings {
             propagated_hint.insert(&(RESTYLE_SELF | RESTYLE_DESCENDANTS).into());
         }
+
+        // Store the damage already handled by ancestors.
+        restyle_data.set_damage_handled(damage_handled);
 
         // If properties that we inherited from the parent changed, we need to recascade.
         //

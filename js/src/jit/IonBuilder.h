@@ -561,6 +561,8 @@ class IonBuilder
     AbortReasonOr<Ok> jsop_lambda(JSFunction* fun);
     AbortReasonOr<Ok> jsop_lambda_arrow(JSFunction* fun);
     AbortReasonOr<Ok> jsop_setfunname(uint8_t prefixKind);
+    AbortReasonOr<Ok> jsop_pushlexicalenv(uint32_t index);
+    AbortReasonOr<Ok> jsop_copylexicalenv(bool copySlots);
     AbortReasonOr<Ok> jsop_functionthis();
     AbortReasonOr<Ok> jsop_globalthis();
     AbortReasonOr<Ok> jsop_typeof();
@@ -577,6 +579,7 @@ class IonBuilder
     AbortReasonOr<Ok> jsop_debugger();
     AbortReasonOr<Ok> jsop_newtarget();
     AbortReasonOr<Ok> jsop_checkisobj(uint8_t kind);
+    AbortReasonOr<Ok> jsop_checkiscallable(uint8_t kind);
     AbortReasonOr<Ok> jsop_checkobjcoercible();
     AbortReasonOr<Ok> jsop_pushcallobj();
 

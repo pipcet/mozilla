@@ -172,6 +172,8 @@ namespace jit {
     _(LoadSlot)                                                             \
     _(StoreSlot)                                                            \
     _(FunctionEnvironment)                                                  \
+    _(NewLexicalEnvironmentObject)                                          \
+    _(CopyLexicalEnvironmentObject)                                         \
     _(FilterTypeSet)                                                        \
     _(TypeBarrier)                                                          \
     _(MonitorTypes)                                                         \
@@ -285,6 +287,7 @@ namespace jit {
     _(ArrowNewTarget)                                                       \
     _(CheckReturn)                                                          \
     _(CheckIsObj)                                                           \
+    _(CheckIsCallable)                                                      \
     _(CheckObjCoercible)                                                    \
     _(DebugCheckSelfHosted)                                                 \
     _(AsmJSNeg)                                                             \

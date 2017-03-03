@@ -44,7 +44,7 @@ describe("PageError component:", () => {
     const locationLink = wrapper.find(`.message-location`);
     expect(locationLink.length).toBe(1);
     // @TODO Will likely change. See bug 1307952
-    expect(locationLink.text()).toBe("test-tempfile.js:3:5");
+    expect(locationLink.text()).toBe("test-console-api.html:3:5");
   });
 
   it("displays a [Learn more] link", () => {
@@ -76,9 +76,9 @@ describe("PageError component:", () => {
     // There should be a collapse button.
     expect(wrapper.find(".theme-twisty.open").length).toBe(1);
 
-    // There should be three stacktrace items.
+    // There should be five stacktrace items.
     const frameLinks = wrapper.find(`.stack-trace span.frame-link`);
-    expect(frameLinks.length).toBe(3);
+    expect(frameLinks.length).toBe(5);
   });
 
   it("toggle the stacktrace when the collapse button is clicked", () => {
@@ -222,5 +222,23 @@ describe("PageError component:", () => {
     const locationLink3 = note3.find(`.message-location`);
     expect(locationLink3.length).toBe(1);
     expect(locationLink3.text()).toBe("test3.js:9:4");
+  });
+
+  it("displays error notes", () => {
+    const message = stubPreparedMessages.get("SyntaxError: redeclaration of let a");
+
+    let wrapper = render(PageError({ message, serviceContainer }));
+
+    const notes = wrapper.find(".error-note");
+    expect(notes.length).toBe(1);
+
+    const note = notes.eq(0);
+    expect(note.find(".message-body").text())
+      .toBe("note: Previously declared at line 2, column 6");
+
+    // There should be the location.
+    const locationLink = note.find(`.message-location`);
+    expect(locationLink.length).toBe(1);
+    expect(locationLink.text()).toBe("test-console-api.html:2:6");
   });
 });

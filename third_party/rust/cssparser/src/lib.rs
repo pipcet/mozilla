@@ -68,12 +68,17 @@ fn parse_border_spacing(_context: &ParserContext, input: &mut Parser)
 
 #![recursion_limit="200"]  // For color::parse_color_keyword
 
+#[macro_use] extern crate cssparser_macros;
 #[macro_use] extern crate matches;
+#[macro_use] extern crate procedural_masquerade;
+#[doc(hidden)] pub extern crate phf as _internal__phf;
 #[cfg(test)] extern crate encoding_rs;
 #[cfg(test)] extern crate tempdir;
 #[cfg(test)] extern crate rustc_serialize;
 #[cfg(feature = "serde")] extern crate serde;
 #[cfg(feature = "heapsize")] #[macro_use] extern crate heapsize;
+
+pub use cssparser_macros::*;
 
 pub use tokenizer::{Token, NumericValue, PercentageValue, SourceLocation};
 pub use rules_and_declarations::{parse_important};
@@ -87,70 +92,16 @@ pub use serializer::{ToCss, CssStringWriter, serialize_identifier, serialize_str
 pub use parser::{Parser, Delimiter, Delimiters, SourcePosition};
 pub use unicode_range::UnicodeRange;
 
+// For macros
+#[doc(hidden)] pub use macros::_internal__to_lowercase;
 
-/**
+// For macros when used in this crate. Unsure how $crate works with procedural-masquerade.
+mod cssparser { pub use _internal__phf; }
 
-This macro is equivalent to a `match` expression on an `&str` value,
-but matching is case-insensitive in the ASCII range.
-
-Usage example:
-
-```{rust,ignore}
-match_ignore_ascii_case! { string,
-    "foo" => Some(Foo),
-    "bar" => Some(Bar),
-    "baz" => Some(Baz),
-    _ => None
-}
-```
-
-The macro also takes a slice of the value,
-so that a `String` or `CowString` could be passed directly instead of a `&str`.
-
-*/
-#[macro_export]
-macro_rules! match_ignore_ascii_case {
-    // parse the last case plus the fallback
-    (@inner $value:expr, ($string:expr => $result:expr, _ => $fallback:expr) -> ($($parsed:tt)*) ) => {
-        match_ignore_ascii_case!(@inner $value, () -> ($($parsed)* ($string => $result)) $fallback)
-    };
-
-    // parse a case (not the last one)
-    (@inner $value:expr, ($string:expr => $result:expr, $($rest:tt)*) -> ($($parsed:tt)*) ) => {
-        match_ignore_ascii_case!(@inner $value, ($($rest)*) -> ($($parsed)* ($string => $result)))
-    };
-
-    // finished parsing
-    (@inner $value:expr, () -> ($(($string:expr => $result:expr))*) $fallback:expr ) => {
-        {
-            use std::ascii::AsciiExt;
-            match &$value[..] {
-                $(
-                    s if s.eq_ignore_ascii_case($string) => $result,
-                )+
-                _ => $fallback
-            }
-        }
-    };
-
-    // entry point, start parsing
-    ( $value:expr, $($rest:tt)* ) => {
-        match_ignore_ascii_case!(@inner $value, ($($rest)*) -> ())
-    };
-}
+#[macro_use]
+mod macros;
 
 mod rules_and_declarations;
-
-#[cfg(feature = "dummy_match_byte")]
-macro_rules! match_byte {
-    ($value:expr, $($rest:tt)* ) => {
-        match $value {
-            $(
-                $rest
-            )+
-        }
-    };
-}
 
 #[cfg(feature = "dummy_match_byte")]
 mod tokenizer;

@@ -3038,12 +3038,6 @@ jit::AssertExtendedGraphCoherency(MIRGraph& graph, bool underValueNumberer, bool
         for (MPhiIterator iter(block->phisBegin()), end(block->phisEnd()); iter != end; ++iter) {
             MPhi* phi = *iter;
             for (size_t i = 0, e = phi->numOperands(); i < e; ++i) {
-                // We sometimes see a phi with a magic-optimized-arguments
-                // operand defined in the normal entry block, while the phi is
-                // also reachable from the OSR entry (auto-regress/bug779818.js)
-                if (phi->getOperand(i)->type() == MIRType::MagicOptimizedArguments)
-                    continue;
-
                 MOZ_ASSERT(phi->getOperand(i)->block()->dominates(block->getPredecessor(i)),
                            "Phi input is not dominated by its operand");
             }
@@ -4412,8 +4406,14 @@ jit::AnalyzeArgumentsUsage(JSContext* cx, JSScript* scriptArg)
     // direct eval is present.
     //
     // FIXME: Don't build arguments for ES6 generator expressions.
-    if (scriptArg->isDebuggee() || script->isGenerator() || script->bindingsAccessedDynamically())
+    if (scriptArg->isDebuggee() ||
+        script->isStarGenerator() ||
+        script->isLegacyGenerator() ||
+        script->isAsync() ||
+        script->bindingsAccessedDynamically())
+    {
         return true;
+    }
 
     if (!jit::IsIonEnabled(cx))
         return true;

@@ -41,8 +41,7 @@ add_task(function* () {
     header("Cache-Control: no-cache")
   ];
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/actions/index");
+  let { document } = monitor.panelWin;
 
   let wait = waitForNetworkEvents(monitor, 1);
   yield ContentTask.spawn(tab.linkedBrowser, SIMPLE_SJS, function* (url) {
@@ -59,7 +58,7 @@ add_task(function* () {
     // Context menu is appending in XUL document, we must select it from
     // toolbox.doc
     monitor.toolbox.doc
-      .querySelector("#request-menu-context-copy-as-curl").click();
+      .querySelector("#request-list-context-copy-as-curl").click();
   }, function validate(result) {
     if (typeof result !== "string") {
       return false;

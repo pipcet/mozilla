@@ -97,6 +97,10 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
 #endif
     activeContext_(nullptr),
     activeContextChangeProhibited_(0),
+    singleThreadedExecutionRequired_(0),
+    startingSingleThreadedExecution_(false),
+    beginSingleThreadedExecutionCallback(nullptr),
+    endSingleThreadedExecutionCallback(nullptr),
     profilerSampleBufferGen_(0),
     profilerSampleBufferLapCount_(1),
     telemetryCallback(nullptr),
@@ -250,6 +254,9 @@ JSRuntime::init(JSContext* cx, uint32_t maxbytes, uint32_t maxNurseryBytes)
             return false;
     }
 
+    if (!caches().init())
+        return false;
+
     return true;
 }
 
@@ -305,6 +312,7 @@ JSRuntime::destroyRuntime()
 
     MOZ_ASSERT(ionLazyLinkListSize_ == 0);
     MOZ_ASSERT(ionLazyLinkList().isEmpty());
+    MOZ_ASSERT_IF(!geckoProfiler().enabled(), !singleThreadedExecutionRequired_);
 
     MOZ_ASSERT(!hasHelperThreadZones());
     AutoLockForExclusiveAccess lock(this);
@@ -331,14 +339,80 @@ JSRuntime::destroyRuntime()
     MOZ_ASSERT(oldCount > 0);
 }
 
+static void
+CheckCanChangeActiveContext(JSRuntime* rt)
+{
+    MOZ_RELEASE_ASSERT(!rt->activeContextChangeProhibited());
+    MOZ_RELEASE_ASSERT(!rt->activeContext() || rt->gc.canChangeActiveContext(rt->activeContext()));
+
+    if (rt->singleThreadedExecutionRequired()) {
+        for (ZoneGroupsIter group(rt); !group.done(); group.next())
+            MOZ_RELEASE_ASSERT(group->ownerContext().context() == nullptr);
+    }
+}
+
 void
 JSRuntime::setActiveContext(JSContext* cx)
 {
-    MOZ_ASSERT_IF(cx, isCooperatingContext(cx));
-    MOZ_RELEASE_ASSERT(!activeContextChangeProhibited());
-    MOZ_RELEASE_ASSERT(gc.canChangeActiveContext(cx));
+    CheckCanChangeActiveContext(this);
+    MOZ_ASSERT_IF(cx, cx->isCooperativelyScheduled());
 
     activeContext_ = cx;
+}
+
+void
+JSRuntime::setNewbornActiveContext(JSContext* cx)
+{
+    CheckCanChangeActiveContext(this);
+
+    activeContext_ = cx;
+
+    AutoEnterOOMUnsafeRegion oomUnsafe;
+    if (!cooperatingContexts().append(cx))
+        oomUnsafe.crash("Add cooperating context");
+}
+
+void
+JSRuntime::deleteActiveContext(JSContext* cx)
+{
+    CheckCanChangeActiveContext(this);
+    MOZ_ASSERT(cx == activeContext());
+
+    js_delete_poison(cx);
+    activeContext_ = nullptr;
+}
+
+bool
+JSRuntime::beginSingleThreadedExecution(JSContext* cx)
+{
+    if (singleThreadedExecutionRequired_ == 0) {
+        if (startingSingleThreadedExecution_)
+            return false;
+        startingSingleThreadedExecution_ = true;
+        if (beginSingleThreadedExecutionCallback)
+            beginSingleThreadedExecutionCallback(cx);
+        MOZ_ASSERT(startingSingleThreadedExecution_);
+        startingSingleThreadedExecution_ = false;
+    }
+
+    singleThreadedExecutionRequired_++;
+
+    for (ZoneGroupsIter group(this); !group.done(); group.next()) {
+        MOZ_RELEASE_ASSERT(group->ownedByCurrentThread() ||
+                           group->ownerContext().context() == nullptr);
+    }
+
+    return true;
+}
+
+void
+JSRuntime::endSingleThreadedExecution(JSContext* cx)
+{
+    MOZ_ASSERT(singleThreadedExecutionRequired_);
+    if (--singleThreadedExecutionRequired_ == 0) {
+        if (endSingleThreadedExecutionCallback)
+            endSingleThreadedExecutionCallback(cx);
+    }
 }
 
 void
@@ -377,19 +451,15 @@ JSRuntime::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::Runtim
         rtSizes->interpreterStack += cx->interpreterStack().sizeOfExcludingThis(mallocSizeOf);
     }
 
-    for (ZoneGroupsIter group(this); !group.done(); group.next()) {
-        ZoneGroupCaches& caches = group->caches();
+    if (MathCache* cache = caches().maybeGetMathCache())
+        rtSizes->mathCache += cache->sizeOfIncludingThis(mallocSizeOf);
 
-        if (MathCache* cache = caches.maybeGetMathCache())
-            rtSizes->mathCache += cache->sizeOfIncludingThis(mallocSizeOf);
+    rtSizes->uncompressedSourceCache +=
+        caches().uncompressedSourceCache.sizeOfExcludingThis(mallocSizeOf);
 
-        rtSizes->uncompressedSourceCache +=
-            caches.uncompressedSourceCache.sizeOfExcludingThis(mallocSizeOf);
-
-        rtSizes->gc.nurseryCommitted += group->nursery().sizeOfHeapCommitted();
-        rtSizes->gc.nurseryMallocedBuffers += group->nursery().sizeOfMallocedBuffers(mallocSizeOf);
-        group->storeBuffer().addSizeOfExcludingThis(mallocSizeOf, &rtSizes->gc);
-    }
+    rtSizes->gc.nurseryCommitted += gc.nursery().sizeOfHeapCommitted();
+    rtSizes->gc.nurseryMallocedBuffers += gc.nursery().sizeOfMallocedBuffers(mallocSizeOf);
+    gc.storeBuffer().addSizeOfExcludingThis(mallocSizeOf, &rtSizes->gc);
 
     if (sharedImmutableStrings_) {
         rtSizes->sharedImmutableStringsCache +=
@@ -608,7 +678,7 @@ JSObject*
 JSRuntime::getIncumbentGlobal(JSContext* cx)
 {
     MOZ_ASSERT(cx->runtime()->getIncumbentGlobalCallback,
-               "Must set a callback using JS_SetGetIncumbentGlobalCallback before using Promises");
+               "Must set a callback using SetGetIncumbentGlobalCallback before using Promises");
 
     return cx->runtime()->getIncumbentGlobalCallback(cx);
 }

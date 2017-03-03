@@ -20,7 +20,6 @@
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/indexedDB/ActorsParent.h"
 #include "mozilla/dom/ipc/BlobParent.h"
-#include "mozilla/plugins/PluginWidgetParent.h"
 #include "mozilla/EventStateManager.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/DataSurfaceHelpers.h"
@@ -32,6 +31,7 @@
 #include "mozilla/layers/AsyncDragMetrics.h"
 #include "mozilla/layers/InputAPZContext.h"
 #include "mozilla/layout/RenderFrameParent.h"
+#include "mozilla/plugins/PPluginWidgetParent.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/net/NeckoChild.h"
@@ -99,6 +99,10 @@
 #include "mozilla/WebBrowserPersistDocumentParent.h"
 #include "nsIGroupedSHistory.h"
 #include "PartialSHistory.h"
+
+#ifdef XP_WIN
+#include "mozilla/plugins/PluginWidgetParent.h"
+#endif
 
 #if defined(XP_WIN) && defined(ACCESSIBILITY)
 #include "mozilla/a11y/AccessibleWrap.h"
@@ -386,6 +390,7 @@ TabParent::DestroyInternal()
     frame->Destroy();
   }
 
+#ifdef XP_WIN
   // Let all PluginWidgets know we are tearing down. Prevents
   // these objects from sending async events after the child side
   // is shut down.
@@ -395,6 +400,7 @@ TabParent::DestroyInternal()
     static_cast<mozilla::plugins::PluginWidgetParent*>(
        iter.Get()->GetKey())->ParentDestroy();
   }
+#endif
 }
 
 void
@@ -917,7 +923,6 @@ TabParent::RecvPDocAccessibleConstructor(PDocAccessibleParent* aDoc,
 {
 #ifdef ACCESSIBILITY
   auto doc = static_cast<a11y::DocAccessibleParent*>(aDoc);
-  doc->AddToMap();
 
   // If this tab is already shutting down just mark the new actor as shutdown
   // and ignore it.  When the tab actor is destroyed it will be too.
@@ -937,18 +942,22 @@ TabParent::RecvPDocAccessibleConstructor(PDocAccessibleParent* aDoc,
 
     auto parentDoc = static_cast<a11y::DocAccessibleParent*>(aParentDoc);
     mozilla::ipc::IPCResult added = parentDoc->AddChildDoc(doc, aParentID);
+    if (!added) {
+#ifdef DEBUG
+      return added;
+#else
+      return IPC_OK();
+#endif
+    }
+
 #ifdef XP_WIN
     MOZ_ASSERT(aDocCOMProxy.IsNull());
-    if (added) {
-      a11y::WrapperFor(doc)->SetID(aMsaaID);
-      if (a11y::nsWinUtils::IsWindowEmulationStarted()) {
-        doc->SetEmulatedWindowHandle(parentDoc->GetEmulatedWindowHandle());
-      }
+    a11y::WrapperFor(doc)->SetID(aMsaaID);
+    if (a11y::nsWinUtils::IsWindowEmulationStarted()) {
+      doc->SetEmulatedWindowHandle(parentDoc->GetEmulatedWindowHandle());
     }
 #endif
-    if (!added) {
-      return added;
-    }
+
     return IPC_OK();
   } else {
     // null aParentDoc means this document is at the top level in the child
@@ -2681,10 +2690,16 @@ TabParent::GetLoadContext()
   } else {
     bool isPrivate = mChromeFlags & nsIWebBrowserChrome::CHROME_PRIVATE_WINDOW;
     SetPrivateBrowsingAttributes(isPrivate);
+    bool useTrackingProtection = false;
+    nsCOMPtr<nsIDocShell> docShell = mFrameElement->OwnerDoc()->GetDocShell();
+    if (docShell) {
+      docShell->GetUseTrackingProtection(&useTrackingProtection);
+    }
     loadContext = new LoadContext(GetOwnerElement(),
                                   true /* aIsContent */,
                                   isPrivate,
                                   mChromeFlags & nsIWebBrowserChrome::CHROME_REMOTE_WINDOW,
+                                  useTrackingProtection,
                                   OriginAttributesRef());
     mLoadContext = loadContext;
   }
@@ -2879,7 +2894,12 @@ TabParent::RecvRemotePaintIsReady()
 mozilla::plugins::PPluginWidgetParent*
 TabParent::AllocPPluginWidgetParent()
 {
+#ifdef XP_WIN
   return new mozilla::plugins::PluginWidgetParent();
+#else
+  MOZ_ASSERT_UNREACHABLE();
+  return nullptr;
+#endif
 }
 
 bool
@@ -2994,7 +3014,8 @@ public:
   NS_IMETHOD GetOriginAttributes(JS::MutableHandleValue) NO_IMPL
   NS_IMETHOD GetUseRemoteTabs(bool*) NO_IMPL
   NS_IMETHOD SetRemoteTabs(bool) NO_IMPL
-  NS_IMETHOD IsTrackingProtectionOn(bool*) NO_IMPL
+  NS_IMETHOD GetUseTrackingProtection(bool*) NO_IMPL
+  NS_IMETHOD SetUseTrackingProtection(bool) NO_IMPL
 #undef NO_IMPL
 
 protected:

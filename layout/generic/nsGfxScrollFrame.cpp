@@ -1106,7 +1106,7 @@ nsHTMLScrollFrame::Reflow(nsPresContext*           aPresContext,
 
   mHelper.UpdatePrevScrolledRect();
 
-  aStatus = NS_FRAME_COMPLETE;
+  aStatus.Reset();
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowInput, aDesiredSize);
   mHelper.PostOverflowEvent();
 }
@@ -2151,7 +2151,7 @@ ScrollFrameHelper::CompleteAsyncScroll(const nsRect &aRange, nsIAtom* aOrigin)
   // Apply desired destination range since this is the last step of scrolling.
   mAsyncSmoothMSDScroll = nullptr;
   mAsyncScroll = nullptr;
-  nsWeakFrame weakFrame(mOuter);
+  AutoWeakFrame weakFrame(mOuter);
   ScrollToImpl(mDestination, aRange, aOrigin);
   if (!weakFrame.IsAlive()) {
     return;
@@ -2904,7 +2904,7 @@ ScrollFrameHelper::ScrollToImpl(nsPoint aPt, const nsRect& aRange, nsIAtom* aOri
 
   { // scope the AutoScrollbarRepaintSuppression
     AutoScrollbarRepaintSuppression repaintSuppression(this, !schedulePaint);
-    nsWeakFrame weakFrame(mOuter);
+    AutoWeakFrame weakFrame(mOuter);
     UpdateScrollbarPosition();
     if (!weakFrame.IsAlive()) {
       return;
@@ -2991,7 +2991,10 @@ AppendToTop(nsDisplayListBuilder* aBuilder, const nsDisplayListSet& aLists,
     uint32_t flags = (aFlags & APPEND_SCROLLBAR_CONTAINER)
                      ? nsDisplayOwnLayer::SCROLLBAR_CONTAINER
                      : 0;
-    newItem = new (aBuilder) nsDisplayOwnLayer(aBuilder, aSourceFrame, aSource, asr, flags);
+    FrameMetrics::ViewID scrollTarget = (aFlags & APPEND_SCROLLBAR_CONTAINER)
+                                        ? aBuilder->GetCurrentScrollbarTarget()
+                                        : FrameMetrics::NULL_SCROLL_ID;
+    newItem = new (aBuilder) nsDisplayOwnLayer(aBuilder, aSourceFrame, aSource, asr, flags, scrollTarget);
   } else {
     newItem = new (aBuilder) nsDisplayWrapList(aBuilder, aSourceFrame, aSource, asr);
   }
@@ -3097,7 +3100,8 @@ ScrollFrameHelper::AppendScrollPartsTo(nsDisplayListBuilder*   aBuilder,
     // Always create layers for overlay scrollbars so that we don't create a
     // giant layer covering the whole scrollport if both scrollbars are visible.
     bool isOverlayScrollbar = (flags != 0) && overlayScrollbars;
-    bool createLayer = aCreateLayer || isOverlayScrollbar;
+    bool createLayer = aCreateLayer || isOverlayScrollbar ||
+        gfxPrefs::AlwaysLayerizeScrollbarTrackTestOnly();
 
     nsDisplayListBuilder::AutoCurrentScrollbarInfoSetter
       infoSetter(aBuilder, scrollTargetId, flags, createLayer);
@@ -4013,7 +4017,7 @@ ScrollFrameHelper::ScrollBy(nsIntPoint aDelta,
                rangeLowerY,
                rangeUpperX - rangeLowerX,
                rangeUpperY - rangeLowerY);
-  nsWeakFrame weakFrame(mOuter);
+  AutoWeakFrame weakFrame(mOuter);
   ScrollToWithOrigin(newPos, aMode, aOrigin, &range);
   if (!weakFrame.IsAlive()) {
     return;
@@ -4220,7 +4224,7 @@ ScrollFrameHelper::ScrollToRestoredPosition()
         scrollToPos.x = mScrollPort.x -
           (mScrollPort.XMost() - scrollToPos.x - mScrolledFrame->GetRect().width);
       }
-      nsWeakFrame weakFrame(mOuter);
+      AutoWeakFrame weakFrame(mOuter);
       ScrollToWithOrigin(scrollToPos, nsIScrollableFrame::INSTANT,
                          nsGkAtoms::restore, nullptr);
       if (!weakFrame.IsAlive()) {
@@ -4597,7 +4601,7 @@ ScrollFrameHelper::Destroy()
 void
 ScrollFrameHelper::UpdateScrollbarPosition()
 {
-  nsWeakFrame weakFrame(mOuter);
+  AutoWeakFrame weakFrame(mOuter);
   mFrameIsUpdatingScrollbar = true;
 
   nsPoint pt = GetScrollPosition();
@@ -4669,7 +4673,7 @@ void ScrollFrameHelper::CurPosAttributeChanged(nsIContent* aContent)
     // didn't actually move yet.  We need to make sure other listeners
     // see that the scroll position is not (yet) what they thought it
     // was.
-    nsWeakFrame weakFrame(mOuter);
+    AutoWeakFrame weakFrame(mOuter);
     UpdateScrollbarPosition();
     if (!weakFrame.IsAlive()) {
       return;
@@ -4709,6 +4713,7 @@ ScrollFrameHelper::ScrollEvent::WillRefresh(mozilla::TimeStamp aTime)
 void
 ScrollFrameHelper::FireScrollEvent()
 {
+  GeckoProfilerTracingRAII tracer("Paint", "FireScrollEvent");
   MOZ_ASSERT(mScrollEvent);
   mScrollEvent = nullptr;
 
@@ -5304,7 +5309,7 @@ ScrollFrameHelper::ReflowFinished()
   // for scrollbars. XXXmats is this still true now that we have a script
   // blocker in this scope? (if not, remove the weak frame checks below).
   if (vScroll || hScroll) {
-    nsWeakFrame weakFrame(mOuter);
+    AutoWeakFrame weakFrame(mOuter);
     nsPoint scrollPos = GetScrollPosition();
     nsSize lineScrollAmount = GetLineScrollAmount();
     if (vScroll) {
@@ -5668,7 +5673,7 @@ ScrollFrameHelper::SetCoordAttribute(nsIContent* aContent, nsIAtom* aAtom,
   if (aContent->AttrValueIs(kNameSpaceID_None, aAtom, newValue, eCaseMatters))
     return;
 
-  nsWeakFrame weakFrame(mOuter);
+  AutoWeakFrame weakFrame(mOuter);
   nsCOMPtr<nsIContent> kungFuDeathGrip = aContent;
   aContent->SetAttr(kNameSpaceID_None, aAtom, newValue, true);
   MOZ_ASSERT(ShellIsAlive(weakShell), "pres shell was destroyed by scrolling");

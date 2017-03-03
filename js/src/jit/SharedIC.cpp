@@ -1534,6 +1534,17 @@ DoCompareFallback(JSContext* cx, void* payload, ICCompare_Fallback* stub_, Handl
             return true;
         }
 
+        if (lhs.isSymbol() && rhs.isSymbol() && !stub->hasStub(ICStub::Compare_Symbol)) {
+            JitSpew(JitSpew_BaselineIC, "  Generating %s(Symbol, Symbol) stub", CodeName[op]);
+            ICCompare_Symbol::Compiler compiler(cx, op, engine);
+            ICStub* symbolStub = compiler.getStub(compiler.getStubSpace(info.outerScript(cx)));
+            if (!symbolStub)
+                return false;
+
+            stub->addNewStub(symbolStub);
+            return true;
+        }
+
         if (lhs.isObject() && rhs.isObject()) {
             MOZ_ASSERT(!stub->hasStub(ICStub::Compare_Object));
             JitSpew(JitSpew_BaselineIC, "  Generating %s(Object, Object) stub", CodeName[op]);
@@ -1546,13 +1557,10 @@ DoCompareFallback(JSContext* cx, void* payload, ICCompare_Fallback* stub_, Handl
             return true;
         }
 
-        if ((lhs.isObject() || lhs.isNull() || lhs.isUndefined()) &&
-            (rhs.isObject() || rhs.isNull() || rhs.isUndefined()) &&
-            !stub->hasStub(ICStub::Compare_ObjectWithUndefined))
-        {
-            JitSpew(JitSpew_BaselineIC, "  Generating %s(Obj/Null/Undef, Obj/Null/Undef) stub",
+        if (lhs.isNullOrUndefined() || rhs.isNullOrUndefined()) {
+            JitSpew(JitSpew_BaselineIC, "  Generating %s(Null/Undef or X, Null/Undef or X) stub",
                     CodeName[op]);
-            bool lhsIsUndefined = lhs.isNull() || lhs.isUndefined();
+            bool lhsIsUndefined = lhs.isNullOrUndefined();
             bool compareWithNull = lhs.isNull() || rhs.isNull();
             ICCompare_ObjectWithUndefined::Compiler compiler(cx, op, engine,
                                                              lhsIsUndefined, compareWithNull);
@@ -1619,6 +1627,38 @@ ICCompare_String::Compiler::generateStubCode(MacroAssembler& masm)
     masm.tagValue(JSVAL_TYPE_BOOLEAN, scratchReg, R0);
     EmitReturnFromIC(masm);
 
+    masm.bind(&failure);
+    EmitStubGuardFailure(masm);
+    return true;
+}
+
+//
+// Compare_Symbol
+//
+
+bool
+ICCompare_Symbol::Compiler::generateStubCode(MacroAssembler& masm)
+{
+    Label failure;
+    masm.branchTestSymbol(Assembler::NotEqual, R0, &failure);
+    masm.branchTestSymbol(Assembler::NotEqual, R1, &failure);
+
+    MOZ_ASSERT(IsEqualityOp(op));
+
+    Register left = masm.extractSymbol(R0, ExtractTemp0);
+    Register right = masm.extractSymbol(R1, ExtractTemp1);
+
+    Label ifTrue;
+    masm.branchPtr(JSOpToCondition(op, /* signed = */true), left, right, &ifTrue);
+
+    masm.moveValue(BooleanValue(false), R0);
+    EmitReturnFromIC(masm);
+
+    masm.bind(&ifTrue);
+    masm.moveValue(BooleanValue(true), R0);
+    EmitReturnFromIC(masm);
+
+    // Failure case - jump to next stub
     masm.bind(&failure);
     EmitStubGuardFailure(masm);
     return true;
@@ -1767,12 +1807,29 @@ ICCompare_ObjectWithUndefined::Compiler::generateStubCode(MacroAssembler& masm)
     masm.bind(&notObject);
 
     // Also support null == null or undefined == undefined comparisons.
+    Label differentTypes;
     if (compareWithNull)
-        masm.branchTestNull(Assembler::NotEqual, objectOperand, &failure);
+        masm.branchTestNull(Assembler::NotEqual, objectOperand, &differentTypes);
     else
-        masm.branchTestUndefined(Assembler::NotEqual, objectOperand, &failure);
+        masm.branchTestUndefined(Assembler::NotEqual, objectOperand, &differentTypes);
 
     masm.moveValue(BooleanValue(op == JSOP_STRICTEQ || op == JSOP_EQ), R0);
+    EmitReturnFromIC(masm);
+
+    masm.bind(&differentTypes);
+    // Also support null == undefined or undefined == null.
+    Label neverEqual;
+    if (compareWithNull)
+        masm.branchTestUndefined(Assembler::NotEqual, objectOperand, &neverEqual);
+    else
+        masm.branchTestNull(Assembler::NotEqual, objectOperand, &neverEqual);
+
+    masm.moveValue(BooleanValue(op == JSOP_EQ || op == JSOP_STRICTNE), R0);
+    EmitReturnFromIC(masm);
+
+    // null/undefined can only be equal to null/undefined or emulatesUndefined.
+    masm.bind(&neverEqual);
+    masm.moveValue(BooleanValue(op == JSOP_NE || op == JSOP_STRICTNE), R0);
     EmitReturnFromIC(masm);
 
     // Failure case - jump to next stub
@@ -1869,114 +1926,6 @@ StripPreliminaryObjectStubs(JSContext* cx, ICFallbackStub* stub)
     }
 }
 
-JSObject*
-GetDOMProxyProto(JSObject* obj)
-{
-    MOZ_ASSERT(IsCacheableDOMProxy(obj));
-    return obj->staticPrototype();
-}
-
-bool
-IsCacheableProtoChain(JSObject* obj, JSObject* holder, bool isDOMProxy)
-{
-    MOZ_ASSERT_IF(isDOMProxy, IsCacheableDOMProxy(obj));
-
-    if (!isDOMProxy && !obj->isNative()) {
-        if (obj == holder)
-            return false;
-        if (!obj->is<UnboxedPlainObject>() &&
-            !obj->is<UnboxedArrayObject>() &&
-            !obj->is<TypedObject>())
-        {
-            return false;
-        }
-    }
-
-    JSObject* cur = obj;
-    while (cur != holder) {
-        // We cannot assume that we find the holder object on the prototype
-        // chain and must check for null proto. The prototype chain can be
-        // altered during the lookupProperty call.
-        MOZ_ASSERT(!cur->hasDynamicPrototype());
-
-        // Don't handle objects which require a prototype guard. This should
-        // be uncommon so handling it is likely not worth the complexity.
-        if (cur->hasUncacheableProto())
-            return false;
-
-        JSObject* proto = cur->staticPrototype();
-        if (!proto || !proto->isNative())
-            return false;
-
-        cur = proto;
-    }
-
-    return true;
-}
-
-bool
-IsCacheableGetPropReadSlot(JSObject* obj, JSObject* holder, Shape* shape, bool isDOMProxy)
-{
-    if (!shape || !IsCacheableProtoChain(obj, holder, isDOMProxy))
-        return false;
-
-    if (!shape->hasSlot() || !shape->hasDefaultGetter())
-        return false;
-
-    return true;
-}
-
-void
-GetFixedOrDynamicSlotOffset(Shape* shape, bool* isFixed, uint32_t* offset)
-{
-    MOZ_ASSERT(isFixed);
-    MOZ_ASSERT(offset);
-    *isFixed = shape->slot() < shape->numFixedSlots();
-    *offset = *isFixed ? NativeObject::getFixedSlotOffset(shape->slot())
-                       : (shape->slot() - shape->numFixedSlots()) * sizeof(Value);
-}
-
-bool
-IsCacheableGetPropCall(JSContext* cx, JSObject* obj, JSObject* holder, Shape* shape,
-                       bool* isScripted, bool* isTemporarilyUnoptimizable, bool isDOMProxy)
-{
-    MOZ_ASSERT(isScripted);
-
-    if (!shape || !IsCacheableProtoChain(obj, holder, isDOMProxy))
-        return false;
-
-    if (shape->hasSlot() || shape->hasDefaultGetter())
-        return false;
-
-    if (!shape->hasGetterValue())
-        return false;
-
-    if (!shape->getterValue().isObject() || !shape->getterObject()->is<JSFunction>())
-        return false;
-
-    JSFunction* func = &shape->getterObject()->as<JSFunction>();
-    if (IsWindow(obj)) {
-        if (!func->isNative())
-            return false;
-
-        if (!func->jitInfo() || func->jitInfo()->needsOuterizedThisObject())
-            return false;
-    }
-
-    if (func->isNative()) {
-        *isScripted = false;
-        return true;
-    }
-
-    if (!func->hasJITCode()) {
-        *isTemporarilyUnoptimizable = true;
-        return false;
-    }
-
-    *isScripted = true;
-    return true;
-}
-
 bool
 CheckHasNoSuchProperty(JSContext* cx, JSObject* obj, jsid id,
                        JSObject** lastProto, size_t* protoChainDepthOut)
@@ -2038,10 +1987,10 @@ ComputeGetPropResult(JSContext* cx, BaselineFrame* frame, JSOp op, HandlePropert
             res.setObject(*frame->callee());
         }
     } else {
-        if (op == JSOP_GETXPROP) {
-            RootedObject obj(cx, &val.toObject());
+        if (op == JSOP_GETBOUNDNAME) {
+            RootedObject env(cx, &val.toObject());
             RootedId id(cx, NameToId(name));
-            if (!GetPropertyForNameLookup(cx, obj, id, res))
+            if (!GetNameBoundInEnvironment(cx, env, id, res))
                 return false;
         } else {
             MOZ_ASSERT(op == JSOP_GETPROP || op == JSOP_CALLPROP || op == JSOP_LENGTH);
@@ -2067,7 +2016,10 @@ DoGetPropFallback(JSContext* cx, BaselineFrame* frame, ICGetProp_Fallback* stub_
     JSOp op = JSOp(*pc);
     FallbackICSpew(cx, stub, "GetProp(%s)", CodeName[op]);
 
-    MOZ_ASSERT(op == JSOP_GETPROP || op == JSOP_CALLPROP || op == JSOP_LENGTH || op == JSOP_GETXPROP);
+    MOZ_ASSERT(op == JSOP_GETPROP ||
+               op == JSOP_CALLPROP ||
+               op == JSOP_LENGTH ||
+               op == JSOP_GETBOUNDNAME);
 
     // Grab our old shape before it goes away.
     RootedShape oldShape(cx);
@@ -2196,21 +2148,6 @@ ICGetProp_Fallback::Compiler::postGenerateStubCode(MacroAssembler& masm, Handle<
         void* address = code->raw() + returnOffset_;
         cx->compartment()->jitCompartment()->initBaselineGetPropReturnAddr(address);
     }
-}
-
-bool
-GetProtoShapes(JSObject* obj, size_t protoChainDepth, MutableHandle<ShapeVector> shapes)
-{
-    JSObject* curProto = obj->staticPrototype();
-    for (size_t i = 0; i < protoChainDepth; i++) {
-        if (!shapes.append(curProto->as<NativeObject>().lastProperty()))
-            return false;
-        curProto = curProto->staticPrototype();
-    }
-
-    MOZ_ASSERT(!curProto,
-               "longer prototype chain encountered than this stub permits!");
-    return true;
 }
 
 /* static */ ICGetProp_Generic*

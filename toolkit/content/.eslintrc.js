@@ -1,7 +1,11 @@
 "use strict";
 
 module.exports = {
-  "rules": {
-    "no-undef": "off"
-  }
+  "env": {
+    "mozilla/browser-window": true,
+  },
+
+  "plugins": [
+    "mozilla"
+  ],
 };

@@ -796,11 +796,13 @@ public:
   static bool IsDraggableLink(const nsIContent* aContent);
 
   /**
-   * Convenience method to create a new nodeinfo that differs only by name
-   * from aNodeInfo.
+   * Convenience method to create a new nodeinfo that differs only by prefix and
+   * name from aNodeInfo. The new nodeinfo's name is set to aName, and prefix is
+   * set to null.
    */
-  static nsresult NameChanged(mozilla::dom::NodeInfo* aNodeInfo, nsIAtom* aName,
-                              mozilla::dom::NodeInfo** aResult);
+  static nsresult QNameChanged(mozilla::dom::NodeInfo* aNodeInfo,
+                               nsIAtom* aName,
+                               mozilla::dom::NodeInfo** aResult);
 
   /**
    * Returns the appropriate event argument names for the specified
@@ -2804,6 +2806,9 @@ public:
                                     const mozilla::dom::Sequence<JSObject*>& aTransfer,
                                     JS::MutableHandle<JS::Value> aValue);
 
+  static bool
+  IsWebComponentsEnabled() { return sIsWebComponentsEnabled; }
+
 private:
   static bool InitializeEventTable();
 
@@ -2910,6 +2915,7 @@ private:
   static bool sIsUserTimingLoggingEnabled;
   static bool sIsFrameTimingPrefEnabled;
   static bool sIsExperimentalAutocompleteEnabled;
+  static bool sIsWebComponentsEnabled;
   static bool sEncodeDecodeURLHash;
   static bool sGettersDecodeURLHash;
   static bool sPrivacyResistFingerprinting;

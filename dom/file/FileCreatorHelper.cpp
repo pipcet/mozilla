@@ -31,7 +31,7 @@ FileCreatorHelper::CreateFile(nsIGlobalObject* aGlobalObject,
                               bool aIsFromNsIFile,
                               ErrorResult& aRv)
 {
-  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread());
 
   RefPtr<Promise> promise = Promise::Create(aGlobalObject, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
@@ -82,7 +82,8 @@ FileCreatorHelper::CreateFileInternal(nsPIDOMWindowInner* aWindow,
 
   RefPtr<BlobImpl> blobImpl;
   aRv = CreateBlobImpl(aFile, aBag.mType, aBag.mName, lastModifiedPassed,
-                       lastModified, aIsFromNsIFile, getter_AddRefs(blobImpl));
+                       lastModified, aBag.mExistenceCheck, aIsFromNsIFile,
+                       getter_AddRefs(blobImpl));
   if (aRv.Failed()) {
      return nullptr;
   }
@@ -130,7 +131,8 @@ FileCreatorHelper::SendRequest(nsIFile* aFile,
   }
 
   cc->FileCreationRequest(uuid, this, path, aBag.mType, aBag.mName,
-                          aBag.mLastModified, aIsFromNsIFile);
+                          aBag.mLastModified, aBag.mExistenceCheck,
+                          aIsFromNsIFile);
 }
 
 void
@@ -151,6 +153,7 @@ FileCreatorHelper::CreateBlobImplForIPC(const nsAString& aPath,
                                         const nsAString& aName,
                                         bool aLastModifiedPassed,
                                         int64_t aLastModified,
+                                        bool aExistenceCheck,
                                         bool aIsFromNsIFile,
                                         BlobImpl** aBlobImpl)
 {
@@ -161,7 +164,7 @@ FileCreatorHelper::CreateBlobImplForIPC(const nsAString& aPath,
   }
 
   return CreateBlobImpl(file, aType, aName, aLastModifiedPassed, aLastModified,
-                        aIsFromNsIFile, aBlobImpl);
+                        aExistenceCheck, aIsFromNsIFile, aBlobImpl);
 }
 
 /* static */ nsresult
@@ -170,9 +173,29 @@ FileCreatorHelper::CreateBlobImpl(nsIFile* aFile,
                                   const nsAString& aName,
                                   bool aLastModifiedPassed,
                                   int64_t aLastModified,
+                                  bool aExistenceCheck,
                                   bool aIsFromNsIFile,
                                   BlobImpl** aBlobImpl)
 {
+  if (!aExistenceCheck) {
+    RefPtr<FileBlobImpl> impl = new FileBlobImpl(aFile);
+
+    if (!aName.IsEmpty()) {
+      impl->SetName(aName);
+    }
+
+    if (!aType.IsEmpty()) {
+      impl->SetType(aType);
+    }
+
+    if (aLastModifiedPassed) {
+      impl->SetLastModified(aLastModified);
+    }
+
+    impl.forget(aBlobImpl);
+    return NS_OK;
+  }
+
   RefPtr<MultipartBlobImpl> impl = new MultipartBlobImpl(EmptyString());
   nsresult rv =
     impl->InitializeChromeFile(aFile, aType, aName, aLastModifiedPassed,

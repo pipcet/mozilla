@@ -345,7 +345,11 @@ pref("media.wmf.enabled", true);
 pref("media.wmf.decoder.thread-count", -1);
 pref("media.wmf.low-latency.enabled", false);
 pref("media.wmf.skip-blacklist", false);
+#ifdef NIGHTLY_BUILD
 pref("media.wmf.vp9.enabled", true);
+#else
+pref("media.wmf.vp9.enabled", false);
+#endif
 pref("media.wmf.allow-unsupported-resolutions", false);
 pref("media.windows-media-foundation.allow-d3d11-dxva", true);
 pref("media.wmf.disable-d3d11-for-dlls", "igd11dxva64.dll: 20.19.15.4463, 20.19.15.4454, 20.19.15.4444, 20.19.15.4416, 20.19.15.4404, 20.19.15.4390, 20.19.15.4380, 20.19.15.4377, 20.19.15.4364, 20.19.15.4360, 20.19.15.4352, 20.19.15.4331, 20.19.15.4326, 20.19.15.4300; igd10iumd32.dll: 20.19.15.4444, 20.19.15.4424, 20.19.15.4409, 20.19.15.4390, 20.19.15.4380, 20.19.15.4360, 10.18.10.4358, 20.19.15.4331, 20.19.15.4312, 20.19.15.4300, 10.18.15.4281, 10.18.15.4279, 10.18.10.4276, 10.18.15.4268, 10.18.15.4256, 10.18.10.4252, 10.18.15.4248, 10.18.14.4112, 10.18.10.3958, 10.18.10.3496, 10.18.10.3431, 10.18.10.3412, 10.18.10.3355, 9.18.10.3234, 9.18.10.3071, 9.18.10.3055, 9.18.10.3006; igd10umd32.dll: 9.17.10.4229, 9.17.10.3040, 9.17.10.2857, 8.15.10.2274, 8.15.10.2272, 8.15.10.2246, 8.15.10.1840, 8.15.10.1808; igd10umd64.dll: 9.17.10.4229, 9.17.10.2857, 10.18.10.3496; isonyvideoprocessor.dll: 4.1.2247.8090, 4.1.2153.6200; tosqep.dll: 1.2.15.526, 1.1.12.201, 1.0.11.318, 1.0.11.215, 1.0.10.1224; tosqep64.dll: 1.1.12.201, 1.0.11.215; nvwgf2um.dll: 10.18.13.6510, 10.18.13.5891, 10.18.13.5887, 10.18.13.5582, 10.18.13.5382, 9.18.13.4195, 9.18.13.3165; atidxx32.dll: 21.19.151.3, 21.19.142.257, 21.19.137.514, 21.19.137.1, 21.19.134.1, 21.19.128.7, 21.19.128.4, 20.19.0.32837, 20.19.0.32832, 8.17.10.682, 8.17.10.671, 8.17.10.661, 8.17.10.648, 8.17.10.644, 8.17.10.625, 8.17.10.605, 8.17.10.581, 8.17.10.569, 8.17.10.560, 8.17.10.545, 8.17.10.539, 8.17.10.531, 8.17.10.525, 8.17.10.520, 8.17.10.519, 8.17.10.514, 8.17.10.511, 8.17.10.494, 8.17.10.489, 8.17.10.483, 8.17.10.453, 8.17.10.451, 8.17.10.441, 8.17.10.436, 8.17.10.432, 8.17.10.425, 8.17.10.418, 8.17.10.414, 8.17.10.401, 8.17.10.395, 8.17.10.385, 8.17.10.378, 8.17.10.362, 8.17.10.355, 8.17.10.342, 8.17.10.331, 8.17.10.318, 8.17.10.310, 8.17.10.286, 8.17.10.269, 8.17.10.261, 8.17.10.247, 8.17.10.240, 8.15.10.212; atidxx64.dll: 21.19.151.3, 21.19.142.257, 21.19.137.514, 21.19.137.1, 21.19.134.1, 21.19.128.7, 21.19.128.4, 20.19.0.32832, 8.17.10.682, 8.17.10.661, 8.17.10.644, 8.17.10.625; nvumdshim.dll: 10.18.13.6822");
@@ -361,6 +365,9 @@ pref("media.libavcodec.allow-obsolete", false);
 #endif
 #if defined(MOZ_FFVPX)
 pref("media.ffvpx.enabled", true);
+#endif
+#if defined(MOZ_FFMPEG) || defined(MOZ_FFVPX)
+pref("media.ffmpeg.low-latency.enabled", false);
 #endif
 pref("media.gmp.decoder.enabled", false);
 pref("media.gmp.decoder.aac", 0);
@@ -716,6 +723,8 @@ pref("gfx.hidpi.enabled", 2);
 pref("layout.scroll.root-frame-containers", false);
 #endif
 
+pref("layout.scrollbars.always-layerize-track", false);
+
 // Whether to enable LayerScope tool and default listening port
 pref("gfx.layerscope.enabled", false);
 pref("gfx.layerscope.port", 23456);
@@ -747,6 +756,9 @@ pref("gfx.downloadable_fonts.otl_validation", false);
 #else
 pref("gfx.downloadable_fonts.otl_validation", true);
 #endif
+
+// Whether to preserve OpenType variation tables in fonts (bypassing OTS)
+pref("gfx.downloadable_fonts.keep_variation_tables", false);
 
 #ifdef ANDROID
 pref("gfx.bundled_fonts.enabled", true);
@@ -1254,11 +1266,7 @@ pref("privacy.trackingprotection.lower_network_priority",  false);
 
 pref("dom.event.contextmenu.enabled",       true);
 pref("dom.event.clipboardevents.enabled",   true);
-#if defined(XP_WIN) && !defined(RELEASE_OR_BETA) || defined(MOZ_WIDGET_GTK) && !defined(RELEASE_OR_BETA) || defined(XP_MACOSX) && !defined(RELEASE_OR_BETA)
 pref("dom.event.highrestimestamp.enabled",  true);
-#else
-pref("dom.event.highrestimestamp.enabled",  false);
-#endif
 
 pref("dom.webcomponents.enabled",           false);
 pref("dom.webcomponents.customelements.enabled", false);
@@ -1271,7 +1279,7 @@ pref("javascript.options.strict.debug",     false);
 pref("javascript.options.baselinejit",      true);
 pref("javascript.options.ion",              true);
 pref("javascript.options.asmjs",            true);
-pref("javascript.options.wasm",             false);
+pref("javascript.options.wasm",             true);
 pref("javascript.options.wasm_baselinejit", false);
 pref("javascript.options.native_regexp",    true);
 pref("javascript.options.parallel_parsing", true);
@@ -1484,8 +1492,9 @@ pref("network.http.accept.default", "text/html,application/xhtml+xml,application
 // Prefs allowing granular control of referers
 // 0=don't send any, 1=send only on clicks, 2=send on image requests as well
 pref("network.http.sendRefererHeader",      2);
-// 0=no referrer, 1=same origin, 2=strict-origin-when-cross-origin,
-// 3=no-referre-when-downgrade(default)
+// Set the default Referrer Policy to be used unless overriden by the site
+// 0=no-referrer, 1=same-origin, 2=strict-origin-when-cross-origin,
+// 3=no-referrer-when-downgrade
 pref("network.http.referer.userControlPolicy", 3);
 // false=real referer, true=spoof referer (use target URI as referer)
 pref("network.http.referer.spoofSource", false);
@@ -1509,27 +1518,6 @@ pref("network.http.redirection-limit", 20);
 // NOTE: separate values with comma+space (", "): see bug 576033
 pref("network.http.accept-encoding", "gzip, deflate");
 pref("network.http.accept-encoding.secure", "gzip, deflate, br");
-
-pref("network.http.pipelining"      , false);
-pref("network.http.pipelining.ssl"  , false); // disable pipelining over SSL
-pref("network.http.pipelining.abtest", false);
-pref("network.http.proxy.pipelining", false);
-
-// Max number of requests in the pipeline
-pref("network.http.pipelining.maxrequests" , 32);
-
-// An optimistic request is one pipelined when policy might allow a new
-// connection instead
-pref("network.http.pipelining.max-optimistic-requests" , 4);
-
-pref("network.http.pipelining.aggressive", false);
-pref("network.http.pipelining.maxsize" , 300000);
-pref("network.http.pipelining.reschedule-on-timeout", true);
-pref("network.http.pipelining.reschedule-timeout", 1500);
-
-// The read-timeout is a ms timer that causes the transaction to be completely
-// restarted without pipelining.
-pref("network.http.pipelining.read-timeout", 30000);
 
 // Prompt for redirects resulting in unsafe HTTP requests
 pref("network.http.prompt-temp-redirect", false);
@@ -2233,9 +2221,9 @@ pref("extensions.blocklist.interval", 86400);
 // Required blocklist freshness for OneCRL OCSP bypass
 // (default is 1.25x extensions.blocklist.interval, or 30 hours)
 pref("security.onecrl.maximum_staleness_in_seconds", 108000);
-pref("extensions.blocklist.url", "https://blocklist.addons.mozilla.org/blocklist/3/%APP_ID%/%APP_VERSION%/%PRODUCT%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/%PING_COUNT%/%TOTAL_PING_COUNT%/%DAYS_SINCE_LAST_PING%/");
-pref("extensions.blocklist.detailsURL", "https://www.mozilla.com/%LOCALE%/blocklist/");
-pref("extensions.blocklist.itemURL", "https://blocklist.addons.mozilla.org/%LOCALE%/%APP%/blocked/%blockID%");
+pref("extensions.blocklist.url", "https://blocklists.settings.services.mozilla.com/v1/blocklist/3/%APP_ID%/%APP_VERSION%/%PRODUCT%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/%PING_COUNT%/%TOTAL_PING_COUNT%/%DAYS_SINCE_LAST_PING%/");
+pref("extensions.blocklist.detailsURL", "https://blocked.cdn.mozilla.net/");
+pref("extensions.blocklist.itemURL", "https://blocked.cdn.mozilla.net/%blockID%.html");
 // Controls what level the blocklist switches from warning about items to forcibly
 // blocking them.
 pref("extensions.blocklist.level", 2);
@@ -2567,6 +2555,9 @@ pref("layout.css.convertFromNode.enabled", true);
 // Is support for CSS "text-align: unsafe X" enabled?
 pref("layout.css.text-align-unsafe-value.enabled", false);
 
+// Is support for CSS text-justify property enabled?
+pref("layout.css.text-justify.enabled", false);
+
 // Is support for CSS "float: inline-{start,end}" and
 // "clear: inline-{start,end}" enabled?
 #if defined(MOZ_B2G) || !defined(RELEASE_OR_BETA)
@@ -2614,9 +2605,6 @@ pref("layout.css.background-clip-text.enabled", true);
 pref("layout.css.text-combine-upright.enabled", true);
 // Is support for CSS text-combine-upright: digits 2-4 enabled?
 pref("layout.css.text-combine-upright-digits.enabled", false);
-
-// Is support for object-fit and object-position enabled?
-pref("layout.css.object-fit-and-position.enabled", true);
 
 // Is -moz-osx-font-smoothing enabled?
 // Only supported in OSX builds
@@ -2798,9 +2786,6 @@ pref("dom.max_script_run_time", 10);
 // Stop all scripts in a compartment when the "stop script" dialog is used.
 pref("dom.global_stop_script", true);
 
-// If true, ArchiveReader will be enabled
-pref("dom.archivereader.enabled", false);
-
 // Time (milliseconds) between throttled idle callbacks.
 pref("dom.idle_period.throttled_length", 10000);
 
@@ -2915,6 +2900,8 @@ pref("dom.ipc.plugins.asyncdrawing.enabled", false);
 #else
 // Allow the AsyncDrawing mode to be used for plugins in dev channels.
 pref("dom.ipc.plugins.asyncdrawing.enabled", true);
+// Force the accelerated path for a subset of Flash wmode values
+pref("dom.ipc.plugins.forcedirect.enabled", true);
 #endif
 
 #ifdef NIGHTLY_BUILD
@@ -2922,6 +2909,9 @@ pref("dom.ipc.processCount", 2);
 #else
 pref("dom.ipc.processCount", 1);
 #endif
+
+// WebExtensions only support a single extension process.
+pref("dom.ipc.processCount.extension", 1);
 
 // Disable support for SVG
 pref("svg.disabled", false);
@@ -4312,7 +4302,11 @@ pref("font.name.monospace.x-math", "Fira Mono");
 #elif defined(ANDROID)
 // We use the bundled fonts for Firefox for Android
 
-// ar
+pref("font.name.serif.ar", "Noto Naskh Arabic");
+pref("font.name.sans-serif.ar", "Noto Naskh Arabic");
+pref("font.name.monospace.ar", "Noto Naskh Arabic");
+pref("font.name-list.serif.ar", "Noto Naskh Arabic, Noto Serif, Droid Serif");
+pref("font.name-list.sans-serif.ar", "Noto Naskh Arabic, Clear Sans, Roboto, Droid Sans");
 
 pref("font.name.serif.el", "Droid Serif"); // not Charis SIL Compact, only has a few Greek chars
 pref("font.name.sans-serif.el", "Clear Sans");
@@ -4476,6 +4470,10 @@ pref("image.infer-src-animation.threshold-ms", 2000);
 // Discards inactive image frames and re-decodes them on demand from
 // compressed data.
 pref("image.mem.discardable", true);
+
+// Discards inactive image frames of _animated_ images and re-decodes them on
+// demand from compressed data. Has no effect if image.mem.discardable is false.
+pref("image.mem.animated.discardable", false);
 
 // Decodes images into shared memory to allow direct use in separate
 // rendering processes.
@@ -4713,9 +4711,6 @@ pref("gfx.direct2d.disabled", false);
 pref("gfx.direct2d.force-enabled", false);
 
 pref("layers.prefer-opengl", false);
-pref("layers.prefer-d3d9", false);
-// Disable for now due to bug 1304360
-pref("layers.allow-d3d9-fallback", false);
 #endif
 
 // Copy-on-write canvas
@@ -4777,6 +4772,8 @@ pref("extensions.webextensions.keepStorageOnUninstall", false);
 pref("extensions.webextensions.keepUuidOnUninstall", false);
 // Redirect basedomain used by identity api
 pref("extensions.webextensions.identity.redirectDomain", "extensions.allizom.org");
+// Whether or not webextension themes are supported.
+pref("extensions.webextensions.themes.enabled", false);
 pref("extensions.webextensions.remote", false);
 
 // Report Site Issue button
@@ -4905,7 +4902,11 @@ pref("dom.w3c_touch_events.enabled", 2);
 #endif
 
 // W3C draft pointer events
+#if defined(XP_WIN) && defined(NIGHTLY_BUILD)
+pref("dom.w3c_pointer_events.enabled", true);
+#else
 pref("dom.w3c_pointer_events.enabled", false);
+#endif
 
 // W3C pointer events draft
 pref("dom.w3c_pointer_events.implicit_capture", false);
@@ -5125,16 +5126,25 @@ pref("urlclassifier.phishTable", "googpub-phish-shavar,test-phish-simple");
 #endif
 
 // Tables for application reputation.
+#ifdef NIGHTLY_BUILD
+pref("urlclassifier.downloadBlockTable", "goog-badbinurl-shavar,goog-badbinurl-proto");
+#else
 pref("urlclassifier.downloadBlockTable", "goog-badbinurl-shavar");
+#endif
 
 #ifdef XP_WIN
  // Only download the whitelist on Windows, since the whitelist is
  // only useful for suppressing remote lookups for signed binaries which we can
  // only verify on Windows (Bug 974579). Other platforms always do remote lookups.
+#ifdef NIGHTLY_BUILD
+pref("urlclassifier.downloadAllowTable", "goog-downloadwhite-digest256,goog-downloadwhite-proto");
+#else
 pref("urlclassifier.downloadAllowTable", "goog-downloadwhite-digest256");
+#endif // NIGHTLY_BUILD
+
 #else
 pref("urlclassifier.downloadAllowTable", "");
-#endif
+#endif // XP_WIN
 
 pref("urlclassifier.disallow_completions", "test-malware-simple,test-phish-simple,test-unwanted-simple,test-track-simple,test-trackwhite-simple,test-block-simple,test-flashallow-simple,testexcept-flashallow-simple,test-flash-simple,testexcept-flash-simple,test-flashsubdoc-simple,testexcept-flashsubdoc-simple,goog-downloadwhite-digest256,base-track-digest256,mozstd-trackwhite-digest256,content-track-digest256,mozplugin-block-digest256,mozplugin2-block-digest256");
 
@@ -5180,18 +5190,21 @@ pref("browser.safebrowsing.provider.google.lists", "goog-badbinurl-shavar,goog-d
 pref("browser.safebrowsing.provider.google.updateURL", "https://safebrowsing.google.com/safebrowsing/downloads?client=SAFEBROWSING_ID&appver=%MAJOR_VERSION%&pver=2.2&key=%GOOGLE_API_KEY%");
 pref("browser.safebrowsing.provider.google.gethashURL", "https://safebrowsing.google.com/safebrowsing/gethash?client=SAFEBROWSING_ID&appver=%MAJOR_VERSION%&pver=2.2");
 pref("browser.safebrowsing.provider.google.reportURL", "https://safebrowsing.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
+pref("browser.safebrowsing.provider.google.reportPhishMistakeURL", "https://%LOCALE%.phish-error.mozilla.com/?hl=%LOCALE%&url=");
+pref("browser.safebrowsing.provider.google.reportMalwareMistakeURL", "https://%LOCALE%.malware-error.mozilla.com/?hl=%LOCALE%&url=");
+
 
 // Prefs for v4.
 pref("browser.safebrowsing.provider.google4.pver", "4");
-pref("browser.safebrowsing.provider.google4.lists", "goog-phish-proto,googpub-phish-proto,goog-malware-proto,goog-unwanted-proto");
+pref("browser.safebrowsing.provider.google4.lists", "goog-badbinurl-proto,goog-downloadwhite-proto,goog-phish-proto,googpub-phish-proto,goog-malware-proto,goog-unwanted-proto");
 pref("browser.safebrowsing.provider.google4.updateURL", "https://safebrowsing.googleapis.com/v4/threatListUpdates:fetch?$ct=application/x-protobuf&key=%GOOGLE_API_KEY%");
 // Leave it empty until we roll out v4 hash completion feature. See Bug 1323856.
 pref("browser.safebrowsing.provider.google4.gethashURL", "");
 pref("browser.safebrowsing.provider.google4.reportURL", "https://safebrowsing.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
+pref("browser.safebrowsing.provider.google4.reportPhishMistakeURL", "https://%LOCALE%.phish-error.mozilla.com/?hl=%LOCALE%&url=");
+pref("browser.safebrowsing.provider.google4.reportMalwareMistakeURL", "https://%LOCALE%.malware-error.mozilla.com/?hl=%LOCALE%&url=");
 
-pref("browser.safebrowsing.reportPhishMistakeURL", "https://%LOCALE%.phish-error.mozilla.com/?hl=%LOCALE%&url=");
 pref("browser.safebrowsing.reportPhishURL", "https://%LOCALE%.phish-report.mozilla.com/?hl=%LOCALE%&url=");
-pref("browser.safebrowsing.reportMalwareMistakeURL", "https://%LOCALE%.malware-error.mozilla.com/?hl=%LOCALE%&url=");
 
 // The table and global pref for blocking plugin content
 pref("browser.safebrowsing.blockedURIs.enabled", true);
@@ -5530,6 +5543,7 @@ pref("dom.mozBrowserFramesEnabled", false);
 pref("layout.css.color-adjust.enabled", true);
 
 pref("dom.audiochannel.audioCompeting", false);
+pref("dom.audiochannel.audioCompeting.allAgents", false);
 
 // Default media volume
 pref("media.default_volume", "1.0");
@@ -5555,11 +5569,7 @@ pref("dom.webkitBlink.dirPicker.enabled", true);
 pref("dom.webkitBlink.filesystem.enabled", true);
 #endif
 
-#ifdef NIGHTLY_BUILD
 pref("media.block-autoplay-until-in-foreground", true);
-#else
-pref("media.block-autoplay-until-in-foreground", false);
-#endif
 
 #ifdef MOZ_STYLO
 // Is the Servo-backed style system enabled?
@@ -5581,7 +5591,7 @@ pref("security.mixed_content.send_hsts_priming", true);
 pref("security.mixed_content.use_hsts", true);
 #endif
 // Approximately 1 week default cache for HSTS priming failures, in seconds
-pref ("security.mixed_content.hsts_priming_cache_timeout", 10080);
+pref ("security.mixed_content.hsts_priming_cache_timeout", 604800);
 // Force the channel to timeout in 3 seconds if we have not received
 // expects a time in milliseconds
 pref ("security.mixed_content.hsts_priming_request_timeout", 3000);
@@ -5612,6 +5622,10 @@ pref("dom.IntersectionObserver.enabled", false);
 
 // Whether module scripts (<script type="module">) are enabled for content.
 pref("dom.moduleScripts.enabled", false);
+
+// Maximum number of setTimeout()/setInterval() callbacks to run in a single
+// event loop runnable. Minimum value of 1.
+pref("dom.timeout.max_consecutive_callbacks", 5);
 
 #ifdef FUZZING
 pref("fuzzing.enabled", false);

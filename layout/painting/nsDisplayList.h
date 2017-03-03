@@ -34,6 +34,7 @@
 #include "mozilla/UniquePtr.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/gfx/UserData.h"
+#include "nsCSSRenderingBorders.h"
 
 #include <stdint.h>
 #include "nsTHashtable.h"
@@ -57,6 +58,8 @@ namespace layers {
 class Layer;
 class ImageLayer;
 class ImageContainer;
+class WebRenderCommand;
+class WebRenderDisplayItemLayer;
 } // namespace layers
 } // namespace mozilla
 
@@ -446,11 +449,8 @@ public:
    * Get the ViewID and the scrollbar flags corresponding to the scrollbar for
    * which we are building display items at the moment.
    */
-  void GetScrollbarInfo(ViewID* aOutScrollbarTarget, uint32_t* aOutScrollbarFlags)
-  {
-    *aOutScrollbarTarget = mCurrentScrollbarTarget;
-    *aOutScrollbarFlags = mCurrentScrollbarFlags;
-  }
+  ViewID GetCurrentScrollbarTarget() const { return mCurrentScrollbarTarget; }
+  uint32_t GetCurrentScrollbarFlags() const { return mCurrentScrollbarFlags; }
   /**
    * Returns true if building a scrollbar, and the scrollbar will not be
    * layerized.
@@ -1584,7 +1584,10 @@ public:
   typedef mozilla::layers::FrameMetrics::ViewID ViewID;
   typedef mozilla::layers::Layer Layer;
   typedef mozilla::layers::LayerManager LayerManager;
+  typedef mozilla::layers::WebRenderCommand WebRenderCommand;
+  typedef mozilla::layers::WebRenderDisplayItemLayer WebRenderDisplayItemLayer;
   typedef mozilla::LayerState LayerState;
+  typedef class mozilla::gfx::DrawTarget DrawTarget;
 
   // This is never instantiated directly (it has pure virtual methods), so no
   // need to count constructors and destructors.
@@ -1916,6 +1919,21 @@ public:
                                              LayerManager* aManager,
                                              const ContainerLayerParameters& aContainerParameters)
   { return nullptr; }
+
+  /**
+    * Create the WebRenderCommands required to paint this display item.
+    * The layer this item is in is passed in as rects must be relative
+    * to their parent.
+    */
+   virtual void CreateWebRenderCommands(nsTArray<WebRenderCommand>& aCommands,
+                                        WebRenderDisplayItemLayer* aLayer) {}
+  /**
+   * Builds a DisplayItemLayer and sets the display item to this.
+   */
+   already_AddRefed<Layer>
+   BuildDisplayItemLayer(nsDisplayListBuilder* aBuilder,
+                         LayerManager* aManager,
+                         const ContainerLayerParameters& aContainerParameters);
 
   /**
    * On entry, aVisibleRegion contains the region (relative to ReferenceFrame())
@@ -2617,8 +2635,6 @@ public:
  */
 class nsDisplayGeneric : public nsDisplayItem {
 public:
-  typedef class mozilla::gfx::DrawTarget DrawTarget;
-
   typedef void (* PaintCallback)(nsIFrame* aFrame, DrawTarget* aDrawTarget,
                                  const nsRect& aDirtyRect, nsPoint aFramePt);
 
@@ -2798,6 +2814,15 @@ public:
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) override;
   virtual void Paint(nsDisplayListBuilder* aBuilder, nsRenderingContext* aCtx) override;
   NS_DISPLAY_DECL_NAME("Caret", TYPE_CARET)
+
+  virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
+                                   LayerManager* aManager,
+                                   const ContainerLayerParameters& aParameters) override;
+  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
+                                             LayerManager* aManager,
+                                             const ContainerLayerParameters& aContainerParameters) override;
+  virtual void CreateWebRenderCommands(nsTArray<WebRenderCommand>& aCommands,
+                                        WebRenderDisplayItemLayer* aLayer) override;
 
 protected:
   RefPtr<nsCaret> mCaret;
@@ -3352,6 +3377,15 @@ public:
     return new nsDisplayBoxShadowOuterGeometry(this, aBuilder, mOpacity);
   }
 
+  virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
+                                   LayerManager* aManager,
+                                   const ContainerLayerParameters& aParameters) override;
+  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
+                                             LayerManager* aManager,
+                                             const ContainerLayerParameters& aContainerParameters) override;
+  virtual void CreateWebRenderCommands(nsTArray<WebRenderCommand>& aCommands,
+                                       WebRenderDisplayItemLayer* aLayer) override;
+
   nsRect GetBoundsInternal();
 
 private:
@@ -3417,10 +3451,20 @@ public:
   }
 #endif
 
+  virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
+                                   LayerManager* aManager,
+                                   const ContainerLayerParameters& aParameters) override;
+  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
+                                             LayerManager* aManager,
+                                             const ContainerLayerParameters& aContainerParameters) override;
+  virtual void CreateWebRenderCommands(nsTArray<WebRenderCommand>& aCommands,
+                                       mozilla::layers::WebRenderDisplayItemLayer* aLayer) override;
   virtual bool IsInvisibleInRect(const nsRect& aRect) override;
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) override;
   virtual void Paint(nsDisplayListBuilder* aBuilder, nsRenderingContext* aCtx) override;
   NS_DISPLAY_DECL_NAME("Outline", TYPE_OUTLINE)
+
+  mozilla::Maybe<nsCSSBorderRenderer> mBorderRenderer;
 };
 
 /**
@@ -4194,7 +4238,6 @@ protected:
 class nsDisplayMask : public nsDisplaySVGEffects {
 public:
   typedef mozilla::layers::ImageLayer ImageLayer;
-  typedef class mozilla::gfx::DrawTarget DrawTarget;
 
   nsDisplayMask(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
                 nsDisplayList* aList, bool aHandleOpacity,

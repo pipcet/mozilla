@@ -1102,6 +1102,8 @@ var gViewController = {
           document.getElementById("updates-progress").hidden = true;
           gUpdatesView.maybeRefresh();
 
+          Services.obs.notifyObservers(null, "EM-update-check-finished", null);
+
           if (numManualUpdates > 0 && numUpdated == 0) {
             document.getElementById("updates-manualUpdatesFound-btn").hidden = false;
             return;
@@ -1278,6 +1280,26 @@ var gViewController = {
                 hasPermission(aAddon, "enable"));
       },
       doCommand(aAddon) {
+        if (aAddon.isWebExtension && !aAddon.seen && WEBEXT_PERMISSION_PROMPTS) {
+          let perms = aAddon.userPermissions;
+          if (perms.hosts.length > 0 || perms.permissions.length > 0) {
+            let subject = {
+              wrappedJSObject: {
+                target: getBrowserElement(),
+                info: {
+                  type: "sideload",
+                  addon: aAddon,
+                  icon: aAddon.iconURL,
+                  permissions: perms,
+                  resolve() { aAddon.userDisabled = false },
+                  reject() {},
+                },
+              },
+            };
+            Services.obs.notifyObservers(subject, "webextension-permission-prompt", null);
+            return;
+          }
+        }
         aAddon.userDisabled = false;
       },
       getTooltip(aAddon) {
@@ -1387,21 +1409,23 @@ var gViewController = {
                 nsIFilePicker.modeOpenMultiple);
         try {
           fp.appendFilter(gStrings.ext.GetStringFromName("installFromFile.filterName"),
-                          "*.xpi;*.jar");
+                          "*.xpi;*.jar;*.zip");
           fp.appendFilters(nsIFilePicker.filterAll);
         } catch (e) { }
 
-        if (fp.show() != nsIFilePicker.returnOK)
-          return;
+        fp.open(result => {
+          if (result != nsIFilePicker.returnOK)
+            return;
 
-        let browser = getBrowserElement();
-        let files = fp.files;
-        while (files.hasMoreElements()) {
-          let file = files.getNext();
-          AddonManager.getInstallForFile(file, install => {
-            AddonManager.installAddonFromAOM(browser, document.documentURI, install);
-          });
-        }
+          let browser = getBrowserElement();
+          let files = fp.files;
+          while (files.hasMoreElements()) {
+            let file = files.getNext();
+            AddonManager.getInstallForFile(file, install => {
+              AddonManager.installAddonFromAOM(browser, document.documentURI, install);
+            });
+          }
+        });
       }
     },
 
@@ -2718,6 +2742,27 @@ var gSearchView = {
 
   onInstallCancelled(aInstall) {
     this.removeInstall(aInstall);
+  },
+
+  onInstallEnded(aInstall) {
+    // If this is a webextension that was installed from this page,
+    // display the post-install notification.
+    if (!WEBEXT_PERMISSION_PROMPTS || !aInstall.addon.isWebExtension) {
+      return;
+    }
+
+    for (let item of this._listBox.childNodes) {
+      if (item.mInstall == aInstall) {
+        let subject = {
+          wrappedJSObject: {
+            target: getBrowserElement(),
+            addon: aInstall.addon,
+          },
+        };
+        Services.obs.notifyObservers(subject, "webextension-install-notify", null);
+        return;
+      }
+    }
   },
 
   removeInstall(aInstall) {

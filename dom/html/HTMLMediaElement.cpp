@@ -120,6 +120,7 @@ static mozilla::LazyLogModule gMediaElementEventsLog("nsMediaElementEvents");
 
 #include "mozilla/dom/HTMLVideoElement.h"
 #include "mozilla/dom/VideoPlaybackQuality.h"
+#include "HTMLMediaElement.h"
 
 using namespace mozilla::layers;
 using mozilla::net::nsMediaFragmentURIParser;
@@ -996,7 +997,7 @@ private:
   IsOwnerAudible() const
   {
     // Muted or the volume should not be ~0
-    if (mOwner->Muted() || (std::fabs(mOwner->Volume()) <= 1e-7)) {
+    if (mOwner->mMuted || (std::fabs(mOwner->Volume()) <= 1e-7)) {
       return AudioChannelService::AudibleState::eNotAudible;
     }
 
@@ -1008,6 +1009,11 @@ private:
     // Might be audible but not yet.
     if (mOwner->HasAudio() && !mOwner->mIsAudioTrackAudible) {
       return AudioChannelService::AudibleState::eMaybeAudible;
+    }
+
+    // Media is suspended.
+    if (mSuspended != nsISuspendedTypes::NONE_SUSPENDED) {
+      return AudioChannelService::AudibleState::eNotAudible;
     }
 
     return AudioChannelService::AudibleState::eAudible;
@@ -1476,6 +1482,14 @@ HTMLMediaElement::MozRequestDebugInfo(ErrorResult& aRv)
 
   nsAutoString result;
   GetMozDebugReaderData(result);
+
+  if (mMediaKeys) {
+    nsString EMEInfo;
+    GetEMEInfo(EMEInfo);
+    result.AppendLiteral("EME Info: ");
+    result.Append(EMEInfo);
+    result.AppendLiteral("\n");
+  }
 
   if (mDecoder) {
     mDecoder->RequestDebugInfo()->Then(
@@ -2039,15 +2053,19 @@ void HTMLMediaElement::NotifyMediaTrackDisabled(MediaTrack* aTrack)
              (!aTrack->AsVideoTrack() || !aTrack->AsVideoTrack()->Selected()));
 
   if (aTrack->AsAudioTrack()) {
-    bool shouldMute = true;
-    for (uint32_t i = 0; i < AudioTracks()->Length(); ++i) {
-      if ((*AudioTracks())[i]->Enabled()) {
-        shouldMute = false;
-        break;
+    // If we don't have any alive track , we don't need to mute MediaElement.
+    if (AudioTracks()->Length() > 0) {
+      bool shouldMute = true;
+      for (uint32_t i = 0; i < AudioTracks()->Length(); ++i) {
+        if ((*AudioTracks())[i]->Enabled()) {
+          shouldMute = false;
+          break;
+        }
       }
-    }
-    if (shouldMute) {
-      SetMutedInternal(mMuted | MUTED_BY_AUDIO_TRACK);
+
+      if (shouldMute) {
+        SetMutedInternal(mMuted | MUTED_BY_AUDIO_TRACK);
+      }
     }
   } else if (aTrack->AsVideoTrack()) {
     if (mSrcStream) {
@@ -5257,6 +5275,9 @@ void HTMLMediaElement::DecodeError(const MediaResult& aError)
   const char16_t* params[] = { src.get() };
   ReportLoadError("MediaLoadDecodeError", params, ArrayLength(params));
 
+  DecoderDoctorDiagnostics diagnostics;
+  diagnostics.StoreDecodeError(OwnerDoc(), aError, src, __func__);
+
   AudioTracks()->EmptyTracks();
   VideoTracks()->EmptyTracks();
   if (mIsLoadingFromSourceChildren) {
@@ -5272,6 +5293,14 @@ void HTMLMediaElement::DecodeError(const MediaResult& aError)
   } else {
     Error(MEDIA_ERR_DECODE, aError.Description());
   }
+}
+
+void HTMLMediaElement::DecodeWarning(const MediaResult& aError)
+{
+  nsAutoString src;
+  GetCurrentSrc(src);
+  DecoderDoctorDiagnostics diagnostics;
+  diagnostics.StoreDecodeError(OwnerDoc(), aError, src, __func__);
 }
 
 bool HTMLMediaElement::HasError() const
@@ -5607,6 +5636,14 @@ HTMLMediaElement::UpdateReadyStateInternal()
 
   if (nextFrameStatus == NEXT_FRAME_UNAVAILABLE_BUFFERING) {
     // Force HAVE_CURRENT_DATA when buffering.
+    ChangeReadyState(nsIDOMHTMLMediaElement::HAVE_CURRENT_DATA);
+    return;
+  }
+
+  // TextTracks must be loaded for the HAVE_ENOUGH_DATA and
+  // HAVE_FUTURE_DATA.
+  // So force HAVE_CURRENT_DATA if text tracks not loaded.
+  if (mTextTrackManager && !mTextTrackManager->IsLoaded()) {
     ChangeReadyState(nsIDOMHTMLMediaElement::HAVE_CURRENT_DATA);
     return;
   }
@@ -7231,12 +7268,12 @@ HTMLMediaElement::MarkAsContentSource(CallerAPI aAPI)
 
   LOG(LogLevel::Debug,
       ("%p Log VIDEO_AS_CONTENT_SOURCE: visibility = %u, API: '%d' and 'All'",
-       this, isVisible, aAPI));
+       this, isVisible, static_cast<int>(aAPI)));
 
   if (!isVisible) {
     LOG(LogLevel::Debug,
         ("%p Log VIDEO_AS_CONTENT_SOURCE_IN_TREE_OR_NOT: inTree = %u, API: '%d' and 'All'",
-         this, IsInUncomposedDoc(), aAPI));
+         this, IsInUncomposedDoc(), static_cast<int>(aAPI)));
   }
 }
 
@@ -7315,6 +7352,25 @@ HTMLMediaElement::AsyncRejectPendingPlayPromises(nsresult aError)
   OwnerDoc()->Dispatch("nsResolveOrRejectPendingPlayPromisesRunner",
                        TaskCategory::Other,
                        event.forget());
+}
+
+void
+HTMLMediaElement::GetEMEInfo(nsString& aEMEInfo)
+{
+  if (!mMediaKeys) {
+    return;
+  }
+
+  nsString keySystem;
+  mMediaKeys->GetKeySystem(keySystem);
+
+  nsString sessionsInfo;
+  mMediaKeys->GetSessionsInfo(sessionsInfo);
+
+  aEMEInfo.AppendLiteral("Key System=");
+  aEMEInfo.Append(keySystem);
+  aEMEInfo.AppendLiteral(" SessionsInfo=");
+  aEMEInfo.Append(sessionsInfo);
 }
 
 bool HasDebuggerPrivilege(JSContext* aCx, JSObject* aObj)

@@ -34,6 +34,7 @@
 #include "mozilla/gfx/gfxVars.h"        // for gfxVars
 #include "VRManager.h"                  // for VRManager
 #include "mozilla/ipc/Transport.h"      // for Transport
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/layers/APZCTreeManager.h"  // for APZCTreeManager
 #include "mozilla/layers/APZCTreeManagerParent.h"  // for APZCTreeManagerParent
 #include "mozilla/layers/APZThreadUtils.h"  // for APZCTreeManager
@@ -54,7 +55,6 @@
 #include "mozilla/layers/RemoteContentController.h"
 #include "mozilla/layers/WebRenderBridgeParent.h"
 #include "mozilla/layers/WebRenderCompositableHolder.h"
-#include "mozilla/layers/WebRenderCompositorOGL.h"
 #include "mozilla/layout/RenderFrameParent.h"
 #include "mozilla/webrender/WebRenderAPI.h"
 #include "mozilla/media/MediaSystemResourceService.h" // for MediaSystemResourceService
@@ -1316,8 +1316,9 @@ CompositorBridgeParent::FlushApzRepaints(const LayerTransactionParent* aLayerTre
     // use the compositor's root layer tree id.
     layersId = mRootLayerTreeID;
   }
+  RefPtr<CompositorBridgeParent> self = this;
   APZThreadUtils::RunOnControllerThread(NS_NewRunnableFunction([=] () {
-    mApzcTreeManager->FlushApzRepaints(layersId);
+    self->mApzcTreeManager->FlushApzRepaints(layersId);
   }));
 }
 
@@ -1842,7 +1843,7 @@ CompositorBridgeParent::NotifyDidComposite(uint64_t aTransactionId, TimeStamp& a
 
   MonitorAutoLock lock(*sIndirectLayerTreesLock);
   ForEachIndirectLayerTree([&] (LayerTreeState* lts, const uint64_t& aLayersId) -> void {
-    if (lts->mCrossProcessParent) {
+    if (lts->mCrossProcessParent && lts->mParent == this) {
       CrossProcessCompositorBridgeParent* cpcp = lts->mCrossProcessParent;
       cpcp->DidComposite(aLayersId, aCompositeStart, aCompositeEnd);
     }

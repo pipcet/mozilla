@@ -80,8 +80,8 @@ pub enum ItemKind {
     Mac(Mac),
 }
 
-impl From<MacroInput> for Item {
-    fn from(input: MacroInput) -> Item {
+impl From<DeriveInput> for Item {
+    fn from(input: DeriveInput) -> Item {
         Item {
             ident: input.ident,
             vis: input.vis,
@@ -242,8 +242,8 @@ pub mod parsing {
     use generics::parsing::{generics, lifetime, ty_param_bound, where_clause};
     use ident::parsing::ident;
     use mac::parsing::delimited;
-    use macro_input::{Body, MacroInput};
-    use macro_input::parsing::macro_input;
+    use derive::{Body, DeriveInput};
+    use derive::parsing::derive_input;
     use ty::parsing::{abi, mutability, path, ty, unsafety};
 
     named!(pub item -> Item, alt!(
@@ -484,14 +484,14 @@ pub mod parsing {
             lt: option!(lifetime) >>
             mutability: mutability >>
             keyword!("self") >>
-            not!(peek!(punct!(":"))) >>
+            not!(punct!(":")) >>
             (FnArg::SelfRef(lt, mutability))
         )
         |
         do_parse!(
             mutability: mutability >>
             keyword!("self") >>
-            not!(peek!(punct!(":"))) >>
+            not!(punct!(":")) >>
             (FnArg::SelfValue(mutability))
         )
         |
@@ -639,8 +639,8 @@ pub mod parsing {
     ));
 
     named!(item_struct_or_enum -> Item, map!(
-        macro_input,
-        |def: MacroInput| Item {
+        derive_input,
+        |def: DeriveInput| Item {
             ident: def.ident,
             vis: def.vis,
             attrs: def.attrs,
@@ -848,7 +848,7 @@ pub mod parsing {
                 polarity: impl_polarity >>
                 path: path >>
                 keyword!("for") >>
-                ((polarity, Some(path)))
+                (polarity, Some(path))
             )
             |
             epsilon!() => { |_| (ImplPolarity::Positive, None) }

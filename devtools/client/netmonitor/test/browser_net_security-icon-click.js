@@ -11,10 +11,6 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(CUSTOM_GET_URL);
   let { document, gStore, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/actions/index");
-  let {
-    getDisplayedRequests,
-    getSortedRequests,
-  } = windowRequire("devtools/client/netmonitor/selectors/index");
 
   gStore.dispatch(Actions.batchEnable(false));
 
@@ -32,7 +28,7 @@ add_task(function* () {
 
   info("Sorting the items by filename.");
   EventUtils.sendMouseEvent({ type: "click" },
-    document.querySelector("#requests-menu-file-button"));
+    document.querySelector("#requests-list-file-button"));
 
   info("Testing that security icon can be clicked after the items were sorted.");
 
@@ -54,6 +50,7 @@ add_task(function* () {
     info("Clicking security icon of the first request and waiting for panel update.");
     EventUtils.synthesizeMouseAtCenter(icon, {}, monitor.panelWin);
 
-    ok(document.querySelector("#security-tab[aria-selected=true]"), "Security tab is selected.");
+    ok(document.querySelector("#security-tab[aria-selected=true]"),
+       "Security tab is selected.");
   }
 });

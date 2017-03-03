@@ -18,23 +18,11 @@
 
 #include <algorithm>
 
-// We duplicate this code here to avoid header dependencies which make it more
-// difficult to include in other places.
-#if defined(_M_X64) || defined(__x86_64__)
-#define V8_HOST_ARCH_X64 1
-#elif defined(_M_IX86) || defined(__i386__) || defined(__i386)
-#define V8_HOST_ARCH_IA32 1
-#elif defined(__ARMEL__)
-#define V8_HOST_ARCH_ARM 1
-#else
-#warning Please add support for your architecture in chromium_types.h
-#endif
-
 // STORE_SEQUENCER: Because signals can interrupt our profile modification
 //                  we need to make stores are not re-ordered by the compiler
 //                  or hardware to make sure the profile is consistent at
 //                  every point the signal can fire.
-#ifdef V8_HOST_ARCH_ARM
+#if defined(__arm__)
 // TODO Is there something cheaper that will prevent memory stores from being
 // reordered?
 
@@ -43,7 +31,9 @@ LinuxKernelMemoryBarrierFunc pLinuxKernelMemoryBarrier __attribute__((weak)) =
     (LinuxKernelMemoryBarrierFunc) 0xffff0fa0;
 
 # define STORE_SEQUENCER() pLinuxKernelMemoryBarrier()
-#elif defined(V8_HOST_ARCH_IA32) || defined(V8_HOST_ARCH_X64)
+
+#elif defined(__i386__) || defined(__x86_64__) || \
+      defined(_M_IX86) || defined(_M_X64)
 # if defined(_MSC_VER)
 #  include <intrin.h>
 #  define STORE_SEQUENCER() _ReadWriteBarrier();
@@ -54,21 +44,10 @@ LinuxKernelMemoryBarrierFunc pLinuxKernelMemoryBarrier __attribute__((weak)) =
 # else
 #  error "Memory clobber not supported for your compiler."
 # endif
+
 #else
 # error "Memory clobber not supported for your platform."
 #endif
-
-// A stack entry exists to allow the JS engine to inform the Gecko Profiler of
-// the current backtrace, but also to instrument particular points in C++ in
-// case stack walking is not available on the platform we are running on.
-//
-// Each entry has a descriptive string, a relevant stack address, and some extra
-// information the JS engine might want to inform the Gecko Profiler of. This
-// class inherits from the JS engine's version of the entry to ensure that the
-// size and layout of the two representations are consistent.
-class StackEntry : public js::ProfileEntry
-{
-};
 
 class ProfilerMarkerPayload;
 template<typename T>
@@ -282,7 +261,7 @@ public:
       return;
     }
 
-    volatile StackEntry& entry = mStack[mStackPointer];
+    volatile js::ProfileEntry& entry = mStack[mStackPointer];
 
     // Make sure we increment the pointer after the name has been written such
     // that mStack is always consistent.
@@ -421,7 +400,7 @@ private:
 
 public:
   // The list of active checkpoints.
-  StackEntry volatile mStack[1024];
+  js::ProfileEntry volatile mStack[1024];
 
 private:
   // A list of pending markers that must be moved to the circular buffer.

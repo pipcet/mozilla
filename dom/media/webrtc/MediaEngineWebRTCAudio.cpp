@@ -373,10 +373,10 @@ MediaEngineWebRTCMicrophoneSource::SetLastPrefs(
 
   RefPtr<MediaEngineWebRTCMicrophoneSource> that = this;
 
-  NS_DispatchToMainThread(media::NewRunnableFrom([this, that, aPrefs]() mutable {
-    mSettings.mEchoCancellation.Value() = aPrefs.mAecOn;
-    mSettings.mMozAutoGainControl.Value() = aPrefs.mAgcOn;
-    mSettings.mMozNoiseSuppression.Value() = aPrefs.mNoiseOn;
+  NS_DispatchToMainThread(media::NewRunnableFrom([that, aPrefs]() mutable {
+    that->mSettings.mEchoCancellation.Value() = aPrefs.mAecOn;
+    that->mSettings.mMozAutoGainControl.Value() = aPrefs.mAgcOn;
+    that->mSettings.mMozNoiseSuppression.Value() = aPrefs.mNoiseOn;
     return NS_OK;
   }));
 }
@@ -525,7 +525,7 @@ MediaEngineWebRTCMicrophoneSource::NotifyPull(MediaStreamGraph *aGraph,
                                               const PrincipalHandle& aPrincipalHandle)
 {
   // Ignore - we push audio data
-  LOG_FRAMES(("NotifyPull, desired = %ld", (int64_t) aDesiredTime));
+  LOG_FRAMES(("NotifyPull, desired = %" PRId64, (int64_t) aDesiredTime));
 }
 
 void

@@ -10,6 +10,7 @@
 #include "gfxUserFontSet.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PathHelpers.h"
+#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Sprintf.h"
 #include "nsGkAtoms.h"
 #include "nsILanguageAtomService.h"
@@ -615,11 +616,17 @@ gfxTextRun::Draw(Range aRange, gfxPoint aPt, const DrawParams& aParams) const
         HasNonOpaqueNonTransparentColor(aParams.context, currentColor) &&
         HasSyntheticBoldOrColor(this, aRange)) {
         needToRestore = true;
-        // measure text, use the bounding box
+        // Measure text; use the bounding box to determine the area we need
+        // to buffer.
         gfxTextRun::Metrics metrics = MeasureText(
             aRange, gfxFont::LOOSE_INK_EXTENTS,
             aParams.context->GetDrawTarget(), aParams.provider);
-        metrics.mBoundingBox.MoveBy(aPt);
+        if (IsRightToLeft()) {
+            metrics.mBoundingBox.MoveBy(gfxPoint(aPt.x - metrics.mAdvanceWidth,
+                                                 aPt.y));
+        } else {
+            metrics.mBoundingBox.MoveBy(aPt);
+        }
         syntheticBoldBuffer.PushSolidColor(metrics.mBoundingBox, currentColor,
                                            GetAppUnitsPerDevUnit());
     }
@@ -2168,7 +2175,7 @@ gfxFontGroup::InitTextRun(DrawTarget* aDrawTarget,
                 nsAutoCString str((const char*)aString, aLength);
                 MOZ_LOG(log, LogLevel::Warning,\
                        ("(%s) fontgroup: [%s] default: %s lang: %s script: %d "
-                        "len %d weight: %d width: %d style: %s size: %6.2f %d-byte "
+                        "len %d weight: %d width: %d style: %s size: %6.2f %" PRIuSIZE "-byte "
                         "TEXTRUN [%s] ENDTEXTRUN\n",
                         (mStyle.systemFont ? "textrunui" : "textrun"),
                         NS_ConvertUTF16toUTF8(families).get(),
@@ -2176,7 +2183,7 @@ gfxFontGroup::InitTextRun(DrawTarget* aDrawTarget,
                          "serif" :
                          (mFamilyList.GetDefaultFontType() == eFamily_sans_serif ?
                           "sans-serif" : "none")),
-                        lang.get(), Script::LATIN, aLength,
+                        lang.get(), static_cast<int>(Script::LATIN), aLength,
                         uint32_t(mStyle.weight), uint32_t(mStyle.stretch),
                         (mStyle.style & NS_FONT_STYLE_ITALIC ? "italic" :
                         (mStyle.style & NS_FONT_STYLE_OBLIQUE ? "oblique" :
@@ -2217,14 +2224,14 @@ gfxFontGroup::InitTextRun(DrawTarget* aDrawTarget,
                     MOZ_LOG(log, LogLevel::Warning,\
                            ("(%s) fontgroup: [%s] default: %s lang: %s script: %d "
                             "len %d weight: %d width: %d style: %s size: %6.2f "
-                            "%d-byte TEXTRUN [%s] ENDTEXTRUN\n",
+                            "%" PRIuSIZE "-byte TEXTRUN [%s] ENDTEXTRUN\n",
                             (mStyle.systemFont ? "textrunui" : "textrun"),
                             NS_ConvertUTF16toUTF8(families).get(),
                             (mFamilyList.GetDefaultFontType() == eFamily_serif ?
                              "serif" :
                              (mFamilyList.GetDefaultFontType() == eFamily_sans_serif ?
                               "sans-serif" : "none")),
-                            lang.get(), runScript, runLen,
+                            lang.get(), static_cast<int>(runScript), runLen,
                             uint32_t(mStyle.weight), uint32_t(mStyle.stretch),
                             (mStyle.style & NS_FONT_STYLE_ITALIC ? "italic" :
                             (mStyle.style & NS_FONT_STYLE_OBLIQUE ? "oblique" :
@@ -2995,7 +3002,7 @@ void gfxFontGroup::ComputeRanges(nsTArray<gfxTextRange>& aRanges,
                  "serif" :
                  (mFamilyList.GetDefaultFontType() == eFamily_sans_serif ?
                   "sans-serif" : "none")),
-                lang.get(), aRunScript,
+                lang.get(), static_cast<int>(aRunScript),
                 fontMatches.get()));
     }
 #endif

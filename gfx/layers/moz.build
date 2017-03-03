@@ -142,6 +142,7 @@ EXPORTS.mozilla.layers += [
     'client/TextureClientRecycleAllocator.h',
     'client/TextureClientSharedSurface.h',
     'client/TiledContentClient.h',
+    'composite/AnimationMetricsTracker.h',
     'composite/AsyncCompositionManager.h',
     'composite/CanvasLayerComposite.h',
     'composite/ColorLayerComposite.h',
@@ -209,7 +210,7 @@ EXPORTS.mozilla.layers += [
     'wr/WebRenderBridgeChild.h',
     'wr/WebRenderBridgeParent.h',
     'wr/WebRenderCompositableHolder.h',
-    'wr/WebRenderCompositorOGL.h',
+    'wr/WebRenderDisplayItemLayer.h',
     'wr/WebRenderImageHost.h',
     'wr/WebRenderLayerManager.h',
     'wr/WebRenderLayersLogging.h',
@@ -292,6 +293,7 @@ UNIFIED_SOURCES += [
     'basic/BasicColorLayer.cpp',
     'basic/BasicCompositor.cpp',
     'basic/BasicContainerLayer.cpp',
+    'basic/BasicDisplayItemLayer.cpp',
     'basic/BasicImages.cpp',
     'basic/BasicLayerManager.cpp',
     'basic/BasicLayersImpl.cpp',
@@ -321,6 +323,7 @@ UNIFIED_SOURCES += [
     'client/TextureClientRecycleAllocator.cpp',
     'client/TextureClientSharedSurface.cpp',
     'client/TiledContentClient.cpp',
+    'composite/AnimationMetricsTracker.cpp',
     'composite/AsyncCompositionManager.cpp',
     'composite/CanvasLayerComposite.cpp',
     'composite/ColorLayerComposite.cpp',
@@ -394,8 +397,8 @@ UNIFIED_SOURCES += [
     'wr/WebRenderCanvasLayer.cpp',
     'wr/WebRenderColorLayer.cpp',
     'wr/WebRenderCompositableHolder.cpp',
-    'wr/WebRenderCompositorOGL.cpp',
     'wr/WebRenderContainerLayer.cpp',
+    'wr/WebRenderDisplayItemLayer.cpp',
     'wr/WebRenderImageHost.cpp',
     'wr/WebRenderImageLayer.cpp',
     'wr/WebRenderLayerManager.cpp',
@@ -451,7 +454,7 @@ LOCAL_INCLUDES += [
     '/docshell/base',  # for nsDocShell.h
     '/layout/base',    # for TouchManager.h
     '/layout/generic', # for nsTextFrame.h
-    '/media/libyuv/include', # for libyuv.h
+    '/media/libyuv/libyuv/include', # for libyuv.h
 ]
 
 FINAL_LIBRARY = 'xul'

@@ -474,6 +474,24 @@ JS_NewContext(uint32_t maxbytes, uint32_t maxNurseryBytes, JSRuntime* parentRunt
     return NewContext(maxbytes, maxNurseryBytes, parentRuntime);
 }
 
+JS_PUBLIC_API(JSContext*)
+JS_NewCooperativeContext(JSContext* siblingContext)
+{
+    return NewCooperativeContext(siblingContext);
+}
+
+JS_PUBLIC_API(void)
+JS_YieldCooperativeContext(JSContext* cx)
+{
+    YieldCooperativeContext(cx);
+}
+
+JS_PUBLIC_API(void)
+JS_ResumeCooperativeContext(JSContext* cx)
+{
+    ResumeCooperativeContext(cx);
+}
+
 JS_PUBLIC_API(void)
 JS_DestroyContext(JSContext* cx)
 {
@@ -547,6 +565,15 @@ JS_GetParentRuntime(JSContext* cx)
     return cx->runtime()->parentRuntime ? cx->runtime()->parentRuntime : cx->runtime();
 }
 
+JS_PUBLIC_API(void)
+JS::SetSingleThreadedExecutionCallbacks(JSContext* cx,
+                                        BeginSingleThreadedExecutionCallback begin,
+                                        EndSingleThreadedExecutionCallback end)
+{
+    cx->runtime()->beginSingleThreadedExecutionCallback = begin;
+    cx->runtime()->endSingleThreadedExecutionCallback = end;
+}
+
 JS_PUBLIC_API(JSVersion)
 JS_GetVersion(JSContext* cx)
 {
@@ -618,9 +645,6 @@ JS::InitSelfHostedCode(JSContext* cx)
 
     JSAutoRequest ar(cx);
     if (!rt->initializeAtoms(cx))
-        return false;
-
-    if (!cx->cycleDetectorSet().init())
         return false;
 
     if (!rt->initSelfHosting(cx))
@@ -908,11 +932,8 @@ JS_TransplantObject(JSContext* cx, HandleObject origobj, HandleObject target)
         MOZ_ASSERT(Wrapper::wrappedObject(newIdentityWrapper) == newIdentity);
         if (!JSObject::swap(cx, origobj, newIdentityWrapper))
             MOZ_CRASH();
-        if (!origobj->compartment()->putWrapperMaybeUpdate(cx, CrossCompartmentKey(newIdentity),
-                                                           origv))
-        {
+        if (!origobj->compartment()->putWrapper(cx, CrossCompartmentKey(newIdentity), origv))
             MOZ_CRASH();
-        }
     }
 
     // The new identity object might be one of several things. Return it to avoid
@@ -1531,7 +1552,8 @@ JS_SetNativeStackQuota(JSContext* cx, size_t systemCodeStackSize, size_t trusted
     SetNativeStackQuotaAndLimit(cx, JS::StackForTrustedScript, trustedScriptStackSize);
     SetNativeStackQuotaAndLimit(cx, JS::StackForUntrustedScript, untrustedScriptStackSize);
 
-    cx->initJitStackLimit();
+    if (cx->isCooperativelyScheduled())
+        cx->initJitStackLimit();
 }
 
 /************************************************************************/
@@ -6746,7 +6768,7 @@ DescribeScriptedCaller(JSContext* cx, AutoFilename* filename, unsigned* lineno,
     if (filename) {
         if (i.isWasm()) {
             // For Wasm, copy out the filename, there is no script source.
-            UniqueChars copy = DuplicateString(i.filename());
+            UniqueChars copy = DuplicateString(i.filename() ? i.filename() : "");
             if (!copy)
                 filename->setUnowned("out of memory");
             else

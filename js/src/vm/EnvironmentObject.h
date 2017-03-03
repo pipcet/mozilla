@@ -441,6 +441,11 @@ class WasmFunctionCallObject : public EnvironmentObject
 
     static WasmFunctionCallObject* createHollowForDebug(JSContext* cx,
                                                         Handle<WasmFunctionScope*> scope);
+    WasmFunctionScope& scope() const {
+        Value v = getReservedSlot(SCOPE_SLOT);
+        MOZ_ASSERT(v.isPrivateGCThing());
+        return *static_cast<WasmFunctionScope*>(v.toGCThing());
+    }
 };
 
 class LexicalEnvironmentObject : public EnvironmentObject
@@ -477,11 +482,8 @@ class LexicalEnvironmentObject : public EnvironmentObject
     }
 
   public:
-    static LexicalEnvironmentObject* createTemplateObject(JSContext* cx,
-                                                          Handle<LexicalScope*> scope,
-                                                          HandleObject enclosing,
-                                                          gc::InitialHeap heap);
-
+    static LexicalEnvironmentObject* create(JSContext* cx, Handle<LexicalScope*> scope,
+                                            HandleObject enclosing, gc::InitialHeap heap);
     static LexicalEnvironmentObject* create(JSContext* cx, Handle<LexicalScope*> scope,
                                             AbstractFramePtr frame);
     static LexicalEnvironmentObject* createGlobal(JSContext* cx, Handle<GlobalObject*> global);
@@ -1055,6 +1057,14 @@ IsGlobalLexicalEnvironment(JSObject* env)
 {
     return env->is<LexicalEnvironmentObject>() &&
            env->as<LexicalEnvironmentObject>().isGlobal();
+}
+
+inline JSObject*
+MaybeUnwrapWithEnvironment(JSObject* env)
+{
+    if (env->is<WithEnvironmentObject>())
+        return &env->as<WithEnvironmentObject>().object();
+    return env;
 }
 
 template <typename SpecificEnvironment>

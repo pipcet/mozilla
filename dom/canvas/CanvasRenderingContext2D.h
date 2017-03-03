@@ -29,6 +29,7 @@
 #include "FilterSupport.h"
 #include "nsSVGEffects.h"
 #include "Layers.h"
+#include "nsBidi.h"
 
 class nsGlobalWindow;
 class nsXULElement;
@@ -682,7 +683,7 @@ protected:
   /**
    * Disposes an old target and prepares to lazily create a new target.
    */
-  void ClearTarget(bool aRetainBuffer = false);
+  void ClearTarget();
 
   /*
    * Returns the target to the buffer provider. i.e. this will queue a frame for
@@ -863,6 +864,8 @@ protected:
   };
 
   nsTArray<RegionInfo> mHitRegionsOptions;
+
+  nsBidi mBidiEngine;
 
   /**
     * Returns true if a shadow should be drawn along with a

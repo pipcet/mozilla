@@ -18,6 +18,7 @@ use style_traits::ToCss;
 use style_traits::values::specified::AllowedNumericType;
 use super::{Angle, Number, SimplifiedValueNode, SimplifiedSumNode, Time};
 use values::{Auto, CSSFloat, Either, FONT_MEDIUM_PX, HasViewportPercentage, None_, Normal};
+use values::ExtremumLength;
 use values::computed::Context;
 
 pub use super::image::{AngleOrCorner, ColorStop, EndingShape as GradientEndingShape, Gradient};
@@ -343,6 +344,12 @@ impl NoCalcLength {
         *self == NoCalcLength::Absolute(Au(0))
     }
 
+    #[inline]
+    /// Returns a `medium` length.
+    pub fn medium() -> NoCalcLength {
+        NoCalcLength::Absolute(Au::from_px(FONT_MEDIUM_PX))
+    }
+
     /// Get an absolute length from a px value.
     #[inline]
     pub fn from_px(px_value: CSSFloat) -> NoCalcLength {
@@ -366,6 +373,13 @@ pub enum Length {
     /// TODO(emilio): We have more `Calc` variants around, we should only use
     /// one.
     Calc(Box<CalcLengthOrPercentage>, AllowedNumericType),
+}
+
+impl From<NoCalcLength> for Length {
+    #[inline]
+    fn from(len: NoCalcLength) -> Self {
+        Length::NoCalc(len)
+    }
 }
 
 impl HasViewportPercentage for Length {
@@ -489,10 +503,24 @@ impl Parse for Length {
     }
 }
 
-impl<T> Either<Length, T> {
+impl Either<Length, Normal> {
     #[inline]
     #[allow(missing_docs)]
-    pub fn parse_non_negative_length(_context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+    pub fn parse_non_negative_length(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+        if input.try(|input| Normal::parse(context, input)).is_ok() {
+            return Ok(Either::Second(Normal));
+        }
+        Length::parse_internal(input, AllowedNumericType::NonNegative).map(Either::First)
+    }
+}
+
+impl Either<Length, Auto> {
+    #[inline]
+    #[allow(missing_docs)]
+    pub fn parse_non_negative_length(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+        if input.try(|input| Auto::parse(context, input)).is_ok() {
+            return Ok(Either::Second(Auto));
+        }
         Length::parse_internal(input, AllowedNumericType::NonNegative).map(Either::First)
     }
 }
@@ -938,6 +966,20 @@ impl From<Length> for LengthOrPercentage {
     }
 }
 
+impl From<NoCalcLength> for LengthOrPercentage {
+    #[inline]
+    fn from(len: NoCalcLength) -> Self {
+        LengthOrPercentage::Length(len)
+    }
+}
+
+impl From<Percentage> for LengthOrPercentage {
+    #[inline]
+    fn from(pc: Percentage) -> Self {
+        LengthOrPercentage::Percentage(pc)
+    }
+}
+
 impl HasViewportPercentage for LengthOrPercentage {
     fn has_viewport_percentage(&self) -> bool {
         match *self {
@@ -987,6 +1029,34 @@ impl LengthOrPercentage {
         LengthOrPercentage::parse_internal(input, AllowedNumericType::NonNegative)
     }
 
+    /// Parse a length, treating dimensionless numbers as pixels
+    ///
+    /// https://www.w3.org/TR/SVG2/types.html#presentation-attribute-css-value
+    pub fn parse_numbers_are_pixels(input: &mut Parser) -> Result<LengthOrPercentage, ()> {
+        if let Ok(lop) = input.try(|i| Self::parse_internal(i, AllowedNumericType::All)) {
+            Ok(lop)
+        } else {
+            let num = input.expect_number()?;
+            Ok(LengthOrPercentage::Length(NoCalcLength::Absolute(Au((AU_PER_PX * num) as i32))))
+        }
+    }
+
+    /// Parse a non-negative length, treating dimensionless numbers as pixels
+    ///
+    /// This is nonstandard behavior used by Firefox for SVG
+    pub fn parse_numbers_are_pixels_non_negative(input: &mut Parser) -> Result<LengthOrPercentage, ()> {
+        if let Ok(lop) = input.try(|i| Self::parse_internal(i, AllowedNumericType::NonNegative)) {
+            Ok(lop)
+        } else {
+            let num = input.expect_number()?;
+            if num >= 0. {
+                Ok(LengthOrPercentage::Length(NoCalcLength::Absolute(Au((AU_PER_PX * num) as i32))))
+            } else {
+                Err(())
+            }
+        }
+    }
+
     /// Extract value from ref without a clone, replacing it with a 0 Au
     ///
     /// Use when you need to move out of a length array without cloning
@@ -1013,6 +1083,21 @@ pub enum LengthOrPercentageOrAuto {
     Percentage(Percentage),
     Auto,
     Calc(Box<CalcLengthOrPercentage>),
+}
+
+
+impl From<NoCalcLength> for LengthOrPercentageOrAuto {
+    #[inline]
+    fn from(len: NoCalcLength) -> Self {
+        LengthOrPercentageOrAuto::Length(len)
+    }
+}
+
+impl From<Percentage> for LengthOrPercentageOrAuto {
+    #[inline]
+    fn from(pc: Percentage) -> Self {
+        LengthOrPercentageOrAuto::Percentage(pc)
+    }
 }
 
 impl HasViewportPercentage for LengthOrPercentageOrAuto {
@@ -1224,5 +1309,93 @@ impl LengthOrNumber {
         } else {
             Length::parse_non_negative(input).map(Either::First)
         }
+    }
+}
+
+/// A value suitable for a `min-width` or `min-height` property.
+/// Unlike `max-width` or `max-height` properties, a MinLength can be
+/// `auto`, and cannot be `none`.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[allow(missing_docs)]
+pub enum MinLength {
+    LengthOrPercentage(LengthOrPercentage),
+    Auto,
+    ExtremumLength(ExtremumLength),
+}
+
+impl HasViewportPercentage for MinLength {
+    fn has_viewport_percentage(&self) -> bool {
+        match *self {
+            MinLength::LengthOrPercentage(ref lop) => lop.has_viewport_percentage(),
+            _ => false
+        }
+    }
+}
+
+impl ToCss for MinLength {
+    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+        match *self {
+            MinLength::LengthOrPercentage(ref lop) =>
+                lop.to_css(dest),
+            MinLength::Auto =>
+                dest.write_str("auto"),
+            MinLength::ExtremumLength(ref ext) =>
+                ext.to_css(dest),
+        }
+    }
+}
+
+impl Parse for MinLength {
+    fn parse(_context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+        input.try(ExtremumLength::parse).map(MinLength::ExtremumLength)
+            .or_else(|()| input.try(LengthOrPercentage::parse_non_negative).map(MinLength::LengthOrPercentage))
+            .or_else(|()| input.expect_ident_matching("auto").map(|()| MinLength::Auto))
+    }
+}
+
+/// A value suitable for a `max-width` or `max-height` property.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[allow(missing_docs)]
+pub enum MaxLength {
+    LengthOrPercentage(LengthOrPercentage),
+    None,
+    ExtremumLength(ExtremumLength),
+}
+
+impl HasViewportPercentage for MaxLength {
+    fn has_viewport_percentage(&self) -> bool {
+        match *self {
+            MaxLength::LengthOrPercentage(ref lop) => lop.has_viewport_percentage(),
+            _ => false
+        }
+    }
+}
+
+impl ToCss for MaxLength {
+    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+        match *self {
+            MaxLength::LengthOrPercentage(ref lop) =>
+                lop.to_css(dest),
+            MaxLength::None =>
+                dest.write_str("none"),
+            MaxLength::ExtremumLength(ref ext) =>
+                ext.to_css(dest),
+        }
+    }
+}
+
+impl Parse for MaxLength {
+    fn parse(_context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+        input.try(ExtremumLength::parse).map(MaxLength::ExtremumLength)
+            .or_else(|()| input.try(LengthOrPercentage::parse_non_negative).map(MaxLength::LengthOrPercentage))
+            .or_else(|()| {
+                match_ignore_ascii_case! { &try!(input.expect_ident()),
+                    "none" =>
+                        Ok(MaxLength::None),
+                    _ => Err(())
+                }
+            })
     }
 }

@@ -285,6 +285,7 @@ bool nsContentUtils::sIsPerformanceTimingEnabled = false;
 bool nsContentUtils::sIsResourceTimingEnabled = false;
 bool nsContentUtils::sIsUserTimingLoggingEnabled = false;
 bool nsContentUtils::sIsExperimentalAutocompleteEnabled = false;
+bool nsContentUtils::sIsWebComponentsEnabled = false;
 bool nsContentUtils::sEncodeDecodeURLHash = false;
 bool nsContentUtils::sGettersDecodeURLHash = false;
 bool nsContentUtils::sPrivacyResistFingerprinting = false;
@@ -512,10 +513,11 @@ nsContentUtils::Init()
   sSecurityManager->GetSystemPrincipal(&sSystemPrincipal);
   MOZ_ASSERT(sSystemPrincipal);
 
-  // We use the constructor here because we want infallible initialization; we
-  // apparently don't care whether sNullSubjectPrincipal has a sane URI or not.
-  RefPtr<nsNullPrincipal> nullPrincipal = new nsNullPrincipal();
-  nullPrincipal->Init();
+  RefPtr<nsNullPrincipal> nullPrincipal = nsNullPrincipal::Create();
+  if (!nullPrincipal) {
+    return NS_ERROR_FAILURE;
+  }
+
   nullPrincipal.forget(&sNullSubjectPrincipal);
 
   nsresult rv = CallGetService(NS_IOSERVICE_CONTRACTID, &sIOService);
@@ -581,6 +583,9 @@ nsContentUtils::Init()
 
   Preferences::AddBoolVarCache(&sIsExperimentalAutocompleteEnabled,
                                "dom.forms.autocomplete.experimental", false);
+
+  Preferences::AddBoolVarCache(&sIsWebComponentsEnabled,
+                               "dom.webcomponents.enabled", false);
 
   Preferences::AddBoolVarCache(&sEncodeDecodeURLHash,
                                "dom.url.encode_decode_hash", false);
@@ -3444,12 +3449,12 @@ nsContentUtils::IsDraggableLink(const nsIContent* aContent) {
 
 // static
 nsresult
-nsContentUtils::NameChanged(mozilla::dom::NodeInfo* aNodeInfo, nsIAtom* aName,
-                            mozilla::dom::NodeInfo** aResult)
+nsContentUtils::QNameChanged(mozilla::dom::NodeInfo* aNodeInfo, nsIAtom* aName,
+                             mozilla::dom::NodeInfo** aResult)
 {
   nsNodeInfoManager *niMgr = aNodeInfo->NodeInfoManager();
 
-  *aResult = niMgr->GetNodeInfo(aName, aNodeInfo->GetPrefixAtom(),
+  *aResult = niMgr->GetNodeInfo(aName, nullptr,
                                 aNodeInfo->NamespaceID(),
                                 aNodeInfo->NodeType(),
                                 aNodeInfo->GetExtraName()).take();
@@ -7064,23 +7069,30 @@ nsContentUtils::GetSelectionInTextControl(Selection* aSelection,
     return;
   }
 
-  nsCOMPtr<nsINode> anchorNode = aSelection->GetAnchorNode();
+  // All the node pointers here are raw pointers for performance.  We shouldn't
+  // be doing anything in this function that invalidates the node tree.
+  nsINode* anchorNode = aSelection->GetAnchorNode();
   uint32_t anchorOffset = aSelection->AnchorOffset();
-  nsCOMPtr<nsINode> focusNode = aSelection->GetFocusNode();
+  nsINode* focusNode = aSelection->GetFocusNode();
   uint32_t focusOffset = aSelection->FocusOffset();
 
   // We have at most two children, consisting of an optional text node followed
   // by an optional <br>.
   NS_ASSERTION(aRoot->GetChildCount() <= 2, "Unexpected children");
-  nsCOMPtr<nsIContent> firstChild = aRoot->GetFirstChild();
+  nsIContent* firstChild = aRoot->GetFirstChild();
 #ifdef DEBUG
   nsCOMPtr<nsIContent> lastChild = aRoot->GetLastChild();
   NS_ASSERTION(anchorNode == aRoot || anchorNode == firstChild ||
                anchorNode == lastChild, "Unexpected anchorNode");
   NS_ASSERTION(focusNode == aRoot || focusNode == firstChild ||
                focusNode == lastChild, "Unexpected focusNode");
+  // firstChild is either text or a <br> (hence an element).
+  MOZ_ASSERT_IF(firstChild,
+                firstChild->IsNodeOfType(nsINode::eTEXT) || firstChild->IsElement());
 #endif
-  if (!firstChild || !firstChild->IsNodeOfType(nsINode::eTEXT)) {
+  // Testing IsElement() is faster than testing IsNodeOfType(), since it's
+  // non-virtual.
+  if (!firstChild || firstChild->IsElement()) {
     // No text node, so everything is 0
     anchorOffset = focusOffset = 0;
   } else {
@@ -9788,8 +9800,9 @@ nsContentUtils::AttemptLargeAllocationLoad(nsIHttpChannel* aChannel)
   TabChild* tabChild = TabChild::GetFrom(outer->AsOuter());
   NS_ENSURE_TRUE(tabChild, false);
 
-  if (tabChild->TakeAwaitingLargeAlloc())  {
+  if (tabChild->IsAwaitingLargeAlloc())  {
     NS_WARNING("In a Large-Allocation TabChild, ignoring Large-Allocation header!");
+    tabChild->StopAwaitingLargeAlloc();
     outer->SetLargeAllocStatus(LargeAllocStatus::SUCCESS);
     return false;
   }

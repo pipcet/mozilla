@@ -340,29 +340,29 @@ struct JSRuntime : public js::MallocProvider<JSRuntime>
     js::ActiveThreadData<js::Vector<js::CooperatingContext, 4, js::SystemAllocPolicy>> cooperatingContexts_;
 
     // Count of AutoProhibitActiveContextChange instances on the active context.
-    js::ActiveThreadData<size_t> activeContextChangeProhibited_;
+    mozilla::Atomic<size_t> activeContextChangeProhibited_;
+
+    // Count of beginSingleThreadedExecution() calls that have occurred with no
+    // matching endSingleThreadedExecution().
+    mozilla::Atomic<size_t> singleThreadedExecutionRequired_;
+
+    // Whether some thread has called beginSingleThreadedExecution() and we are
+    // in the associated callback (which may execute JS on other threads).
+    js::ActiveThreadData<bool> startingSingleThreadedExecution_;
 
   public:
     JSContext* activeContext() const { return activeContext_; }
     const void* addressOfActiveContext() { return &activeContext_; }
 
     void setActiveContext(JSContext* cx);
+    void setNewbornActiveContext(JSContext* cx);
+    void deleteActiveContext(JSContext* cx);
 
     inline JSContext* activeContextFromOwnThread();
 
     js::Vector<js::CooperatingContext, 4, js::SystemAllocPolicy>& cooperatingContexts() {
         return cooperatingContexts_.ref();
     }
-
-#ifdef DEBUG
-    bool isCooperatingContext(JSContext* cx) {
-        for (const js::CooperatingContext& target : cooperatingContexts()) {
-            if (target.context() == cx)
-                return true;
-        }
-        return false;
-    }
-#endif
 
     class MOZ_RAII AutoProhibitActiveContextChange
     {
@@ -382,6 +382,17 @@ struct JSRuntime : public js::MallocProvider<JSRuntime>
     };
 
     bool activeContextChangeProhibited() { return activeContextChangeProhibited_; }
+    bool singleThreadedExecutionRequired() { return singleThreadedExecutionRequired_; }
+
+    js::ActiveThreadData<JS::BeginSingleThreadedExecutionCallback> beginSingleThreadedExecutionCallback;
+    js::ActiveThreadData<JS::EndSingleThreadedExecutionCallback> endSingleThreadedExecutionCallback;
+
+    // Ensure there is only a single thread interacting with this runtime.
+    // beginSingleThreadedExecution() returns false if some context has already
+    // started forcing this runtime to be single threaded. Calls to these
+    // functions must be balanced.
+    bool beginSingleThreadedExecution(JSContext* cx);
+    void endSingleThreadedExecution(JSContext* cx);
 
     /*
      * The profiler sampler generation after the latest sample.
@@ -1044,6 +1055,11 @@ struct JSRuntime : public js::MallocProvider<JSRuntime>
     // For inherited heap state accessors.
     friend class js::gc::AutoTraceSession;
     friend class JS::AutoEnterCycleCollection;
+
+  private:
+    js::ActiveThreadData<js::RuntimeCaches> caches_;
+  public:
+    js::RuntimeCaches& caches() { return caches_.ref(); }
 };
 
 namespace js {
@@ -1307,6 +1323,24 @@ class RuntimeAllocPolicy
 };
 
 extern const JSSecurityCallbacks NullSecurityCallbacks;
+
+inline Nursery&
+ZoneGroup::nursery()
+{
+    return runtime->gc.nursery();
+}
+
+inline gc::StoreBuffer&
+ZoneGroup::storeBuffer()
+{
+    return runtime->gc.storeBuffer();
+}
+
+inline void
+ZoneGroup::callAfterMinorGC(void (*thunk)(void* data), void* data)
+{
+    nursery().queueSweepAction(thunk, data);
+}
 
 } /* namespace js */
 

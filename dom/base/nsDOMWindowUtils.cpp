@@ -1631,16 +1631,6 @@ nsDOMWindowUtils::GetIsMozAfterPaintPending(bool *aResult)
 }
 
 NS_IMETHODIMP
-nsDOMWindowUtils::ClearMozAfterPaintEvents()
-{
-  nsPresContext* presContext = GetPresContext();
-  if (!presContext)
-    return NS_OK;
-  presContext->ClearMozAfterPaintEvents();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 nsDOMWindowUtils::DisableNonTestMouseEvents(bool aDisable)
 {
   nsCOMPtr<nsPIDOMWindowOuter> window = do_QueryReferent(mWindow);
@@ -1660,9 +1650,9 @@ nsDOMWindowUtils::SuppressEventHandling(bool aSuppress)
   NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
 
   if (aSuppress) {
-    doc->SuppressEventHandling(nsIDocument::eEvents);
+    doc->SuppressEventHandling();
   } else {
-    doc->UnsuppressEventHandlingAndFireEvents(nsIDocument::eEvents, true);
+    doc->UnsuppressEventHandlingAndFireEvents(true);
   }
 
   return NS_OK;
@@ -2817,27 +2807,6 @@ nsDOMWindowUtils::GetContainerElement(nsIDOMElement** aResult)
     do_QueryInterface(window->GetFrameElementInternal());
 
   element.forget(aResult);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDOMWindowUtils::WrapDOMFile(nsIFile *aFile,
-                              nsISupports **aDOMFile)
-{
-  if (!aFile) {
-    return NS_ERROR_FAILURE;
-  }
-
-  nsCOMPtr<nsPIDOMWindowOuter> window = do_QueryReferent(mWindow);
-  NS_ENSURE_STATE(window);
-
-  nsPIDOMWindowInner* innerWindow = window->GetCurrentInnerWindow();
-  if (!innerWindow) {
-    return NS_ERROR_FAILURE;
-  }
-
-  nsCOMPtr<nsIDOMBlob> blob = File::CreateFromFile(innerWindow, aFile);
-  blob.forget(aDOMFile);
   return NS_OK;
 }
 

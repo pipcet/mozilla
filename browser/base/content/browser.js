@@ -27,7 +27,8 @@ Cu.import("resource://gre/modules/NotificationDB.jsm");
           ShortcutUtils:false, SimpleServiceDiscovery:false, SitePermissions:false,
           Social:false, TabCrashHandler:false, Task:false, TelemetryStopwatch:false,
           Translation:false, UITour:false, UpdateUtils:false, Weave:false,
-          fxAccounts:false, gDevTools:false, gDevToolsBrowser:false, webrtcUI:false
+          fxAccounts:false, gDevTools:false, gDevToolsBrowser:false, webrtcUI:false,
+          URLBarZoom:false
  */
 
 /**
@@ -74,11 +75,12 @@ Cu.import("resource://gre/modules/NotificationDB.jsm");
   ["Translation", "resource:///modules/translation/Translation.jsm"],
   ["UITour", "resource:///modules/UITour.jsm"],
   ["UpdateUtils", "resource://gre/modules/UpdateUtils.jsm"],
+  ["URLBarZoom", "resource:///modules/URLBarZoom.jsm"],
   ["Weave", "resource://services-sync/main.js"],
   ["fxAccounts", "resource://gre/modules/FxAccounts.jsm"],
   ["gDevTools", "resource://devtools/client/framework/gDevTools.jsm"],
   ["gDevToolsBrowser", "resource://devtools/client/framework/gDevTools.jsm"],
-  ["webrtcUI", "resource:///modules/webrtcUI.jsm", ]
+  ["webrtcUI", "resource:///modules/webrtcUI.jsm"],
 ].forEach(([name, resource]) => XPCOMUtils.defineLazyModuleGetter(this, name, resource));
 
 XPCOMUtils.defineLazyModuleGetter(this, "SafeBrowsing",
@@ -460,6 +462,7 @@ const gStoragePressureObserver = {
     let buttons = [];
     let usage = parseInt(data);
     let prefStrBundle = document.getElementById("bundle_preferences");
+    let brandShortName = document.getElementById("bundle_brand").getString("brandShortName");
     let notificationBox = document.getElementById("high-priority-global-notificationbox");
     buttons.push({
       label: prefStrBundle.getString("spaceAlert.learnMoreButton.label"),
@@ -474,7 +477,7 @@ const gStoragePressureObserver = {
       // This is because this usage is small and not the main cause for space issue.
       // In order to avoid the bad and wrong impression among users that
       // firefox eats disk space a lot, indicate users to clean up other disk space.
-      msg = prefStrBundle.getString("spaceAlert.under5GB.description");
+      msg = prefStrBundle.getFormattedString("spaceAlert.under5GB.message", [brandShortName]);
       buttons.push({
         label: prefStrBundle.getString("spaceAlert.under5GB.okButton.label"),
         accessKey: prefStrBundle.getString("spaceAlert.under5GB.okButton.accesskey"),
@@ -483,15 +486,15 @@ const gStoragePressureObserver = {
     } else {
       // The firefox-used space >= 5GB, then guide users to about:preferences
       // to clear some data stored on firefox by websites.
-      let descriptionStringID = "spaceAlert.over5GB.description";
+      let descriptionStringID = "spaceAlert.over5GB.message";
       let prefButtonLabelStringID = "spaceAlert.over5GB.prefButton.label";
       let prefButtonAccesskeyStringID = "spaceAlert.over5GB.prefButton.accesskey";
       if (AppConstants.platform == "win") {
-        descriptionStringID = "spaceAlert.over5GB.descriptionWin";
+        descriptionStringID = "spaceAlert.over5GB.messageWin";
         prefButtonLabelStringID = "spaceAlert.over5GB.prefButtonWin.label";
         prefButtonAccesskeyStringID = "spaceAlert.over5GB.prefButtonWin.accesskey";
       }
-      msg = prefStrBundle.getString(descriptionStringID);
+      msg = prefStrBundle.getFormattedString(descriptionStringID, [brandShortName]);
       buttons.push({
         label: prefStrBundle.getString(prefButtonLabelStringID),
         accessKey: prefStrBundle.getString(prefButtonAccesskeyStringID),
@@ -1131,6 +1134,7 @@ var gBrowserInit = {
     TrackingProtection.init();
     RefreshBlocker.init();
     CaptivePortalWatcher.init();
+    URLBarZoom.init(window);
 
     let mm = window.getGroupMessageManager("browsers");
     mm.loadFrameScript("chrome://browser/content/tab-content.js", true);
@@ -1366,7 +1370,6 @@ var gBrowserInit = {
     // apply full zoom settings to tabs restored by the session restore service.
     FullZoom.init();
     PanelUI.init();
-    LightweightThemeListener.init();
 
     UpdateUrlbarSearchSplitterState();
 
@@ -1703,7 +1706,6 @@ var gBrowserInit = {
 
       BrowserOffline.uninit();
       IndexedDBPromptHelper.uninit();
-      LightweightThemeListener.uninit();
       PanelUI.uninit();
       AutoShowBookmarksToolbar.uninit();
     }
@@ -2972,7 +2974,8 @@ var BrowserOnClick = {
       break;
       case "Browser:SiteBlockedError":
         this.onAboutBlocked(msg.data.elementId, msg.data.reason,
-                            msg.data.isTopFrame, msg.data.location);
+                            msg.data.isTopFrame, msg.data.location,
+                            msg.data.blockedInfo);
       break;
       case "Browser:EnableOnlineMode":
         if (Services.io.offline) {
@@ -3097,7 +3100,7 @@ var BrowserOnClick = {
     }
   },
 
-  onAboutBlocked(elementId, reason, isTopFrame, location) {
+  onAboutBlocked(elementId, reason, isTopFrame, location, blockedInfo) {
     // Depending on what page we are displaying here (malware/phishing/unwanted)
     // use the right strings and links for each.
     let bucketName = "";
@@ -3140,13 +3143,13 @@ var BrowserOnClick = {
           if (sendTelemetry) {
             secHistogram.add(nsISecTel[bucketName + "IGNORE_WARNING"]);
           }
-          this.ignoreWarningButton(reason);
+          this.ignoreWarningButton(reason, blockedInfo);
         }
         break;
     }
   },
 
-  ignoreWarningButton(reason) {
+  ignoreWarningButton(reason, blockedInfo) {
     // Allow users to override and continue through to the site,
     // but add a notify bar as a reminder, so that they don't lose
     // track after, e.g., tab switching.
@@ -3166,23 +3169,33 @@ var BrowserOnClick = {
 
     let title;
     if (reason === "malware") {
-      title = gNavigatorBundle.getString("safebrowsing.reportedAttackSite");
-      buttons[1] = {
-        label: gNavigatorBundle.getString("safebrowsing.notAnAttackButton.label"),
-        accessKey: gNavigatorBundle.getString("safebrowsing.notAnAttackButton.accessKey"),
-        callback() {
-          openUILinkIn(gSafeBrowsing.getReportURL("MalwareMistake"), "tab");
-        }
-      };
+      let reportUrl = gSafeBrowsing.getReportURL("MalwareMistake", blockedInfo);
+
+      // There's no button if we can not get report url, for example if the provider
+      // of blockedInfo is not Google
+      if (reportUrl) {
+        buttons[1] = {
+          label: gNavigatorBundle.getString("safebrowsing.notAnAttackButton.label"),
+          accessKey: gNavigatorBundle.getString("safebrowsing.notAnAttackButton.accessKey"),
+          callback() {
+            openUILinkIn(reportUrl, "tab");
+          }
+        };
+      }
     } else if (reason === "phishing") {
-      title = gNavigatorBundle.getString("safebrowsing.deceptiveSite");
-      buttons[1] = {
-        label: gNavigatorBundle.getString("safebrowsing.notADeceptiveSiteButton.label"),
-        accessKey: gNavigatorBundle.getString("safebrowsing.notADeceptiveSiteButton.accessKey"),
-        callback() {
-          openUILinkIn(gSafeBrowsing.getReportURL("PhishMistake"), "tab");
-        }
-      };
+      let reportUrl = gSafeBrowsing.getReportURL("PhishMistake", blockedInfo);
+
+      // There's no button if we can not get report url, for example if the provider
+      // of blockedInfo is not Google
+      if (reportUrl) {
+        buttons[1] = {
+          label: gNavigatorBundle.getString("safebrowsing.notADeceptiveSiteButton.label"),
+          accessKey: gNavigatorBundle.getString("safebrowsing.notADeceptiveSiteButton.accessKey"),
+          callback() {
+            openUILinkIn(reportUrl, "tab");
+          }
+        };
+      }
     } else if (reason === "unwanted") {
       title = gNavigatorBundle.getString("safebrowsing.reportedUnwantedSite");
       // There is no button for reporting errors since Google doesn't currently
@@ -3424,7 +3437,7 @@ var PrintPreviewListener = {
       let browser = gBrowser.selectedBrowser;
       let preferredRemoteType = browser.remoteType;
       this._tabBeforePrintPreview = gBrowser.selectedTab;
-      this._printPreviewTab = gBrowser.loadOneTab("about:blank", {
+      this._printPreviewTab = gBrowser.loadOneTab("about:printpreview", {
         inBackground: false,
         preferredRemoteType,
         sameProcessAsFrameLoader: browser.frameLoader
@@ -3435,7 +3448,7 @@ var PrintPreviewListener = {
   },
   createSimplifiedBrowser() {
     let browser = this._tabBeforePrintPreview.linkedBrowser;
-    this._simplifyPageTab = gBrowser.loadOneTab("about:blank", {
+    this._simplifyPageTab = gBrowser.loadOneTab("about:printpreview", {
       inBackground: true,
       sameProcessAsFrameLoader: browser.frameLoader
      });
@@ -4634,8 +4647,6 @@ var XULBrowserWindow = {
 
       SocialUI.updateState();
 
-      UITour.onLocationChange(location);
-
       gTabletModePageCounter.inc();
 
       // Utility functions for disabling find
@@ -5726,6 +5737,10 @@ function handleLinkClick(event, href, linkNode) {
     }
   }
 
+  let frameOuterWindowID = doc.defaultView.QueryInterface(Ci.nsIInterfaceRequestor)
+                              .getInterface(Ci.nsIDOMWindowUtils)
+                              .outerWindowID;
+
   urlSecurityCheck(href, doc.nodePrincipal);
   let params = {
     charset: doc.characterSet,
@@ -5734,6 +5749,7 @@ function handleLinkClick(event, href, linkNode) {
     referrerPolicy,
     noReferrer: BrowserUtils.linkHasNoReferrer(linkNode),
     originPrincipal: doc.nodePrincipal,
+    frameOuterWindowID,
   };
 
   // The new tab/window must use the same userContextId
@@ -6463,49 +6479,52 @@ var MailIntegration = {
 
 function BrowserOpenAddonsMgr(aView) {
   return new Promise(resolve => {
-    if (aView) {
-      let emWindow;
-      let browserWindow;
+    let emWindow;
+    let browserWindow;
 
-      var receivePong = function(aSubject, aTopic, aData) {
-        let browserWin = aSubject.QueryInterface(Ci.nsIInterfaceRequestor)
-                                 .getInterface(Ci.nsIWebNavigation)
-                                 .QueryInterface(Ci.nsIDocShellTreeItem)
-                                 .rootTreeItem
-                                 .QueryInterface(Ci.nsIInterfaceRequestor)
-                                 .getInterface(Ci.nsIDOMWindow);
-        if (!emWindow || browserWin == window /* favor the current window */) {
-          emWindow = aSubject;
-          browserWindow = browserWin;
-        }
+    var receivePong = function(aSubject, aTopic, aData) {
+      let browserWin = aSubject.QueryInterface(Ci.nsIInterfaceRequestor)
+                               .getInterface(Ci.nsIWebNavigation)
+                               .QueryInterface(Ci.nsIDocShellTreeItem)
+                               .rootTreeItem
+                               .QueryInterface(Ci.nsIInterfaceRequestor)
+                               .getInterface(Ci.nsIDOMWindow);
+      if (!emWindow || browserWin == window /* favor the current window */) {
+        emWindow = aSubject;
+        browserWindow = browserWin;
       }
-      Services.obs.addObserver(receivePong, "EM-pong", false);
-      Services.obs.notifyObservers(null, "EM-ping", "");
-      Services.obs.removeObserver(receivePong, "EM-pong");
+    }
+    Services.obs.addObserver(receivePong, "EM-pong", false);
+    Services.obs.notifyObservers(null, "EM-ping", "");
+    Services.obs.removeObserver(receivePong, "EM-pong");
 
-      if (emWindow) {
+    if (emWindow) {
+      if (aView) {
         emWindow.loadView(aView);
-        browserWindow.gBrowser.selectedTab =
-          browserWindow.gBrowser._getTabForContentWindow(emWindow);
-        emWindow.focus();
-        resolve(emWindow);
-        return;
       }
+      browserWindow.gBrowser.selectedTab =
+        browserWindow.gBrowser._getTabForContentWindow(emWindow);
+      emWindow.focus();
+      resolve(emWindow);
+      return;
     }
 
-    switchToTabHavingURI("about:addons", true);
+    // This must be a new load, else the ping/pong would have
+    // found the window above.
+    let whereToOpen = (window.gBrowser && isTabEmpty(gBrowser.selectedTab)) ?
+                      "current" :
+                      "tab";
+    openUILinkIn("about:addons", whereToOpen);
 
-    if (aView) {
-      // This must be a new load, else the ping/pong would have
-      // found the window above.
-      Services.obs.addObserver(function observer(aSubject, aTopic, aData) {
-        Services.obs.removeObserver(observer, aTopic);
+    Services.obs.addObserver(function observer(aSubject, aTopic, aData) {
+      Services.obs.removeObserver(observer, aTopic);
+      if (aView) {
         aSubject.loadView(aView);
-        resolve(aSubject);
-      }, "EM-loaded", false);
-    } else {
-      resolve();
-    }
+      }
+      aSubject.QueryInterface(Ci.nsIDOMWindow);
+      aSubject.focus();
+      resolve(aSubject);
+    }, "EM-loaded", false);
   });
 }
 

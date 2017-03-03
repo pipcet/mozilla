@@ -4545,6 +4545,9 @@ class MCompare
         // String compared to String
         Compare_String,
 
+        // Symbol compared to Symbol
+        Compare_Symbol,
+
         // Undefined compared to String
         // Null      compared to String
         // Boolean   compared to String
@@ -11527,6 +11530,63 @@ class MFunctionEnvironment
     }
 };
 
+// Allocate a new LexicalEnvironmentObject.
+class MNewLexicalEnvironmentObject
+  : public MUnaryInstruction,
+    public SingleObjectPolicy::Data
+{
+    CompilerGCPointer<LexicalScope*> scope_;
+
+    MNewLexicalEnvironmentObject(MDefinition* enclosing, LexicalScope* scope)
+      : MUnaryInstruction(enclosing),
+        scope_(scope)
+    {
+        setResultType(MIRType::Object);
+    }
+
+  public:
+    INSTRUCTION_HEADER(NewLexicalEnvironmentObject)
+    TRIVIAL_NEW_WRAPPERS
+    NAMED_OPERANDS((0, enclosing))
+
+    LexicalScope* scope() const {
+        return scope_;
+    }
+    bool possiblyCalls() const override {
+        return true;
+    }
+    bool appendRoots(MRootList& roots) const override {
+        return roots.append(scope_);
+    }
+};
+
+// Allocate a new LexicalEnvironmentObject from existing one
+class MCopyLexicalEnvironmentObject
+  : public MUnaryInstruction,
+    public SingleObjectPolicy::Data
+{
+    bool copySlots_;
+
+    MCopyLexicalEnvironmentObject(MDefinition* env, bool copySlots)
+      : MUnaryInstruction(env),
+        copySlots_(copySlots)
+    {
+        setResultType(MIRType::Object);
+    }
+
+  public:
+    INSTRUCTION_HEADER(CopyLexicalEnvironmentObject)
+    TRIVIAL_NEW_WRAPPERS
+    NAMED_OPERANDS((0, env))
+
+    bool copySlots() const {
+        return copySlots_;
+    }
+    bool possiblyCalls() const override {
+        return true;
+    }
+};
+
 // Store to vp[slot] (slots that are not inline in an object).
 class MStoreSlot
   : public MBinaryInstruction,
@@ -13456,8 +13516,9 @@ class MCheckIsObj
 {
     uint8_t checkKind_;
 
-    explicit MCheckIsObj(MDefinition* toCheck, uint8_t checkKind)
-      : MUnaryInstruction(toCheck), checkKind_(checkKind)
+    MCheckIsObj(MDefinition* toCheck, uint8_t checkKind)
+      : MUnaryInstruction(toCheck),
+        checkKind_(checkKind)
     {
         setResultType(MIRType::Value);
         setResultTypeSet(toCheck->resultTypeSet());
@@ -13466,6 +13527,33 @@ class MCheckIsObj
 
   public:
     INSTRUCTION_HEADER(CheckIsObj)
+    TRIVIAL_NEW_WRAPPERS
+    NAMED_OPERANDS((0, checkValue))
+
+    uint8_t checkKind() const { return checkKind_; }
+
+    AliasSet getAliasSet() const override {
+        return AliasSet::None();
+    }
+};
+
+class MCheckIsCallable
+  : public MUnaryInstruction,
+    public BoxInputsPolicy::Data
+{
+    uint8_t checkKind_;
+
+    MCheckIsCallable(MDefinition* toCheck, uint8_t checkKind)
+      : MUnaryInstruction(toCheck),
+        checkKind_(checkKind)
+    {
+        setResultType(MIRType::Value);
+        setResultTypeSet(toCheck->resultTypeSet());
+        setGuard();
+    }
+
+  public:
+    INSTRUCTION_HEADER(CheckIsCallable)
     TRIVIAL_NEW_WRAPPERS
     NAMED_OPERANDS((0, checkValue))
 

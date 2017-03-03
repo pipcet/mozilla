@@ -1116,11 +1116,6 @@ void
 nsComputedDOMStyle::SetToRGBAColor(nsROCSSPrimitiveValue* aValue,
                                    nscolor aColor)
 {
-  if (NS_GET_A(aColor) == 0) {
-    aValue->SetIdent(eCSSKeyword_transparent);
-    return;
-  }
-
   nsROCSSPrimitiveValue *red   = new nsROCSSPrimitiveValue;
   nsROCSSPrimitiveValue *green = new nsROCSSPrimitiveValue;
   nsROCSSPrimitiveValue *blue  = new nsROCSSPrimitiveValue;
@@ -4055,6 +4050,16 @@ nsComputedDOMStyle::DoGetTextIndent()
 }
 
 already_AddRefed<CSSValue>
+nsComputedDOMStyle::DoGetTextJustify()
+{
+  RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
+  val->SetIdent(
+    nsCSSProps::ValueToKeywordEnum(StyleText()->mTextJustify,
+                                   nsCSSProps::kTextJustifyKTable));
+  return val.forget();
+}
+
+already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetTextOrientation()
 {
   RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
@@ -4106,6 +4111,15 @@ nsComputedDOMStyle::DoGetTextShadow()
   return GetCSSShadowArray(StyleText()->mTextShadow,
                            StyleColor()->mColor,
                            false);
+}
+
+already_AddRefed<CSSValue>
+nsComputedDOMStyle::DoGetTextSizeAdjust()
+{
+  RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
+  val->SetIdent(nsCSSProps::ValueToKeywordEnum(StyleText()->mTextSizeAdjust,
+                                               nsCSSProps::kTextSizeAdjustKTable));
+  return val.forget();
 }
 
 already_AddRefed<CSSValue>
@@ -4199,24 +4213,6 @@ nsComputedDOMStyle::DoGetHyphens()
   val->SetIdent(
     nsCSSProps::ValueToKeywordEnum(StyleText()->mHyphens,
                                    nsCSSProps::kHyphensKTable));
-  return val.forget();
-}
-
-already_AddRefed<CSSValue>
-nsComputedDOMStyle::DoGetTextSizeAdjust()
-{
-  RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
-  switch (StyleText()->mTextSizeAdjust) {
-    default:
-      NS_NOTREACHED("unexpected value");
-      MOZ_FALLTHROUGH;
-    case NS_STYLE_TEXT_SIZE_ADJUST_AUTO:
-      val->SetIdent(eCSSKeyword_auto);
-      break;
-    case NS_STYLE_TEXT_SIZE_ADJUST_NONE:
-      val->SetIdent(eCSSKeyword_none);
-      break;
-  }
   return val.forget();
 }
 
@@ -6222,10 +6218,9 @@ nsComputedDOMStyle::CreatePrimitiveValueForShapeSource(
   return valueList.forget();
 }
 
-template<typename ReferenceBox>
 already_AddRefed<CSSValue>
 nsComputedDOMStyle::GetShapeSource(
-  const StyleShapeSource<ReferenceBox>& aShapeSource,
+  const StyleShapeSource& aShapeSource,
   const KTableEntry aBoxKeywordTable[])
 {
   switch (aShapeSource.GetType()) {

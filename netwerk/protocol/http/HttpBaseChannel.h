@@ -29,6 +29,7 @@
 #include "nsIStringEnumerator.h"
 #include "nsISupportsPriority.h"
 #include "nsIClassOfService.h"
+#include "nsIClassifiedChannel.h"
 #include "nsIApplicationCache.h"
 #include "nsIResumableChannel.h"
 #include "nsITraceableChannel.h"
@@ -47,6 +48,7 @@
 #include "nsIThrottledInputChannel.h"
 #include "nsTArray.h"
 #include "nsCOMPtr.h"
+#include "mozilla/IntegerPrintfMacros.h"
 
 #define HTTP_BASE_CHANNEL_IID \
 { 0x9d5cde03, 0xe6e9, 0x4612, \
@@ -89,6 +91,7 @@ class HttpBaseChannel : public nsHashPropertyBag
                       , public nsIForcePendingChannel
                       , public nsIConsoleReportCollector
                       , public nsIThrottledInputChannel
+                      , public nsIClassifiedChannel
 {
 protected:
   virtual ~HttpBaseChannel();
@@ -101,6 +104,7 @@ public:
   NS_DECL_NSITRACEABLECHANNEL
   NS_DECL_NSITIMEDCHANNEL
   NS_DECL_NSITHROTTLEDINPUTCHANNEL
+  NS_DECL_NSICLASSIFIEDCHANNEL
 
   NS_DECLARE_STATIC_IID_ACCESSOR(HTTP_BASE_CHANNEL_IID)
 
@@ -175,8 +179,8 @@ public:
   NS_IMETHOD GetOriginalResponseHeader(const nsACString &aHeader,
                                        nsIHttpHeaderVisitor *aVisitor) override;
   NS_IMETHOD VisitOriginalResponseHeaders(nsIHttpHeaderVisitor *aVisitor) override;
-  NS_IMETHOD GetAllowPipelining(bool *value) override;
-  NS_IMETHOD SetAllowPipelining(bool value) override;
+  NS_IMETHOD GetAllowPipelining(bool *value) override; // deprecated
+  NS_IMETHOD SetAllowPipelining(bool value) override;  // deprecated
   NS_IMETHOD GetAllowSTS(bool *value) override;
   NS_IMETHOD SetAllowSTS(bool value) override;
   NS_IMETHOD GetRedirectionLimit(uint32_t *value) override;
@@ -483,7 +487,6 @@ protected:
   // if 1 all "http-on-{opening|modify|etc}-request" observers have been called
   uint32_t                          mRequestObserversCalled     : 1;
   uint32_t                          mResponseHeadersModified    : 1;
-  uint32_t                          mAllowPipelining            : 1;
   uint32_t                          mAllowSTS                   : 1;
   uint32_t                          mThirdPartyFlags            : 3;
   uint32_t                          mUploadStreamHasHeaders     : 1;
@@ -599,6 +602,11 @@ protected:
   nsID mChannelId;
 
   nsString mIntegrityMetadata;
+
+  // Classified channel's matched information
+  nsCString mMatchedList;
+  nsCString mMatchedProvider;
+  nsCString mMatchedPrefix;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(HttpBaseChannel, HTTP_BASE_CHANNEL_IID)
@@ -640,7 +648,8 @@ template <class T>
 nsresult HttpAsyncAborter<T>::AsyncAbort(nsresult status)
 {
   MOZ_LOG(gHttpLog, LogLevel::Debug,
-         ("HttpAsyncAborter::AsyncAbort [this=%p status=%x]\n", mThis, status));
+         ("HttpAsyncAborter::AsyncAbort [this=%p status=%" PRIx32 "]\n",
+          mThis, static_cast<uint32_t>(status)));
 
   mThis->mStatus = status;
 

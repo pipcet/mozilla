@@ -6,6 +6,8 @@
 /* This content script should work in any browser or iframe and should not
  * depend on the frame being contained in tabbrowser. */
 
+/* eslint-env mozilla/frame-script */
+
 var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
@@ -499,10 +501,14 @@ var ClickEventHandler = {
       }
     }
 
+    let frameOuterWindowID = ownerDoc.defaultView.QueryInterface(Ci.nsIInterfaceRequestor)
+                                     .getInterface(Ci.nsIDOMWindowUtils)
+                                     .outerWindowID;
+
     let json = { button: event.button, shiftKey: event.shiftKey,
                  ctrlKey: event.ctrlKey, metaKey: event.metaKey,
                  altKey: event.altKey, href: null, title: null,
-                 bookmark: false, referrerPolicy,
+                 bookmark: false, frameOuterWindowID, referrerPolicy,
                  triggeringPrincipal: principal,
                  originAttributes: principal ? principal.originAttributes : {},
                  isContentWindowPrivate: PrivateBrowsingUtils.isContentWindowPrivate(ownerDoc.defaultView)};
@@ -573,11 +579,36 @@ var ClickEventHandler = {
     } else if (/e=unwantedBlocked/.test(ownerDoc.documentURI)) {
       reason = "unwanted";
     }
+
+    let docShell = ownerDoc.defaultView.QueryInterface(Ci.nsIInterfaceRequestor)
+                                       .getInterface(Ci.nsIWebNavigation)
+                                      .QueryInterface(Ci.nsIDocShell);
+    let blockedInfo = {};
+    if (docShell.failedChannel) {
+      let classifiedChannel = docShell.failedChannel.
+                              QueryInterface(Ci.nsIClassifiedChannel);
+      if (classifiedChannel) {
+        let httpChannel = docShell.failedChannel.QueryInterface(Ci.nsIHttpChannel);
+
+        let reportUri = httpChannel.URI.clone();
+
+        // Remove the query to avoid leaking sensitive data
+        if (reportUri instanceof Ci.nsIURL) {
+          reportUri.query = "";
+        }
+
+        blockedInfo = { list: classifiedChannel.matchedList,
+                        provider: classifiedChannel.matchedProvider,
+                        uri: reportUri.asciiSpec };
+      }
+    }
+
     sendAsyncMessage("Browser:SiteBlockedError", {
       location: ownerDoc.location.href,
       reason,
       elementId: targetElement.getAttribute("id"),
-      isTopFrame: (ownerDoc.defaultView.parent === ownerDoc.defaultView)
+      isTopFrame: (ownerDoc.defaultView.parent === ownerDoc.defaultView),
+      blockedInfo
     });
   },
 

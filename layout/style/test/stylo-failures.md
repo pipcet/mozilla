@@ -28,7 +28,7 @@ Any line which doesn't follow the format above would be ignored like comment.
 
 * Media query support:
   * test_acid3_test46.html: @media support [13]
-  * test_bug1089417.html [1] **disabled**
+  * test_bug1089417.html [1]
   * test_bug418986-2.html: matchMedia support [3]
   * test_bug453896_deck.html: &lt;style media&gt; support [8]
   * test_media_queries.html [1]
@@ -60,7 +60,7 @@ Any line which doesn't follow the format above would be ignored like comment.
     * test_inherit_computation.html `animation` [6]
     * test_initial_computation.html `animation` [12]
     * test_property_syntax_errors.html `animation` [404]
-    * test_value_storage.html `animation` [1078]
+    * test_value_storage.html `animation` [1063]
 * test_any_dynamic.html: -moz-any pseudo class [2]
 * CSSOM support:
   * @namespace ##easy##
@@ -79,15 +79,14 @@ Any line which doesn't follow the format above would be ignored like comment.
   * @support
     * test_supports_rules.html [1]
 * test_box_size_keywords.html: moz-prefixed intrinsic size keyword value [64]
-* test_bug160403.html: servo/servo#15004 [2]
 * test_bug229915.html: sibling selector with dynamic change bug 1330885 [5]
 * test_bug357614.html: case-insensitivity for old attrs in attr selector servo/servo#15006 [2]
 * mapped attribute not supported
   * test_bug363146.html [2]
   * test_bug389464.html: also font-size computation [1]
-  * test_html_attribute_computed_values.html: also list-style-type [9]
+  * test_html_attribute_computed_values.html: also list-style-type [8]
 * test_bug387615.html: getComputedStyle value not updated bug 1331294 ##important## (when that gets fixed, servo/servo#15006) [1]
-* test_bug397427.html: @import issue bug 1331291 and CSSOM support of @import [2]
+* test_bug397427.html: @import issue bug 1331291 and CSSOM support of @import [3]
 * console support:
   * test_bug413958.html `monitorConsole` [3]
   * test_parser_diagnostics_unprintables.html [550]
@@ -107,7 +106,7 @@ Any line which doesn't follow the format above would be ignored like comment.
   * test_transitions_computed_values.html [10]
   * test_transitions_dynamic_changes.html [10]
   * test_transitions_step_functions.html [24]
-  * test_value_storage.html `transition` [635]
+  * test_value_storage.html `transition` [620]
 * test_bug798843_pref.html: conditional opentype svg support [7]
 * test_computed_style.html `gradient`: -moz-prefixed radient value [9]
 * url value in style attribute bug 1310886
@@ -118,11 +117,8 @@ Any line which doesn't follow the format above would be ignored like comment.
   * ... `url` [3]
 * test_computed_style.html `mask`: setting mask shorthand resets subproperties to non-initial value bug 1331516 [11]
 * auto value for min-{width,height} servo/servo#15045
-  * test_computed_style_min_size_auto.html [14]
-  * test_compute_data_with_start_struct.html `height` [4]
-  * ... `min-width` [2]
+  * test_compute_data_with_start_struct.html `height` [1]
   * ... ` width` [1]
-  * test_value_storage.html `'auto' on 'min-` [4]
 * test_compute_data_with_start_struct.html `timing-function`: incorrectly computing keywords to bezier function servo/servo#15086 [2]
 * test_condition_text.html: @-moz-document, CSSOM support of @media, @support [2]
 * @counter-style support:
@@ -130,19 +126,19 @@ Any line which doesn't follow the format above would be ignored like comment.
   * test_counter_style.html [1]
   * test_rule_insertion.html `@counter-style` [4]
   * test_value_storage.html `symbols(` [30]
-  * ... `list-style-type` [74]
+  * ... `list-style-type` [60]
   * ... `'list-style'` [30]
 * test_default_computed_style.html: support of getDefaultComputedStyle [1]
 * @font-face support bug 1290237
   * test_descriptor_storage.html [1]
   * test_descriptor_syntax_errors.html [1]
   * test_font_face_parser.html `@font-face` [447]
-  * test_redundant_font_download.html [3] **disabled**
+  * test_redundant_font_download.html [3]
 * @namespace support:
   * test_namespace_rule.html [17]
 * test_dont_use_document_colors.html: support of disabling document color [21]
 * test_exposed_prop_accessors.html: mainly various unsupported properties [*]
-* test_extra_inherit_initial.html: CSS-wide keywords are accepted as part of value servo/servo#15054 [946]
+* test_extra_inherit_initial.html: CSS-wide keywords are accepted as part of value servo/servo#15054 [822]
 * flex-basis glue not implemented bug 1331529
   * test_flexbox_flex_shorthand.html `flex-basis` [28]
   * test_flexbox_layout.html [355]
@@ -221,7 +217,7 @@ Any line which doesn't follow the format above would be ignored like comment.
     * test_inherit_storage.html `transform`: for -moz-transform [3]
     * test_initial_computation.html `-moz-transform`: need different parsing rules [4]
     * test_initial_storage.html `transform`: for -moz-transform [6]
-    * test_value_storage.html `-moz-transform`: need different parsing rules [280]
+    * test_value_storage.html `-moz-transform`: need different parsing rules [284]
   * test_variables.html `var(--var6)`: -x-system-font [1]
 * Unimplemented CSS properties:
   * will-change longhand property
@@ -241,19 +237,12 @@ Any line which doesn't follow the format above would be ignored like comment.
     * test_initial_storage.html `contain` [4]
     * test_value_storage.html `'contain'` [30]
   * flexbox / grid position properties **need investigation**
-    * test_align_justify_computed_values.html [16]
-    * test_compute_data_with_start_struct.html `align-` [2]
-    * ... `justify-` [2]
-    * test_inherit_computation.html `align-` [4]
-    * ... `justify-` [2]
     * test_inherit_storage.html `align-` [3]
-    * ... `justify-` [5]
-    * test_initial_computation.html `align-` [8]
-    * ... `justify-` [4]
+    * ... `justify-` [3]
     * test_initial_storage.html `align-` [6]
-    * ... `justify-` [10]
-    * test_value_storage.html `align-` [105]
-    * ... `justify-` [111]
+    * ... `justify-` [6]
+    * test_value_storage.html `align-` [90]
+    * ... `justify-` [79]
   * place-{content,items,self} shorthands
     * test_align_shorthand_serialization.html [8]
     * test_inherit_computation.html `place-` [6]
@@ -289,6 +278,12 @@ Any line which doesn't follow the format above would be ignored like comment.
     * test_initial_computation.html `shape-outside` [4]
     * test_initial_storage.html `shape-outside` [4]
     * test_value_storage.html `shape-outside` [121]
+  * text-justify property
+    * test_compute_data_with_start_struct.html `text-justify` [2]
+    * test_inherit_computation.html `text-justify` [4]
+    * test_inherit_storage.html `text-justify` [4]
+    * test_initial_computation.html `text-justify` [2]
+    * test_initial_storage.html `text-justify` [2]
   * touch-action property
     * test_compute_data_with_start_struct.html `touch-action` [2]
     * test_inherit_computation.html `touch-action` [2]
@@ -297,36 +292,13 @@ Any line which doesn't follow the format above would be ignored like comment.
     * test_initial_storage.html `touch-action` [4]
     * test_value_storage.html `touch-action` [14]
 * Unimplemented SVG properties:
-  * fill property
-    * test_compute_data_with_start_struct.html `fill` [2]
-    * test_inherit_computation.html `fill` [4]
-    * test_inherit_storage.html `fill` [4]
-    * test_initial_computation.html `fill` [2]
-    * test_initial_storage.html `fill` [2]
-    * test_value_storage.html `on 'fill'` [25]
   * marker-{start,mid,end} properties
     * test_compute_data_with_start_struct.html `marker-` [6]
     * test_inherit_computation.html `marker` [16]
-    * test_inherit_storage.html `marker` [22]
     * test_initial_computation.html `marker` [8]
-    * test_initial_storage.html `marker` [11]
-    * test_value_storage.html `on 'marker` [15]
-  * paint-order property
-    * test_compute_data_with_start_struct.html `paint-order` [2]
-    * test_inherit_computation.html `paint-order` [4]
-    * test_inherit_storage.html `paint-order` [4]
-    * test_initial_computation.html `paint-order` [2]
-    * test_initial_storage.html `paint-order` [2]
-    * test_value_storage.html `on 'paint-order` [10]
   * stroke properties
-    * test_compute_data_with_start_struct.html `stroke` [8]
-    * test_inherit_computation.html `'stroke` [16]
-    * test_inherit_storage.html `'stroke` [8]
-    * ... `"stroke` [8]
-    * test_initial_computation.html `'stroke` [8]
-    * test_initial_storage.html `'stroke` [4]
-    * ... `"stroke` [4]
-    * test_value_storage.html `on 'stroke` [71]
+    * test_value_storage.html `on 'stroke` [6]
+    * test_compute_data_with_start_struct.html `initial and other values of stroke-dasharray are different` [2]
 * Properties implemented but not in geckolib:
   * counter-reset property:
     * test_bug829816.html [8]
@@ -344,13 +316,8 @@ Any line which doesn't follow the format above would be ignored like comment.
     * test_initial_computation.html `counter-increment` [4]
     * test_initial_storage.html `counter-increment` [4]
     * test_value_storage.html `counter-increment` [30]
-  * clip property
-    * test_compute_data_with_start_struct.html `clip` [2]
-    * test_inherit_computation.html `clip` [2]
-    * test_inherit_storage.html `clip` [2]
-    * test_initial_computation.html `'clip'` [4]
-    * test_initial_storage.html `clip` [4]
-    * test_value_storage.html `on 'clip'` [12]
+  * clip property: servo/servo#15729
+    * test_value_storage.html `should be idempotent for 'clip` [4]
   * font-feature-settings property
     * test_compute_data_with_start_struct.html `font-feature-settings` [2]
     * test_inherit_computation.html `font-feature-settings` [8]
@@ -422,7 +389,6 @@ Any line which doesn't follow the format above would be ignored like comment.
     * test_pointer-events.html [2]
     * test_value_storage.html `pointer-events` [8]
   * new syntax of rgba?() and hsla?() functions servo/rust-cssparser#113
-    * test_parse_rule.html `128.0` [1]
     * test_value_storage.html `'color'` [37]
     * ... `rgb(100, 100.0, 100)` [1]
   * color interpolation hint not supported servo/servo#15166
@@ -432,7 +398,7 @@ Any line which doesn't follow the format above would be ignored like comment.
     * ... `mask-repeat` [24]
   * lack glue for function values of content property bug 1296477
     * test_rule_insertion.html `decimal counter` [3]
-    * test_value_storage.html `'content` [38]
+    * test_value_storage.html `'content` [40]
   * SVG-in-OpenType values not supported servo/servo#15211
     * test_value_storage.html `context-` [2]
   * writing-mode: sideways-{lr,rl} and SVG values servo/servo#15213
@@ -445,10 +411,6 @@ Any line which doesn't follow the format above would be ignored like comment.
   * calc() doesn't support number value servo/servo#15205
     * test_value_storage.html `calc(1 +` [1]
     * ... `calc(-2.5)` [1]
-  * incorrect parsing function for column-{gap,width} servo/servo#15088
-    * test_compute_data_with_start_struct.html ` column-` [4]
-    * test_value_storage.html `column-gap` [3]
-    * ... `column-width` [3]
   * size part of shorthand background/mask always desires two values servo/servo#15199
     * test_value_storage.html `'background'` [18]
     * ... `/ auto none` [34]
@@ -467,11 +429,12 @@ Any line which doesn't follow the format above would be ignored like comment.
     * ... `circle(at ` [2]
     * ... `ellipse(at ` [2]
   * accepts rubbish for second part of value:
-    * {transform,perspective}-origin servo/servo#15487
-      * test_property_syntax_errors.html `transform-origin'` [50]
-      * ... `perspective-origin'` [30]
-    * test_property_syntax_errors.html `'border-spacing'`: servo/servo#15489 [7]
-    * ... `'text-overflow'`: servo/servo#15491 [8]
+    * test_property_syntax_errors.html `'text-overflow'`: servo/servo#15491 [8]
+  * -moz-alt-content parsing is wrong: servo/servo#15726
+    * test_property_syntax_errors.html `-moz-alt-content` [4]
+  * {transform,perspective}-origin fail to parse 'center left' and 'center right' servo/servo#15750
+    * test_value_storage.html `'center left'` [8]
+    * ... `'center right'` [8]
 * Incorrect serialization
   * border-radius and -moz-outline-radius shorthand servo/servo#15169
     * test_priority_preservation.html `border-radius` [4]
@@ -490,28 +453,22 @@ Any line which doesn't follow the format above would be ignored like comment.
     * ... `for 'mask-position` [18]
     * ... `for '-webkit-mask-position` [36]
     * ... `for '-webkit-mask` [3]
-    * test_shorthand_property_getters.html `background-position` [3]
+    * test_shorthand_property_getters.html `background-position` [1]
   * box-shadow wrong order of &lt;length&gt; values servo/servo#15203
     * test_value_storage.html `box-shadow` [44]
   * outline shorthand generates "initial" as part servo/servo#15206
     * test_value_storage.html `'outline:` [4]
-  * border shorthand serializes when not Serializes servo/servo#15395
-    * test_shorthand_property_getters.html `should not be able to serialize border` [7]
   * color value not canonicalized servo/servo#15397
     * test_shorthand_property_getters.html `should condense to canonical case` [2]
-  * animation and transition shorthand serialization is wrong servo/servo#15398
-    * test_shorthand_property_getters.html `animation` [9]
-    * ... `transition` [5]
   * background-position invalid 3-value form **issue to be filed**
     * test_shorthand_property_getters.html `should serialize to 4-value` [2]
   * test_variables.html `--weird`: name of custom property is not escaped properly servo/servo#15399 [1]
   * ... `got "--`: CSS-wide keywords in custom properties servo/servo#15401 [3]
+  * test_priority_preservation.html `text-decoration`: not serialize style if it has the initial value servo/servo#15790 [6]
 * Unsupported pseudo-classes
   * :default ##easy##
     * test_bug302186.html [24]
   * test_bug98997.html: pseudo-class :empty and :-moz-only-whitespace bug 1337068 [75]
-  * :lang() servo/servo#15415
-    * test_parse_rule.html `:lang` [2]
   * :-moz-{first,last}-node
     * test_selectors.html `:-moz-` [4]
     * ... `unexpected rule index` [2]
@@ -523,13 +480,11 @@ Any line which doesn't follow the format above would be ignored like comment.
   * test_initial_storage.html `for property 'font-` [1]
   * test_value_storage.html `'font'` [171]
   * test_shorthand_property_getters.html `font shorthand` [2]
-  * test_system_font_serialization.html [11]
-* test_value_storage.html `font-size: calc(`: clamp negative value servo/servo#15296 [4]
+  * test_system_font_serialization.html [10]
+* test_value_storage.html `font-size: calc(`: clamp negative value servo/servo#15296 [3]
 * rounding issue
   * test_value_storage.html `33.5833px` [2]
-  * ... `98.7667px` [1]
   * ... `0.766667px` [2]
-  * ... `75.5667px` [2]
   * ... `105.333px` [2]
 * test_viewport_units.html: viewport units support [12]
 * test_value_storage.html `: var(--a)`: extra whitespace is added for shorthand with variables servo/servo#15295 [*]
@@ -556,8 +511,8 @@ Any line which doesn't follow the format above would be ignored like comment.
     * ... `: 10 ` [6]
     * ... ` 2 ` [26]
     * ... `: 5 ` [84]
-    * ... `border-spacing: ` [5]
-    * ... `rect(1, ` [1]
+    * ... `border-spacing: ` [6]
+    * ... `rect(1, ` [2]
 * test_pseudoelement_parsing.html: support parsing some pseudo-classes on some pseudo-elements [5]
 * Unit should be preserved after parsing servo/servo#15346
   * test_units_length.html [5]
@@ -570,26 +525,17 @@ Any line which doesn't follow the format above would be ignored like comment.
   * test_variable_serialization_computed.html [36]
   * test_variables.html `custom property name` [2]
 * test_css_supports.html: issues around @supports syntax servo/servo#15482 [8]
-* test_load_events_on_stylesheets.html: stylesheets from data uri are not sync loaded [3]
 
 ## Assertions
 
-* Table wrapper with borders and paddings bug 1324661
-  * test_animations_async_tests.html asserts [3]
-  * test_animations_effect_timing_enddelay.html asserts [2]
-  * test_animations_event_order.html asserts [1]
-  * test_animations_omta_start.html asserts [1]
-  * test_animations_playbackrate.html asserts [1]
-  * test_at_rule_parse_serialize.html asserts [1]
-  * test_unclosed_parentheses.html asserts [1]
 * Content glue not implemented
   * assertion in frame constructor bug 1324704
     * test_rule_insertion.html asserts [1]
   * assertion in computed style bug 1337635
-    * test_value_cloning.html asserts [18]
-    * test_value_computation.html asserts [18]
-    * test_value_storage.html asserts [32]
-* test_value_cloning.html asserts: negative radius bug 1337618 [6]
+    * test_value_cloning.html asserts [12]
+    * test_value_computation.html asserts [24]
+    * test_value_storage.html asserts [44]
+* test_value_cloning.html asserts: negative radius bug 1337618 [4]
 
 ## Need Gecko change
 
@@ -597,7 +543,6 @@ Any line which doesn't follow the format above would be ignored like comment.
   * unitless zero as angle bug 1234357
     * test_property_syntax_errors.html `linear-gradient(0,` [10]
     * ... `hue-rotate(0)` [6]
-  * test_bug372770.html: rgba(0,0,0,0) and transparent bug 1328224 [4]
 * test_moz_device_pixel_ratio.html: probably unship -moz-device-pixel-ratio bug 1338425 [4]
 
 ## Spec Unclear
@@ -610,23 +555,12 @@ Any line which doesn't follow the format above would be ignored like comment.
 * border-width/padding failure
   * test_compute_data_with_start_struct.html `-width` [4]
   * ... `padding-` [4]
-* -moz-border alias should have been fixed servo/servo#15297
-  * test_inherit_storage.html `-moz-border-` [22]
-  * ... `border-inline-` [2]
-  * test_inherit_computation.html `-moz-border-end` [12]
-  * ... `-moz-border-start` [12]
-  * test_initial_storage.html `-moz-border-` [44]
-  * ... `border-inline-` [4]
-  * test_initial_computation.html `-moz-border-end` [6]
-  * ... `-moz-border-start` [6]
-  * test_value_storage.html `-moz-border-end` [66]
-  * ... `border-inline-end` [42]
-  * ... `-moz-border-start` [66]
-  * ... `border-inline-start` [42]
+* test_additional_sheets.html: one sub-test cascade order is wrong [1]
 * test_selectors.html `:nth-child`: &lt;an+b&gt; parsing difference [14]
 * test_selectors_on_anonymous_content.html: xbl and :nth-child [1]
 * test_variables.html `url`: url in custom property [1]
 * test_pseudoelement_state.html: doesn't seem to work at all, but only range-thumb fails... [4]
+* test_parse_rule.html `rgb(0, 128, 0)`: color properties not getting computed [8]
 
 ## Ignore
 

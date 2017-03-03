@@ -12,6 +12,7 @@ import android.content.ContentProviderClient;
 import android.os.Environment;
 import android.os.Process;
 import android.support.annotation.NonNull;
+import android.support.annotation.UiThread;
 
 import android.graphics.Rect;
 
@@ -61,6 +62,7 @@ import org.mozilla.gecko.javaaddons.JavaAddonManager;
 import org.mozilla.gecko.media.VideoPlayer;
 import org.mozilla.gecko.menu.GeckoMenu;
 import org.mozilla.gecko.menu.GeckoMenuItem;
+import org.mozilla.gecko.mozglue.GeckoLoader;
 import org.mozilla.gecko.mozglue.SafeIntent;
 import org.mozilla.gecko.notifications.NotificationHelper;
 import org.mozilla.gecko.overlays.ui.ShareDialog;
@@ -924,6 +926,25 @@ public class BrowserApp extends GeckoApp
     }
 
     /**
+     * Code to actually show the first run pager, separated
+     * for distribution purposes.
+     */
+    @UiThread
+    private void checkFirstrunInternal() {
+        showFirstrunPager();
+
+        if (HardwareUtils.isTablet()) {
+            mTabStrip.setOnTabChangedListener(new TabStripInterface.OnTabAddedOrRemovedListener() {
+                @Override
+                public void onTabChanged() {
+                    hideFirstrunPager(TelemetryContract.Method.BUTTON);
+                    mTabStrip.setOnTabChangedListener(null);
+                }
+            });
+        }
+    }
+
+    /**
      * Check and show the firstrun pane if the browser has never been launched and
      * is not opening an external link from another application.
      *
@@ -946,16 +967,40 @@ public class BrowserApp extends GeckoApp
         try {
             final SharedPreferences prefs = GeckoSharedPrefs.forProfile(this);
 
-            if (prefs.getBoolean(FirstrunAnimationContainer.PREF_FIRSTRUN_ENABLED, true)) {
+            if (prefs.getBoolean(FirstrunAnimationContainer.PREF_FIRSTRUN_ENABLED_OLD, true) &&
+                prefs.getBoolean(FirstrunAnimationContainer.PREF_FIRSTRUN_ENABLED, true)) {
                 if (!Intent.ACTION_VIEW.equals(intent.getAction())) {
-                    showFirstrunPager();
-
-                    if (HardwareUtils.isTablet()) {
-                        mTabStrip.setOnTabChangedListener(new TabStripInterface.OnTabAddedOrRemovedListener() {
+                    // Check to see if a distribution has turned off the first run pager.
+                    final Distribution distribution = Distribution.getInstance(BrowserApp.this);
+                    if (!distribution.shouldWaitForSystemDistribution()) {
+                        checkFirstrunInternal();
+                    } else {
+                        distribution.addOnDistributionReadyCallback(new Distribution.ReadyCallback() {
                             @Override
-                            public void onTabChanged() {
-                                hideFirstrunPager(TelemetryContract.Method.BUTTON);
-                                mTabStrip.setOnTabChangedListener(null);
+                            public void distributionNotFound() {
+                                ThreadUtils.postToUiThread(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        checkFirstrunInternal();
+                                    }
+                                });
+                            }
+
+                            @Override
+                            public void distributionFound(final Distribution distribution) {
+                                // Check preference again in case distribution turned it off.
+                                if (prefs.getBoolean(FirstrunAnimationContainer.PREF_FIRSTRUN_ENABLED, true)) {
+                                    ThreadUtils.postToUiThread(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            checkFirstrunInternal();
+                                        }
+                                    });
+                                }
+                            }
+
+                            @Override
+                            public void distributionArrivedLate(final Distribution distribution) {
                             }
                         });
                     }
@@ -1171,6 +1216,8 @@ public class BrowserApp extends GeckoApp
         for (final BrowserAppDelegate delegate : delegates) {
             delegate.onStop(this);
         }
+
+        onAfterStop();
     }
 
     @Override
@@ -1700,6 +1747,10 @@ public class BrowserApp extends GeckoApp
                               final EventCallback callback) {
         switch (event) {
             case "Gecko:Ready":
+                if (!GeckoLoader.neonCompatible()) {
+                    conditionallyNotifyEOL();
+                }
+
                 EventDispatcher.getInstance().registerUiThreadListener(this, "Gecko:DelayedStartup");
 
                 // Handle this message in GeckoApp, but also enable the Settings
@@ -2026,8 +2077,8 @@ public class BrowserApp extends GeckoApp
                 request.setMimeType(mimeType);
 
                 try {
-                    request.setDestinationInExternalFilesDir(
-                            this, Environment.DIRECTORY_DOWNLOADS, filename);
+                    request.setDestinationInExternalPublicDir(
+                            Environment.DIRECTORY_DOWNLOADS, filename);
                 } catch (IllegalStateException e) {
                     Log.e(LOGTAG, "Cannot create download directory");
                     break;
@@ -3031,56 +3082,19 @@ public class BrowserApp extends GeckoApp
     }
 
     /**
-     * Hides certain UI elements (e.g. button toast, tabs panel) when the
-     * user touches the main layout.
+     * Hides certain UI elements (e.g. button toast) when the user touches the main layout.
      */
     private class HideOnTouchListener implements TouchEventInterceptor {
-        private boolean mIsHidingTabs;
-        private final Rect mTempRect = new Rect();
-
         @Override
         public boolean onInterceptTouchEvent(View view, MotionEvent event) {
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 SnackbarBuilder.dismissCurrentSnackbar();
-            }
-
-
-
-            // We need to account for scroll state for the touched view otherwise
-            // tapping on an "empty" part of the view will still be considered a
-            // valid touch event.
-            if (view.getScrollX() != 0 || view.getScrollY() != 0) {
-                view.getHitRect(mTempRect);
-                mTempRect.offset(-view.getScrollX(), -view.getScrollY());
-
-                int[] viewCoords = new int[2];
-                view.getLocationOnScreen(viewCoords);
-
-                int x = (int) event.getRawX() - viewCoords[0];
-                int y = (int) event.getRawY() - viewCoords[1];
-
-                if (!mTempRect.contains(x, y))
-                    return false;
-            }
-
-            // If the tabs panel is showing, hide the tab panel and don't send the event to content.
-            if (event.getActionMasked() == MotionEvent.ACTION_DOWN && autoHideTabs()) {
-                mIsHidingTabs = true;
-                return true;
             }
             return false;
         }
 
         @Override
         public boolean onTouch(View view, MotionEvent event) {
-            if (mIsHidingTabs) {
-                // Keep consuming events until the gesture finishes.
-                int action = event.getActionMasked();
-                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                    mIsHidingTabs = false;
-                }
-                return true;
-            }
             return false;
         }
     }

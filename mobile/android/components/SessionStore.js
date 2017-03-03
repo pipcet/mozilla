@@ -183,6 +183,7 @@ SessionStore.prototype = {
         observerService.addObserver(this, "quit-application", true);
         observerService.addObserver(this, "Session:Restore", true);
         observerService.addObserver(this, "Session:NotifyLocationChange", true);
+        observerService.addObserver(this, "Content:HistoryChange", true);
         observerService.addObserver(this, "Tab:KeepZombified", true);
         observerService.addObserver(this, "application-background", true);
         observerService.addObserver(this, "application-foreground", true);
@@ -310,6 +311,27 @@ SessionStore.prototype = {
         if (browser.__SS_restoreDataOnLocationChange) {
           delete browser.__SS_restoreDataOnLocationChange;
           this._restoreZoom(browser.__SS_data.scrolldata, browser);
+        }
+        break;
+      }
+      case "Content:HistoryChange": {
+        let browser = aSubject;
+        let window = browser.ownerGlobal;
+        log("Content:HistoryChange for tab " + window.BrowserApp.getTabForBrowser(browser).id);
+        // We want to ignore history changes which we caused ourselves when
+        // restoring the history of a delay-loaded tab.
+        if (!browser.__SS_restore && !browser.__SS_restoreReloadPending) {
+          // The OnHistory... notifications are called *before* the history changes
+          // are persisted. We therefore need to make our onTabLoad call async,
+          // so it can actually capture the new session history state.
+          if (browser.__SS_historyChange) {
+            window.clearTimeout(browser.__SS_historyChange);
+          }
+          browser.__SS_historyChange =
+            window.setTimeout(() => {
+              delete browser.__SS_historyChange;
+              this.onTabLoad(window, browser);
+            }, 0);
         }
         break;
       }
@@ -618,6 +640,11 @@ SessionStore.prototype = {
     aBrowser.removeEventListener("DOMAutoComplete", this, true);
     aBrowser.removeEventListener("scroll", this, true);
     aBrowser.removeEventListener("resize", this, true);
+
+    if (aBrowser.__SS_historyChange) {
+      aWindow.clearTimeout(aBrowser.__SS_historyChange);
+      delete aBrowser.__SS_historyChange;
+    }
 
     delete aBrowser.__SS_data;
 
@@ -1412,14 +1439,6 @@ SessionStore.prototype = {
       }
     }
 
-    // The field aEntry.owner_b64 got renamed to aEntry.triggeringPricipal_b64 in
-    // Bug 1286472. To remain backward compatible we still have to support that
-    // field for a few cycles before we can remove it within Bug 1289785.
-    if (aEntry.owner_b64) {
-      aEntry.triggeringPricipal_b64 = aEntry.owner_b64;
-      delete aEntry.owner_b64;
-    }
-
     // Before introducing the concept of principalToInherit we only had
     // a triggeringPrincipal within every entry which basically is the
     // equivalent of the new principalToInherit. To avoid compatibility
@@ -1647,12 +1666,12 @@ SessionStore.prototype = {
       tab.browser.__SS_extdata = tabData.extData;
 
       if (window.BrowserApp.selectedTab == tab) {
-        this._restoreTab(tabData, tab.browser);
-
-        // We can now lift the general ban on tab data capturing,
-        // but we still need to protect the foreground tab until we're
+        // After we're done restoring, we can lift the general ban on tab data
+        // capturing, but we still need to protect the foreground tab until we're
         // sure it's actually reloading after history restoring has finished.
         tab.browser.__SS_restoreReloadPending = true;
+
+        this._restoreTab(tabData, tab.browser);
         this._startupRestoreFinished = true;
         log("startupRestoreFinished = true");
 
@@ -1774,11 +1793,11 @@ SessionStore.prototype = {
     let tabs = closedTabs
       .filter(tab => tab.isPrivate == isPrivate)
       .map(function (tab) {
-        // Get the url and title for the last entry in the session history.
-        let lastEntry = tab.entries[tab.entries.length - 1];
+        // Get the url and title for the current entry in the session history.
+        let entry = tab.entries[tab.index - 1];
         return {
-          url: lastEntry.url,
-          title: lastEntry.title || "",
+          url: entry.url,
+          title: entry.title || "",
           data: JSON.stringify(tab),
         };
       });

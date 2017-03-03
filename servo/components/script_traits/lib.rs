@@ -6,8 +6,6 @@
 //! The traits are here instead of in script so that these modules won't have
 //! to depend on script.
 
-#![feature(plugin)]
-#![plugin(plugins)]
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 
@@ -69,7 +67,7 @@ use servo_url::ServoUrl;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::mpsc::{Receiver, Sender};
-use style_traits::{PagePx, UnsafeNode, ViewportPx};
+use style_traits::{CSSPixel, UnsafeNode};
 use webdriver_msg::{LoadStatus, WebDriverScriptCommand};
 use webvr_traits::{WebVRDisplayEvent, WebVRMsg};
 
@@ -91,13 +89,13 @@ impl HeapSizeOf for UntrustedNodeAddress {
 unsafe impl Send for UntrustedNodeAddress {}
 
 impl Serialize for UntrustedNodeAddress {
-    fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), S::Error> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         (self.0 as usize).serialize(s)
     }
 }
 
 impl Deserialize for UntrustedNodeAddress {
-    fn deserialize<D: Deserializer>(d: &mut D) -> Result<UntrustedNodeAddress, D::Error> {
+    fn deserialize<D: Deserializer>(d: D) -> Result<UntrustedNodeAddress, D::Error> {
         let value: usize = try!(Deserialize::deserialize(d));
         Ok(UntrustedNodeAddress::from_id(value))
     }
@@ -665,13 +663,10 @@ pub enum DevicePixel {}
 pub struct WindowSizeData {
     /// The size of the initial layout viewport, before parsing an
     /// http://www.w3.org/TR/css-device-adapt/#initial-viewport
-    pub initial_viewport: TypedSize2D<f32, ViewportPx>,
-
-    /// The "viewing area" in page px. See `PagePx` documentation for details.
-    pub visible_viewport: TypedSize2D<f32, PagePx>,
+    pub initial_viewport: TypedSize2D<f32, CSSPixel>,
 
     /// The resolution of the window in dppx, not including any "pinch zoom" factor.
-    pub device_pixel_ratio: ScaleFactor<f32, ViewportPx, DevicePixel>,
+    pub device_pixel_ratio: ScaleFactor<f32, CSSPixel, DevicePixel>,
 }
 
 /// The type of window size change.

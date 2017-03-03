@@ -2694,6 +2694,7 @@ ssl3_SendRecord(sslSocket *ss,
     SECStatus rv;
     PRInt32 totalSent = 0;
     PRBool capRecordVersion;
+    ssl3CipherSpec *spec;
 
     SSL_TRC(3, ("%d: SSL3[%d] SendRecord type: %s nIn=%d",
                 SSL_GETPID(), ss->fd, ssl3_DecodeContentType(type),
@@ -2798,11 +2799,12 @@ ssl3_SendRecord(sslSocket *ss,
                 PORT_Assert(IS_DTLS(ss) &&
                             (type == content_handshake ||
                              type == content_change_cipher_spec));
+                spec = cwSpec;
             } else {
-                cwSpec = ss->ssl3.cwSpec;
+                spec = ss->ssl3.cwSpec;
             }
 
-            rv = ssl_ProtectRecord(ss, cwSpec, !IS_DTLS(ss) && capRecordVersion,
+            rv = ssl_ProtectRecord(ss, spec, !IS_DTLS(ss) && capRecordVersion,
                                    type, pIn, contentLen, wrBuf);
             if (rv == SECSuccess) {
                 PRINT_BUF(50, (ss, "send (encrypted) record data:",
@@ -3069,7 +3071,9 @@ ssl3_HandleNoCertificate(sslSocket *ss)
          (ss->opt.requireCertificate == SSL_REQUIRE_FIRST_HANDSHAKE))) {
         PRFileDesc *lower;
 
-        ss->sec.uncache(ss->sec.ci.sid);
+        if (!ss->opt.noCache) {
+            ss->sec.uncache(ss->sec.ci.sid);
+        }
         SSL3_SendAlert(ss, alert_fatal, bad_certificate);
 
         lower = ss->fd->lower;
@@ -9790,16 +9794,14 @@ ssl3_HandleCertificateVerify(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
     PORT_Assert(ss->opt.noLocks || ssl_HaveRecvBufLock(ss));
     PORT_Assert(ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss));
 
-    /* TLS 1.3 is handled by tls13_HandleCertificateVerify */
-    PORT_Assert(ss->ssl3.prSpec->version <= SSL_LIBRARY_VERSION_TLS_1_2);
-
-    isTLS = (PRBool)(ss->ssl3.prSpec->version > SSL_LIBRARY_VERSION_3_0);
-
     if (ss->ssl3.hs.ws != wait_cert_verify) {
         desc = unexpected_message;
         errCode = SSL_ERROR_RX_UNEXPECTED_CERT_VERIFY;
         goto alert_loser;
     }
+
+    /* TLS 1.3 is handled by tls13_HandleCertificateVerify */
+    PORT_Assert(ss->ssl3.prSpec->version <= SSL_LIBRARY_VERSION_TLS_1_2);
 
     if (!hashes) {
         PORT_Assert(0);
@@ -9847,6 +9849,8 @@ ssl3_HandleCertificateVerify(sslSocket *ss, SSL3Opaque *b, PRUint32 length,
     if (rv != SECSuccess) {
         goto loser; /* malformed. */
     }
+
+    isTLS = (PRBool)(ss->ssl3.prSpec->version > SSL_LIBRARY_VERSION_3_0);
 
     /* XXX verify that the key & kea match */
     rv = ssl3_VerifySignedHashes(ss, sigScheme, hashesForVerify, &signed_hash);
@@ -10277,7 +10281,7 @@ ssl3_SendNewSessionTicket(sslSocket *ss)
         goto loser;
 
     /* This is a fixed value. */
-    rv = ssl3_AppendHandshakeNumber(ss, TLS_EX_SESS_TICKET_LIFETIME_HINT, 4);
+    rv = ssl3_AppendHandshakeNumber(ss, ssl_ticket_lifetime, 4);
     if (rv != SECSuccess)
         goto loser;
 
@@ -13343,8 +13347,6 @@ ssl3_DestroySSL3Info(sslSocket *ss)
     tls13_DestroyEarlyData(&ss->ssl3.hs.bufferedEarlyData);
 
     ss->ssl3.initialized = PR_FALSE;
-
-    SECITEM_FreeItem(&ss->xtnData.nextProto, PR_FALSE);
 }
 
 #define MAP_NULL(x) (((x) != 0) ? (x) : SEC_OID_NULL_CIPHER)

@@ -12,6 +12,7 @@
 #include "proxy/Proxy.h"
 
 #include "jscntxtinlines.h"
+#include "jscompartmentinlines.h"
 
 #include "jit/MacroAssembler-inl.h"
 
@@ -262,6 +263,24 @@ BaselineCacheIRCompiler::emitGuardProto()
 }
 
 bool
+BaselineCacheIRCompiler::emitGuardCompartment()
+{
+    Register obj = allocator.useRegister(masm, reader.objOperandId());
+    reader.stubOffset(); // Read global.
+    AutoScratchRegister scratch(allocator, masm);
+
+    FailurePath* failure;
+    if (!addFailurePath(&failure))
+        return false;
+
+    Address addr(stubAddress(reader.stubOffset()));
+    masm.loadPtr(Address(obj, JSObject::offsetOfGroup()), scratch);
+    masm.loadPtr(Address(scratch, ObjectGroup::offsetOfCompartment()), scratch);
+    masm.branchPtr(Assembler::NotEqual, addr, scratch, failure->label());
+    return true;
+}
+
+bool
 BaselineCacheIRCompiler::emitGuardSpecificObject()
 {
     Register obj = allocator.useRegister(masm, reader.objOperandId());
@@ -354,11 +373,11 @@ BaselineCacheIRCompiler::emitLoadDynamicSlotResult()
     AutoOutputRegister output(*this);
     Register obj = allocator.useRegister(masm, reader.objOperandId());
     AutoScratchRegisterMaybeOutput scratch(allocator, masm, output);
+    AutoScratchRegister scratch2(allocator, masm);
 
-    // We're about to return, so it's safe to clobber obj now.
     masm.load32(stubAddress(reader.stubOffset()), scratch);
-    masm.loadPtr(Address(obj, NativeObject::offsetOfSlots()), obj);
-    masm.loadValue(BaseIndex(obj, scratch, TimesOne), output.valueReg());
+    masm.loadPtr(Address(obj, NativeObject::offsetOfSlots()), scratch2);
+    masm.loadValue(BaseIndex(scratch2, scratch, TimesOne), output.valueReg());
     return true;
 }
 
@@ -911,7 +930,7 @@ BaselineCacheIRCompiler::emitStoreUnboxedProperty()
 
     // Note that the storeUnboxedProperty call here is infallible, as the
     // IR emitter is responsible for guarding on |val|'s type.
-    EmitUnboxedPreBarrierForBaseline(masm, fieldAddr, fieldType);
+    EmitICUnboxedPreBarrier(masm, fieldAddr, fieldType);
     masm.storeUnboxedProperty(fieldAddr, fieldType,
                               ConstantOrRegister(TypedOrValueRegister(val)),
                               /* failure = */ nullptr);
@@ -937,7 +956,7 @@ BaselineCacheIRCompiler::emitStoreTypedObjectReferenceProperty()
     Register obj = allocator.useRegister(masm, objId);
     AutoScratchRegister scratch2(allocator, masm);
 
-    // We don't need a type update IC if the property is always a string.scratch
+    // We don't need a type update IC if the property is always a string.
     if (type != ReferenceTypeDescr::TYPE_STRING) {
         LiveGeneralRegisterSet saveRegs;
         saveRegs.add(obj);
@@ -951,35 +970,10 @@ BaselineCacheIRCompiler::emitStoreTypedObjectReferenceProperty()
     masm.addPtr(offsetAddr, scratch1);
     Address dest(scratch1, 0);
 
-    switch (type) {
-      case ReferenceTypeDescr::TYPE_ANY:
-        EmitPreBarrier(masm, dest, MIRType::Value);
-        masm.storeValue(val, dest);
-        break;
-
-      case ReferenceTypeDescr::TYPE_OBJECT: {
-        EmitPreBarrier(masm, dest, MIRType::Object);
-        Label isNull, done;
-        masm.branchTestObject(Assembler::NotEqual, val, &isNull);
-        masm.unboxObject(val, scratch2);
-        masm.storePtr(scratch2, dest);
-        masm.jump(&done);
-        masm.bind(&isNull);
-        masm.storePtr(ImmWord(0), dest);
-        masm.bind(&done);
-        break;
-      }
-
-      case ReferenceTypeDescr::TYPE_STRING:
-        EmitPreBarrier(masm, dest, MIRType::String);
-        masm.unboxString(val, scratch2);
-        masm.storePtr(scratch2, dest);
-        break;
-    }
+    emitStoreTypedObjectReferenceProp(val, type, dest, scratch2);
 
     if (type != ReferenceTypeDescr::TYPE_STRING)
         BaselineEmitPostWriteBarrierSlot(masm, obj, val, scratch1, LiveGeneralRegisterSet(), cx_);
-
     return true;
 }
 
@@ -1003,7 +997,7 @@ BaselineCacheIRCompiler::emitStoreTypedObjectScalarProperty()
     masm.addPtr(offsetAddr, scratch1);
     Address dest(scratch1, 0);
 
-    BaselineStoreToTypedArray(cx_, masm, type, val, dest, scratch2, failure->label());
+    StoreToTypedArray(cx_, masm, type, val, dest, scratch2, failure->label());
     return true;
 }
 
@@ -1230,7 +1224,7 @@ BaselineCacheIRCompiler::emitStoreTypedElement()
     masm.push(scratch2);
 
     Label fail;
-    BaselineStoreToTypedArray(cx_, masm, type, val, dest, scratch2, &fail);
+    StoreToTypedArray(cx_, masm, type, val, dest, scratch2, &fail);
     masm.pop(scratch2);
     masm.jump(&done);
 
@@ -1284,7 +1278,7 @@ BaselineCacheIRCompiler::emitStoreUnboxedArrayElement()
     // Note that the storeUnboxedProperty call here is infallible, as the
     // IR emitter is responsible for guarding on |val|'s type.
     BaseIndex element(scratch, index, ScaleFromElemWidth(UnboxedTypeSize(elementType)));
-    EmitUnboxedPreBarrierForBaseline(masm, element, elementType);
+    EmitICUnboxedPreBarrier(masm, element, elementType);
     masm.storeUnboxedProperty(element, elementType,
                               ConstantOrRegister(TypedOrValueRegister(val)),
                               /* failure = */ nullptr);
@@ -1351,13 +1345,13 @@ BaselineCacheIRCompiler::emitStoreUnboxedArrayElementHole()
     masm.add32(Imm32(1), length);
     masm.bind(&skipIncrementLength);
 
-    // Skip EmitUnboxedPreBarrierForBaseline as the memory is uninitialized.
+    // Skip EmitICUnboxedPreBarrier as the memory is uninitialized.
     masm.jump(&doStore);
 
     masm.bind(&inBounds);
 
     BaseIndex element(scratch, index, ScaleFromElemWidth(UnboxedTypeSize(elementType)));
-    EmitUnboxedPreBarrierForBaseline(masm, element, elementType);
+    EmitICUnboxedPreBarrier(masm, element, elementType);
 
     // Note that the storeUnboxedProperty call here is infallible, as the
     // IR emitter is responsible for guarding on |val|'s type.
@@ -1499,6 +1493,79 @@ BaselineCacheIRCompiler::emitCallSetArrayLength()
     masm.Push(obj);
 
     if (!callVM(masm, SetArrayLengthInfo))
+        return false;
+
+    stubFrame.leave(masm);
+    return true;
+}
+
+typedef bool (*ProxySetPropertyFn)(JSContext*, HandleObject, HandleId, HandleValue, bool);
+static const VMFunction ProxySetPropertyInfo =
+    FunctionInfo<ProxySetPropertyFn>(ProxySetProperty, "ProxySetProperty");
+
+bool
+BaselineCacheIRCompiler::emitCallProxySet()
+{
+    Register obj = allocator.useRegister(masm, reader.objOperandId());
+    ValueOperand val = allocator.useValueRegister(masm, reader.valOperandId());
+    Address idAddr(stubAddress(reader.stubOffset()));
+    bool strict = reader.readBool();
+
+    AutoScratchRegister scratch(allocator, masm);
+
+    allocator.discardStack(masm);
+
+    AutoStubFrame stubFrame(*this);
+    stubFrame.enter(masm, scratch);
+
+    // Load the jsid in the scratch register.
+    masm.loadPtr(idAddr, scratch);
+
+    masm.Push(Imm32(strict));
+    masm.Push(val);
+    masm.Push(scratch);
+    masm.Push(obj);
+
+    if (!callVM(masm, ProxySetPropertyInfo))
+        return false;
+
+    stubFrame.leave(masm);
+    return true;
+}
+
+typedef bool (*ProxySetPropertyByValueFn)(JSContext*, HandleObject, HandleValue, HandleValue, bool);
+static const VMFunction ProxySetPropertyByValueInfo =
+    FunctionInfo<ProxySetPropertyByValueFn>(ProxySetPropertyByValue, "ProxySetPropertyByValue");
+
+bool
+BaselineCacheIRCompiler::emitCallProxySetByValue()
+{
+    Register obj = allocator.useRegister(masm, reader.objOperandId());
+    ValueOperand idVal = allocator.useValueRegister(masm, reader.valOperandId());
+    ValueOperand val = allocator.useValueRegister(masm, reader.valOperandId());
+    bool strict = reader.readBool();
+
+    allocator.discardStack(masm);
+
+    // We need a scratch register but we don't have any registers available on
+    // x86, so temporarily store |obj| in the frame's scratch slot.
+    int scratchOffset = BaselineFrame::reverseOffsetOfScratchValue();
+    masm.storePtr(obj, Address(BaselineFrameReg, scratchOffset));
+
+    AutoStubFrame stubFrame(*this);
+    stubFrame.enter(masm, obj);
+
+    // Restore |obj|. Because we entered a stub frame we first have to load
+    // the original frame pointer.
+    masm.loadPtr(Address(BaselineFrameReg, 0), obj);
+    masm.loadPtr(Address(obj, scratchOffset), obj);
+
+    masm.Push(Imm32(strict));
+    masm.Push(val);
+    masm.Push(idVal);
+    masm.Push(obj);
+
+    if (!callVM(masm, ProxySetPropertyByValueInfo))
         return false;
 
     stubFrame.leave(masm);

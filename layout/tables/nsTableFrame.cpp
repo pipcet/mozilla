@@ -916,19 +916,26 @@ nsTableFrame::InsertRows(nsTableRowGroupFrame*       aRowGroupFrame,
   nsTableCellMap* cellMap = GetCellMap();
   if (cellMap) {
     TableArea damageArea(0, 0, 0, 0);
+    bool didRecalculate = RecalculateRowIndices();
     int32_t origNumRows = cellMap->GetRowCount();
     int32_t numNewRows = aRowFrames.Length();
     cellMap->InsertRows(aRowGroupFrame, aRowFrames, aRowIndex, aConsiderSpans, damageArea);
     MatchCellMapToColCache(cellMap);
-    if (aRowIndex < origNumRows) {
-      AdjustRowIndices(aRowIndex, numNewRows);
+
+    if (!didRecalculate) {
+      if (aRowIndex < origNumRows) {
+        AdjustRowIndices(aRowIndex, numNewRows);
+      }
+
+      // assign the correct row indices to the new rows. If they were recalculated
+      // above it may not have been done correctly because each row is constructed
+      // with index 0
+      for (int32_t rowB = 0; rowB < numNewRows; rowB++) {
+        nsTableRowFrame* rowFrame = aRowFrames.ElementAt(rowB);
+        rowFrame->SetRowIndex(aRowIndex + rowB);
+      }
     }
-    // assign the correct row indices to the new rows. If they were adjusted above
-    // it may not have been done correctly because each row is constructed with index 0
-    for (int32_t rowB = 0; rowB < numNewRows; rowB++) {
-      nsTableRowFrame* rowFrame = aRowFrames.ElementAt(rowB);
-      rowFrame->SetRowIndex(aRowIndex + rowB);
-    }
+
     if (IsBorderCollapse()) {
       AddBCDamageArea(damageArea);
     }
@@ -941,11 +948,111 @@ nsTableFrame::InsertRows(nsTableRowGroupFrame*       aRowGroupFrame,
   return numColsToAdd;
 }
 
+bool
+nsTableFrame::RecalculateRowIndices()
+{
+  if (mDeletedRowIndexRanges.size() == 0) {
+    return false;
+  }
+  mDeletedRowIndexRanges.clear();
+
+  RowGroupArray rowGroups;
+  OrderRowGroups(rowGroups);
+
+  int32_t rowIndex = 0;
+  for (uint32_t rgIdx = 0; rgIdx < rowGroups.Length(); rgIdx++) {
+    nsTableRowGroupFrame* rgFrame = rowGroups[rgIdx];
+    const nsFrameList& rowFrames = rgFrame->PrincipalChildList();
+    for (nsFrameList::Enumerator rEnum(rowFrames); !rEnum.AtEnd(); rEnum.Next()) {
+      if (mozilla::StyleDisplay::TableRow == rEnum.get()->StyleDisplay()->mDisplay) {
+        nsTableRowFrame *row = static_cast<nsTableRowFrame*>(rEnum.get());
+        row->SetRowIndex(rowIndex);
+        rowIndex++;
+      }
+    }
+  }
+  return true;
+}
+
+void
+nsTableFrame::AddDeletedRowIndex(int32_t aDeletedRowStoredIndex)
+{
+  if (mDeletedRowIndexRanges.size() == 0) {
+    mDeletedRowIndexRanges.insert(std::pair<int32_t, int32_t>
+                                    (aDeletedRowStoredIndex,
+                                     aDeletedRowStoredIndex));
+    return;
+  }
+
+  // Find the position of the current deleted row's stored index
+  // among the previous deleted row index ranges and merge ranges if
+  // they are consecutive, else add a new (disjoint) range to the map.
+  // Call to mDeletedRowIndexRanges.upper_bound is
+  // O(log(mDeletedRowIndexRanges.size())) therefore call to
+  // AddDeletedRowIndex is also ~O(log(mDeletedRowIndexRanges.size()))
+
+  // greaterIter = will point to smallest range in the map with lower value
+  //              greater than the aDeletedRowStoredIndex.
+  //              If no such value exists, point to end of map.
+  // smallerIter = will point to largest range in the map with higher value
+  //              smaller than the aDeletedRowStoredIndex
+  //              If no such value exists, point to beginning of map.
+  // i.e. when both values exist below is true:
+  // smallerIter->second < aDeletedRowStoredIndex < greaterIter->first
+  auto greaterIter = mDeletedRowIndexRanges.upper_bound(aDeletedRowStoredIndex);
+  auto smallerIter = greaterIter;
+  if (smallerIter != mDeletedRowIndexRanges.begin()) {
+    smallerIter--;
+  }
+
+  if (smallerIter->second == aDeletedRowStoredIndex - 1) {
+    if (greaterIter != mDeletedRowIndexRanges.end() &&
+        greaterIter->first == aDeletedRowStoredIndex + 1) {
+      // merge current index with smaller and greater range as they are consecutive
+      smallerIter->second = greaterIter->second;
+      mDeletedRowIndexRanges.erase(greaterIter);
+    }
+    else {
+      // add aDeletedRowStoredIndex in the smaller range as it is consecutive
+      smallerIter->second = aDeletedRowStoredIndex;
+    }
+  } else if (greaterIter != mDeletedRowIndexRanges.end() &&
+             greaterIter->first == aDeletedRowStoredIndex + 1) {
+    // add aDeletedRowStoredIndex in the greater range as it is consecutive
+    mDeletedRowIndexRanges.insert(std::pair<int32_t, int32_t>
+                                   (aDeletedRowStoredIndex,
+                                    greaterIter->second));
+    mDeletedRowIndexRanges.erase(greaterIter);
+  } else {
+    // add new range as aDeletedRowStoredIndex is disjoint from existing ranges
+    mDeletedRowIndexRanges.insert(std::pair<int32_t, int32_t>
+                                   (aDeletedRowStoredIndex,
+                                    aDeletedRowStoredIndex));
+  }
+}
+
+int32_t
+nsTableFrame::GetAdjustmentForStoredIndex(int32_t aStoredIndex)
+{
+  if (mDeletedRowIndexRanges.size() == 0)
+    return 0;
+
+  int32_t adjustment = 0;
+
+  // O(log(mDeletedRowIndexRanges.size()))
+  auto endIter = mDeletedRowIndexRanges.upper_bound(aStoredIndex);
+  for (auto iter = mDeletedRowIndexRanges.begin(); iter != endIter; ++iter) {
+    adjustment += iter->second - iter->first + 1;
+  }
+
+  return adjustment;
+}
+
 // this cannot extend beyond a single row group
 void
 nsTableFrame::RemoveRows(nsTableRowFrame& aFirstRowFrame,
-                              int32_t          aNumRowsToRemove,
-                              bool             aConsiderSpans)
+                         int32_t          aNumRowsToRemove,
+                         bool             aConsiderSpans)
 {
 #ifdef TBD_OPTIMIZATION
   // decide if we need to rebalance. we have to do this here because the row group
@@ -971,13 +1078,19 @@ nsTableFrame::RemoveRows(nsTableRowFrame& aFirstRowFrame,
   nsTableCellMap* cellMap = GetCellMap();
   if (cellMap) {
     TableArea damageArea(0, 0, 0, 0);
+
+    // Mark rows starting from aFirstRowFrame to the next 'aNumRowsToRemove-1'
+    // number of rows as deleted.
+    nsTableRowGroupFrame* parentFrame = aFirstRowFrame.GetTableRowGroupFrame();
+    parentFrame->MarkRowsAsDeleted(aFirstRowFrame, aNumRowsToRemove);
+
     cellMap->RemoveRows(firstRowIndex, aNumRowsToRemove, aConsiderSpans, damageArea);
     MatchCellMapToColCache(cellMap);
     if (IsBorderCollapse()) {
       AddBCDamageArea(damageArea);
     }
   }
-  AdjustRowIndices(firstRowIndex, -aNumRowsToRemove);
+
 #ifdef DEBUG_TABLE_CELLMAP
   printf("=== removeRowsAfter\n");
   Dump(true, true, true);
@@ -1844,7 +1957,7 @@ nsTableFrame::Reflow(nsPresContext*           aPresContext,
   bool isPaginated = aPresContext->IsPaginated();
   WritingMode wm = aReflowInput.GetWritingMode();
 
-  aStatus = NS_FRAME_COMPLETE;
+  aStatus.Reset();
   if (!GetPrevInFlow() && !mTableLayoutStrategy) {
     NS_ERROR("strategy should have been created in Init");
     return;
@@ -1929,7 +2042,7 @@ nsTableFrame::Reflow(nsPresContext*           aPresContext,
     }
 
     // XXXldb Are all these conditions correct?
-    if (needToInitiateSpecialReflow && NS_FRAME_IS_COMPLETE(aStatus)) {
+    if (needToInitiateSpecialReflow && aStatus.IsComplete()) {
       // XXXldb Do we need to set the IsBResize flag on any reflow states?
 
       ReflowInput &mutable_rs =
@@ -1942,7 +2055,7 @@ nsTableFrame::Reflow(nsPresContext*           aPresContext,
       ReflowTable(aDesiredSize, aReflowInput, aReflowInput.AvailableBSize(),
                   lastChildReflowed, aStatus);
 
-      if (lastChildReflowed && NS_FRAME_IS_NOT_COMPLETE(aStatus)) {
+      if (lastChildReflowed && aStatus.IsIncomplete()) {
         // if there is an incomplete child, then set the desired bsize
         // to include it but not the next one
         LogicalMargin borderPadding = GetChildAreaOffset(wm, &aReflowInput);
@@ -2047,7 +2160,7 @@ nsTableFrame::FixupPositionedTableParts(nsPresContext*           aPresContext,
     ReflowInput reflowInput(aPresContext, positionedPart,
                                   aReflowInput.mRenderingContext, availSize,
                                   ReflowInput::DUMMY_PARENT_REFLOW_STATE);
-    nsReflowStatus reflowStatus = NS_FRAME_COMPLETE;
+    nsReflowStatus reflowStatus;
 
     // Reflow absolutely-positioned descendants of the positioned part.
     // FIXME: Unconditionally using NS_UNCONSTRAINEDSIZE for the bsize and
@@ -3022,7 +3135,7 @@ nsTableFrame::ReflowChildren(TableReflowInput& aReflowInput,
                              nsIFrame*&          aLastChildReflowed,
                              nsOverflowAreas&    aOverflowAreas)
 {
-  aStatus = NS_FRAME_COMPLETE;
+  aStatus.Reset();
   aLastChildReflowed = nullptr;
 
   nsIFrame* prevKidFrame = nullptr;
@@ -3098,7 +3211,8 @@ nsTableFrame::ReflowChildren(TableReflowInput& aReflowInput,
           tfoot->SetRepeatable(false);
         }
         PushChildren(rowGroups, childX);
-        aStatus = NS_FRAME_NOT_COMPLETE;
+        aStatus.Reset();
+        aStatus.SetIncomplete();
         break;
       }
 
@@ -3163,20 +3277,20 @@ nsTableFrame::ReflowChildren(TableReflowInput& aReflowInput,
           childX = rowGroups.Length();
         }
       }
-      if (isPaginated && !NS_FRAME_IS_FULLY_COMPLETE(aStatus) &&
+      if (isPaginated && !aStatus.IsFullyComplete() &&
           ShouldAvoidBreakInside(aReflowInput.reflowInput)) {
-        aStatus = NS_INLINE_LINE_BREAK_BEFORE();
+        aStatus.SetInlineLineBreakBeforeAndReset();
         break;
       }
       // see if the rowgroup did not fit on this page might be pushed on
       // the next page
       if (isPaginated &&
-          (NS_INLINE_IS_BREAK_BEFORE(aStatus) ||
-           (NS_FRAME_IS_COMPLETE(aStatus) &&
+          (aStatus.IsInlineBreakBefore() ||
+           (aStatus.IsComplete() &&
             (NS_UNCONSTRAINEDSIZE != kidReflowInput.AvailableHeight()) &&
             kidReflowInput.AvailableHeight() < desiredSize.Height()))) {
         if (ShouldAvoidBreakInside(aReflowInput.reflowInput)) {
-          aStatus = NS_INLINE_LINE_BREAK_BEFORE();
+          aStatus.SetInlineLineBreakBeforeAndReset();
           break;
         }
         // if we are on top of the page place with dataloss
@@ -3194,7 +3308,8 @@ nsTableFrame::ReflowChildren(TableReflowInput& aReflowInput,
               else if (tfoot && tfoot->IsRepeatable()) {
                 tfoot->SetRepeatable(false);
               }
-              aStatus = NS_FRAME_NOT_COMPLETE;
+              aStatus.Reset();
+              aStatus.SetIncomplete();
               PushChildren(rowGroups, childX + 1);
               aLastChildReflowed = kidFrame;
               break;
@@ -3209,7 +3324,8 @@ nsTableFrame::ReflowChildren(TableReflowInput& aReflowInput,
             else if (tfoot && tfoot->IsRepeatable()) {
               tfoot->SetRepeatable(false);
             }
-            aStatus = NS_FRAME_NOT_COMPLETE;
+            aStatus.Reset();
+            aStatus.SetIncomplete();
             PushChildren(rowGroups, childX);
             aLastChildReflowed = prevKidFrame;
             break;
@@ -3233,7 +3349,7 @@ nsTableFrame::ReflowChildren(TableReflowInput& aReflowInput,
 
       pageBreak = false;
       // see if there is a page break after this row group or before the next one
-      if (NS_FRAME_IS_COMPLETE(aStatus) && isPaginated &&
+      if (aStatus.IsComplete() && isPaginated &&
           (NS_UNCONSTRAINEDSIZE != kidReflowInput.AvailableHeight())) {
         nsIFrame* nextKid =
           (childX + 1 < rowGroups.Length()) ? rowGroups[childX + 1] : nullptr;
@@ -3249,11 +3365,11 @@ nsTableFrame::ReflowChildren(TableReflowInput& aReflowInput,
       // Remember where we just were in case we end up pushing children
       prevKidFrame = kidFrame;
 
-      MOZ_ASSERT(!NS_FRAME_IS_NOT_COMPLETE(aStatus) || isPaginated,
+      MOZ_ASSERT(!aStatus.IsIncomplete() || isPaginated,
                  "Table contents should only fragment in paginated contexts");
 
       // Special handling for incomplete children
-      if (isPaginated && NS_FRAME_IS_NOT_COMPLETE(aStatus)) {
+      if (isPaginated && aStatus.IsIncomplete()) {
         nsIFrame* kidNextInFlow = kidFrame->GetNextInFlow();
         if (!kidNextInFlow) {
           // The child doesn't have a next-in-flow so create a continuing
@@ -4858,7 +4974,7 @@ public:
     return NS_OK;
   }
 private:
-  nsWeakFrame mFrame;
+  WeakFrame mFrame;
 };
 
 bool

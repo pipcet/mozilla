@@ -45,7 +45,7 @@
       },
       "experimental-hidden": {
         "visibleDefaultEngines": [
-          "yahoo-en-CA"
+          "yahoo-en-CA", "yandex-en"
         ]
       }
     },
@@ -95,6 +95,13 @@
       "default": {
         "visibleDefaultEngines": [
           "google", "amazondotcom", "azerdict", "bing", "ddg", "wikipedia-az", "yandex-az"
+        ]
+      }
+    },
+    "be": {
+      "default": {
+        "visibleDefaultEngines": [
+          "yandex-by", "google", "ddg", "wikipedia-be", "wikipedia-be-tarask"
         ]
       }
     },
@@ -193,6 +200,11 @@
       "default": {
         "visibleDefaultEngines": [
           "google", "yahoo-en-GB", "bing", "amazon-en-GB", "chambers-en-GB", "ddg", "twitter", "wikipedia"
+        ]
+      },
+      "experimental-hidden": {
+        "visibleDefaultEngines": [
+          "yandex-en"
         ]
       }
     },

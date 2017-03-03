@@ -29,7 +29,7 @@ use app_units::Au;
 use block::{BlockFlow, FormattingContextType};
 use context::LayoutContext;
 use display_list_builder::DisplayListBuildState;
-use euclid::{Point2D, Size2D};
+use euclid::{Matrix4D, Point2D, Size2D};
 use flex::FlexFlow;
 use floats::{Floats, SpeculatedFloatPlacement};
 use flow_list::{FlowList, MutFlowListIterator};
@@ -42,7 +42,7 @@ use inline::InlineFlow;
 use model::{CollapsibleMargins, IntrinsicISizes, MarginCollapseInfo};
 use multicol::MulticolFlow;
 use parallel::FlowParallelInfo;
-use serde::{Serialize, Serializer};
+use serde::ser::{Serialize, SerializeStruct, Serializer};
 use servo_geometry::{au_rect_to_f32_rect, f32_rect_to_au_rect};
 use std::{fmt, mem, raw};
 use std::iter::Zip;
@@ -272,7 +272,11 @@ pub trait Flow: fmt::Debug + Sync + Send + 'static {
 
         // TODO: Take into account 3d transforms, even though it's a fairly
         // uncommon case.
-        let transform_2d = self.as_block().fragment.transform_matrix(&position).to_2d();
+        let transform_2d = self.as_block()
+                               .fragment
+                               .transform_matrix(&position)
+                               .unwrap_or(Matrix4D::identity())
+                               .to_2d();
         let transformed_overflow = Overflow {
             paint: f32_rect_to_au_rect(transform_2d.transform_rect(
                                        &au_rect_to_f32_rect(overflow.paint))),
@@ -1013,16 +1017,16 @@ impl fmt::Debug for BaseFlow {
 }
 
 impl Serialize for BaseFlow {
-    fn serialize<S: Serializer>(&self, serializer: &mut S) -> Result<(), S::Error> {
-        let mut state = try!(serializer.serialize_struct("base", 5));
-        try!(serializer.serialize_struct_elt(&mut state, "id", self.debug_id()));
-        try!(serializer.serialize_struct_elt(&mut state, "stacking_relative_position",
-                                             &self.stacking_relative_position));
-        try!(serializer.serialize_struct_elt(&mut state, "intrinsic_inline_sizes",
-                                             &self.intrinsic_inline_sizes));
-        try!(serializer.serialize_struct_elt(&mut state, "position", &self.position));
-        try!(serializer.serialize_struct_elt(&mut state, "children", &self.children));
-        serializer.serialize_struct_end(state)
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut serializer = try!(serializer.serialize_struct("base", 5));
+        try!(serializer.serialize_field("id", &self.debug_id()));
+        try!(serializer.serialize_field("stacking_relative_position",
+                                        &self.stacking_relative_position));
+        try!(serializer.serialize_field("intrinsic_inline_sizes",
+                                        &self.intrinsic_inline_sizes));
+        try!(serializer.serialize_field("position", &self.position));
+        try!(serializer.serialize_field("children", &self.children));
+        serializer.end()
     }
 }
 

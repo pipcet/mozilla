@@ -10,6 +10,7 @@ use app_units::Au;
 use cssparser::{self, Parser, Token};
 use euclid::size::Size2D;
 use parser::{ParserContext, Parse};
+use self::grid::{TrackBreadth as GenericTrackBreadth, TrackSize as GenericTrackSize};
 use self::url::SpecifiedUrl;
 use std::ascii::AsciiExt;
 use std::f32::consts::PI;
@@ -21,14 +22,15 @@ use super::computed::{ComputedValueAsSpecified, Context, ToComputedValue};
 use super::computed::Shadow as ComputedShadow;
 
 #[cfg(feature = "gecko")]
-pub use self::align::{AlignJustifyContent, AlignJustifySelf};
-pub use self::grid::GridLine;
+pub use self::align::{AlignItems, AlignJustifyContent, AlignJustifySelf, JustifyItems};
+pub use self::grid::{GridLine, TrackKeyword};
 pub use self::image::{AngleOrCorner, ColorStop, EndingShape as GradientEndingShape, Gradient};
 pub use self::image::{GradientKind, HorizontalDirection, Image, LengthOrKeyword, LengthOrPercentageOrKeyword};
 pub use self::image::{SizeKeyword, VerticalDirection};
 pub use self::length::{FontRelativeLength, ViewportPercentageLength, CharacterWidth, Length, CalcLengthOrPercentage};
 pub use self::length::{Percentage, LengthOrNone, LengthOrNumber, LengthOrPercentage, LengthOrPercentageOrAuto};
 pub use self::length::{LengthOrPercentageOrNone, LengthOrPercentageOrAutoOrContent, NoCalcLength, CalcUnit};
+pub use self::length::{MaxLength, MinLength};
 pub use self::position::{HorizontalPosition, Position, VerticalPosition};
 
 #[cfg(feature = "gecko")]
@@ -72,6 +74,27 @@ impl ToCss for CSSColor {
         match self.authored {
             Some(ref s) => dest.write_str(s),
             None => self.parsed.to_css(dest),
+        }
+    }
+}
+
+impl CSSColor {
+    #[inline]
+    /// Returns currentcolor value.
+    pub fn currentcolor() -> CSSColor {
+        CSSColor {
+            parsed: cssparser::Color::CurrentColor,
+            authored: None,
+        }
+    }
+
+    #[inline]
+    /// Returns transparent value.
+    pub fn transparent() -> CSSColor {
+        CSSColor {
+            parsed: cssparser::Color::RGBA(cssparser::RGBA::transparent()),
+            // This should probably be "transparent", but maybe it doesn't matter.
+            authored: None,
         }
     }
 }
@@ -295,7 +318,7 @@ impl Angle {
 #[allow(missing_docs)]
 pub fn parse_border_radius(context: &ParserContext, input: &mut Parser) -> Result<BorderRadiusSize, ()> {
     input.try(|i| BorderRadiusSize::parse(context, i)).or_else(|_| {
-        match_ignore_ascii_case! { try!(input.expect_ident()),
+        match_ignore_ascii_case! { &try!(input.expect_ident()),
             "thin" => Ok(BorderRadiusSize::circle(
                              LengthOrPercentage::Length(NoCalcLength::from_px(1.)))),
             "medium" => Ok(BorderRadiusSize::circle(
@@ -310,7 +333,7 @@ pub fn parse_border_radius(context: &ParserContext, input: &mut Parser) -> Resul
 #[allow(missing_docs)]
 pub fn parse_border_width(input: &mut Parser) -> Result<Length, ()> {
     input.try(Length::parse_non_negative).or_else(|()| {
-        match_ignore_ascii_case! { try!(input.expect_ident()),
+        match_ignore_ascii_case! { &try!(input.expect_ident()),
             "thin" => Ok(Length::from_px(1.)),
             "medium" => Ok(Length::from_px(3.)),
             "thick" => Ok(Length::from_px(5.)),
@@ -333,7 +356,7 @@ impl Parse for BorderWidth {
     fn parse(_context: &ParserContext, input: &mut Parser) -> Result<BorderWidth, ()> {
         match input.try(Length::parse_non_negative) {
             Ok(length) => Ok(BorderWidth::Width(length)),
-            Err(_) => match_ignore_ascii_case! { try!(input.expect_ident()),
+            Err(_) => match_ignore_ascii_case! { &try!(input.expect_ident()),
                "thin" => Ok(BorderWidth::Thin),
                "medium" => Ok(BorderWidth::Medium),
                "thick" => Ok(BorderWidth::Thick),
@@ -554,6 +577,12 @@ impl ToCss for Opacity {
 #[allow(missing_docs)]
 pub type UrlOrNone = Either<SpecifiedUrl, None_>;
 
+/// The specified value of a grid `<track-breadth>`
+pub type TrackBreadth = GenericTrackBreadth<LengthOrPercentage>;
+
+/// The specified value of a grid `<track-size>`
+pub type TrackSize = GenericTrackSize<LengthOrPercentage>;
+
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 #[allow(missing_docs)]
@@ -670,13 +699,182 @@ impl Shadow {
     }
 }
 
+no_viewport_percentage!(SVGPaint);
+
+/// An SVG paint value
+///
+/// https://www.w3.org/TR/SVG2/painting.html#SpecifyingPaint
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+pub struct SVGPaint {
+    /// The paint source
+    pub kind: SVGPaintKind,
+    /// The fallback color
+    pub fallback: Option<CSSColor>,
+}
+
+/// An SVG paint value without the fallback
+///
+/// Whereas the spec only allows PaintServer
+/// to have a fallback, Gecko lets the context
+/// properties have a fallback as well.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+pub enum SVGPaintKind {
+    /// `none`
+    None,
+    /// `<color>`
+    Color(CSSColor),
+    /// `url(...)`
+    PaintServer(SpecifiedUrl),
+    /// `context-fill`
+    ContextFill,
+    /// `context-stroke`
+    ContextStroke,
+}
+
+impl SVGPaintKind {
+    fn parse_ident(input: &mut Parser) -> Result<Self, ()> {
+        Ok(match_ignore_ascii_case! { &input.expect_ident()?,
+            "none" => SVGPaintKind::None,
+            "context-fill" => SVGPaintKind::ContextFill,
+            "context-stroke" => SVGPaintKind::ContextStroke,
+            _ => return Err(())
+        })
+    }
+}
+
+impl Parse for SVGPaint {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+        if let Ok(url) = input.try(|i| SpecifiedUrl::parse(context, i)) {
+            let fallback = input.try(|i| CSSColor::parse(context, i));
+            Ok(SVGPaint {
+                kind: SVGPaintKind::PaintServer(url),
+                fallback: fallback.ok(),
+            })
+        } else if let Ok(kind) = input.try(SVGPaintKind::parse_ident) {
+            if kind == SVGPaintKind::None {
+                Ok(SVGPaint {
+                    kind: kind,
+                    fallback: None,
+                })
+            } else {
+                let fallback = input.try(|i| CSSColor::parse(context, i));
+                Ok(SVGPaint {
+                    kind: kind,
+                    fallback: fallback.ok(),
+                })
+            }
+        } else if let Ok(color) = input.try(|i| CSSColor::parse(context, i)) {
+            Ok(SVGPaint {
+                kind: SVGPaintKind::Color(color),
+                fallback: None,
+            })
+        } else {
+            Err(())
+        }
+    }
+}
+
+impl ToCss for SVGPaintKind {
+    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+        match *self {
+            SVGPaintKind::None => dest.write_str("none"),
+            SVGPaintKind::ContextStroke => dest.write_str("context-stroke"),
+            SVGPaintKind::ContextFill => dest.write_str("context-fill"),
+            SVGPaintKind::Color(ref color) => color.to_css(dest),
+            SVGPaintKind::PaintServer(ref server) => server.to_css(dest),
+        }
+    }
+}
+
+impl ToCss for SVGPaint {
+    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+        self.kind.to_css(dest)?;
+        if let Some(ref fallback) = self.fallback {
+            fallback.to_css(dest)?;
+        }
+        Ok(())
+    }
+}
+
+
+impl ToComputedValue for SVGPaint {
+    type ComputedValue = super::computed::SVGPaint;
+
+    #[inline]
+    fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
+        super::computed::SVGPaint {
+            kind: self.kind.to_computed_value(context),
+            fallback: self.fallback.as_ref().map(|f| f.to_computed_value(context))
+        }
+    }
+
+    #[inline]
+    fn from_computed_value(computed: &Self::ComputedValue) -> Self {
+        SVGPaint {
+            kind: ToComputedValue::from_computed_value(&computed.kind),
+            fallback: computed.fallback.as_ref().map(ToComputedValue::from_computed_value)
+        }
+    }
+}
+
+impl ToComputedValue for SVGPaintKind {
+    type ComputedValue = super::computed::SVGPaintKind;
+
+    #[inline]
+    fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
+        match *self {
+            SVGPaintKind::None => super::computed::SVGPaintKind::None,
+            SVGPaintKind::ContextStroke => super::computed::SVGPaintKind::ContextStroke,
+            SVGPaintKind::ContextFill => super::computed::SVGPaintKind::ContextFill,
+            SVGPaintKind::Color(ref color) => {
+                super::computed::SVGPaintKind::Color(color.to_computed_value(context))
+            }
+            SVGPaintKind::PaintServer(ref server) => {
+                super::computed::SVGPaintKind::PaintServer(server.to_computed_value(context))
+            }
+        }
+    }
+
+    #[inline]
+    fn from_computed_value(computed: &Self::ComputedValue) -> Self {
+        match *computed {
+            super::computed::SVGPaintKind::None => SVGPaintKind::None,
+            super::computed::SVGPaintKind::ContextStroke => SVGPaintKind::ContextStroke,
+            super::computed::SVGPaintKind::ContextFill => SVGPaintKind::ContextFill,
+            super::computed::SVGPaintKind::Color(ref color) => {
+                SVGPaintKind::Color(ToComputedValue::from_computed_value(color))
+            }
+            super::computed::SVGPaintKind::PaintServer(ref server) => {
+                SVGPaintKind::PaintServer(ToComputedValue::from_computed_value(server))
+            }
+        }
+    }
+}
+
+/// <length> | <percentage> | <number>
+pub type LoPOrNumber = Either<LengthOrPercentage, Number>;
+
+impl LoPOrNumber {
+    /// parse a <length-percentage> | <number> enforcing that the contents aren't negative
+    pub fn parse_non_negative(_: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+        if let Ok(lop) = input.try(LengthOrPercentage::parse_non_negative) {
+            Ok(Either::First(lop))
+        } else if let Ok(num) = input.try(Number::parse_non_negative) {
+            Ok(Either::Second(num))
+        } else {
+            Err(())
+        }
+    }
+}
 
 impl HasViewportPercentage for ClipRect {
     fn has_viewport_percentage(&self) -> bool {
-        self.top.has_viewport_percentage() ||
+        self.top.as_ref().map_or(false, |x| x.has_viewport_percentage()) ||
         self.right.as_ref().map_or(false, |x| x.has_viewport_percentage()) ||
         self.bottom.as_ref().map_or(false, |x| x.has_viewport_percentage()) ||
-        self.left.has_viewport_percentage()
+        self.left.as_ref().map_or(false, |x| x.has_viewport_percentage())
     }
 }
 
@@ -684,14 +882,14 @@ impl HasViewportPercentage for ClipRect {
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 /// rect(<top>, <left>, <bottom>, <right>) used by clip and image-region
 pub struct ClipRect {
-    /// <top> (<length> | <auto>). Auto maps to 0
-    pub top: Length,
+    /// <top> (<length> | <auto>)
+    pub top: Option<Length>,
     /// <right> (<length> | <auto>)
     pub right: Option<Length>,
     /// <bottom> (<length> | <auto>)
     pub bottom: Option<Length>,
-    /// <left> (<length> | <auto>). Auto maps to 0
-    pub left: Length,
+    /// <left> (<length> | <auto>)
+    pub left: Option<Length>,
 }
 
 
@@ -699,8 +897,12 @@ impl ToCss for ClipRect {
     fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
         try!(dest.write_str("rect("));
 
-        try!(self.top.to_css(dest));
-        try!(dest.write_str(", "));
+        if let Some(ref top) = self.top {
+            try!(top.to_css(dest));
+            try!(dest.write_str(", "));
+        } else {
+            try!(dest.write_str("auto, "));
+        }
 
         if let Some(ref right) = self.right {
             try!(right.to_css(dest));
@@ -716,7 +918,11 @@ impl ToCss for ClipRect {
             try!(dest.write_str("auto, "));
         }
 
-        try!(self.left.to_css(dest));
+        if let Some(ref left) = self.left {
+            try!(left.to_css(dest));
+        } else {
+            try!(dest.write_str("auto"));
+        }
 
         try!(dest.write_str(")"));
         Ok(())
@@ -729,20 +935,20 @@ impl ToComputedValue for ClipRect {
     #[inline]
     fn to_computed_value(&self, context: &Context) -> super::computed::ClipRect {
         super::computed::ClipRect {
-            top: self.top.to_computed_value(context),
+            top: self.top.as_ref().map(|top| top.to_computed_value(context)),
             right: self.right.as_ref().map(|right| right.to_computed_value(context)),
             bottom: self.bottom.as_ref().map(|bottom| bottom.to_computed_value(context)),
-            left: self.left.to_computed_value(context),
+            left: self.left.as_ref().map(|left| left.to_computed_value(context)),
         }
     }
 
     #[inline]
     fn from_computed_value(computed: &super::computed::ClipRect) -> Self {
         ClipRect {
-            top: ToComputedValue::from_computed_value(&computed.top),
+            top: computed.top.map(|top| ToComputedValue::from_computed_value(&top)),
             right: computed.right.map(|right| ToComputedValue::from_computed_value(&right)),
             bottom: computed.bottom.map(|bottom| ToComputedValue::from_computed_value(&bottom)),
-            left: ToComputedValue::from_computed_value(&computed.left),
+            left: computed.left.map(|left| ToComputedValue::from_computed_value(&left)),
         }
     }
 }
@@ -763,7 +969,6 @@ impl Parse for ClipRect {
             return Err(())
         }
 
-        // NB: `top` and `left` are 0 if `auto` per CSS 2.1 11.1.2.
         input.parse_nested_block(|input| {
             let top = try!(parse_argument(context, input));
             let right;
@@ -782,10 +987,10 @@ impl Parse for ClipRect {
                 left = try!(parse_argument(context, input));
             }
             Ok(ClipRect {
-                top: top.unwrap_or(Length::zero()),
+                top: top,
                 right: right,
                 bottom: bottom,
-                left: left.unwrap_or(Length::zero()),
+                left: left,
             })
         })
     }

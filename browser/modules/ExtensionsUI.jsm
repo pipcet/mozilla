@@ -25,13 +25,14 @@ XPCOMUtils.defineLazyPreferenceGetter(this, "WEBEXT_PERMISSION_PROMPTS",
 const DEFAULT_EXTENSION_ICON = "chrome://mozapps/skin/extensions/extensionGeneric.svg";
 
 const BROWSER_PROPERTIES = "chrome://browser/locale/browser.properties";
-const BRAND_PROPERTIES = "chrome://browser/locale/brand.properties";
+const BRAND_PROPERTIES = "chrome://branding/locale/brand.properties";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 
 this.ExtensionsUI = {
   sideloaded: new Set(),
   updates: new Set(),
+  sideloadListener: null,
 
   init() {
     Services.obs.addObserver(this, "webextension-permission-prompt", false);
@@ -53,6 +54,25 @@ this.ExtensionsUI = {
       }
 
       if (WEBEXT_PERMISSION_PROMPTS) {
+        if (!this.sideloadListener) {
+          this.sideloadListener = {
+            onEnabled: addon => {
+              if (!this.sideloaded.has(addon)) {
+                return;
+              }
+
+              this.sideloaded.delete(addon);
+              this.emit("change");
+
+              if (this.sideloaded.size == 0) {
+                AddonManager.removeAddonListener(this.sideloadListener);
+                this.sideloadListener = null;
+              }
+            },
+          };
+          AddonManager.addAddonListener(this.sideloadListener);
+        }
+
         for (let addon of sideloaded) {
           this.sideloaded.add(addon);
         }
@@ -120,24 +140,17 @@ this.ExtensionsUI = {
         progressNotification.remove();
       }
 
-      let reply = answer => {
+      let strings = this._buildStrings(info);
+      this.showPermissionsPrompt(target, strings, info.icon).then(answer => {
         if (answer) {
           info.resolve();
         } else {
           info.reject();
         }
-      };
-
-      let perms = info.addon.userPermissions;
-      if (!perms) {
-        reply(true);
-      } else {
-        info.permissions = perms;
-        let strings = this._buildStrings(info);
-        this.showPermissionsPrompt(target, strings, info.icon).then(reply);
-      }
+      });
     } else if (topic == "webextension-update-permissions") {
       let info = subject.wrappedJSObject;
+      info.type = "update";
       let strings = this._buildStrings(info);
 
       // If we don't prompt for any new permissions, just apply it
@@ -179,55 +192,9 @@ this.ExtensionsUI = {
 
     let bundle = Services.strings.createBundle(BROWSER_PROPERTIES);
 
-    let name = info.addon.name;
-    if (name.length > 50) {
-      name = name.slice(0, 49) + "…";
-    }
-    name = this._sanitizeName(name);
-    let addonName = `<span class="addon-webext-name">${name}</span>`;
-
-    result.header = bundle.formatStringFromName("webextPerms.header", [addonName], 1);
-    result.text = "";
-    result.listIntro = bundle.GetStringFromName("webextPerms.listIntro");
-
-    result.acceptText = bundle.GetStringFromName("webextPerms.add.label");
-    result.acceptKey = bundle.GetStringFromName("webextPerms.add.accessKey");
-    result.cancelText = bundle.GetStringFromName("webextPerms.cancel.label");
-    result.cancelKey = bundle.GetStringFromName("webextPerms.cancel.accessKey");
-
-    if (info.type == "sideload") {
-      result.header = bundle.formatStringFromName("webextPerms.sideloadHeader", [addonName], 1);
-      result.text = bundle.GetStringFromName("webextPerms.sideloadText2");
-      result.acceptText = bundle.GetStringFromName("webextPerms.sideloadEnable.label");
-      result.acceptKey = bundle.GetStringFromName("webextPerms.sideloadEnable.accessKey");
-      result.cancelText = bundle.GetStringFromName("webextPerms.sideloadCancel.label");
-      result.cancelKey = bundle.GetStringFromName("webextPerms.sideloadCancel.accessKey");
-    } else if (info.type == "update") {
-      result.header = "";
-      result.text = bundle.formatStringFromName("webextPerms.updateText", [addonName], 1);
-      result.acceptText = bundle.GetStringFromName("webextPerms.updateAccept.label");
-      result.acceptKey = bundle.GetStringFromName("webextPerms.updateAccept.accessKey");
-    }
-
     let perms = info.permissions || {hosts: [], permissions: []};
 
-    result.msgs = [];
-    for (let permission of perms.permissions) {
-      let key = `webextPerms.description.${permission}`;
-      if (permission == "nativeMessaging") {
-        let brandBundle = Services.strings.createBundle(BRAND_PROPERTIES);
-        let appName = brandBundle.GetStringFromName("brandShortName");
-        result.msgs.push(bundle.formatStringFromName(key, [appName], 1));
-      } else {
-        try {
-          result.msgs.push(bundle.GetStringFromName(key));
-        } catch (err) {
-          // We deliberately do not include all permissions in the prompt.
-          // So if we don't find one then just skip it.
-        }
-      }
-    }
-
+    // First classify our host permissions
     let allUrls = false, wildcards = [], sites = [];
     for (let permission of perms.hosts) {
       if (permission == "<all_urls>") {
@@ -247,6 +214,10 @@ this.ExtensionsUI = {
       }
     }
 
+    // Format the host permissions.  If we have a wildcard for all urls,
+    // a single string will suffice.  Otherwise, show domain wildcards
+    // first, then individual host permissions.
+    result.msgs = [];
     if (allUrls) {
       result.msgs.push(bundle.GetStringFromName("webextPerms.hostDescription.allUrls"));
     } else {
@@ -272,6 +243,59 @@ this.ExtensionsUI = {
              "webextPerms.hostDescription.tooManyWildcards");
       format(sites, "webextPerms.hostDescription.oneSite",
              "webextPerms.hostDescription.tooManySites");
+    }
+
+    let permissionKey = perm => `webextPerms.description.${perm}`;
+
+    // Next, show the native messaging permission if it is present.
+    const NATIVE_MSG_PERM = "nativeMessaging";
+    if (perms.permissions.includes(NATIVE_MSG_PERM)) {
+      let brandBundle = Services.strings.createBundle(BRAND_PROPERTIES);
+      let appName = brandBundle.GetStringFromName("brandShortName");
+      result.msgs.push(bundle.formatStringFromName(permissionKey(NATIVE_MSG_PERM), [appName], 1));
+    }
+
+    // Finally, show remaining permissions, in any order.
+    for (let permission of perms.permissions) {
+      // Handled above
+      if (permission == "nativeMessaging") {
+        continue;
+      }
+      try {
+        result.msgs.push(bundle.GetStringFromName(permissionKey(permission)));
+      } catch (err) {
+        // We deliberately do not include all permissions in the prompt.
+        // So if we don't find one then just skip it.
+      }
+    }
+
+    // Now figure out all the rest of the notification text.
+    let name = this._sanitizeName(info.addon.name);
+    let addonName = `<span class="addon-webext-name">${name}</span>`;
+
+    result.header = bundle.formatStringFromName("webextPerms.header", [addonName], 1);
+    result.text = "";
+    result.listIntro = bundle.GetStringFromName("webextPerms.listIntro");
+
+    result.acceptText = bundle.GetStringFromName("webextPerms.add.label");
+    result.acceptKey = bundle.GetStringFromName("webextPerms.add.accessKey");
+    result.cancelText = bundle.GetStringFromName("webextPerms.cancel.label");
+    result.cancelKey = bundle.GetStringFromName("webextPerms.cancel.accessKey");
+
+    if (info.type == "sideload") {
+      result.header = bundle.formatStringFromName("webextPerms.sideloadHeader", [addonName], 1);
+      let key = result.msgs.length == 0 ?
+                "webextPerms.sideloadTextNoPerms" : "webextPerms.sideloadText2";
+      result.text = bundle.GetStringFromName(key);
+      result.acceptText = bundle.GetStringFromName("webextPerms.sideloadEnable.label");
+      result.acceptKey = bundle.GetStringFromName("webextPerms.sideloadEnable.accessKey");
+      result.cancelText = bundle.GetStringFromName("webextPerms.sideloadCancel.label");
+      result.cancelKey = bundle.GetStringFromName("webextPerms.sideloadCancel.accessKey");
+    } else if (info.type == "update") {
+      result.header = "";
+      result.text = bundle.formatStringFromName("webextPerms.updateText", [addonName], 1);
+      result.acceptText = bundle.GetStringFromName("webextPerms.updateAccept.label");
+      result.acceptKey = bundle.GetStringFromName("webextPerms.updateAccept.accessKey");
     }
 
     return result;

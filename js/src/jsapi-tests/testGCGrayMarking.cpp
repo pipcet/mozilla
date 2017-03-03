@@ -5,6 +5,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "jsweakmap.h"
+
 #include "gc/Heap.h"
 #include "gc/Zone.h"
 
@@ -12,6 +14,27 @@
 
 using namespace js;
 using namespace js::gc;
+
+namespace JS {
+
+template <>
+struct DeletePolicy<js::ObjectWeakMap> : public js::GCManagedDeletePolicy<js::ObjectWeakMap>
+{};
+
+template <>
+struct MapTypeToRootKind<js::ObjectWeakMap*> {
+    static const JS::RootKind kind = JS::RootKind::Traceable;
+};
+
+template <>
+struct GCPolicy<js::ObjectWeakMap*> {
+    static void trace(JSTracer* trc, js::ObjectWeakMap** tp, const char* name) {
+        (*tp)->trace(trc);
+    }
+};
+
+} // namespace JS
+
 
 class AutoNoAnalysisForTest
 {
@@ -28,7 +51,12 @@ BEGIN_TEST(testGCGrayMarking)
 
     InitGrayRootTracer();
 
-    bool ok = TestMarking() && TestWeakMaps() && TestCCWs();
+    bool ok =
+        TestMarking() &&
+        TestWeakMaps() &&
+        TestUnassociatedWeakMaps() &&
+        TestWatchpoints() &&
+        TestCCWs();
 
     global1 = nullptr;
     global2 = nullptr;
@@ -40,13 +68,13 @@ BEGIN_TEST(testGCGrayMarking)
 bool
 TestMarking()
 {
-    JSObject* sameTarget = AllocTargetObject();
+    JSObject* sameTarget = AllocPlainObject();
     CHECK(sameTarget);
 
     JSObject* sameSource = AllocSameCompartmentSourceObject(sameTarget);
     CHECK(sameSource);
 
-    JSObject* crossTarget = AllocTargetObject();
+    JSObject* crossTarget = AllocPlainObject();
     CHECK(crossTarget);
 
     JSObject* crossSource = GetCrossCompartmentWrapper(crossTarget);
@@ -76,6 +104,8 @@ TestMarking()
     CHECK(IsMarkedBlack(sameTarget));
     CHECK(IsMarkedBlack(crossTarget));
 
+    CHECK(!JS::ObjectIsMarkedGray(sameSource));
+
     // Test GC with gray roots marks object gray.
 
     blackRoot1 = nullptr;
@@ -88,10 +118,12 @@ TestMarking()
     CHECK(IsMarkedGray(sameTarget));
     CHECK(IsMarkedGray(crossTarget));
 
+    CHECK(JS::ObjectIsMarkedGray(sameSource));
+
     // Test ExposeToActiveJS marks gray objects black.
 
-    ExposeGCThingToActiveJS(JS::GCCellPtr(sameSource));
-    ExposeGCThingToActiveJS(JS::GCCellPtr(crossSource));
+    JS::ExposeObjectToActiveJS(sameSource);
+    JS::ExposeObjectToActiveJS(crossSource);
     CHECK(IsMarkedBlack(sameSource));
     CHECK(IsMarkedBlack(crossSource));
     CHECK(IsMarkedBlack(sameTarget));
@@ -110,6 +142,11 @@ TestMarking()
     CHECK(IsMarkedBlack(crossSource));
     CHECK(IsMarkedBlack(crossTarget));
 
+    blackRoot1 = nullptr;
+    blackRoot2 = nullptr;
+    grayRoots.grayRoot1 = nullptr;
+    grayRoots.grayRoot2 = nullptr;
+
     return true;
 }
 
@@ -122,7 +159,7 @@ TestWeakMaps()
     JSObject* key = AllocWeakmapKeyObject();
     CHECK(key);
 
-    JSObject* value = AllocWeakmapKeyObject();
+    JSObject* value = AllocPlainObject();
     CHECK(value);
 
     {
@@ -276,17 +313,181 @@ TestWeakMaps()
     CHECK(IsMarkedGray(weakMap));
     CHECK(IsMarkedGray(value));
 
+    blackRoot1 = nullptr;
+    blackRoot2 = nullptr;
+    grayRoots.grayRoot1 = nullptr;
+    grayRoots.grayRoot2 = nullptr;
+
+    return true;
+}
+
+bool
+TestUnassociatedWeakMaps()
+{
+    // Make a weakmap that's not associated with a JSObject.
+    auto weakMap = cx->make_unique<ObjectWeakMap>(cx);
+    CHECK(weakMap);
+    CHECK(weakMap->init());
+
+    // Make sure this gets traced during GC.
+    Rooted<ObjectWeakMap*> rootMap(cx, weakMap.get());
+
+    JSObject* key = AllocWeakmapKeyObject();
+    CHECK(key);
+
+    JSObject* value = AllocPlainObject();
+    CHECK(value);
+
+    CHECK(weakMap->add(cx, key, value));
+
+    // Test the value of a weakmap entry is marked gray by GC if the
+    // key is marked gray.
+
+    grayRoots.grayRoot1 = key;
+    JS_GC(cx);
+    CHECK(IsMarkedGray(key));
+    CHECK(IsMarkedGray(value));
+
+    // Test the value of a weakmap entry is marked gray by GC if the key is marked gray.
+
+    grayRoots.grayRoot1 = key;
+    grayRoots.grayRoot2 = nullptr;
+    JS_GC(cx);
+    CHECK(IsMarkedGray(key));
+    CHECK(IsMarkedGray(value));
+
+    // Test the value of a weakmap entry is marked black by GC if the key is
+    // marked black.
+
+    JS::RootedObject blackRoot(cx);
+    blackRoot = key;
+    grayRoots.grayRoot1 = nullptr;
+    grayRoots.grayRoot2 = nullptr;
+    JS_GC(cx);
+    CHECK(IsMarkedBlack(key));
+    CHECK(IsMarkedBlack(value));
+
+    // Test that a weakmap key is marked gray if it has a gray delegate.
+
+    JSObject* delegate = AllocDelegateForKey(key);
+    blackRoot = nullptr;
+    grayRoots.grayRoot1 = delegate;
+    grayRoots.grayRoot2 = nullptr;
+    JS_GC(cx);
+    CHECK(IsMarkedGray(delegate));
+    CHECK(IsMarkedGray(key));
+    CHECK(IsMarkedGray(value));
+
+    // Test that a weakmap key is marked black if it has a black delegate.
+
+    blackRoot = delegate;
+    grayRoots.grayRoot1 = nullptr;
+    grayRoots.grayRoot2 = nullptr;
+    JS_GC(cx);
+    CHECK(IsMarkedBlack(delegate));
+    CHECK(IsMarkedBlack(key));
+    CHECK(IsMarkedBlack(value));
+
+    blackRoot = delegate;
+    grayRoots.grayRoot1 = key;
+    grayRoots.grayRoot2 = nullptr;
+    JS_GC(cx);
+    CHECK(IsMarkedBlack(delegate));
+    CHECK(IsMarkedBlack(key));
+    CHECK(IsMarkedBlack(value));
+
+    // Test what happens if there is a delegate but it is not marked for both
+    // black and gray cases.
+
+    delegate = nullptr;
+    blackRoot = key;
+    grayRoots.grayRoot1 = nullptr;
+    grayRoots.grayRoot2 = nullptr;
+    JS_GC(cx);
+    CHECK(IsMarkedBlack(key));
+    CHECK(IsMarkedBlack(value));
+
+    CHECK(AllocDelegateForKey(key));
+    blackRoot = nullptr;
+    grayRoots.grayRoot1 = key;
+    grayRoots.grayRoot2 = nullptr;
+    JS_GC(cx);
+    CHECK(IsMarkedGray(key));
+    CHECK(IsMarkedGray(value));
+
+    blackRoot = nullptr;
+    grayRoots.grayRoot1 = nullptr;
+    grayRoots.grayRoot2 = nullptr;
+
+    return true;
+}
+
+bool
+TestWatchpoints()
+{
+    JSObject* watched = AllocPlainObject();
+    CHECK(watched);
+
+    JSObject* closure = AllocPlainObject();
+    CHECK(closure);
+
+    {
+        RootedObject obj(cx, watched);
+        RootedObject callable(cx, closure);
+        RootedId id(cx, INT_TO_JSID(0));
+        CHECK(JS_DefinePropertyById(cx, obj, id, JS::TrueHandleValue, 0));
+        CHECK(js::WatchGuts(cx, obj, id, callable));
+    }
+
+    // Test that a watchpoint marks the callable black if the watched object is
+    // black.
+
+    RootedObject blackRoot(cx, watched);
+    grayRoots.grayRoot1 = nullptr;
+    JS_GC(cx);
+    CHECK(IsMarkedBlack(watched));
+    CHECK(IsMarkedBlack(closure));
+
+    // Test that a watchpoint marks the callable gray if the watched object is
+    // gray.
+
+    blackRoot = nullptr;
+    grayRoots.grayRoot1 = watched;
+    JS_GC(cx);
+    CHECK(IsMarkedGray(watched));
+    CHECK(IsMarkedGray(closure));
+
+    // Test that ExposeToActiveJS *doesn't* unmark through watchpoints.  We
+    // could make this work, but it's currently handled by the CC fixup.
+
+    CHECK(IsMarkedGray(watched));
+    CHECK(IsMarkedGray(closure));
+    JS::ExposeObjectToActiveJS(watched);
+    CHECK(IsMarkedBlack(watched));
+    CHECK(IsMarkedGray(closure));
+
+    {
+        RootedObject obj(cx, watched);
+        RootedId id(cx, INT_TO_JSID(0));
+        CHECK(js::UnwatchGuts(cx, obj, id));
+    }
+
+    blackRoot = nullptr;
+    grayRoots.grayRoot1 = nullptr;
+    grayRoots.grayRoot2 = nullptr;
+
     return true;
 }
 
 bool
 TestCCWs()
 {
-    RootedObject target(cx, AllocTargetObject());
+    JSObject* target = AllocPlainObject();
     CHECK(target);
 
     // Test getting a new wrapper doesn't return a gray wrapper.
 
+    RootedObject blackRoot(cx, target);
     JSObject* wrapper = GetCrossCompartmentWrapper(target);
     CHECK(wrapper);
     CHECK(!IsMarkedGray(wrapper));
@@ -323,6 +524,43 @@ TestCCWs()
 
     JS::FinishIncrementalGC(cx, JS::gcreason::API);
 
+    // Test behaviour of gray CCWs marked black by a barrier during incremental
+    // GC.
+
+    // Initial state: source and target are gray.
+    blackRoot = nullptr;
+    grayRoots.grayRoot1 = wrapper;
+    grayRoots.grayRoot2 = nullptr;
+    JS_GC(cx);
+    CHECK(IsMarkedGray(wrapper));
+    CHECK(IsMarkedGray(target));
+
+    // Incremental zone GC started: the source is now unmarked.
+    JS_SetGCParameter(cx, JSGC_MODE, JSGC_MODE_INCREMENTAL);
+    JS::PrepareZoneForGC(wrapper->zone());
+    budget = js::SliceBudget(js::WorkBudget(1));
+    cx->runtime()->gc.startDebugGC(GC_NORMAL, budget);
+    CHECK(JS::IsIncrementalGCInProgress(cx));
+    CHECK(wrapper->zone()->isGCMarkingBlack());
+    CHECK(!target->zone()->wasGCStarted());
+    CHECK(!IsMarkedBlack(wrapper));
+    CHECK(!IsMarkedGray(wrapper));
+    CHECK(IsMarkedGray(target));
+
+    // Betweeen GC slices: source marked black by barrier, target is still gray.
+    // ObjectIsMarkedGray() and CheckObjectIsNotMarkedGray() should handle this
+    // case and report that target is not marked gray.
+    grayRoots.grayRoot1.get();
+    CHECK(IsMarkedBlack(wrapper));
+    CHECK(IsMarkedGray(target));
+    CHECK(!JS::ObjectIsMarkedGray(target));
+    MOZ_ASSERT(JS::ObjectIsNotGray(target));
+
+    // Final state: source and target are black.
+    JS::FinishIncrementalGC(cx, JS::gcreason::API);
+    CHECK(IsMarkedBlack(wrapper));
+    CHECK(IsMarkedBlack(target));
+
     grayRoots.grayRoot1 = nullptr;
     grayRoots.grayRoot2 = nullptr;
 
@@ -334,8 +572,8 @@ JS::PersistentRootedObject global2;
 
 struct GrayRoots
 {
-    JSObject* grayRoot1;
-    JSObject* grayRoot2;
+    JS::Heap<JSObject*> grayRoot1;
+    JS::Heap<JSObject*> grayRoot2;
 };
 
 GrayRoots grayRoots;
@@ -370,14 +608,12 @@ static void
 TraceGrayRoots(JSTracer* trc, void* data)
 {
     auto grayRoots = static_cast<GrayRoots*>(data);
-    if (grayRoots->grayRoot1)
-        UnsafeTraceManuallyBarrieredEdge(trc, &grayRoots->grayRoot1, "gray root 1");
-    if (grayRoots->grayRoot2)
-        UnsafeTraceManuallyBarrieredEdge(trc, &grayRoots->grayRoot2, "gray root 2");
+    TraceEdge(trc, &grayRoots->grayRoot1, "gray root 1");
+    TraceEdge(trc, &grayRoots->grayRoot2, "gray root 2");
 }
 
 JSObject*
-AllocTargetObject()
+AllocPlainObject()
 {
     JS::RootedObject obj(cx, JS_NewPlainObject(cx));
     EvictNursery();
@@ -477,7 +713,7 @@ IsMarkedGray(JSObject* obj)
 void
 EvictNursery()
 {
-    cx->zone()->group()->evictNursery();
+    cx->runtime()->gc.evictNursery();
 }
 
 bool

@@ -18,12 +18,12 @@ use dom::document::Document;
 use dom::event::Event;
 use dom::eventtarget::EventTarget;
 use dom::mediaquerylistevent::MediaQueryListEvent;
-use euclid::scale_factor::ScaleFactor;
+use dom_struct::dom_struct;
 use js::jsapi::JSTracer;
 use std::cell::Cell;
 use std::rc::Rc;
 use style::media_queries::{Device, MediaList, MediaType};
-use style_traits::{PagePx, ToCss, ViewportPx};
+use style_traits::ToCss;
 
 pub enum MediaQueryListMatchState {
     Same(bool),
@@ -75,12 +75,8 @@ impl MediaQueryList {
 
     pub fn evaluate(&self) -> bool {
         if let Some(window_size) = self.document.window().window_size() {
-            let viewport_size = window_size.visible_viewport;
-            // TODO: support real ViewportPx, including zoom level
-            // This information seems not to be tracked currently, so we assume
-            // ViewportPx == PagePx
-            let page_to_viewport: ScaleFactor<f32, PagePx, ViewportPx> = ScaleFactor::new(1.0);
-            let device = Device::new(MediaType::Screen, viewport_size * page_to_viewport);
+            let viewport_size = window_size.initial_viewport;
+            let device = Device::new(MediaType::Screen, viewport_size);
             self.media_query_list.evaluate(&device)
         } else {
             false
@@ -138,17 +134,23 @@ impl WeakMediaQueryListVec {
     /// Evaluate media query lists and report changes
     /// https://drafts.csswg.org/cssom-view/#evaluate-media-queries-and-report-changes
     pub fn evaluate_and_report_changes(&self) {
+        rooted_vec!(let mut mql_list);
         self.cell.borrow_mut().update(|mql| {
             let mql = mql.root().unwrap();
             if let MediaQueryListMatchState::Changed(_) = mql.evaluate_changes() {
-                let event = MediaQueryListEvent::new(&mql.global(),
-                                                     atom!("change"),
-                                                     false, false,
-                                                     mql.Media(),
-                                                     mql.Matches());
-                event.upcast::<Event>().fire(mql.upcast::<EventTarget>());
+                // Recording list of changed Media Queries
+                mql_list.push(JS::from_ref(&*mql));
             }
         });
+        // Sending change events for all changed Media Queries
+        for mql in mql_list.iter() {
+            let event = MediaQueryListEvent::new(&mql.global(),
+                                                 atom!("change"),
+                                                 false, false,
+                                                 mql.Media(),
+                                                 mql.Matches());
+            event.upcast::<Event>().fire(mql.upcast::<EventTarget>());
+        }
     }
 }
 

@@ -251,23 +251,8 @@ JSCompartment::checkWrapperMapAfterMovingGC()
 #endif
 
 bool
-JSCompartment::putNewWrapper(JSContext* cx, const CrossCompartmentKey& wrapped,
-                             const js::Value& wrapper)
-{
-    MOZ_ASSERT(wrapped.is<JSString*>() == wrapper.isString());
-    MOZ_ASSERT_IF(!wrapped.is<JSString*>(), wrapper.isObject());
-
-    if (!crossCompartmentWrappers.putNew(wrapped, wrapper)) {
-        ReportOutOfMemory(cx);
-        return false;
-    }
-
-    return true;
-}
-
-bool
-JSCompartment::putWrapperMaybeUpdate(JSContext* cx, const CrossCompartmentKey& wrapped,
-                                     const js::Value& wrapper)
+JSCompartment::putWrapper(JSContext* cx, const CrossCompartmentKey& wrapped,
+                          const js::Value& wrapper)
 {
     MOZ_ASSERT(wrapped.is<JSString*>() == wrapper.isString());
     MOZ_ASSERT_IF(!wrapped.is<JSString*>(), wrapper.isObject());
@@ -358,7 +343,7 @@ JSCompartment::wrap(JSContext* cx, MutableHandleString strp)
     JSString* copy = CopyStringPure(cx, str);
     if (!copy)
         return false;
-    if (!putNewWrapper(cx, CrossCompartmentKey(key), StringValue(copy)))
+    if (!putWrapper(cx, CrossCompartmentKey(key), StringValue(copy)))
         return false;
 
     strp.set(copy);
@@ -416,7 +401,8 @@ JSCompartment::getNonWrapperObjectForCurrentCompartment(JSContext* cx, MutableHa
     // We're a bit worried about infinite recursion here, so we do a check -
     // see bug 809295.
     auto preWrap = cx->runtime()->wrapObjectCallbacks->preWrap;
-    JS_CHECK_SYSTEM_RECURSION(cx, return false);
+    if (!CheckSystemRecursionLimit(cx))
+        return false;
     if (preWrap) {
         preWrap(cx, cx->global(), obj, objectPassedToWrap, obj);
         if (!obj)
@@ -448,7 +434,7 @@ JSCompartment::getOrCreateWrapper(JSContext* cx, HandleObject existing, MutableH
     // map is always directly wrapped by the value.
     MOZ_ASSERT(Wrapper::wrappedObject(wrapper) == &key.get().toObject());
 
-    if (!putNewWrapper(cx, CrossCompartmentKey(key), ObjectValue(*wrapper))) {
+    if (!putWrapper(cx, CrossCompartmentKey(key), ObjectValue(*wrapper))) {
         // Enforce the invariant that all cross-compartment wrapper object are
         // in the map by nuking the wrapper if we couldn't add it.
         // Unfortunately it's possible for the wrapper to still be marked if we
@@ -476,7 +462,7 @@ JSCompartment::wrap(JSContext* cx, MutableHandleObject obj)
 
     // Anything we're wrapping has already escaped into script, so must have
     // been unmarked-gray at some point in the past.
-    MOZ_ASSERT(!ObjectIsMarkedGray(obj));
+    MOZ_ASSERT(JS::ObjectIsNotGray(obj));
 
     // The passed object may already be wrapped, or may fit a number of special
     // cases that we need to check for and manually correct.
@@ -1178,9 +1164,8 @@ JSCompartment::updateDebuggerObservesCoverage()
 
     if (debuggerObservesCoverage()) {
         // Interrupt any running interpreter frame. The scriptCounts are
-        // allocated on demand when a script resume its execution.
+        // allocated on demand when a script resumes its execution.
         JSContext* cx = TlsContext.get();
-        MOZ_ASSERT(zone()->group()->ownedByCurrentThread());
         for (ActivationIterator iter(cx); !iter.done(); ++iter) {
             if (iter->isInterpreter())
                 iter->asInterpreter()->enableInterruptsUnconditionally();

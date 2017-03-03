@@ -41,7 +41,7 @@ typedef HashSet<Shape*> ShapeSet;
 class MOZ_RAII AutoCycleDetector
 {
   public:
-    using Set = HashSet<JSObject*, MovableCellHasher<JSObject*>, SystemAllocPolicy>;
+    using Vector = GCVector<JSObject*, 8>;
 
     AutoCycleDetector(JSContext* cx, HandleObject objArg
                       MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
@@ -57,17 +57,11 @@ class MOZ_RAII AutoCycleDetector
     bool foundCycle() { return cyclic; }
 
   private:
-    Generation hashsetGenerationAtInit;
     JSContext* cx;
     RootedObject obj;
-    Set::AddPtr hashsetAddPointer;
     bool cyclic;
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
-
-/* Updates references in the cycle detection set if the GC moves them. */
-extern void
-TraceCycleDetectionSet(JSTracer* trc, AutoCycleDetector::Set& set);
 
 struct AutoResolving;
 
@@ -80,6 +74,12 @@ void ReportOverRecursed(JSContext* cx, unsigned errorNumber);
 /* Thread Local Storage slot for storing the context for a thread. */
 extern MOZ_THREAD_LOCAL(JSContext*) TlsContext;
 
+enum class ContextKind
+{
+    Cooperative,
+    Background
+};
+
 } /* namespace js */
 
 /*
@@ -89,13 +89,14 @@ extern MOZ_THREAD_LOCAL(JSContext*) TlsContext;
 struct JSContext : public JS::RootingContext,
                    public js::MallocProvider<JSContext>
 {
-    explicit JSContext(JSRuntime* runtime, const JS::ContextOptions& options);
+    JSContext(JSRuntime* runtime, const JS::ContextOptions& options);
     ~JSContext();
 
-    bool init();
+    bool init(js::ContextKind kind);
 
   private:
     js::UnprotectedData<JSRuntime*> runtime_;
+    js::WriteOnceData<js::ContextKind> kind_;
 
     // System handle for the thread this context is associated with.
     js::WriteOnceData<size_t> threadNative_;
@@ -112,6 +113,7 @@ struct JSContext : public JS::RootingContext,
     // currently operating on.
     void setRuntime(JSRuntime* rt);
 
+    bool isCooperativelyScheduled() const { return kind_ == js::ContextKind::Cooperative; }
     size_t threadNative() const { return threadNative_; }
 
     inline js::gc::ArenaLists* arenas() const { return arenas_; }
@@ -632,14 +634,18 @@ struct JSContext : public JS::RootingContext,
 
   private:
     /* State for object and array toSource conversion. */
-    js::ThreadLocalData<js::AutoCycleDetector::Set> cycleDetectorSet_;
+    js::ThreadLocalData<js::AutoCycleDetector::Vector> cycleDetectorVector_;
 
   public:
-    js::AutoCycleDetector::Set& cycleDetectorSet() { return cycleDetectorSet_.ref(); }
-    const js::AutoCycleDetector::Set& cycleDetectorSet() const { return cycleDetectorSet_.ref(); }
+    js::AutoCycleDetector::Vector& cycleDetectorVector() {
+        return cycleDetectorVector_.ref();
+    }
+    const js::AutoCycleDetector::Vector& cycleDetectorVector() const {
+        return cycleDetectorVector_.ref();
+    }
 
     /* Client opaque pointer. */
-    void* data;
+    js::UnprotectedData<void*> data;
 
     void initJitStackLimit();
     void resetJitStackLimit();
@@ -764,7 +770,7 @@ struct JSContext : public JS::RootingContext,
 
     void trace(JSTracer* trc);
 
-    inline js::ZoneGroupCaches& caches();
+    inline js::RuntimeCaches& caches();
 
   private:
     /*
@@ -950,6 +956,15 @@ struct MOZ_RAII AutoResolving {
  */
 extern JSContext*
 NewContext(uint32_t maxBytes, uint32_t maxNurseryBytes, JSRuntime* parentRuntime);
+
+extern JSContext*
+NewCooperativeContext(JSContext* siblingContext);
+
+extern void
+YieldCooperativeContext(JSContext* cx);
+
+extern void
+ResumeCooperativeContext(JSContext* cx);
 
 extern void
 DestroyContext(JSContext* cx);

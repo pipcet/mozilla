@@ -1601,14 +1601,41 @@ var collatorInternalProperties = {
         addSpecialMissingLanguageTags(locales);
         return (this._availableLocales = locales);
     },
-    relevantExtensionKeys: ["co", "kn"]
+    relevantExtensionKeys: ["co", "kn", "kf"]
 };
+
+
+/**
+ * Returns the default caseFirst values for the given locale and usage. The
+ * first element in the returned array denotes the default value per ES2017
+ * Intl, 9.1 Internal slots of Service Constructors.
+ */
+function collatorCaseFirst(locale, usage) {
+    assert(typeof locale === "string", "locale should be string");
+    assert(usage === "sort" || usage === "search", "invalid usage option");
+
+    if (usage === "sort") {
+        // If |locale| is the default locale (e.g. da-DK), but only supported
+        // through a fallback (da), we need to get the actual locale before we
+        // can call intl_isUpperCaseFirst. Also see BestAvailableLocaleHelper.
+        var availableLocales = callFunction(collatorInternalProperties.availableLocales,
+                                            collatorInternalProperties);
+        var actualLocale = BestAvailableLocaleIgnoringDefault(availableLocales, locale);
+
+        if (intl_isUpperCaseFirst(actualLocale))
+            return ["upper", "false", "lower"];
+    }
+
+    // Default caseFirst values for all other languages.
+    return ["false", "lower", "upper"];
+}
 
 
 function collatorSortLocaleData(locale) {
     return {
         co: intl_availableCollations(locale),
-        kn: ["false", "true"]
+        kn: ["false", "true"],
+        kf: collatorCaseFirst(locale, "sort"),
     };
 }
 
@@ -1617,6 +1644,7 @@ function collatorSearchLocaleData(locale) {
     return {
         co: [null],
         kn: ["false", "true"],
+        kf: collatorCaseFirst(locale, "search"),
         // In theory the default sensitivity is locale dependent;
         // in reality the CLDR/ICU default strength is always tertiary.
         sensitivity: "variant"
@@ -2197,6 +2225,18 @@ function resolveDateTimeFormatInternals(lazyDateTimeFormatData) {
     //       }
     //
     //     formatMatcher: "basic" / "best fit",
+    //
+    //     mozExtensions: true / false,
+    //
+    //
+    //     // If mozExtensions is true:
+    //
+    //     dateStyle: "full" / "long" / "medium" / "short" / undefined,
+    //
+    //     timeStyle: "full" / "long" / "medium" / "short" / undefined,
+    //
+    //     patternOption:
+    //       String representing LDML Date Format pattern or undefined
     //   }
     //
     // Note that lazy data is only installed as a final step of initialization,
@@ -2235,7 +2275,26 @@ function resolveDateTimeFormatInternals(lazyDateTimeFormatData) {
     var formatOpt = lazyDateTimeFormatData.formatOpt;
 
     // Steps 27-28, more or less - see comment after this function.
-    var pattern = toBestICUPattern(dataLocale, formatOpt);
+    var pattern;
+    if (lazyDateTimeFormatData.mozExtensions) {
+        if (lazyDateTimeFormatData.patternOption !== undefined) {
+            pattern = lazyDateTimeFormatData.patternOption;
+
+            internalProps.patternOption = lazyDateTimeFormatData.patternOption;
+        } else if (lazyDateTimeFormatData.dateStyle || lazyDateTimeFormatData.timeStyle) {
+            pattern = intl_patternForStyle(dataLocale,
+              lazyDateTimeFormatData.dateStyle, lazyDateTimeFormatData.timeStyle,
+              lazyDateTimeFormatData.timeZone);
+
+            internalProps.dateStyle = lazyDateTimeFormatData.dateStyle;
+            internalProps.timeStyle = lazyDateTimeFormatData.timeStyle;
+        } else {
+            pattern = toBestICUPattern(dataLocale, formatOpt);
+        }
+        internalProps.mozExtensions = true;
+    } else {
+      pattern = toBestICUPattern(dataLocale, formatOpt);
+    }
 
     // Step 29.
     internalProps.pattern = pattern;
@@ -2301,7 +2360,7 @@ function UnwrapDateTimeFormat(dtf, methodName) {
  *
  * Spec: ECMAScript Internationalization API Specification, 12.1.1.
  */
-function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options) {
+function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options, mozExtensions) {
     assert(IsObject(dateTimeFormat), "InitializeDateTimeFormat called with non-Object");
     assert(IsDateTimeFormat(dateTimeFormat),
            "InitializeDateTimeFormat called with non-DateTimeFormat");
@@ -2377,6 +2436,18 @@ function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options) {
     // Step 18.
     var formatOpt = new Record();
     lazyDateTimeFormatData.formatOpt = formatOpt;
+
+    lazyDateTimeFormatData.mozExtensions = mozExtensions;
+
+    if (mozExtensions) {
+        let pattern = GetOption(options, "pattern", "string", undefined, undefined);
+        lazyDateTimeFormatData.patternOption = pattern;
+
+        let dateStyle = GetOption(options, "dateStyle", "string", ["full", "long", "medium", "short"], undefined);
+        lazyDateTimeFormatData.dateStyle = dateStyle;
+        let timeStyle = GetOption(options, "timeStyle", "string", ["full", "long", "medium", "short"], undefined);
+        lazyDateTimeFormatData.timeStyle = timeStyle;
+    }
 
     // Step 19.
     // 12.1, Table 4: Components of date and time formats.
@@ -2793,8 +2864,18 @@ function Intl_DateTimeFormat_resolvedOptions() {
         locale: internals.locale,
         calendar: internals.calendar,
         numberingSystem: internals.numberingSystem,
-        timeZone: internals.timeZone
+        timeZone: internals.timeZone,
     };
+
+    if (internals.mozExtensions) {
+        if (internals.patternOption !== undefined) {
+            result.pattern = internals.pattern;
+        } else if (internals.dateStyle || internals.timeStyle) {
+            result.dateStyle = internals.dateStyle;
+            result.timeStyle = internals.timeStyle;
+        }
+    }
+
     resolveICUPattern(internals.pattern, result);
     return result;
 }
@@ -3335,5 +3416,24 @@ function Intl_getDisplayNames(locales, options) {
 
     // 24. Return result.
     return result;
+}
+
+function Intl_getLocaleInfo(locales) {
+  const requestedLocales = CanonicalizeLocaleList(locales);
+
+  // In the future, we may want to expose uloc_getAvailable and use it here.
+  const DateTimeFormat = dateTimeFormatInternalProperties;
+  const localeData = DateTimeFormat.localeData;
+
+  const localeOpt = new Record();
+  localeOpt.localeMatcher = "best fit";
+
+  const r = ResolveLocale(callFunction(DateTimeFormat.availableLocales, DateTimeFormat),
+                          requestedLocales,
+                          localeOpt,
+                          DateTimeFormat.relevantExtensionKeys,
+                          localeData);
+
+  return intl_GetLocaleInfo(r.locale);
 }
 

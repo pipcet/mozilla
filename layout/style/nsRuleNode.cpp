@@ -141,9 +141,8 @@ CreateStyleImageRequest(nsPresContext* aPresContext, const nsCSSValue& aValue,
   return request.forget();
 }
 
-template<typename ReferenceBox>
 static void
-SetStyleShapeSourceToCSSValue(StyleShapeSource<ReferenceBox>* aShapeSource,
+SetStyleShapeSourceToCSSValue(StyleShapeSource* aShapeSource,
                               const nsCSSValue* aValue,
                               nsStyleContext* aStyleContext,
                               nsPresContext* aPresContext,
@@ -1450,6 +1449,7 @@ struct SetEnumValueHelper
   DEFINE_ENUM_CLASS_SETTER(StyleFloat, None, InlineEnd)
   DEFINE_ENUM_CLASS_SETTER(StyleFloatEdge, ContentBox, MarginBox)
   DEFINE_ENUM_CLASS_SETTER(StyleHyphens, None, Auto)
+  DEFINE_ENUM_CLASS_SETTER(StyleTextJustify, None, InterCharacter)
   DEFINE_ENUM_CLASS_SETTER(StyleUserFocus, None, SelectMenu)
   DEFINE_ENUM_CLASS_SETTER(StyleUserSelect, None, MozText)
   DEFINE_ENUM_CLASS_SETTER(StyleUserInput, None, Auto)
@@ -2616,6 +2616,9 @@ nsRuleNode::WalkRuleTree(const nsStyleStructID aSID,
       const void* parentStruct = parentContext->StyleData(aSID);
       aContext->AddStyleBit(bit); // makes const_cast OK.
       aContext->SetStyle(aSID, const_cast<void*>(parentStruct));
+      if (isReset) {
+        parentContext->AddStyleBit(NS_STYLE_HAS_CHILD_THAT_USES_RESET_STYLE);
+      }
       return parentStruct;
     }
     else
@@ -4874,6 +4877,12 @@ nsRuleNode::ComputeTextData(void* aStartStruct,
              SETCOORD_UNSET_INHERIT,
            aContext, mPresContext, conditions);
 
+  // text-justify: enum, inherit, initial
+  SetValue(*aRuleData->ValueForTextJustify(), text->mTextJustify, conditions,
+           SETVAL_ENUMERATED | SETVAL_UNSET_INHERIT,
+           parentText->mTextJustify,
+           StyleTextJustify::Auto);
+
   // text-transform: enum, inherit, initial
   SetValue(*aRuleData->ValueForTextTransform(), text->mTextTransform, conditions,
            SETVAL_ENUMERATED | SETVAL_UNSET_INHERIT,
@@ -4931,13 +4940,12 @@ nsRuleNode::ComputeTextData(void* aStartStruct,
            parentText->mRubyPosition,
            NS_STYLE_RUBY_POSITION_OVER);
 
-  // text-size-adjust: none, auto, inherit, initial
-  SetValue(*aRuleData->ValueForTextSizeAdjust(), text->mTextSizeAdjust,
-           conditions, SETVAL_UNSET_INHERIT,
+  // text-size-adjust: enum, inherit, initial
+  SetValue(*aRuleData->ValueForTextSizeAdjust(),
+           text->mTextSizeAdjust, conditions,
+           SETVAL_ENUMERATED | SETVAL_UNSET_INHERIT,
            parentText->mTextSizeAdjust,
-           /* initial */ NS_STYLE_TEXT_SIZE_ADJUST_AUTO,
-           /* auto */ NS_STYLE_TEXT_SIZE_ADJUST_AUTO,
-           /* none */ NS_STYLE_TEXT_SIZE_ADJUST_NONE, Unused, Unused);
+           NS_STYLE_TEXT_SIZE_ADJUST_AUTO);
 
   // text-combine-upright: enum, inherit, initial
   SetValue(*aRuleData->ValueForTextCombineUpright(),
@@ -6615,19 +6623,19 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     case eCSSUnit_None:
     case eCSSUnit_Initial:
     case eCSSUnit_Unset:
-      display->mShapeOutside = StyleShapeOutside();
+      display->mShapeOutside = StyleShapeSource();
       break;
     case eCSSUnit_Inherit:
       conditions.SetUncacheable();
       display->mShapeOutside = parentDisplay->mShapeOutside;
       break;
     case eCSSUnit_URL: {
-      display->mShapeOutside = StyleShapeOutside();
+      display->mShapeOutside = StyleShapeSource();
       display->mShapeOutside.SetURL(shapeOutsideValue->GetURLStructValue());
       break;
     }
     case eCSSUnit_Array: {
-      display->mShapeOutside = StyleShapeOutside();
+      display->mShapeOutside = StyleShapeSource();
       SetStyleShapeSourceToCSSValue(&display->mShapeOutside, shapeOutsideValue,
                                     aContext, mPresContext, conditions);
       break;
@@ -9838,10 +9846,9 @@ GetStyleBasicShapeFromCSSValue(const nsCSSValue& aValue,
   return basicShape.forget();
 }
 
-template<typename ReferenceBox>
 static void
 SetStyleShapeSourceToCSSValue(
-  StyleShapeSource<ReferenceBox>* aShapeSource,
+  StyleShapeSource* aShapeSource,
   const nsCSSValue* aValue,
   nsStyleContext* aStyleContext,
   nsPresContext* aPresContext,
@@ -9854,13 +9861,13 @@ SetStyleShapeSourceToCSSValue(
   MOZ_ASSERT(array->Count() == 1 || array->Count() == 2,
              "Expect one or both of a shape function and a reference box");
 
-  ReferenceBox referenceBox = ReferenceBox::NoBox;
+  StyleGeometryBox referenceBox = StyleGeometryBox::NoBox;
   RefPtr<StyleBasicShape> basicShape;
 
   for (size_t i = 0; i < array->Count(); ++i) {
     const nsCSSValue& item = array->Item(i);
     if (item.GetUnit() == eCSSUnit_Enumerated) {
-      referenceBox = static_cast<ReferenceBox>(item.GetIntValue());
+      referenceBox = static_cast<StyleGeometryBox>(item.GetIntValue());
     } else if (item.GetUnit() == eCSSUnit_Function) {
       basicShape = GetStyleBasicShapeFromCSSValue(item, aStyleContext,
                                                   aPresContext, aConditions);
@@ -9985,19 +9992,19 @@ nsRuleNode::ComputeSVGResetData(void* aStartStruct,
     case eCSSUnit_None:
     case eCSSUnit_Initial:
     case eCSSUnit_Unset:
-      svgReset->mClipPath = StyleClipPath();
+      svgReset->mClipPath = StyleShapeSource();
       break;
     case eCSSUnit_Inherit:
       conditions.SetUncacheable();
       svgReset->mClipPath = parentSVGReset->mClipPath;
       break;
     case eCSSUnit_URL: {
-      svgReset->mClipPath = StyleClipPath();
+      svgReset->mClipPath = StyleShapeSource();
       svgReset->mClipPath.SetURL(clipPathValue->GetURLStructValue());
       break;
     }
     case eCSSUnit_Array: {
-      svgReset->mClipPath = StyleClipPath();
+      svgReset->mClipPath = StyleShapeSource();
       SetStyleShapeSourceToCSSValue(&svgReset->mClipPath, clipPathValue, aContext,
                                     mPresContext, conditions);
       break;

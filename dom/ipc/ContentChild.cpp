@@ -34,6 +34,7 @@
 #include "mozilla/dom/MemoryReportRequest.h"
 #include "mozilla/dom/ProcessGlobal.h"
 #include "mozilla/dom/PushNotifier.h"
+#include "mozilla/dom/Storage.h"
 #include "mozilla/dom/StorageIPC.h"
 #include "mozilla/dom/TabGroup.h"
 #include "mozilla/dom/workers/ServiceWorkerManager.h"
@@ -3035,6 +3036,20 @@ ContentChild::RecvBlobURLUnregistration(const nsCString& aURI)
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult
+ContentChild::RecvDispatchLocalStorageChange(const nsString& aDocumentURI,
+                                             const nsString& aKey,
+                                             const nsString& aOldValue,
+                                             const nsString& aNewValue,
+                                             const IPC::Principal& aPrincipal,
+                                             const bool& aIsPrivate)
+{
+  Storage::DispatchStorageEvent(Storage::LocalStorage,
+                                aDocumentURI, aKey, aOldValue, aNewValue,
+                                aPrincipal, aIsPrivate, nullptr, true);
+  return IPC_OK();
+}
+
 #if defined(XP_WIN) && defined(ACCESSIBILITY)
 bool
 ContentChild::SendGetA11yContentId()
@@ -3160,6 +3175,7 @@ ContentChild::FileCreationRequest(nsID& aUUID, FileCreatorHelper* aHelper,
                                   const nsAString& aType,
                                   const nsAString& aName,
                                   const Optional<int64_t>& aLastModified,
+                                  bool aExistenceCheck,
                                   bool aIsFromNsIFile)
 {
   MOZ_ASSERT(aHelper);
@@ -3173,7 +3189,8 @@ ContentChild::FileCreationRequest(nsID& aUUID, FileCreatorHelper* aHelper,
 
   Unused << SendFileCreationRequest(aUUID, nsString(aFullPath), nsString(aType),
                                     nsString(aName), lastModifiedPassed,
-                                    lastModified, aIsFromNsIFile);
+                                    lastModified, aExistenceCheck,
+                                    aIsFromNsIFile);
   mFileCreationPending.Put(aUUID, aHelper);
 }
 

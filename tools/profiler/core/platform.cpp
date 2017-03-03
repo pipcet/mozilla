@@ -36,7 +36,7 @@
 #include "nsProfilerStartParams.h"
 #include "mozilla/Services.h"
 #include "nsThreadUtils.h"
-#include "mozilla/ProfileGatherer.h"
+#include "ProfileGatherer.h"
 #include "ProfilerMarkers.h"
 #include "shared-libraries.h"
 
@@ -49,17 +49,18 @@
 # include "FennecJNIWrappers.h"
 #endif
 
-#if defined(MOZ_PROFILING) && (defined(XP_MACOSX) || defined(XP_WIN))
+#if defined(MOZ_PROFILING) && \
+    (defined(GP_OS_windows) || defined(GP_OS_darwin))
 # define USE_NS_STACKWALK
 #endif
 
 // This should also work on ARM Linux, but not tested there yet.
-#if defined(__arm__) && defined(ANDROID)
+#if defined(GP_arm_android)
 # define USE_EHABI_STACKWALK
 # include "EHABIStackWalk.h"
 #endif
 
-#if defined(SPS_PLAT_amd64_linux) || defined(SPS_PLAT_x86_linux)
+#if defined(GP_PLAT_amd64_linux) || defined(GP_PLAT_x86_linux)
 # define USE_LUL_STACKWALK
 # include "lul/LulMain.h"
 # include "lul/platform-linux-lul.h"
@@ -71,9 +72,9 @@
 # define VALGRIND_MAKE_MEM_DEFINED(_addr,_len)   ((void)0)
 #endif
 
-#if defined(XP_WIN)
+#if defined(GP_OS_windows)
 typedef CONTEXT tickcontext_t;
-#elif defined(LINUX)
+#elif defined(GP_OS_linux) || defined(GP_OS_android)
 #include <ucontext.h>
 typedef ucontext_t tickcontext_t;
 #endif
@@ -106,9 +107,8 @@ static mozilla::StaticMutex gRegisteredThreadsMutex;
 // All accesses to gGatherer are on the main thread, so no locking is needed.
 static StaticRefPtr<mozilla::ProfileGatherer> gGatherer;
 
-// XXX: gBuffer is used on multiple threads -- including via copies in
-// ThreadInfo::mBuffer -- without any apparent synchronization(!)
-static StaticRefPtr<ProfileBuffer> gBuffer;
+// Always used in conjunction with gRegisteredThreads.
+static ProfileBuffer* gBuffer;
 
 // gThreadNameFilters is accessed from multiple threads. All accesses to it
 // must be guarded by gThreadNameFiltersMutex.
@@ -118,14 +118,10 @@ static mozilla::StaticMutex gThreadNameFiltersMutex;
 // All accesses to gFeatures are on the main thread, so no locking is needed.
 static Vector<std::string> gFeatures;
 
-// All accesses to gEntrySize are on the main thread, so no locking is needed.
-static int gEntrySize = 0;
+// All accesses to gEntries are on the main thread, so no locking is needed.
+static int gEntries = 0;
 
-// This variable is set on the main thread in profiler_{start,stop}(), and
-// mostly read on the main thread. There is one read off the main thread in
-// SigprofSender() in platform-linux.cc which is safe because there is implicit
-// synchronization between that function and the set points in
-// profiler_{start,stop}().
+// All accesses to gInterval are on the main thread, so no locking is needed.
 static double gInterval = 0;
 
 // XXX: These two variables are used extensively both on and off the main
@@ -143,7 +139,7 @@ bool stack_key_initialized;
 // XXX: This is set by profiler_init() and profiler_start() on the main thread.
 // It is read off the main thread, e.g. by Tick(). It might require more
 // inter-thread synchronization than it currently has.
-mozilla::TimeStamp gStartTime;
+static mozilla::TimeStamp gStartTime;
 
 // XXX: These are accessed by multiple threads and might require more
 // inter-thread synchronization than they currently have.
@@ -170,22 +166,14 @@ static Atomic<bool> gProfileRestyle(false);
 static Atomic<bool> gProfileThreads(false);
 static Atomic<bool> gUseStackWalk(false);
 
-// Environment variables to control the profiler
-const char* PROFILER_HELP = "MOZ_PROFILER_HELP";
-const char* PROFILER_INTERVAL = "MOZ_PROFILER_INTERVAL";
-const char* PROFILER_ENTRIES = "MOZ_PROFILER_ENTRIES";
-const char* PROFILER_STACK = "MOZ_PROFILER_STACK_SCAN";
-const char* PROFILER_FEATURES = "MOZ_PROFILING_FEATURES";
-
 /* we don't need to worry about overflow because we only treat the
  * case of them being the same as special. i.e. we only run into
  * a problem if 2^32 events happen between samples that we need
  * to know are associated with different events */
 
 // Values harvested from env vars, that control the profiler.
-static int gUnwindInterval;   /* in milliseconds */
-static int gUnwindStackScan;  /* max # of dubious frames allowed */
-static int gProfileEntries;   /* how many entries do we store? */
+static int gEnvVarEntries;    /* how many entries do we store? */
+static int gEnvVarInterval;   /* in milliseconds */
 
 static mozilla::StaticAutoPtr<mozilla::ProfilerIOInterposeObserver>
                                                             gInterposeObserver;
@@ -199,7 +187,7 @@ CanNotifyObservers()
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
-#if defined(SPS_OS_android)
+#if defined(GP_OS_android)
   // Android ANR reporter uses the profiler off the main thread.
   return NS_IsMainThread();
 #else
@@ -241,9 +229,9 @@ public:
 };
 
 static void
-AddDynamicCodeLocationTag(ThreadInfo& aInfo, const char* aStr)
+AddDynamicCodeLocationTag(ProfileBuffer* aBuffer, const char* aStr)
 {
-  aInfo.addTag(ProfileEntry::CodeLocation(""));
+  aBuffer->addTag(ProfileBufferEntry::CodeLocation(""));
 
   size_t strLen = strlen(aStr) + 1;   // +1 for the null terminator
   for (size_t j = 0; j < strLen; ) {
@@ -257,17 +245,17 @@ AddDynamicCodeLocationTag(ThreadInfo& aInfo, const char* aStr)
     j += sizeof(void*) / sizeof(char);
 
     // Cast to *((void**) to pass the text data to a void*.
-    aInfo.addTag(ProfileEntry::EmbeddedString(*((void**)(&text[0]))));
+    aBuffer->addTag(ProfileBufferEntry::EmbeddedString(*((void**)(&text[0]))));
   }
 }
 
 static void
-AddPseudoEntry(volatile StackEntry& entry, ThreadInfo& aInfo,
+AddPseudoEntry(ProfileBuffer* aBuffer, volatile js::ProfileEntry& entry,
                PseudoStack* stack, void* lastpc)
 {
   // Pseudo-frames with the BEGIN_PSEUDO_JS flag are just annotations and
   // should not be recorded in the profile.
-  if (entry.hasFlag(StackEntry::BEGIN_PSEUDO_JS)) {
+  if (entry.hasFlag(js::ProfileEntry::BEGIN_PSEUDO_JS)) {
     return;
   }
 
@@ -280,7 +268,7 @@ AddPseudoEntry(volatile StackEntry& entry, ThreadInfo& aInfo,
   if (entry.isCopyLabel()) {
     // Store the string using 1 or more EmbeddedString tags.
     // That will happen to the preceding tag.
-    AddDynamicCodeLocationTag(aInfo, sampleLabel);
+    AddDynamicCodeLocationTag(aBuffer, sampleLabel);
     if (entry.isJs()) {
       JSScript* script = entry.script();
       if (script) {
@@ -304,7 +292,7 @@ AddPseudoEntry(volatile StackEntry& entry, ThreadInfo& aInfo,
       lineno = entry.line();
     }
   } else {
-    aInfo.addTag(ProfileEntry::CodeLocation(sampleLabel));
+    aBuffer->addTag(ProfileBufferEntry::CodeLocation(sampleLabel));
 
     // XXX: Bug 1010578. Don't assume a CPP entry and try to get the line for
     // js entries as well.
@@ -314,15 +302,15 @@ AddPseudoEntry(volatile StackEntry& entry, ThreadInfo& aInfo,
   }
 
   if (lineno != -1) {
-    aInfo.addTag(ProfileEntry::LineNumber(lineno));
+    aBuffer->addTag(ProfileBufferEntry::LineNumber(lineno));
   }
 
   uint32_t category = entry.category();
-  MOZ_ASSERT(!(category & StackEntry::IS_CPP_ENTRY));
-  MOZ_ASSERT(!(category & StackEntry::FRAME_LABEL_COPY));
+  MOZ_ASSERT(!(category & js::ProfileEntry::IS_CPP_ENTRY));
+  MOZ_ASSERT(!(category & js::ProfileEntry::FRAME_LABEL_COPY));
 
   if (category) {
-    aInfo.addTag(ProfileEntry::Category((int)category));
+    aBuffer->addTag(ProfileBufferEntry::Category((int)category));
   }
 }
 
@@ -352,11 +340,11 @@ struct AutoWalkJSStack
 };
 
 static void
-MergeStacksIntoProfile(ThreadInfo& aInfo, TickSample* aSample,
+MergeStacksIntoProfile(ProfileBuffer* aBuffer, TickSample* aSample,
                        NativeStack& aNativeStack)
 {
-  PseudoStack* pseudoStack = aInfo.Stack();
-  volatile StackEntry* pseudoFrames = pseudoStack->mStack;
+  PseudoStack* pseudoStack = aSample->threadInfo->Stack();
+  volatile js::ProfileEntry* pseudoFrames = pseudoStack->mStack;
   uint32_t pseudoCount = pseudoStack->stackSize();
 
   // Make a copy of the JS stack into a JSFrame array. This is necessary since,
@@ -370,7 +358,7 @@ MergeStacksIntoProfile(ThreadInfo& aInfo, TickSample* aSample,
   uint32_t startBufferGen;
   startBufferGen = aSample->isSamplingCurrentThread
                  ? UINT32_MAX
-                 : aInfo.bufferGeneration();
+                 : aBuffer->mGeneration;
   uint32_t jsCount = 0;
   JS::ProfilingFrameIterator::Frame jsFrames[1000];
 
@@ -410,7 +398,7 @@ MergeStacksIntoProfile(ThreadInfo& aInfo, TickSample* aSample,
   }
 
   // Start the sample with a root entry.
-  aInfo.addTag(ProfileEntry::Sample("(root)"));
+  aBuffer->addTag(ProfileBufferEntry::Sample("(root)"));
 
   // While the pseudo-stack array is ordered oldest-to-youngest, the JS and
   // native arrays are ordered youngest-to-oldest. We must add frames to aInfo
@@ -431,7 +419,7 @@ MergeStacksIntoProfile(ThreadInfo& aInfo, TickSample* aSample,
     uint8_t* nativeStackAddr = nullptr;
 
     if (pseudoIndex != pseudoCount) {
-      volatile StackEntry& pseudoFrame = pseudoFrames[pseudoIndex];
+      volatile js::ProfileEntry& pseudoFrame = pseudoFrames[pseudoIndex];
 
       if (pseudoFrame.isCpp()) {
         lastPseudoCppStackAddr = (uint8_t*) pseudoFrame.stackAddress();
@@ -482,8 +470,8 @@ MergeStacksIntoProfile(ThreadInfo& aInfo, TickSample* aSample,
     // Check to see if pseudoStack frame is top-most.
     if (pseudoStackAddr > jsStackAddr && pseudoStackAddr > nativeStackAddr) {
       MOZ_ASSERT(pseudoIndex < pseudoCount);
-      volatile StackEntry& pseudoFrame = pseudoFrames[pseudoIndex];
-      AddPseudoEntry(pseudoFrame, aInfo, pseudoStack, nullptr);
+      volatile js::ProfileEntry& pseudoFrame = pseudoFrames[pseudoIndex];
+      AddPseudoEntry(aBuffer, pseudoFrame, pseudoStack, nullptr);
       pseudoIndex++;
       continue;
     }
@@ -508,12 +496,12 @@ MergeStacksIntoProfile(ThreadInfo& aInfo, TickSample* aSample,
       // with stale JIT code return addresses.
       if (aSample->isSamplingCurrentThread ||
           jsFrame.kind == JS::ProfilingFrameIterator::Frame_Wasm) {
-        AddDynamicCodeLocationTag(aInfo, jsFrame.label);
+        AddDynamicCodeLocationTag(aBuffer, jsFrame.label);
       } else {
         MOZ_ASSERT(jsFrame.kind == JS::ProfilingFrameIterator::Frame_Ion ||
                    jsFrame.kind == JS::ProfilingFrameIterator::Frame_Baseline);
-        aInfo.addTag(
-          ProfileEntry::JitReturnAddr(jsFrames[jsIndex].returnAddress));
+        aBuffer->addTag(
+          ProfileBufferEntry::JitReturnAddr(jsFrames[jsIndex].returnAddress));
       }
 
       jsIndex--;
@@ -525,7 +513,7 @@ MergeStacksIntoProfile(ThreadInfo& aInfo, TickSample* aSample,
     if (nativeStackAddr) {
       MOZ_ASSERT(nativeIndex >= 0);
       void* addr = (void*)aNativeStack.pc_array[nativeIndex];
-      aInfo.addTag(ProfileEntry::NativeLeafAddr(addr));
+      aBuffer->addTag(ProfileBufferEntry::NativeLeafAddr(addr));
     }
     if (nativeIndex >= 0) {
       nativeIndex--;
@@ -537,15 +525,15 @@ MergeStacksIntoProfile(ThreadInfo& aInfo, TickSample* aSample,
   // Do not do this for synchronous sampling, which create their own
   // ProfileBuffers.
   if (!aSample->isSamplingCurrentThread && pseudoStack->mContext) {
-    MOZ_ASSERT(aInfo.bufferGeneration() >= startBufferGen);
-    uint32_t lapCount = aInfo.bufferGeneration() - startBufferGen;
+    MOZ_ASSERT(aBuffer->mGeneration >= startBufferGen);
+    uint32_t lapCount = aBuffer->mGeneration - startBufferGen;
     JS::UpdateJSContextProfilerSampleBufferGen(pseudoStack->mContext,
-                                               aInfo.bufferGeneration(),
+                                               aBuffer->mGeneration,
                                                lapCount);
   }
 }
 
-#ifdef XP_WIN
+#if defined(GP_OS_windows)
 static uintptr_t GetThreadHandle(PlatformData* aData);
 #endif
 
@@ -561,7 +549,7 @@ StackWalkCallback(uint32_t aFrameNumber, void* aPC, void* aSP, void* aClosure)
 }
 
 static void
-DoNativeBacktrace(ThreadInfo& aInfo, TickSample* aSample)
+DoNativeBacktrace(ProfileBuffer* aBuffer, TickSample* aSample)
 {
   void* pc_array[1000];
   void* sp_array[1000];
@@ -580,7 +568,7 @@ DoNativeBacktrace(ThreadInfo& aInfo, TickSample* aSample)
 
   uint32_t maxFrames = uint32_t(nativeStack.size - nativeStack.count);
 
-#if defined(XP_MACOSX) || (defined(XP_WIN) && !defined(V8_HOST_ARCH_X64))
+#if defined(GP_OS_darwin) || (defined(GP_PLAT_x86_windows))
   void* stackEnd = aSample->threadInfo->StackTop();
   if (aSample->fp >= aSample->sp && aSample->fp <= stackEnd) {
     FramePointerStackWalk(StackWalkCallback, /* skipFrames */ 0, maxFrames,
@@ -596,13 +584,13 @@ DoNativeBacktrace(ThreadInfo& aInfo, TickSample* aSample)
                thread, /* platformData */ nullptr);
 #endif
 
-  MergeStacksIntoProfile(aInfo, aSample, nativeStack);
+  MergeStacksIntoProfile(aBuffer, aSample, nativeStack);
 }
 #endif
 
 #ifdef USE_EHABI_STACKWALK
 static void
-DoNativeBacktrace(ThreadInfo& aInfo, TickSample* aSample)
+DoNativeBacktrace(Profile* aBuffer, TickSample* aSample)
 {
   void* pc_array[1000];
   void* sp_array[1000];
@@ -627,7 +615,7 @@ DoNativeBacktrace(ThreadInfo& aInfo, TickSample* aSample)
   for (uint32_t i = pseudoStack->stackSize(); i > 0; --i) {
     // The pseudostack grows towards higher indices, so we iterate
     // backwards (from callee to caller).
-    volatile StackEntry& entry = pseudoStack->mStack[i - 1];
+    volatile js::ProfileEntry& entry = pseudoStack->mStack[i - 1];
     if (!entry.isJs() && strcmp(entry.label(), "EnterJIT") == 0) {
       // Found JIT entry frame.  Unwind up to that point (i.e., force
       // the stack walk to stop before the block of saved registers;
@@ -673,7 +661,7 @@ DoNativeBacktrace(ThreadInfo& aInfo, TickSample* aSample)
 
 #ifdef USE_LUL_STACKWALK
 static void
-DoNativeBacktrace(ThreadInfo& aInfo, TickSample* aSample)
+DoNativeBacktrace(ProfileBuffer* aBuffer, TickSample* aSample)
 {
   const mcontext_t* mc =
     &reinterpret_cast<ucontext_t*>(aSample->context)->uc_mcontext;
@@ -681,18 +669,18 @@ DoNativeBacktrace(ThreadInfo& aInfo, TickSample* aSample)
   lul::UnwindRegs startRegs;
   memset(&startRegs, 0, sizeof(startRegs));
 
-#if defined(SPS_PLAT_amd64_linux)
+#if defined(GP_PLAT_amd64_linux)
   startRegs.xip = lul::TaggedUWord(mc->gregs[REG_RIP]);
   startRegs.xsp = lul::TaggedUWord(mc->gregs[REG_RSP]);
   startRegs.xbp = lul::TaggedUWord(mc->gregs[REG_RBP]);
-#elif defined(SPS_PLAT_arm_android)
+#elif defined(GP_PLAT_arm_android)
   startRegs.r15 = lul::TaggedUWord(mc->arm_pc);
   startRegs.r14 = lul::TaggedUWord(mc->arm_lr);
   startRegs.r13 = lul::TaggedUWord(mc->arm_sp);
   startRegs.r12 = lul::TaggedUWord(mc->arm_ip);
   startRegs.r11 = lul::TaggedUWord(mc->arm_fp);
   startRegs.r7  = lul::TaggedUWord(mc->arm_r7);
-#elif defined(SPS_PLAT_x86_linux) || defined(SPS_PLAT_x86_android)
+#elif defined(GP_PLAT_x86_linux) || defined(GP_PLAT_x86_android)
   startRegs.xip = lul::TaggedUWord(mc->gregs[REG_EIP]);
   startRegs.xsp = lul::TaggedUWord(mc->gregs[REG_ESP]);
   startRegs.xbp = lul::TaggedUWord(mc->gregs[REG_EBP]);
@@ -708,20 +696,20 @@ DoNativeBacktrace(ThreadInfo& aInfo, TickSample* aSample)
   lul::StackImage stackImg;
 
   {
-#if defined(SPS_PLAT_amd64_linux)
+#if defined(GP_PLAT_amd64_linux)
     uintptr_t rEDZONE_SIZE = 128;
     uintptr_t start = startRegs.xsp.Value() - rEDZONE_SIZE;
-#elif defined(SPS_PLAT_arm_android)
+#elif defined(GP_PLAT_arm_android)
     uintptr_t rEDZONE_SIZE = 0;
     uintptr_t start = startRegs.r13.Value() - rEDZONE_SIZE;
-#elif defined(SPS_PLAT_x86_linux) || defined(SPS_PLAT_x86_android)
+#elif defined(GP_PLAT_x86_linux) || defined(GP_PLAT_x86_android)
     uintptr_t rEDZONE_SIZE = 0;
     uintptr_t start = startRegs.xsp.Value() - rEDZONE_SIZE;
 #else
 #   error "Unknown plat"
 #endif
-    uintptr_t end   = reinterpret_cast<uintptr_t>(aInfo.StackTop());
-    uintptr_t ws    = sizeof(void*);
+    uintptr_t end = reinterpret_cast<uintptr_t>(aSample->threadInfo->StackTop());
+    uintptr_t ws  = sizeof(void*);
     start &= ~(ws-1);
     end   &= ~(ws-1);
     uintptr_t nToCopy = 0;
@@ -765,7 +753,7 @@ DoNativeBacktrace(ThreadInfo& aInfo, TickSample* aSample)
 
   nativeStack.count = framesUsed;
 
-  MergeStacksIntoProfile(aInfo, aSample, nativeStack);
+  MergeStacksIntoProfile(aBuffer, aSample, nativeStack);
 
   // Update stats in the LUL stats object.  Unfortunately this requires
   // three global memory operations.
@@ -776,42 +764,40 @@ DoNativeBacktrace(ThreadInfo& aInfo, TickSample* aSample)
 #endif
 
 static void
-DoSampleStackTrace(ThreadInfo& aInfo, TickSample* aSample,
+DoSampleStackTrace(ProfileBuffer* aBuffer, TickSample* aSample,
                    bool aAddLeafAddresses)
 {
   NativeStack nativeStack = { nullptr, nullptr, 0, 0 };
-  MergeStacksIntoProfile(aInfo, aSample, nativeStack);
+  MergeStacksIntoProfile(aBuffer, aSample, nativeStack);
 
-#ifdef ENABLE_LEAF_DATA
   if (aSample && aAddLeafAddresses) {
-    aInfo.addTag(ProfileEntry::NativeLeafAddr((void*)aSample->pc));
+    aBuffer->addTag(ProfileBufferEntry::NativeLeafAddr((void*)aSample->pc));
   }
-#endif
 }
 
 // This function is called for each sampling period with the current program
 // counter. It is called within a signal and so must be re-entrant.
 static void
-Tick(TickSample* aSample)
+Tick(ProfileBuffer* aBuffer, TickSample* aSample)
 {
-  ThreadInfo& currThreadInfo = *aSample->threadInfo;
+  ThreadInfo& threadInfo = *aSample->threadInfo;
 
-  currThreadInfo.addTag(ProfileEntry::ThreadId(currThreadInfo.ThreadId()));
+  aBuffer->addTag(ProfileBufferEntry::ThreadId(threadInfo.ThreadId()));
 
   mozilla::TimeDuration delta = aSample->timestamp - gStartTime;
-  currThreadInfo.addTag(ProfileEntry::Time(delta.ToMilliseconds()));
+  aBuffer->addTag(ProfileBufferEntry::Time(delta.ToMilliseconds()));
 
-  PseudoStack* stack = currThreadInfo.Stack();
+  PseudoStack* stack = threadInfo.Stack();
 
 #if defined(USE_NS_STACKWALK) || defined(USE_EHABI_STACKWALK) || \
     defined(USE_LUL_STACKWALK)
   if (gUseStackWalk) {
-    DoNativeBacktrace(currThreadInfo, aSample);
+    DoNativeBacktrace(aBuffer, aSample);
   } else {
-    DoSampleStackTrace(currThreadInfo, aSample, gAddLeafAddresses);
+    DoSampleStackTrace(aBuffer, aSample, gAddLeafAddresses);
   }
 #else
-  DoSampleStackTrace(currThreadInfo, aSample, gAddLeafAddresses);
+  DoSampleStackTrace(aBuffer, aSample, gAddLeafAddresses);
 #endif
 
   // Don't process the PeudoStack's markers if we're synchronously sampling the
@@ -820,32 +806,32 @@ Tick(TickSample* aSample)
     ProfilerMarkerLinkedList* pendingMarkersList = stack->getPendingMarkers();
     while (pendingMarkersList && pendingMarkersList->peek()) {
       ProfilerMarker* marker = pendingMarkersList->popHead();
-      currThreadInfo.addStoredMarker(marker);
-      currThreadInfo.addTag(ProfileEntry::Marker(marker));
+      aBuffer->addStoredMarker(marker);
+      aBuffer->addTag(ProfileBufferEntry::Marker(marker));
     }
   }
 
-  if (currThreadInfo.GetThreadResponsiveness()->HasData()) {
+  if (threadInfo.GetThreadResponsiveness()->HasData()) {
     mozilla::TimeDuration delta =
-      currThreadInfo.GetThreadResponsiveness()->GetUnresponsiveDuration(
+      threadInfo.GetThreadResponsiveness()->GetUnresponsiveDuration(
         aSample->timestamp);
-    currThreadInfo.addTag(ProfileEntry::Responsiveness(delta.ToMilliseconds()));
+    aBuffer->addTag(ProfileBufferEntry::Responsiveness(delta.ToMilliseconds()));
   }
 
   // rssMemory is equal to 0 when we are not recording.
   if (aSample->rssMemory != 0) {
-    currThreadInfo.addTag(ProfileEntry::ResidentMemory(
+    aBuffer->addTag(ProfileBufferEntry::ResidentMemory(
       static_cast<double>(aSample->rssMemory)));
   }
 
   // ussMemory is equal to 0 when we are not recording.
   if (aSample->ussMemory != 0) {
-    currThreadInfo.addTag(ProfileEntry::UnsharedMemory(
+    aBuffer->addTag(ProfileBufferEntry::UnsharedMemory(
       static_cast<double>(aSample->ussMemory)));
   }
 
   if (gLastFrameNumber != gFrameNumber) {
-    currThreadInfo.addTag(ProfileEntry::FrameNumber(gFrameNumber));
+    aBuffer->addTag(ProfileBufferEntry::FrameNumber(gFrameNumber));
     gLastFrameNumber = gFrameNumber;
   }
 }
@@ -888,34 +874,9 @@ AddSharedLibraryInfoToStream(std::ostream& aStream, const SharedLibrary& aLib)
   aStream << "\"start\":" << aLib.GetStart();
   aStream << ",\"end\":" << aLib.GetEnd();
   aStream << ",\"offset\":" << aLib.GetOffset();
-  aStream << ",\"name\":\"" << aLib.GetName() << "\"";
+  aStream << ",\"name\":\"" << aLib.GetNativeDebugName() << "\"";
   const std::string& breakpadId = aLib.GetBreakpadId();
   aStream << ",\"breakpadId\":\"" << breakpadId << "\"";
-
-#ifdef XP_WIN
-  // FIXME: remove this XP_WIN code when the profiler plugin has switched to
-  // using breakpadId.
-  std::string pdbSignature = breakpadId.substr(0, 32);
-  std::string pdbAgeStr = breakpadId.substr(32,  breakpadId.size() - 1);
-
-  std::stringstream stream;
-  stream << pdbAgeStr;
-
-  unsigned pdbAge;
-  stream << std::hex;
-  stream >> pdbAge;
-
-#ifdef DEBUG
-  std::ostringstream oStream;
-  oStream << pdbSignature << std::hex << std::uppercase << pdbAge;
-  MOZ_ASSERT(breakpadId == oStream.str());
-#endif
-
-  aStream << ",\"pdbSignature\":\"" << pdbSignature << "\"";
-  aStream << ",\"pdbAge\":" << pdbAge;
-  aStream << ",\"pdbName\":\"" << aLib.GetName() << "\"";
-#endif
-
   aStream << "}";
 }
 
@@ -1164,7 +1125,7 @@ StreamJSON(SpliceableJSONWriter& aWriter, double aSinceTime)
         for (size_t i = 0; i < gRegisteredThreads->size(); i++) {
           // Thread not being profiled, skip it
           ThreadInfo* info = gRegisteredThreads->at(i);
-          if (!info->hasProfile()) {
+          if (!info->HasProfile()) {
             continue;
           }
 
@@ -1173,7 +1134,7 @@ StreamJSON(SpliceableJSONWriter& aWriter, double aSinceTime)
 
           MutexAutoLock lock(info->GetMutex());
 
-          info->StreamJSON(aWriter, aSinceTime);
+          info->StreamJSON(gBuffer, aWriter, aSinceTime);
         }
       }
 
@@ -1217,19 +1178,6 @@ ToJSON(double aSinceTime)
   SpliceableChunkedJSONWriter b;
   StreamJSON(b, aSinceTime);
   return b.WriteFunc()->CopyData();
-}
-
-static JSObject*
-ToJSObject(JSContext* aCx, double aSinceTime)
-{
-  JS::RootedValue val(aCx);
-  {
-    UniquePtr<char[]> buf = ToJSON(aSinceTime);
-    NS_ConvertUTF8toUTF16 js_string(nsDependentCString(buf.get()));
-    MOZ_ALWAYS_TRUE(JS_ParseJSON(aCx, static_cast<const char16_t*>(js_string.get()),
-                                 js_string.Length(), &val));
-  }
-  return &val.toObject();
 }
 
 // END saving/streaming code
@@ -1283,44 +1231,34 @@ void ProfilerMarker::StreamJSON(SpliceableJSONWriter& aWriter,
   aWriter.EndArray();
 }
 
-/* Has MOZ_PROFILER_VERBOSE been set? */
-
 // Verbosity control for the profiler.  The aim is to check env var
-// MOZ_PROFILER_VERBOSE only once.  However, we may need to temporarily
-// override that so as to print the profiler's help message.  That's
-// what profiler_set_verbosity is for.
+// MOZ_PROFILER_VERBOSE only once.
 
-enum class ProfilerVerbosity : int8_t { UNCHECKED, NOTVERBOSE, VERBOSE };
+enum class Verbosity : int8_t { UNCHECKED, NOTVERBOSE, VERBOSE };
 
 // Raced on, potentially
-static ProfilerVerbosity profiler_verbosity = ProfilerVerbosity::UNCHECKED;
+static Verbosity gVerbosity = Verbosity::UNCHECKED;
 
-bool profiler_verbose()
+bool
+profiler_verbose()
 {
-  if (profiler_verbosity == ProfilerVerbosity::UNCHECKED) {
-    if (getenv("MOZ_PROFILER_VERBOSE") != nullptr)
-      profiler_verbosity = ProfilerVerbosity::VERBOSE;
-    else
-      profiler_verbosity = ProfilerVerbosity::NOTVERBOSE;
+  if (gVerbosity == Verbosity::UNCHECKED) {
+    gVerbosity = getenv("MOZ_PROFILER_VERBOSE")
+               ? Verbosity::VERBOSE
+               : Verbosity::NOTVERBOSE;
   }
 
-  return profiler_verbosity == ProfilerVerbosity::VERBOSE;
+  return gVerbosity == Verbosity::VERBOSE;
 }
 
-void profiler_set_verbosity(ProfilerVerbosity pv)
+static bool
+set_profiler_interval(const char* aInterval)
 {
-   MOZ_ASSERT(pv == ProfilerVerbosity::UNCHECKED ||
-              pv == ProfilerVerbosity::VERBOSE);
-   profiler_verbosity = pv;
-}
-
-
-bool set_profiler_interval(const char* interval) {
-  if (interval) {
+  if (aInterval) {
     errno = 0;
-    long int n = strtol(interval, (char**)nullptr, 10);
-    if (errno == 0 && n >= 1 && n <= 1000) {
-      gUnwindInterval = n;
+    long int n = strtol(aInterval, nullptr, 10);
+    if (errno == 0 && 1 <= n && n <= 1000) {
+      gEnvVarInterval = n;
       return true;
     }
     return false;
@@ -1329,12 +1267,14 @@ bool set_profiler_interval(const char* interval) {
   return true;
 }
 
-bool set_profiler_entries(const char* entries) {
-  if (entries) {
+static bool
+set_profiler_entries(const char* aEntries)
+{
+  if (aEntries) {
     errno = 0;
-    long int n = strtol(entries, (char**)nullptr, 10);
+    long int n = strtol(aEntries, nullptr, 10);
     if (errno == 0 && n > 0) {
-      gProfileEntries = n;
+      gEnvVarEntries = n;
       return true;
     }
     return false;
@@ -1343,21 +1283,9 @@ bool set_profiler_entries(const char* entries) {
   return true;
 }
 
-bool set_profiler_scan(const char* scanCount) {
-  if (scanCount) {
-    errno = 0;
-    long int n = strtol(scanCount, (char**)nullptr, 10);
-    if (errno == 0 && n >= 0 && n <= 100) {
-      gUnwindStackScan = n;
-      return true;
-    }
-    return false;
-  }
-
-  return true;
-}
-
-bool is_native_unwinding_avail() {
+static bool
+is_native_unwinding_avail()
+{
 # if defined(HAVE_NATIVE_UNWIND)
   return true;
 #else
@@ -1365,96 +1293,73 @@ bool is_native_unwinding_avail() {
 #endif
 }
 
-// Read env vars at startup, so as to set:
-//   gUnwindInterval, gProfileEntries, gUnwindStackScan.
-void read_profiler_env_vars()
+static void
+profiler_usage(int aExitCode)
 {
-  /* Set defaults */
-  gUnwindInterval = 0;  /* We'll have to look elsewhere */
-  gProfileEntries = 0;
+  // Force-enable verbosity so that LOG prints something.
+  gVerbosity = Verbosity::VERBOSE;
 
-  const char* interval = getenv(PROFILER_INTERVAL);
-  const char* entries = getenv(PROFILER_ENTRIES);
-  const char* scanCount = getenv(PROFILER_STACK);
-
-  if (getenv(PROFILER_HELP)) {
-     // Enable verbose output
-     profiler_set_verbosity(ProfilerVerbosity::VERBOSE);
-     profiler_usage();
-     // Now force the next enquiry of profiler_verbose to re-query
-     // env var MOZ_PROFILER_VERBOSE.
-     profiler_set_verbosity(ProfilerVerbosity::UNCHECKED);
-  }
-
-  if (!set_profiler_interval(interval) ||
-      !set_profiler_entries(entries) ||
-      !set_profiler_scan(scanCount)) {
-      profiler_usage();
-  } else {
-    LOG( "Profiler:");
-    LOGF("Profiler: Sampling interval = %d ms (zero means \"platform default\")",
-        (int)gUnwindInterval);
-    LOGF("Profiler: Entry store size  = %d (zero means \"platform default\")",
-        (int)gProfileEntries);
-    LOGF("Profiler: UnwindStackScan   = %d (max dubious frames per unwind).",
-        (int)gUnwindStackScan);
-    LOG( "Profiler:");
-  }
-}
-
-void profiler_usage() {
-  LOG( "Profiler: ");
-  LOG( "Profiler: Environment variable usage:");
-  LOG( "Profiler: ");
-  LOG( "Profiler:   MOZ_PROFILER_HELP");
-  LOG( "Profiler:   If set to any value, prints this message.");
-  LOG( "Profiler: ");
-  LOG( "Profiler:   MOZ_PROFILER_INTERVAL=<number>   (milliseconds, 1 to 1000)");
-  LOG( "Profiler:   If unset, platform default is used.");
-  LOG( "Profiler: ");
-  LOG( "Profiler:   MOZ_PROFILER_ENTRIES=<number>    (count, minimum of 1)");
-  LOG( "Profiler:   If unset, platform default is used.");
-  LOG( "Profiler: ");
-  LOG( "Profiler:   MOZ_PROFILER_VERBOSE");
-  LOG( "Profiler:   If set to any value, increases verbosity (recommended).");
-  LOG( "Profiler: ");
-  LOG( "Profiler:   MOZ_PROFILER_STACK_SCAN=<number>   (default is zero)");
-  LOG( "Profiler:   The number of dubious (stack-scanned) frames allowed");
-  LOG( "Profiler: ");
-  LOG( "Profiler:   MOZ_PROFILER_LUL_TEST");
-  LOG( "Profiler:   If set to any value, runs LUL unit tests at startup of");
-  LOG( "Profiler:   the unwinder thread, and prints a short summary of results.");
-  LOG( "Profiler: ");
-  LOGF("Profiler:   This platform %s native unwinding.",
+  LOG ("");
+  LOG ("Environment variable usage:");
+  LOG ("");
+  LOG ("  MOZ_PROFILER_HELP");
+  LOG ("  If set to any value, prints this message.");
+  LOG ("");
+  LOG ("  MOZ_PROFILER_ENTRIES=<1..>      (count)");
+  LOG ("  If unset, platform default is used.");
+  LOG ("");
+  LOG ("  MOZ_PROFILER_INTERVAL=<1..1000> (milliseconds)");
+  LOG ("  If unset, platform default is used.");
+  LOG ("");
+  LOG ("  MOZ_PROFILER_VERBOSE");
+  LOG ("  If set to any value, increases verbosity (recommended).");
+  LOG ("");
+  LOG ("  MOZ_PROFILER_LUL_TEST");
+  LOG ("  If set to any value, runs LUL unit tests at startup of");
+  LOG ("  the unwinder thread, and prints a short summary of ");
+  LOG ("  results.");
+  LOG ("");
+  LOGF("  This platform %s native unwinding.",
        is_native_unwinding_avail() ? "supports" : "does not support");
-  LOG( "Profiler: ");
+  LOG ("");
 
-  /* Re-set defaults */
-  gUnwindInterval   = 0;  /* We'll have to look elsewhere */
-  gProfileEntries   = 0;
-  gUnwindStackScan  = 0;
-
-  LOG( "Profiler:");
-  LOGF("Profiler: Sampling interval = %d ms (zero means \"platform default\")",
-       (int)gUnwindInterval);
-  LOGF("Profiler: Entry store size  = %d (zero means \"platform default\")",
-       (int)gProfileEntries);
-  LOGF("Profiler: UnwindStackScan   = %d (max dubious frames per unwind).",
-       (int)gUnwindStackScan);
-  LOG( "Profiler:");
-
-  return;
+  exit(aExitCode);
 }
 
-bool is_main_thread_name(const char* aName) {
-  if (!aName) {
-    return false;
+// Read env vars at startup, so as to set:
+//   gEnvVarEntries, gEnvVarInterval
+static void
+ReadProfilerEnvVars()
+{
+  const char* help     = getenv("MOZ_PROFILER_HELP");
+  const char* entries  = getenv("MOZ_PROFILER_ENTRIES");
+  const char* interval = getenv("MOZ_PROFILER_INTERVAL");
+
+  if (help) {
+    profiler_usage(0); // terminates execution
   }
-  return strcmp(aName, gGeckoThreadName) == 0;
+
+  if (!set_profiler_entries(entries) ||
+      !set_profiler_interval(interval)) {
+    profiler_usage(1); // terminates execution
+  }
+
+  LOG ("");
+  LOGF("entries  = %d (zero means \"platform default\")",
+       gEnvVarEntries);
+  LOGF("interval = %d ms (zero means \"platform default\")",
+       gEnvVarInterval);
+  LOG ("");
+}
+
+static bool
+is_main_thread_name(const char* aName)
+{
+  return aName && (strcmp(aName, gGeckoThreadName) == 0);
 }
 
 #ifdef HAVE_VA_COPY
-#define VARARGS_ASSIGN(foo, bar)        VA_COPY(foo,bar)
+#define VARARGS_ASSIGN(foo, bar)     VA_COPY(foo,bar)
 #elif defined(HAVE_VA_LIST_AS_ARRAY)
 #define VARARGS_ASSIGN(foo, bar)     foo[0] = bar[0]
 #else
@@ -1462,15 +1367,15 @@ bool is_main_thread_name(const char* aName) {
 #endif
 
 void
-profiler_log(const char* str)
+profiler_log(const char* aStr)
 {
   // This function runs both on and off the main thread.
 
-  profiler_tracing("log", str, TRACING_EVENT);
+  profiler_tracing("log", aStr, TRACING_EVENT);
 }
 
 void
-profiler_log(const char* fmt, va_list args)
+profiler_log(const char* aFmt, va_list aArgs)
 {
   // This function runs both on and off the main thread.
 
@@ -1479,8 +1384,8 @@ profiler_log(const char* fmt, va_list args)
     // this is mozilla external code
     char buf[2048];
     va_list argsCpy;
-    VARARGS_ASSIGN(argsCpy, args);
-    int required = VsprintfLiteral(buf, fmt, argsCpy);
+    VARARGS_ASSIGN(argsCpy, aArgs);
+    int required = VsprintfLiteral(buf, aFmt, argsCpy);
     va_end(argsCpy);
 
     if (required < 0) {
@@ -1490,8 +1395,8 @@ profiler_log(const char* fmt, va_list args)
     } else {
       char* heapBuf = new char[required+1];
       va_list argsCpy;
-      VARARGS_ASSIGN(argsCpy, args);
-      vsnprintf(heapBuf, required+1, fmt, argsCpy);
+      VARARGS_ASSIGN(argsCpy, aArgs);
+      vsnprintf(heapBuf, required+1, aFmt, argsCpy);
       va_end(argsCpy);
       // EVENT_BACKTRACE could be used to get a source
       // for all log events. This could be a runtime
@@ -1581,7 +1486,7 @@ MaybeSetProfile(ThreadInfo* aInfo)
 {
   if ((aInfo->IsMainThread() || gProfileThreads) &&
       ThreadSelected(aInfo->Name())) {
-    aInfo->SetProfile(gBuffer);
+    aInfo->SetHasProfile();
   }
 }
 
@@ -1614,6 +1519,11 @@ RegisterCurrentThread(const char* aName, PseudoStack* aPseudoStack,
 
   gRegisteredThreads->push_back(info);
 }
+
+// Platform-specific init/start/stop actions.
+static void PlatformInit();
+static void PlatformStart(double aInterval);
+static void PlatformStop();
 
 void
 profiler_init(void* stackTop)
@@ -1657,12 +1567,11 @@ profiler_init(void* stackTop)
   bool isMainThread = true;
   RegisterCurrentThread(gGeckoThreadName, stack, isMainThread, stackTop);
 
-  // Read interval settings from MOZ_PROFILER_INTERVAL and stack-scan
-  // threshhold from MOZ_PROFILER_STACK_SCAN.
-  read_profiler_env_vars();
+  // Read settings from environment variables.
+  ReadProfilerEnvVars();
 
-  // platform specific initialization
-  OS::Startup();
+  // Platform-specific initialization.
+  PlatformInit();
 
   set_stderr_callback(profiler_log);
 
@@ -1680,24 +1589,20 @@ profiler_init(void* stackTop)
     return;
   }
 
-  const char* features[] = {"js"
-                         , "leaf"
-                         , "threads"
-#if defined(XP_WIN) || defined(XP_MACOSX) \
-    || (defined(SPS_ARCH_arm) && defined(linux)) \
-    || defined(SPS_PLAT_amd64_linux) || defined(SPS_PLAT_x86_linux)
-                         , "stackwalk"
+  const char* features[] = { "js", "leaf", "threads"
+#if defined(HAVE_NATIVE_UNWIND)
+                           , "stackwalk"
 #endif
 #if defined(PROFILE_JAVA)
-                         , "java"
+                           , "java"
 #endif
-                         };
+                           };
 
   const char* threadFilters[] = { "GeckoMain", "Compositor" };
 
-  profiler_start(PROFILE_DEFAULT_ENTRY, PROFILE_DEFAULT_INTERVAL,
-                         features, MOZ_ARRAY_LENGTH(features),
-                         threadFilters, MOZ_ARRAY_LENGTH(threadFilters));
+  profiler_start(PROFILE_DEFAULT_ENTRIES, PROFILE_DEFAULT_INTERVAL,
+                 features, MOZ_ARRAY_LENGTH(features),
+                 threadFilters, MOZ_ARRAY_LENGTH(threadFilters));
   LOG("END   profiler_init");
 }
 
@@ -1776,7 +1681,14 @@ profiler_get_profile_jsobject(JSContext *aCx, double aSinceTime)
     return nullptr;
   }
 
-  return ToJSObject(aCx, aSinceTime);
+  JS::RootedValue val(aCx);
+  {
+    UniquePtr<char[]> buf = ToJSON(aSinceTime);
+    NS_ConvertUTF8toUTF16 js_string(nsDependentCString(buf.get()));
+    auto buf16 = static_cast<const char16_t*>(js_string.get());
+    MOZ_ALWAYS_TRUE(JS_ParseJSON(aCx, buf16, js_string.Length(), &val));
+  }
+  return &val.toObject();
 }
 
 void
@@ -1808,19 +1720,18 @@ profiler_save_profile_to_file_async(double aSinceTime, const char* aFileName)
 }
 
 void
-profiler_get_start_params(int* aEntrySize,
-                          double* aInterval,
+profiler_get_start_params(int* aEntries, double* aInterval,
                           mozilla::Vector<const char*>* aFilters,
                           mozilla::Vector<const char*>* aFeatures)
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
-  if (NS_WARN_IF(!aEntrySize) || NS_WARN_IF(!aInterval) ||
+  if (NS_WARN_IF(!aEntries) || NS_WARN_IF(!aInterval) ||
       NS_WARN_IF(!aFilters) || NS_WARN_IF(!aFeatures)) {
     return;
   }
 
-  *aEntrySize = gEntrySize;
+  *aEntries = gEntries;
   *aInterval = gInterval;
 
   {
@@ -1839,25 +1750,39 @@ profiler_get_start_params(int* aEntrySize,
 }
 
 void
-profiler_get_gatherer(nsISupports** aRetVal)
+profiler_will_gather_OOP_profile()
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
-  if (!aRetVal) {
+  if (!gGatherer) {
     return;
   }
 
-  if (NS_WARN_IF(!profiler_is_active())) {
-    *aRetVal = nullptr;
+  gGatherer->WillGatherOOPProfile();
+}
+
+void
+profiler_gathered_OOP_profile()
+{
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+
+  if (!gGatherer) {
     return;
   }
 
-  if (NS_WARN_IF(!gGatherer)) {
-    *aRetVal = nullptr;
+  gGatherer->GatheredOOPProfile();
+}
+
+void
+profiler_OOP_exit_profile(const nsCString& aProfile)
+{
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+
+  if (!gGatherer) {
     return;
   }
 
-  NS_ADDREF(*aRetVal = gGatherer);
+  gGatherer->OOPExitProfile(aProfile);
 }
 
 void
@@ -1894,11 +1819,10 @@ profiler_get_features()
     // Walk the C++ stack.
     "stackwalk",
 #endif
-#if defined(ENABLE_LEAF_DATA)
     // Include the C++ leaf node if not stackwalking. DevTools
     // profiler doesn't want the native addresses.
     "leaf",
-#endif
+    // Profile Java code (Android only).
     "java",
     // Tell the JS engine to emit pseudostack entries in the prologue/epilogue.
     "js",
@@ -1929,9 +1853,9 @@ profiler_get_features()
 }
 
 void
-profiler_get_buffer_info_helper(uint32_t *aCurrentPosition,
-                                uint32_t *aTotalSize,
-                                uint32_t *aGeneration)
+profiler_get_buffer_info_helper(uint32_t* aCurrentPosition,
+                                uint32_t* aEntries,
+                                uint32_t* aGeneration)
 {
   // This function is called by profiler_get_buffer_info(), which has already
   // zeroed the outparams.
@@ -1946,7 +1870,7 @@ profiler_get_buffer_info_helper(uint32_t *aCurrentPosition,
   }
 
   *aCurrentPosition = gBuffer->mWritePos;
-  *aTotalSize = gEntrySize;
+  *aEntries = gEntries;
   *aGeneration = gBuffer->mGeneration;
 }
 
@@ -1961,16 +1885,12 @@ hasFeature(const char** aFeatures, uint32_t aFeatureCount, const char* aFeature)
   return false;
 }
 
-// Platform-specific start/stop actions.
-static void PlatformStart();
-static void PlatformStop();
-
 // XXX: an empty class left behind after refactoring. Will be removed soon.
 class Sampler {};
 
 // Values are only honored on the first start
 void
-profiler_start(int aProfileEntries, double aInterval,
+profiler_start(int aEntries, double aInterval,
                const char** aFeatures, uint32_t aFeatureCount,
                const char** aThreadNameFilters, uint32_t aFilterCount)
 
@@ -1984,18 +1904,18 @@ profiler_start(int aProfileEntries, double aInterval,
 
   /* If the sampling interval was set using env vars, use that
      in preference to anything else. */
-  if (gUnwindInterval > 0)
-    aInterval = gUnwindInterval;
+  if (gEnvVarInterval > 0)
+    aInterval = gEnvVarInterval;
 
   /* If the entry count was set using env vars, use that, too: */
-  if (gProfileEntries > 0)
-    aProfileEntries = gProfileEntries;
+  if (gEnvVarEntries > 0)
+    aEntries = gEnvVarEntries;
 
   // Reset the current state if the profiler is running
   profiler_stop();
 
   // Deep copy aThreadNameFilters. Must happen before the MaybeSetProfile()
-  // calls below.
+  // call below.
   {
     StaticMutexAutoLock lock(gThreadNameFiltersMutex);
 
@@ -2011,9 +1931,32 @@ profiler_start(int aProfileEntries, double aInterval,
     gFeatures[i] = aFeatures[i];
   }
 
-  gEntrySize = aProfileEntries ? aProfileEntries : PROFILE_DEFAULT_ENTRY;
+  bool mainThreadIO = hasFeature(aFeatures, aFeatureCount, "mainthreadio");
+  bool privacyMode  = hasFeature(aFeatures, aFeatureCount, "privacy");
+
+#if defined(PROFILE_JAVA)
+  gProfileJava = mozilla::jni::IsFennec() &&
+                      hasFeature(aFeatures, aFeatureCount, "java");
+#endif
+  gProfileJS   = hasFeature(aFeatures, aFeatureCount, "js");
+  gTaskTracer  = hasFeature(aFeatures, aFeatureCount, "tasktracer");
+
+  gAddLeafAddresses = hasFeature(aFeatures, aFeatureCount, "leaf");
+  gDisplayListDump  = hasFeature(aFeatures, aFeatureCount, "displaylistdump");
+  gLayersDump       = hasFeature(aFeatures, aFeatureCount, "layersdump");
+  gProfileGPU       = hasFeature(aFeatures, aFeatureCount, "gpu");
+  gProfileMemory    = hasFeature(aFeatures, aFeatureCount, "memory");
+  gProfileRestyle   = hasFeature(aFeatures, aFeatureCount, "restyle");
+  // Profile non-main threads if we have a filter, because users sometimes ask
+  // to filter by a list of threads but forget to explicitly request.
+  // gProfileThreads must be set before the MaybeSetProfile() call below.
+  gProfileThreads   = hasFeature(aFeatures, aFeatureCount, "threads") ||
+                      aFilterCount > 0;
+  gUseStackWalk     = hasFeature(aFeatures, aFeatureCount, "stackwalk");
+
+  gEntries = aEntries ? aEntries : PROFILE_DEFAULT_ENTRIES;
   gInterval = aInterval ? aInterval : PROFILE_DEFAULT_INTERVAL;
-  gBuffer = new ProfileBuffer(gEntrySize);
+  gBuffer = new ProfileBuffer(gEntries);
   gSampler = new Sampler();
 
   bool ignore;
@@ -2036,40 +1979,18 @@ profiler_start(int aProfileEntries, double aInterval,
   }
 #endif
 
-  gGatherer = new mozilla::ProfileGatherer(gSampler);
+  gGatherer = new mozilla::ProfileGatherer();
 
-  bool mainThreadIO = hasFeature(aFeatures, aFeatureCount, "mainthreadio");
-  bool privacyMode  = hasFeature(aFeatures, aFeatureCount, "privacy");
-
-#if defined(PROFILE_JAVA)
-  gProfileJava = mozilla::jni::IsFennec() &&
-                      hasFeature(aFeatures, aFeatureCount, "java");
-#endif
-  gProfileJS   = hasFeature(aFeatures, aFeatureCount, "js");
-  gTaskTracer  = hasFeature(aFeatures, aFeatureCount, "tasktracer");
-
-  gAddLeafAddresses = hasFeature(aFeatures, aFeatureCount, "leaf");
-  gDisplayListDump  = hasFeature(aFeatures, aFeatureCount, "displaylistdump");
-  gLayersDump       = hasFeature(aFeatures, aFeatureCount, "layersdump");
-  gProfileGPU       = hasFeature(aFeatures, aFeatureCount, "gpu");
-  gProfileMemory    = hasFeature(aFeatures, aFeatureCount, "memory");
-  gProfileRestyle   = hasFeature(aFeatures, aFeatureCount, "restyle");
-  // Profile non-main threads if we have a filter, because users sometimes ask
-  // to filter by a list of threads but forget to explicitly request.
-  gProfileThreads   = hasFeature(aFeatures, aFeatureCount, "threads") ||
-                      aFilterCount > 0;
-  gUseStackWalk     = hasFeature(aFeatures, aFeatureCount, "stackwalk");
-
-  MOZ_ASSERT(!gIsActive && !gIsPaused);
-  PlatformStart();
-  MOZ_ASSERT(gIsActive && !gIsPaused);  // PlatformStart() sets gIsActive.
+  gIsActive = true;  // Must set this for PlatformStart() to work.
+  gIsPaused = false;
+  PlatformStart(gInterval);
 
   if (gProfileJS || privacyMode) {
     mozilla::StaticMutexAutoLock lock(gRegisteredThreadsMutex);
 
     for (uint32_t i = 0; i < gRegisteredThreads->size(); i++) {
       ThreadInfo* info = (*gRegisteredThreads)[i];
-      if (info->IsPendingDelete() || !info->hasProfile()) {
+      if (info->IsPendingDelete() || !info->HasProfile()) {
         continue;
       }
       info->Stack()->reinitializeOnResume();
@@ -2119,7 +2040,7 @@ profiler_start(int aProfileEntries, double aInterval,
       }
 
       nsCOMPtr<nsIProfilerStartParams> params =
-        new nsProfilerStartParams(aProfileEntries, aInterval, featuresArray,
+        new nsProfilerStartParams(aEntries, aInterval, featuresArray,
                                   threadNameFiltersArray);
 
       os->NotifyObservers(params, "profiler-started", nullptr);
@@ -2152,8 +2073,9 @@ profiler_stop()
   }
   gFeatures.clear();
 
+  gIsActive = false;  // Must clear this for PlatformStop() to work.
+  gIsPaused = false;
   PlatformStop();
-  MOZ_ASSERT(!gIsActive && !gIsPaused);   // PlatformStop() clears these.
 
   gProfileJava      = false;
   gProfileJS        = false;
@@ -2167,9 +2089,6 @@ profiler_stop()
   gProfileRestyle   = false;
   gProfileThreads   = false;
   gUseStackWalk     = false;
-
-  if (gIsActive)
-    PlatformStop();
 
   // Destroy ThreadInfo for all threads
   {
@@ -2197,8 +2116,11 @@ profiler_stop()
 
   delete gSampler;
   gSampler = nullptr;
+
+  delete gBuffer;
   gBuffer = nullptr;
-  gEntrySize = 0;
+
+  gEntries = 0;
   gInterval = 0;
 
   // Cancel any in-flight async profile gatherering requests.
@@ -2518,28 +2440,32 @@ profiler_get_backtrace()
   }
   Thread::tid_t tid = Thread::GetCurrentId();
 
-  SyncProfile* profile = new SyncProfile(tid, stack);
+  ProfileBuffer* buffer = new ProfileBuffer(GET_BACKTRACE_DEFAULT_ENTRIES);
+  ThreadInfo* threadInfo =
+    new ThreadInfo("SyncProfile", tid, NS_IsMainThread(), stack,
+                   /* stackTop */ nullptr);
+  threadInfo->SetHasProfile();
 
   TickSample sample;
-  sample.threadInfo = profile;
+  sample.threadInfo = threadInfo;
 
-#if defined(HAVE_NATIVE_UNWIND) || defined(USE_LUL_STACKWALK)
-#if defined(XP_WIN) || defined(LINUX)
+#if defined(HAVE_NATIVE_UNWIND)
+#if defined(GP_OS_windows) || defined(GP_OS_linux) || defined(GP_OS_android)
   tickcontext_t context;
   sample.PopulateContext(&context);
-#elif defined(XP_MACOSX)
+#elif defined(GP_OS_darwin)
   sample.PopulateContext(nullptr);
+#else
+# error "unknown platform"
 #endif
 #endif
 
   sample.isSamplingCurrentThread = true;
   sample.timestamp = mozilla::TimeStamp::Now();
 
-  profile->BeginUnwind();
-  Tick(&sample);
-  profile->EndUnwind();
+  Tick(buffer, &sample);
 
-  return UniqueProfilerBacktrace(new ProfilerBacktrace(profile));
+  return UniqueProfilerBacktrace(new ProfilerBacktrace(buffer, threadInfo));
 }
 
 void
@@ -2564,7 +2490,7 @@ profiler_get_backtrace_noalloc(char *output, size_t outputSize)
     return;
   }
 
-  volatile StackEntry *pseudoFrames = pseudoStack->mStack;
+  volatile js::ProfileEntry *pseudoFrames = pseudoStack->mStack;
   uint32_t pseudoCount = pseudoStack->stackSize();
 
   for (uint32_t i = 0; i < pseudoCount; i++) {
@@ -2662,7 +2588,7 @@ void PseudoStack::flushSamplerOnJSShutdown()
     for (size_t i = 0; i < gRegisteredThreads->size(); i++) {
       // Thread not being profiled, skip it.
       ThreadInfo* info = gRegisteredThreads->at(i);
-      if (!info->hasProfile() || info->IsPendingDelete()) {
+      if (!info->HasProfile() || info->IsPendingDelete()) {
         continue;
       }
 
@@ -2672,7 +2598,7 @@ void PseudoStack::flushSamplerOnJSShutdown()
       }
 
       MutexAutoLock lock(info->GetMutex());
-      info->FlushSamplesAndMarkers();
+      info->FlushSamplesAndMarkers(gBuffer);
     }
   }
 
@@ -2681,12 +2607,12 @@ void PseudoStack::flushSamplerOnJSShutdown()
 
 // We #include these files directly because it means those files can use
 // declarations from this file trivially.
-#if defined(SPS_OS_windows)
-# include "platform-win32.cc"
-#elif defined(SPS_OS_darwin)
-# include "platform-macos.cc"
-#elif defined(SPS_OS_linux) || defined(SPS_OS_android)
-# include "platform-linux.cc"
+#if defined(GP_OS_windows)
+# include "platform-win32.cpp"
+#elif defined(GP_OS_darwin)
+# include "platform-macos.cpp"
+#elif defined(GP_OS_linux) || defined(GP_OS_android)
+# include "platform-linux-android.cpp"
 #else
 # error "bad platform"
 #endif

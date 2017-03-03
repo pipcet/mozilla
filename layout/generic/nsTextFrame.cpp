@@ -2964,22 +2964,40 @@ nsTextFrame::GetTrimmedOffsets(const nsTextFragment* aFrag,
   return offsets;
 }
 
-static bool IsJustifiableCharacter(const nsTextFragment* aFrag, int32_t aPos,
+static bool IsJustifiableCharacter(const nsStyleText* aTextStyle,
+                                   const nsTextFragment* aFrag, int32_t aPos,
                                    bool aLangIsCJ)
 {
   NS_ASSERTION(aPos >= 0, "negative position?!");
+
+  StyleTextJustify justifyStyle = aTextStyle->mTextJustify;
+  if (justifyStyle == StyleTextJustify::None) {
+    return false;
+  }
+
   char16_t ch = aFrag->CharAt(aPos);
-  if (ch == '\n' || ch == '\t' || ch == '\r')
+  if (ch == '\n' || ch == '\t' || ch == '\r') {
     return true;
+  }
   if (ch == ' ' || ch == CH_NBSP) {
     // Don't justify spaces that are combined with diacriticals
-    if (!aFrag->Is2b())
+    if (!aFrag->Is2b()) {
       return true;
+    }
     return !nsTextFrameUtils::IsSpaceCombiningSequenceTail(
-        aFrag->Get2b() + aPos + 1, aFrag->GetLength() - (aPos + 1));
+      aFrag->Get2b() + aPos + 1, aFrag->GetLength() - (aPos + 1));
   }
-  if (ch < 0x2150u)
+
+  if (justifyStyle == StyleTextJustify::InterCharacter) {
+    return true;
+  } else if (justifyStyle == StyleTextJustify::InterWord) {
     return false;
+  }
+
+  // text-justify: auto
+  if (ch < 0x2150u) {
+    return false;
+  }
   if (aLangIsCJ) {
     if ((0x2150u <= ch && ch <= 0x22ffu) || // Number Forms, Arrows, Mathematical Operators
         (0x2460u <= ch && ch <= 0x24ffu) || // Enclosed Alphanumerics
@@ -3307,7 +3325,7 @@ PropertyProvider::ComputeJustification(
     gfxSkipCharsIterator iter = run.GetPos();
     for (uint32_t i = 0; i < length; ++i) {
       uint32_t offset = originalOffset + i;
-      if (!IsJustifiableCharacter(mFrag, offset, isCJ)) {
+      if (!IsJustifiableCharacter(mTextStyle, mFrag, offset, isCJ)) {
         continue;
       }
 
@@ -8984,7 +9002,7 @@ nsTextFrame::Reflow(nsPresContext*           aPresContext,
   // but not inside a cell. For now, just don't reflow.
   if (!aReflowInput.mLineLayout) {
     ClearMetrics(aMetrics);
-    aStatus = NS_FRAME_COMPLETE;
+    aStatus.Reset();
     return;
   }
 
@@ -9060,7 +9078,7 @@ nsTextFrame::ReflowText(nsLineLayout& aLineLayout, nscoord aAvailableWidth,
   // We don't need to reflow if there is no content.
   if (!maxContentLength) {
     ClearMetrics(aMetrics);
-    aStatus = NS_FRAME_COMPLETE;
+    aStatus.Reset();
     return;
   }
 
@@ -9217,7 +9235,7 @@ nsTextFrame::ReflowText(nsLineLayout& aLineLayout, nscoord aAvailableWidth,
 
   if (!mTextRun) {
     ClearMetrics(aMetrics);
-    aStatus = NS_FRAME_COMPLETE;
+    aStatus.Reset();
     return;
   }
 
@@ -9545,22 +9563,24 @@ nsTextFrame::ReflowText(nsLineLayout& aLineLayout, nscoord aAvailableWidth,
   }
 
   // Compute reflow status
-  aStatus = contentLength == maxContentLength
-    ? NS_FRAME_COMPLETE : NS_FRAME_NOT_COMPLETE;
+  aStatus.Reset();
+  if (contentLength != maxContentLength) {
+    aStatus.SetIncomplete();
+  }
 
   if (charsFit == 0 && length > 0 && !usedHyphenation) {
     // Couldn't place any text
-    aStatus = NS_INLINE_LINE_BREAK_BEFORE();
+    aStatus.SetInlineLineBreakBeforeAndReset();
   } else if (contentLength > 0 && mContentOffset + contentLength - 1 == newLineOffset) {
     // Ends in \n
-    aStatus = NS_INLINE_LINE_BREAK_AFTER(aStatus);
+    aStatus.SetInlineLineBreakAfter();
     aLineLayout.SetLineEndsInBR(true);
   } else if (breakAfter) {
-    aStatus = NS_INLINE_LINE_BREAK_AFTER(aStatus);
+    aStatus.SetInlineLineBreakAfter();
   }
   if (completedFirstLetter) {
     aLineLayout.SetFirstLetterStyleOK(false);
-    aStatus |= NS_INLINE_BREAK_FIRST_LETTER_COMPLETE;
+    aStatus.SetFirstLetterComplete();
   }
 
   // Updated the cached NewlineProperty, or delete it.

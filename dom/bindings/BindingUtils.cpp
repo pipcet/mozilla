@@ -2119,7 +2119,9 @@ ReparentWrapper(JSContext* aCx, JS::Handle<JSObject*> aObjArg)
   // transplanting code, since it has no good way to handle errors. This uses
   // the untrusted script limit, which is not strictly necessary since no
   // actual script should run.
-  JS_CHECK_RECURSION_CONSERVATIVE(aCx, return NS_ERROR_FAILURE);
+  if (!js::CheckRecursionLimitConservative(aCx)) {
+    return NS_ERROR_FAILURE;
+  }
 
   JS::Rooted<JSObject*> aObj(aCx, aObjArg);
   const DOMJSClass* domClass = GetDOMClass(aObj);
@@ -2787,7 +2789,7 @@ HandlePrerenderingViolation(nsPIDOMWindowInner* aWindow)
   // Suspend event handling on the document
   nsCOMPtr<nsIDocument> doc = aWindow->GetExtantDoc();
   if (doc) {
-    doc->SuppressEventHandling(nsIDocument::eEvents);
+    doc->SuppressEventHandling();
   }
 }
 

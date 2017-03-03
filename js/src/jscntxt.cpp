@@ -68,67 +68,74 @@ using mozilla::PointerRangeSize;
 bool
 js::AutoCycleDetector::init()
 {
-    AutoCycleDetector::Set& set = cx->cycleDetectorSet();
-    hashsetAddPointer = set.lookupForAdd(obj);
-    if (!hashsetAddPointer) {
-        if (!set.add(hashsetAddPointer, obj)) {
-            ReportOutOfMemory(cx);
-            return false;
-        }
-        cyclic = false;
-        hashsetGenerationAtInit = set.generation();
+    MOZ_ASSERT(cyclic);
+
+    AutoCycleDetector::Vector& vector = cx->cycleDetectorVector();
+
+    for (JSObject* obj2 : vector) {
+        if (MOZ_UNLIKELY(obj == obj2))
+            return true;
     }
+
+    if (!vector.append(obj))
+        return false;
+
+    cyclic = false;
     return true;
 }
 
 js::AutoCycleDetector::~AutoCycleDetector()
 {
-    if (!cyclic) {
-        if (hashsetGenerationAtInit == cx->cycleDetectorSet().generation())
-            cx->cycleDetectorSet().remove(hashsetAddPointer);
-        else
-            cx->cycleDetectorSet().remove(obj);
+    if (MOZ_LIKELY(!cyclic)) {
+        AutoCycleDetector::Vector& vec = cx->cycleDetectorVector();
+        MOZ_ASSERT(vec.back() == obj);
+        if (vec.length() > 1) {
+            vec.popBack();
+        } else {
+            // Avoid holding on to unused heap allocations.
+            vec.clearAndFree();
+        }
     }
 }
 
-void
-js::TraceCycleDetectionSet(JSTracer* trc, AutoCycleDetector::Set& set)
-{
-    for (AutoCycleDetector::Set::Enum e(set); !e.empty(); e.popFront())
-        TraceRoot(trc, &e.mutableFront(), "cycle detector table entry");
-}
-
 bool
-JSContext::init()
+JSContext::init(ContextKind kind)
 {
-    // Get a platform-native handle for this thread, used by js::InterruptRunningJitCode.
+    // Skip most of the initialization if this thread will not be running JS.
+    if (kind == ContextKind::Cooperative) {
+        // Get a platform-native handle for this thread, used by js::InterruptRunningJitCode.
 #ifdef XP_WIN
-    size_t openFlags = THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME |
-                       THREAD_QUERY_INFORMATION;
-    HANDLE self = OpenThread(openFlags, false, GetCurrentThreadId());
-    if (!self)
+        size_t openFlags = THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME |
+                           THREAD_QUERY_INFORMATION;
+        HANDLE self = OpenThread(openFlags, false, GetCurrentThreadId());
+        if (!self)
         return false;
-    static_assert(sizeof(HANDLE) <= sizeof(threadNative_), "need bigger field");
-    threadNative_ = (size_t)self;
+        static_assert(sizeof(HANDLE) <= sizeof(threadNative_), "need bigger field");
+        threadNative_ = (size_t)self;
 #else
-    static_assert(sizeof(pthread_t) <= sizeof(threadNative_), "need bigger field");
-    threadNative_ = (size_t)pthread_self();
+        static_assert(sizeof(pthread_t) <= sizeof(threadNative_), "need bigger field");
+        threadNative_ = (size_t)pthread_self();
 #endif
 
-    if (!regexpStack.ref().init())
-        return false;
+        if (!regexpStack.ref().init())
+            return false;
 
-    if (!fx.initInstance())
-        return false;
+        if (!fx.initInstance())
+            return false;
 
 #ifdef JS_SIMULATOR
-    simulator_ = js::jit::Simulator::Create(this);
-    if (!simulator_)
-        return false;
+        simulator_ = js::jit::Simulator::Create(this);
+        if (!simulator_)
+            return false;
 #endif
 
-    if (!wasm::EnsureSignalHandlers(this))
-        return false;
+        if (!wasm::EnsureSignalHandlers(this))
+            return false;
+    }
+
+    // Set the ContextKind last, so that ProtectedData checks will allow us to
+    // initialize this context before it becomes the runtime's active context.
+    kind_ = kind;
 
     return true;
 }
@@ -156,14 +163,46 @@ js::NewContext(uint32_t maxBytes, uint32_t maxNurseryBytes, JSRuntime* parentRun
         return nullptr;
     }
 
-
-    if (!cx->init()) {
+    if (!cx->init(ContextKind::Cooperative)) {
         js_delete(cx);
         js_delete(runtime);
         return nullptr;
     }
 
     return cx;
+}
+
+JSContext*
+js::NewCooperativeContext(JSContext* siblingContext)
+{
+    MOZ_RELEASE_ASSERT(!TlsContext.get());
+
+    JSRuntime* runtime = siblingContext->runtime();
+
+    JSContext* cx = js_new<JSContext>(runtime, JS::ContextOptions());
+    if (!cx || !cx->init(ContextKind::Cooperative)) {
+        js_delete(cx);
+        return nullptr;
+    }
+
+    runtime->setNewbornActiveContext(cx);
+    return cx;
+}
+
+void
+js::YieldCooperativeContext(JSContext* cx)
+{
+    MOZ_ASSERT(cx == TlsContext.get());
+    MOZ_ASSERT(cx->runtime()->activeContext() == cx);
+    cx->runtime()->setActiveContext(nullptr);
+}
+
+void
+js::ResumeCooperativeContext(JSContext* cx)
+{
+    MOZ_ASSERT(cx == TlsContext.get());
+    MOZ_ASSERT(cx->runtime()->activeContext() == nullptr);
+    cx->runtime()->setActiveContext(cx);
 }
 
 void
@@ -186,6 +225,8 @@ js::DestroyContext(JSContext* cx)
         // Destroy the runtime along with its last context.
         cx->runtime()->destroyRuntime();
         js_delete(cx->runtime());
+
+        js_delete_poison(cx);
     } else {
         DebugOnly<bool> found = false;
         for (size_t i = 0; i < cx->runtime()->cooperatingContexts().length(); i++) {
@@ -197,9 +238,9 @@ js::DestroyContext(JSContext* cx)
             }
         }
         MOZ_ASSERT(found);
-    }
 
-    js_delete_poison(cx);
+        cx->runtime()->deleteActiveContext(cx);
+    }
 }
 
 void
@@ -1092,6 +1133,7 @@ JSContext::alreadyReportedError()
 
 JSContext::JSContext(JSRuntime* runtime, const JS::ContextOptions& options)
   : runtime_(runtime),
+    kind_(ContextKind::Background),
     threadNative_(0),
     helperThread_(nullptr),
     options_(options),
@@ -1155,6 +1197,7 @@ JSContext::JSContext(JSRuntime* runtime, const JS::ContextOptions& options)
     enteredPolicy(nullptr),
 #endif
     generatingError(false),
+    cycleDetectorVector_(this),
     data(nullptr),
     outstandingRequests(0),
     jitIsBroken(false),
@@ -1171,15 +1214,20 @@ JSContext::JSContext(JSRuntime* runtime, const JS::ContextOptions& options)
 {
     MOZ_ASSERT(static_cast<JS::RootingContext*>(this) ==
                JS::RootingContext::get(this));
-    for (size_t i = 0; i < mozilla::ArrayLength(nativeStackQuota); i++)
-        nativeStackQuota[i] = 0;
 
     MOZ_ASSERT(!TlsContext.get());
     TlsContext.set(this);
+
+    for (size_t i = 0; i < mozilla::ArrayLength(nativeStackQuota); i++)
+        nativeStackQuota[i] = 0;
 }
 
 JSContext::~JSContext()
 {
+    // Clear the ContextKind first, so that ProtectedData checks will allow us to
+    // destroy this context even if the runtime is already gone.
+    kind_ = ContextKind::Background;
+
 #ifdef XP_WIN
     if (threadNative_)
         CloseHandle((HANDLE)threadNative_.ref());
@@ -1344,14 +1392,13 @@ JSContext::sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const
      * ones have been found by DMD to be worth measuring.  More stuff may be
      * added later.
      */
-    return cycleDetectorSet().sizeOfExcludingThis(mallocSizeOf);
+    return cycleDetectorVector().sizeOfExcludingThis(mallocSizeOf);
 }
 
 void
 JSContext::trace(JSTracer* trc)
 {
-    if (cycleDetectorSet().initialized())
-        TraceCycleDetectionSet(trc, cycleDetectorSet());
+    cycleDetectorVector().trace(trc);
 
     if (trc->isMarkingTracer() && compartment_)
         compartment_->mark();

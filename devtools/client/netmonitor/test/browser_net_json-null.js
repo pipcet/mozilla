@@ -3,7 +3,7 @@
 
 "use strict";
 
-const { L10N } = require("devtools/client/netmonitor/l10n");
+const { L10N } = require("devtools/client/netmonitor/utils/l10n");
 
 /**
  * Tests if JSON responses containing null values are properly displayed.
@@ -15,10 +15,6 @@ add_task(function* () {
 
   let { document, gStore, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/actions/index");
-  let {
-    getDisplayedRequests,
-    getSortedRequests,
-  } = windowRequire("devtools/client/netmonitor/selectors/index");
 
   gStore.dispatch(Actions.batchEnable(false));
 

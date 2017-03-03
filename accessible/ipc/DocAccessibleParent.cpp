@@ -21,6 +21,7 @@
 
 namespace mozilla {
 namespace a11y {
+uint64_t DocAccessibleParent::sMaxDocID = 0;
 
 mozilla::ipc::IPCResult
 DocAccessibleParent::RecvShowEvent(const ShowEventData& aData,
@@ -398,10 +399,15 @@ DocAccessibleParent::RecvBindChildDoc(PDocAccessibleParent* aChildDoc, const uin
   ipc::IPCResult result = AddChildDoc(childDoc, aID, false);
   MOZ_ASSERT(result);
   MOZ_ASSERT(CheckDocTree());
+#ifdef DEBUG
   if (!result) {
     return result;
   }
-  return IPC_OK();
+#else
+  result = IPC_OK();
+#endif
+
+  return result;
 }
 
 ipc::IPCResult
@@ -411,8 +417,9 @@ DocAccessibleParent::AddChildDoc(DocAccessibleParent* aChildDoc,
   // We do not use GetAccessible here because we want to be sure to not get the
   // document it self.
   ProxyEntry* e = mAccessibles.GetEntry(aParentID);
-  if (!e)
+  if (!e) {
     return IPC_FAIL(this, "binding to nonexistant proxy!");
+  }
 
   ProxyAccessible* outerDoc = e->mProxy;
   MOZ_ASSERT(outerDoc);
@@ -427,8 +434,8 @@ DocAccessibleParent::AddChildDoc(DocAccessibleParent* aChildDoc,
 
   aChildDoc->SetParent(outerDoc);
   outerDoc->SetChildDoc(aChildDoc);
-  mChildDocs.AppendElement(aChildDoc->IProtocol::Id());
-  aChildDoc->mParentDoc = IProtocol::Id();
+  mChildDocs.AppendElement(aChildDoc->mActorID);
+  aChildDoc->mParentDoc = mActorID;
 
   if (aCreating) {
     ProxyCreated(aChildDoc, Interfaces::DOCUMENT | Interfaces::HYPERTEXT);
@@ -463,6 +470,7 @@ DocAccessibleParent::Destroy()
 
   mShutdown = true;
 
+  MOZ_DIAGNOSTIC_ASSERT(LiveDocs().Contains(mActorID));
   uint32_t childDocCount = mChildDocs.Length();
   for (uint32_t i = 0; i < childDocCount; i++) {
     for (uint32_t j = i + 1; j < childDocCount; j++) {
@@ -470,8 +478,18 @@ DocAccessibleParent::Destroy()
     }
   }
 
-  for (uint32_t i = childDocCount - 1; i < childDocCount; i--)
-    ChildDocAt(i)->Destroy();
+  // XXX This indirection through the hash map of live documents shouldn't be
+  // needed, but be paranoid for now.
+  int32_t actorID = mActorID;
+  for (uint32_t i = childDocCount - 1; i < childDocCount; i--) {
+    DocAccessibleParent* thisDoc = LiveDocs().Get(actorID);
+    MOZ_ASSERT(thisDoc);
+    if (!thisDoc) {
+      return;
+    }
+
+    thisDoc->ChildDocAt(i)->Destroy();
+  }
 
   for (auto iter = mAccessibles.Iter(); !iter.Done(); iter.Next()) {
     MOZ_ASSERT(iter.Get()->mProxy != this);
@@ -479,15 +497,33 @@ DocAccessibleParent::Destroy()
     iter.Remove();
   }
 
+  DocAccessibleParent* thisDoc = LiveDocs().Get(actorID);
+  MOZ_ASSERT(thisDoc);
+  if (!thisDoc) {
+    return;
+  }
+
   // The code above should have already completely cleared these, but to be
   // extra safe make sure they are cleared here.
-  mAccessibles.Clear();
-  mChildDocs.Clear();
+  thisDoc->mAccessibles.Clear();
+  thisDoc->mChildDocs.Clear();
 
-  DocManager::NotifyOfRemoteDocShutdown(this);
-  ProxyDestroyed(this);
-  if (DocAccessibleParent* parentDoc = ParentDoc())
-    parentDoc->RemoveChildDoc(this);
+  DocManager::NotifyOfRemoteDocShutdown(thisDoc);
+  thisDoc = LiveDocs().Get(actorID);
+  MOZ_ASSERT(thisDoc);
+  if (!thisDoc) {
+    return;
+  }
+
+  ProxyDestroyed(thisDoc);
+  thisDoc = LiveDocs().Get(actorID);
+  MOZ_ASSERT(thisDoc);
+  if (!thisDoc) {
+    return;
+  }
+
+  if (DocAccessibleParent* parentDoc = thisDoc->ParentDoc())
+    parentDoc->RemoveChildDoc(thisDoc);
   else if (IsTopLevel())
     GetAccService()->RemoteDocShutdown(this);
 }

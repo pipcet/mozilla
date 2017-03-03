@@ -67,6 +67,11 @@ public:
     mSeekTargetThreshold = Some(aTime);
   }
 
+  virtual MediaDataDecoder::ConversionRequired NeedsConversion() const
+  {
+    return MediaDataDecoder::ConversionRequired::kNeedNone;
+  }
+
 protected:
   // IMFTransform wrapper that performs the decoding.
   RefPtr<MFTDecoder> mDecoder;
@@ -102,9 +107,17 @@ public:
     return mMFTManager ? mMFTManager->GetDescriptionName() : "";
   }
 
+  ConversionRequired NeedsConversion() const override
+  {
+    MOZ_ASSERT(mMFTManager);
+    return mMFTManager->NeedsConversion();
+  }
+
   virtual void SetSeekThreshold(const media::TimeUnit& aTime) override;
 
 private:
+
+  RefPtr<DecodePromise> ProcessError(HRESULT aError, const char* aReason);
 
   // Called on the task queue. Inserts the sample into the decoder, and
   // extracts output if available.
@@ -112,7 +125,7 @@ private:
 
   // Called on the task queue. Extracts output if available, and delivers
   // it to the reader. Called after ProcessDecode() and ProcessDrain().
-  void ProcessOutput();
+  HRESULT ProcessOutput(DecodedData& aResults);
 
   // Called on the task queue. Orders the MFT to flush.  There is no output to
   // extract.
@@ -134,8 +147,6 @@ private:
 
   bool mIsShutDown = false;
 
-  MozPromiseHolder<DecodePromise> mDecodePromise;
-  MozPromiseHolder<DecodePromise> mDrainPromise;
   enum class DrainStatus
   {
     DRAINED,

@@ -74,6 +74,7 @@ var ecmaGlobals =
     "URIError",
     "WeakMap",
     "WeakSet",
+    {name: "WebAssembly", disabled: !SpecialPowers.Cu.getJSTestingFunctions().wasmIsSupported()}
   ];
 // IMPORTANT: Do not change the list above without review from
 //            a JavaScript Engine peer!
@@ -753,7 +754,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PluginArray",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "PointerEvent", nightly: true, desktop: true, disabled: true},
+    {name: "PointerEvent", nightly: true, desktop: true, windows: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PopStateEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!

@@ -591,6 +591,9 @@ private:
     // by chunking, content-length, or h2 end-stream framing
     uint32_t                          mStronglyFramed : 1;
 
+    // true if an HTTP transaction is created for the socket thread
+    uint32_t                          mUsedNetwork : 1;
+
     nsTArray<nsContinueRedirectionFunc> mRedirectFuncStack;
 
     // Needed for accurate DNS timing
@@ -618,7 +621,7 @@ private:
     // These next members are only used in unit tests to delay the call to
     // cache->AsyncOpenURI in order to race the cache with the network.
     nsCOMPtr<nsITimer> mCacheOpenTimer;
-    nsCOMPtr<nsIRunnable> mCacheOpenRunnable;
+    std::function<void(nsHttpChannel*)> mCacheOpenFunc;
     uint32_t mCacheOpenDelay = 0;
 
     // We need to remember which is the source of the response we are using.

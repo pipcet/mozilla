@@ -80,7 +80,6 @@
 
 #include "mozilla/Logging.h"
 #include "prtime.h"
-#include "prprf.h"
 #include "prmem.h"
 #include "prenv.h"
 
@@ -205,8 +204,8 @@
 #include "mozilla/gfx/DeviceManagerDx.h"
 #include "mozilla/layers/APZCTreeManager.h"
 #include "mozilla/layers/InputAPZContext.h"
+#include "mozilla/layers/KnowsCompositor.h"
 #include "mozilla/layers/ScrollInputMethods.h"
-#include "ClientLayerManager.h"
 #include "InputData.h"
 
 #include "mozilla/Telemetry.h"
@@ -381,7 +380,7 @@ static bool gIsPointerEventsEnabled = false;
 // coordinate this many milliseconds:
 #define HITTEST_CACHE_LIFETIME_MS 50
 
-#if defined(ACCESSIBILITY) && defined(_M_IX86)
+#if defined(ACCESSIBILITY)
 
 namespace mozilla {
 
@@ -536,7 +535,8 @@ private:
     // We don't want to handle this unless the message is a WM_GETOBJECT that we
     // want to block, and the aHwnd is a nsWindow that belongs to the current
     // thread.
-    if (!aMsgResult || aMsgCode != WM_GETOBJECT || aLParam != OBJID_CLIENT ||
+    if (!aMsgResult || aMsgCode != WM_GETOBJECT ||
+        static_cast<DWORD>(aLParam) != OBJID_CLIENT ||
         !WinUtils::GetNSWindowPtr(aHwnd) ||
         ::GetWindowThreadProcessId(aHwnd, nullptr) != ::GetCurrentThreadId() ||
         !IsA11yBlocked()) {
@@ -570,7 +570,7 @@ StaticAutoPtr<TIPMessageHandler> TIPMessageHandler::sInstance;
 
 } // namespace mozilla
 
-#endif // defined(ACCESSIBILITY) && defined(_M_IX86)
+#endif // defined(ACCESSIBILITY)
 
 /**************************************************************
  **************************************************************
@@ -648,9 +648,9 @@ nsWindow::nsWindow()
     // WinTaskbar.cpp for details.
     mozilla::widget::WinTaskbar::RegisterAppUserModelID();
     KeyboardLayout::GetInstance()->OnLayoutChange(::GetKeyboardLayout(0));
-#if defined(ACCESSIBILITY) && defined(_M_IX86)
+#if defined(ACCESSIBILITY)
     mozilla::TIPMessageHandler::Initialize();
-#endif // defined(ACCESSIBILITY) && defined(_M_IX86)
+#endif // defined(ACCESSIBILITY)
     IMEHandler::Initialize();
     if (SUCCEEDED(::OleInitialize(nullptr))) {
       sIsOleInitialized = TRUE;
@@ -1733,10 +1733,9 @@ nsWindow::SetSizeConstraints(const SizeConstraints& aConstraints)
     c.mMinSize.width = std::max(int32_t(::GetSystemMetrics(SM_CXMINTRACK)), c.mMinSize.width);
     c.mMinSize.height = std::max(int32_t(::GetSystemMetrics(SM_CYMINTRACK)), c.mMinSize.height);
   }
-  ClientLayerManager *clientLayerManager = GetLayerManager()->AsClientLayerManager();
-
-  if (clientLayerManager) {
-    int32_t maxSize = clientLayerManager->GetMaxTextureSize();
+  KnowsCompositor* knowsCompositor = GetLayerManager()->AsKnowsCompositor();
+  if (knowsCompositor) {
+    int32_t maxSize = knowsCompositor->GetMaxTextureSize();
     // We can't make ThebesLayers bigger than this anyway.. no point it letting
     // a window grow bigger as we won't be able to draw content there in
     // general.
@@ -6673,6 +6672,25 @@ void nsWindow::UserActivity()
   }
 }
 
+nsIntPoint nsWindow::GetTouchCoordinates(WPARAM wParam, LPARAM lParam)
+{
+  nsIntPoint ret;
+  uint32_t cInputs = LOWORD(wParam);
+  if (cInputs != 1) {
+    // Just return 0,0 if there isn't exactly one touch point active
+    return ret;
+  }
+  PTOUCHINPUT pInputs = new TOUCHINPUT[cInputs];
+  if (mGesture.GetTouchInputInfo((HTOUCHINPUT)lParam, cInputs, pInputs)) {
+    ret.x = TOUCH_COORD_TO_PIXEL(pInputs[0].x);
+    ret.y = TOUCH_COORD_TO_PIXEL(pInputs[0].y);
+  }
+  delete[] pInputs;
+  // Note that we don't call CloseTouchInputHandle here because we need
+  // to read the touch input info again in OnTouch later.
+  return ret;
+}
+
 bool nsWindow::OnTouch(WPARAM wParam, LPARAM lParam)
 {
   uint32_t cInputs = LOWORD(wParam);
@@ -7892,12 +7910,19 @@ nsWindow::DealWithPopups(HWND aWnd, UINT aMessage,
   // Only need to deal with the last rollup for left mouse down events.
   NS_ASSERTION(!mLastRollup, "mLastRollup is null");
 
-  if (nativeMessage == WM_LBUTTONDOWN || nativeMessage == WM_POINTERDOWN) {
-    POINT pt;
-    pt.x = GET_X_LPARAM(aLParam);
-    pt.y = GET_Y_LPARAM(aLParam);
-    ::ClientToScreen(aWnd, &pt);
-    nsIntPoint pos(pt.x, pt.y);
+  if (nativeMessage == WM_TOUCH || nativeMessage == WM_LBUTTONDOWN || nativeMessage == WM_POINTERDOWN) {
+    nsIntPoint pos;
+    if (nativeMessage == WM_TOUCH) {
+      if (nsWindow* win = WinUtils::GetNSWindowPtr(aWnd)) {
+        pos = win->GetTouchCoordinates(aWParam, aLParam);
+      }
+    } else {
+      POINT pt;
+      pt.x = GET_X_LPARAM(aLParam);
+      pt.y = GET_Y_LPARAM(aLParam);
+      ::ClientToScreen(aWnd, &pt);
+      pos = nsIntPoint(pt.x, pt.y);
+    }
 
     consumeRollupEvent =
       rollupListener->Rollup(popupsToRollup, true, &pos, &mLastRollup);

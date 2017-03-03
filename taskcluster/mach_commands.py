@@ -22,8 +22,6 @@ from mach.decorators import (
 
 from mozbuild.base import MachCommandBase
 
-ARTIFACT_URL = 'https://queue.taskcluster.net/v1/task/{}/artifacts/{}'
-
 
 class ShowTaskGraphSubCommand(SubCommand):
     """A SubCommand with TaskGraph-specific arguments"""
@@ -306,7 +304,12 @@ class MachCommands(MachCommandBase):
                 description='Run action callback used by action tasks')
     def action_callback(self, **options):
         import actions
-        actions.trigger_action_callback()
+        try:
+            self.setup_logging()
+            return actions.trigger_action_callback()
+        except Exception:
+            traceback.print_exc()
+            sys.exit(1)
 
     def setup_logging(self, quiet=False, verbose=True):
         """

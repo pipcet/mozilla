@@ -38,11 +38,10 @@ class nsXMLNameSpaceMap;
 
 namespace mozilla {
 class CSSStyleSheet;
+struct ChildSheetListBuilder;
 
 namespace css {
-class Rule;
 class GroupRule;
-class ImportRule;
 } // namespace css
 namespace dom {
 class CSSRuleList;
@@ -54,8 +53,7 @@ class CSSRuleList;
 
 struct CSSStyleSheetInner : public StyleSheetInfo
 {
-  CSSStyleSheetInner(CSSStyleSheet* aPrimarySheet,
-                     CORSMode aCORSMode,
+  CSSStyleSheetInner(CORSMode aCORSMode,
                      ReferrerPolicy aReferrerPolicy,
                      const dom::SRIMetadata& aIntegrity);
   CSSStyleSheetInner(CSSStyleSheetInner& aCopy,
@@ -63,8 +61,7 @@ struct CSSStyleSheetInner : public StyleSheetInfo
   ~CSSStyleSheetInner();
 
   CSSStyleSheetInner* CloneFor(CSSStyleSheet* aPrimarySheet);
-  void AddSheet(CSSStyleSheet* aSheet);
-  void RemoveSheet(CSSStyleSheet* aSheet);
+  void RemoveSheet(StyleSheet* aSheet) override;
 
   void RebuildNameSpaces();
 
@@ -73,7 +70,6 @@ struct CSSStyleSheetInner : public StyleSheetInfo
 
   size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const;
 
-  AutoTArray<CSSStyleSheet*, 8> mSheets;
   IncrementalClearCOMRuleArray mOrderedRules;
   nsAutoPtr<nsXMLNameSpaceMap> mNameSpaceMap;
 };
@@ -128,14 +124,16 @@ public:
   // Workaround overloaded-virtual warning in GCC.
   using StyleSheet::GetOwnerRule;
 
-  nsXMLNameSpaceMap* GetNameSpaceMap() const { return mInner->mNameSpaceMap; }
+  nsXMLNameSpaceMap* GetNameSpaceMap() const {
+    return Inner()->mNameSpaceMap;
+  }
 
-  already_AddRefed<CSSStyleSheet> Clone(CSSStyleSheet* aCloneParent,
-                                        css::ImportRule* aCloneOwnerRule,
-                                        nsIDocument* aCloneDocument,
-                                        nsINode* aCloneOwningNode) const;
+  virtual already_AddRefed<StyleSheet> Clone(StyleSheet* aCloneParent,
+    css::ImportRule* aCloneOwnerRule,
+    nsIDocument* aCloneDocument,
+    nsINode* aCloneOwningNode) const final;
 
-  bool IsModified() const { return mDirty; }
+  bool IsModified() const final { return mDirty; }
 
   void SetModifiedByChildRule() {
     NS_ASSERTION(mDirty,
@@ -167,7 +165,8 @@ public:
 
   // Function used as a callback to rebuild our inner's child sheet
   // list after we clone a unique inner for ourselves.
-  static bool RebuildChildList(css::Rule* aRule, void* aBuilder);
+  static bool RebuildChildList(css::Rule* aRule,
+                               ChildSheetListBuilder* aBuilder);
 
   size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const override;
 
@@ -207,10 +206,15 @@ protected:
   // Drop our reference to mRuleCollection
   void DropRuleCollection();
 
+  CSSStyleSheetInner* Inner() const
+  {
+    return static_cast<CSSStyleSheetInner*>(mInner);
+  }
+
   // Unlink our inner, if needed, for cycle collection
-  void UnlinkInner();
+  virtual void UnlinkInner() override;
   // Traverse our inner, if needed, for cycle collection
-  void TraverseInner(nsCycleCollectionTraversalCallback &);
+  virtual void TraverseInner(nsCycleCollectionTraversalCallback &) override;
 
 protected:
   // Internal methods which do not have security check and completeness check.
@@ -227,8 +231,6 @@ protected:
   bool                  mDirty; // has been modified 
   bool                  mInRuleProcessorCache;
   RefPtr<dom::Element> mScopeElement;
-
-  CSSStyleSheetInner*   mInner;
 
   AutoTArray<nsCSSRuleProcessor*, 8>* mRuleProcessors;
   nsTArray<nsStyleSet*> mStyleSets;

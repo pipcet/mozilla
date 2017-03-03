@@ -4,25 +4,8 @@
 
 <%! from data import Keyword, to_rust_ident, to_camel_case, LOGICAL_SIDES, PHYSICAL_SIDES, LOGICAL_SIZES %>
 
-<%def name="longhand(name, **kwargs)">
-    <%call expr="raw_longhand(name, **kwargs)">
-        ${caller.body()}
-        % if not data.longhands_by_name[name].derived_from:
-            pub fn parse_specified(context: &ParserContext, input: &mut Parser)
-                % if data.longhands_by_name[name].boxed:
-                                   -> Result<DeclaredValue<Box<SpecifiedValue>>, ()> {
-                    parse(context, input).map(|result| DeclaredValue::Value(Box::new(result)))
-                % else:
-                                   -> Result<DeclaredValue<SpecifiedValue>, ()> {
-                    parse(context, input).map(DeclaredValue::Value)
-                % endif
-            }
-        % endif
-    </%call>
-</%def>
-
 <%def name="predefined_type(name, type, initial_value, parse_method='parse',
-            needs_context=True, vector=False, **kwargs)">
+            needs_context=True, vector=False, initial_specified_value=None, **kwargs)">
     <%def name="predefined_type_inner(name, type, initial_value, parse_method)">
         #[allow(unused_imports)]
         use app_units::Au;
@@ -32,6 +15,9 @@
             pub use values::computed::${type} as T;
         }
         #[inline] pub fn get_initial_value() -> computed_value::T { ${initial_value} }
+        % if initial_specified_value:
+        #[inline] pub fn get_initial_specified_value() -> SpecifiedValue { ${initial_specified_value} }
+        % endif
         #[allow(unused_variables)]
         #[inline] pub fn parse(context: &ParserContext, input: &mut Parser)
                                -> Result<SpecifiedValue, ()> {
@@ -66,7 +52,8 @@
     We assume that the default/initial value is an empty vector for these.
     `initial_value` need not be defined for these.
 </%doc>
-<%def name="vector_longhand(name, gecko_only=False, allow_empty=False, delegate_animate=False, **kwargs)">
+<%def name="vector_longhand(name, gecko_only=False, allow_empty=False,
+            delegate_animate=False, space_separated_allowed=False, **kwargs)">
     <%call expr="longhand(name, **kwargs)">
         % if not gecko_only:
             use std::fmt;
@@ -83,9 +70,10 @@
             pub mod single_value {
                 use cssparser::Parser;
                 use parser::{Parse, ParserContext, ParserContextExtraData};
-                use properties::{CSSWideKeyword, DeclaredValue, ShorthandId};
+                use properties::{DeclaredValue, ShorthandId};
                 use values::computed::{Context, ToComputedValue};
                 use values::{computed, specified};
+                use values::{Auto, Either, None_, Normal};
                 ${caller.body()}
             }
 
@@ -166,16 +154,23 @@
             }
 
             pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+                use parser::parse_space_or_comma_separated;
+
+                <%
+                    parse_func = "Parser::parse_comma_separated"
+                    if space_separated_allowed:
+                        parse_func = "parse_space_or_comma_separated"
+                %>
                 % if allow_empty:
                     if input.try(|input| input.expect_ident_matching("none")).is_ok() {
                         Ok(SpecifiedValue(Vec::new()))
                     } else {
-                        input.parse_comma_separated(|parser| {
+                        ${parse_func}(input, |parser| {
                             single_value::parse(context, parser)
                         }).map(SpecifiedValue)
                     }
                 % else:
-                    input.parse_comma_separated(|parser| {
+                    ${parse_func}(input, |parser| {
                         single_value::parse(context, parser)
                     }).map(SpecifiedValue)
                 % endif
@@ -203,7 +198,7 @@
     </%call>
 </%def>
 
-<%def name="raw_longhand(*args, **kwargs)">
+<%def name="longhand(*args, **kwargs)">
     <%
         property = data.declare_longhand(*args, **kwargs)
         if property is None:
@@ -215,14 +210,14 @@
         % if not property.derived_from:
             use cssparser::Parser;
             use parser::{Parse, ParserContext, ParserContextExtraData};
-            use properties::{CSSWideKeyword, DeclaredValue, UnparsedValue, ShorthandId};
+            use properties::{DeclaredValue, UnparsedValue, ShorthandId};
         % endif
         use values::{Auto, Either, None_, Normal};
         use cascade_info::CascadeInfo;
         use error_reporting::ParseErrorReporter;
         use properties::longhands;
-        use properties::property_bit_field::PropertyBitField;
-        use properties::{ComputedValues, PropertyDeclaration};
+        use properties::LonghandIdSet;
+        use properties::{CSSWideKeyword, ComputedValues, PropertyDeclaration};
         use properties::style_structs;
         use std::boxed::Box as StdBox;
         use std::collections::HashMap;
@@ -236,7 +231,6 @@
                                 inherited_style: &ComputedValues,
                                 default_style: &Arc<ComputedValues>,
                                 context: &mut computed::Context,
-                                seen: &mut PropertyBitField,
                                 cacheable: &mut bool,
                                 cascade_info: &mut Option<<&mut CascadeInfo>,
                                 error_reporter: &mut StdBox<ParseErrorReporter + Send>) {
@@ -247,16 +241,7 @@
                 _ => panic!("entered the wrong cascade_property() implementation"),
             };
 
-            % if property.logical:
-                let wm = context.style.writing_mode;
-            % endif
-            <% maybe_wm = "wm" if property.logical else "" %>
-            <% maybe_physical = "_physical" if property.logical else "" %>
             % if not property.derived_from:
-                if seen.get${maybe_physical}_${property.ident}(${maybe_wm}) {
-                    return
-                }
-                seen.set${maybe_physical}_${property.ident}(${maybe_wm});
                 {
                     let custom_props = context.style().custom_properties();
                     ::properties::substitute_variables_${property.ident}(
@@ -266,6 +251,9 @@
                             cascade_info.on_cascade_property(&declaration,
                                                              &value);
                         }
+                        % if property.logical:
+                            let wm = context.style.writing_mode;
+                        % endif
                         <% maybe_wm = ", wm" if property.logical else "" %>
                         match *value {
                             DeclaredValue::Value(ref specified_value) => {
@@ -279,30 +267,32 @@
                                 % endif
                             }
                             DeclaredValue::WithVariables(_) => unreachable!(),
-                            % if not data.current_style_struct.inherited:
-                            DeclaredValue::Unset |
-                            % endif
-                            DeclaredValue::Initial => {
-                                // We assume that it's faster to use copy_*_from rather than
-                                // set_*(get_initial_value());
-                                let initial_struct = default_style
-                                                      .get_${data.current_style_struct.name_lower}();
-                                context.mutate_style().mutate_${data.current_style_struct.name_lower}()
-                                                      .copy_${property.ident}_from(initial_struct ${maybe_wm});
-                            },
-                            % if data.current_style_struct.inherited:
-                            DeclaredValue::Unset |
-                            % endif
-                            DeclaredValue::Inherit => {
-                                // This is a bit slow, but this is rare so it shouldn't
-                                // matter.
-                                //
-                                // FIXME: is it still?
-                                *cacheable = false;
-                                let inherited_struct =
-                                    inherited_style.get_${data.current_style_struct.name_lower}();
-                                context.mutate_style().mutate_${data.current_style_struct.name_lower}()
-                                       .copy_${property.ident}_from(inherited_struct ${maybe_wm});
+                            DeclaredValue::CSSWideKeyword(keyword) => match keyword {
+                                % if not data.current_style_struct.inherited:
+                                CSSWideKeyword::Unset |
+                                % endif
+                                CSSWideKeyword::Initial => {
+                                    // We assume that it's faster to use copy_*_from rather than
+                                    // set_*(get_initial_value());
+                                    let initial_struct = default_style
+                                                        .get_${data.current_style_struct.name_lower}();
+                                    context.mutate_style().mutate_${data.current_style_struct.name_lower}()
+                                                        .copy_${property.ident}_from(initial_struct ${maybe_wm});
+                                },
+                                % if data.current_style_struct.inherited:
+                                CSSWideKeyword::Unset |
+                                % endif
+                                CSSWideKeyword::Inherit => {
+                                    // This is a bit slow, but this is rare so it shouldn't
+                                    // matter.
+                                    //
+                                    // FIXME: is it still?
+                                    *cacheable = false;
+                                    let inherited_struct =
+                                        inherited_style.get_${data.current_style_struct.name_lower}();
+                                    context.mutate_style().mutate_${data.current_style_struct.name_lower}()
+                                        .copy_${property.ident}_from(inherited_struct ${maybe_wm});
+                                }
                             }
                         }
                     }, error_reporter);
@@ -312,7 +302,6 @@
                     cascade_property_custom(declaration,
                                             inherited_style,
                                             context,
-                                            seen,
                                             cacheable,
                                             error_reporter);
                 % endif
@@ -321,6 +310,15 @@
             % endif
         }
         % if not property.derived_from:
+            pub fn parse_specified(context: &ParserContext, input: &mut Parser)
+                % if property.boxed:
+                                   -> Result<DeclaredValue<Box<SpecifiedValue>>, ()> {
+                    parse(context, input).map(|result| DeclaredValue::Value(Box::new(result)))
+                % else:
+                                   -> Result<DeclaredValue<SpecifiedValue>, ()> {
+                    parse(context, input).map(DeclaredValue::Value)
+                % endif
+            }
             pub fn parse_declared(context: &ParserContext, input: &mut Parser)
                                % if property.boxed:
                                    -> Result<DeclaredValue<Box<SpecifiedValue>>, ()> {
@@ -328,9 +326,7 @@
                                    -> Result<DeclaredValue<SpecifiedValue>, ()> {
                                % endif
                 match input.try(|i| CSSWideKeyword::parse(context, i)) {
-                    Ok(CSSWideKeyword::InheritKeyword) => Ok(DeclaredValue::Inherit),
-                    Ok(CSSWideKeyword::InitialKeyword) => Ok(DeclaredValue::Initial),
-                    Ok(CSSWideKeyword::UnsetKeyword) => Ok(DeclaredValue::Unset),
+                    Ok(keyword) => Ok(DeclaredValue::CSSWideKeyword(keyword)),
                     Err(()) => {
                         input.look_for_var_functions();
                         let start = input.position();
@@ -367,7 +363,44 @@
     </%call>
 </%def>
 
-<%def name="single_keyword_computed(name, values, vector=False, extra_specified=None, **kwargs)">
+<%def name="gecko_keyword_conversion(keyword, values=None, type='SpecifiedValue')">
+    <%
+        if not values:
+            values = keyword.values_for(product)
+    %>
+    #[cfg(feature = "gecko")]
+    impl ${type} {
+        /// Obtain a specified value from a Gecko keyword value
+        ///
+        /// Intended for use with presentation attributes, not style structs
+        pub fn from_gecko_keyword(kw: u32) -> Self {
+            use gecko_bindings::structs;
+            % if keyword.gecko_enum_prefix:
+                % for value in values:
+                    // We can't match on enum values if we're matching on a u32
+                    const ${to_rust_ident(value).upper()}: u32
+                        = structs::${keyword.gecko_enum_prefix}::${to_camel_case(value)} as u32;
+                % endfor
+                match kw {
+                    % for value in values:
+                        ${to_rust_ident(value).upper()} => ${type}::${to_rust_ident(value)},
+                    % endfor
+                    x => panic!("Found unexpected value in style struct for ${keyword.name} property: {:?}", x),
+                }
+            % else:
+                match kw {
+                    % for value in values:
+                        structs::${keyword.gecko_constant(value)} => ${type}::${to_rust_ident(value)},
+                    % endfor
+                    x => panic!("Found unexpected value in style struct for ${keyword.name} property: {:?}", x),
+                }
+            % endif
+        }
+    }
+</%def>
+
+<%def name="single_keyword_computed(name, values, vector=False,
+            extra_specified=None, needs_conversion=False, **kwargs)">
     <%
         keyword_kwargs = {a: kwargs.pop(a, None) for a in [
             'gecko_constant_prefix', 'gecko_enum_prefix',
@@ -376,11 +409,11 @@
         ]}
     %>
 
-    <%def name="inner_body()">
+    <%def name="inner_body(keyword, extra_specified=None, needs_conversion=False)">
         % if extra_specified:
             use style_traits::ToCss;
             define_css_keyword_enum! { SpecifiedValue:
-                % for value in data.longhands_by_name[name].keyword.values_for(product) + extra_specified.split():
+                % for value in keyword.values_for(product) + extra_specified.split():
                     "${value}" => ${to_rust_ident(value)},
                 % endfor
             }
@@ -415,15 +448,25 @@
                 SpecifiedValue::parse(input)
             }
         }
+
+        % if needs_conversion:
+            <%
+                conversion_values = keyword.values_for(product)
+                if extra_specified:
+                    conversion_values += extra_specified.split()
+            %>
+            ${gecko_keyword_conversion(keyword, values=conversion_values)}
+        % endif
     </%def>
     % if vector:
         <%call expr="vector_longhand(name, keyword=Keyword(name, values, **keyword_kwargs), **kwargs)">
-            ${inner_body()}
+            ${inner_body(Keyword(name, values, **keyword_kwargs))}
             ${caller.body()}
         </%call>
     % else:
         <%call expr="longhand(name, keyword=Keyword(name, values, **keyword_kwargs), **kwargs)">
-            ${inner_body()}
+            ${inner_body(Keyword(name, values, **keyword_kwargs),
+                         extra_specified=extra_specified, needs_conversion=needs_conversion)}
             ${caller.body()}
         </%call>
     % endif
@@ -440,17 +483,15 @@
         #[allow(unused_imports)]
         use cssparser::Parser;
         use parser::ParserContext;
-        use properties::{DeclaredValue, PropertyDeclaration, UnparsedValue};
-        use properties::{ShorthandId, longhands};
+        use properties::{DeclaredValue, PropertyDeclaration};
+        use properties::{ShorthandId, UnparsedValue, longhands};
         use properties::declaration_block::Importance;
         use std::fmt;
         use style_traits::ToCss;
-        use super::{SerializeFlags, ALL_INHERIT, ALL_INITIAL, ALL_UNSET};
 
         pub struct Longhands {
             % for sub_property in shorthand.sub_properties:
-                pub ${sub_property.ident}:
-                    Option<longhands::${sub_property.ident}::SpecifiedValue>,
+                pub ${sub_property.ident}: longhands::${sub_property.ident}::SpecifiedValue,
             % endfor
         }
 
@@ -460,10 +501,10 @@
             % for sub_property in shorthand.sub_properties:
                 % if sub_property.boxed:
                     pub ${sub_property.ident}:
-                        &'a DeclaredValue<Box<longhands::${sub_property.ident}::SpecifiedValue>>,
+                        &'a Box<longhands::${sub_property.ident}::SpecifiedValue>,
                 % else:
                     pub ${sub_property.ident}:
-                        &'a DeclaredValue<longhands::${sub_property.ident}::SpecifiedValue>,
+                        &'a longhands::${sub_property.ident}::SpecifiedValue,
                 % endif
             % endfor
         }
@@ -483,7 +524,7 @@
                 for longhand in iter {
                     match *longhand {
                         % for sub_property in shorthand.sub_properties:
-                            PropertyDeclaration::${sub_property.camel_case}(ref value) => {
+                            PropertyDeclaration::${sub_property.camel_case}(DeclaredValue::Value(ref value)) => {
                                 ${sub_property.ident} = Some(value)
                             },
                         % endfor
@@ -513,40 +554,6 @@
             }
         }
 
-        impl<'a> ToCss for LonghandsToSerialize<'a> {
-            fn to_css<W>(&self, dest: &mut W) -> fmt::Result
-                where W: fmt::Write,
-            {
-                let mut all_flags = SerializeFlags::all();
-                let mut with_variables = false;
-                % for sub_property in shorthand.sub_properties:
-                    match *self.${sub_property.ident} {
-                        DeclaredValue::Initial => all_flags &= ALL_INITIAL,
-                        DeclaredValue::Inherit => all_flags &= ALL_INHERIT,
-                        DeclaredValue::Unset => all_flags &= ALL_UNSET,
-                        DeclaredValue::WithVariables(_) => with_variables = true,
-                        DeclaredValue::Value(..) => {
-                            all_flags = SerializeFlags::empty();
-                        }
-                    }
-                % endfor
-
-                if with_variables {
-                    // We don't serialize shorthands with variables
-                    dest.write_str("")
-                } else if all_flags == ALL_INHERIT {
-                    dest.write_str("inherit")
-                } else if all_flags == ALL_INITIAL {
-                    dest.write_str("initial")
-                } else if all_flags == ALL_UNSET {
-                    dest.write_str("unset")
-                } else {
-                    self.to_css_declared(dest)
-                }
-            }
-        }
-
-
         /// Parse the given shorthand and fill the result into the
         /// `declarations` vector.
         pub fn parse(context: &ParserContext,
@@ -563,14 +570,11 @@
             if let Ok(value) = value {
                 % for sub_property in shorthand.sub_properties:
                     declarations.push((PropertyDeclaration::${sub_property.camel_case}(
-                        match value.${sub_property.ident} {
-                            % if sub_property.boxed:
-                                Some(value) => DeclaredValue::Value(Box::new(value)),
-                            % else:
-                                Some(value) => DeclaredValue::Value(value),
-                            % endif
-                            None => DeclaredValue::Initial,
-                        }
+                        % if sub_property.boxed:
+                            DeclaredValue::Value(Box::new(value.${sub_property.ident}))
+                        % else:
+                            DeclaredValue::Value(value.${sub_property.ident})
+                        % endif
                     ), Importance::Normal));
                 % endfor
                 Ok(())
@@ -617,13 +621,13 @@
             % endif
             Ok(Longhands {
                 % for side in ["top", "right", "bottom", "left"]:
-                    ${to_rust_ident(sub_property_pattern % side)}: Some(${side}),
+                    ${to_rust_ident(sub_property_pattern % side)}: ${side},
                 % endfor
             })
         }
 
-        impl<'a> LonghandsToSerialize<'a> {
-            fn to_css_declared<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+        impl<'a> ToCss for LonghandsToSerialize<'a> {
+            fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
                 super::serialize_four_sides(
                     dest,
                     self.${to_rust_ident(sub_property_pattern % 'top')},

@@ -32,6 +32,7 @@
 #include "vm/ErrorObject.h"
 #include "vm/GlobalObject.h"
 #include "vm/SavedStacks.h"
+#include "vm/SelfHosting.h"
 #include "vm/StringBuffer.h"
 
 #include "jsobjinlines.h"
@@ -494,7 +495,8 @@ Error(JSContext* cx, unsigned argc, Value* vp)
 static bool
 exn_toSource(JSContext* cx, unsigned argc, Value* vp)
 {
-    JS_CHECK_RECURSION(cx, return false);
+    if (!CheckRecursionLimit(cx))
+        return false;
     CallArgs args = CallArgsFromVp(argc, vp);
 
     RootedObject obj(cx, ToObject(cx, args.thisv()));
@@ -1144,4 +1146,20 @@ js::ValueToSourceForError(JSContext* cx, HandleValue val, JSAutoByteString& byte
     if (!str)
         return "<<error converting value to string>>";
     return bytes.encodeLatin1(cx, str);
+}
+
+bool
+js::GetInternalError(JSContext* cx, unsigned errorNumber, MutableHandleValue error)
+{
+    FixedInvokeArgs<1> args(cx);
+    args[0].set(Int32Value(errorNumber));
+    return CallSelfHostedFunction(cx, "GetInternalError", NullHandleValue, args, error);
+}
+
+bool
+js::GetTypeError(JSContext* cx, unsigned errorNumber, MutableHandleValue error)
+{
+    FixedInvokeArgs<1> args(cx);
+    args[0].set(Int32Value(errorNumber));
+    return CallSelfHostedFunction(cx, "GetTypeError", NullHandleValue, args, error);
 }

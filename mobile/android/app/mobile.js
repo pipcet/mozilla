@@ -420,8 +420,10 @@ pref("browser.ui.zoom.force-user-scalable", false);
 // in GeckoPreferences and BrowserApp (see bug 1245930).
 #ifdef NIGHTLY_BUILD
 pref("ui.zoomedview.enabled", true);
+pref("ui.bookmark.mobilefolder.enabled", true);
 #else
 pref("ui.zoomedview.enabled", false);
+pref("ui.bookmark.mobilefolder.enabled", false);
 #endif
 pref("ui.zoomedview.keepLimitSize", 16); // value in layer pixels, used to not keep the large elements in the cluster list (Bug 1191041)
 pref("ui.zoomedview.limitReadableSize", 8); // value in layer pixels
@@ -622,16 +624,16 @@ pref("media.decoder.recycle.enabled", true);
 // Enable the MediaCodec PlatformDecoderModule by default.
 pref("media.android-media-codec.enabled", true);
 pref("media.android-media-codec.preferred", true);
-// Run decoder in seperate process.
-pref("media.android-remote-codec.enabled", true);
 
 // Enable MSE
 pref("media.mediasource.enabled", true);
 
 pref("media.mediadrm-widevinecdm.visible", true);
 
+#ifdef NIGHTLY_BUILD
 // Enable EME (Encrypted Media Extensions)
 pref("media.eme.enabled", true);
+#endif
 
 // optimize images memory usage
 pref("image.downscale-during-decode.enabled", true);
@@ -777,6 +779,7 @@ pref("dom.phonenumber.substringmatching.VE", 7);
 // Enable hardware-accelerated Skia canvas
 pref("gfx.canvas.azure.backends", "skia");
 pref("gfx.canvas.azure.accelerated", true);
+pref("gfx.canvas.azure.accelerated.limit", 64);
 
 // See ua-update.json.in for the packaged UA override list
 pref("general.useragent.updates.enabled", true);
@@ -892,6 +895,10 @@ pref("dom.push.maxRecentMessageIDsPerSubscription", 0);
 pref("dom.push.enabled", true);
 #endif
 
+// Maximum number of setTimeout()/setInterval() callbacks to run in a single
+// event loop runnable. Minimum value of 1.
+pref("dom.timeout.max_consecutive_callbacks", 3);
+
 // The remote content URL where FxAccountsWebChannel messages originate.  Must use HTTPS.
 pref("identity.fxaccounts.remote.webchannel.uri", "https://accounts.firefox.com");
 
@@ -919,3 +926,5 @@ pref("dom.audiochannel.mediaControl", true);
 pref("webchannel.allowObject.urlWhitelist", "https://accounts.firefox.com https://content.cdn.mozilla.net https://input.mozilla.org https://support.mozilla.org https://install.mozilla.org");
 
 pref("media.openUnsupportedTypeWithExternalApp", true);
+
+pref("dom.keyboardevent.dispatch_during_composition", true);

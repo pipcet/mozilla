@@ -1669,8 +1669,8 @@ const KTableEntry nsCSSProps::kGridAutoFlowKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kGridTrackBreadthKTable[] = {
-  { eCSSKeyword_min_content, NS_STYLE_GRID_TRACK_BREADTH_MIN_CONTENT },
-  { eCSSKeyword_max_content, NS_STYLE_GRID_TRACK_BREADTH_MAX_CONTENT },
+  { eCSSKeyword_min_content, StyleGridTrackBreadth::MinContent },
+  { eCSSKeyword_max_content, StyleGridTrackBreadth::MaxContent },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -2000,6 +2000,17 @@ KTableEntry nsCSSProps::kTextAlignLastKTable[] = {
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
+const KTableEntry nsCSSProps::kTextJustifyKTable[] = {
+  { eCSSKeyword_none, StyleTextJustify::None },
+  { eCSSKeyword_auto, StyleTextJustify::Auto },
+  { eCSSKeyword_inter_word, StyleTextJustify::InterWord },
+  { eCSSKeyword_inter_character, StyleTextJustify::InterCharacter },
+  // For legacy reasons, UAs must also support the keyword "distribute" with
+  // the exact same meaning and behavior as "inter-character".
+  { eCSSKeyword_distribute, StyleTextJustify::InterCharacter },
+  { eCSSKeyword_UNKNOWN, -1 }
+};
+
 const KTableEntry nsCSSProps::kTextCombineUprightKTable[] = {
   { eCSSKeyword_none, NS_STYLE_TEXT_COMBINE_UPRIGHT_NONE },
   { eCSSKeyword_all, NS_STYLE_TEXT_COMBINE_UPRIGHT_ALL },
@@ -2061,6 +2072,12 @@ const KTableEntry nsCSSProps::kTextEmphasisStyleShapeKTable[] = {
 const KTableEntry nsCSSProps::kTextOverflowKTable[] = {
   { eCSSKeyword_clip, NS_STYLE_TEXT_OVERFLOW_CLIP },
   { eCSSKeyword_ellipsis, NS_STYLE_TEXT_OVERFLOW_ELLIPSIS },
+  { eCSSKeyword_UNKNOWN, -1 }
+};
+
+const KTableEntry nsCSSProps::kTextSizeAdjustKTable[] = {
+  { eCSSKeyword_none, NS_STYLE_TEXT_SIZE_ADJUST_NONE },
+  { eCSSKeyword_auto, NS_STYLE_TEXT_SIZE_ADJUST_AUTO },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -2342,10 +2359,10 @@ const KTableEntry nsCSSProps::kMaskTypeKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kShapeOutsideShapeBoxKTable[] = {
-  { eCSSKeyword_content_box, StyleShapeOutsideShapeBox::Content },
-  { eCSSKeyword_padding_box, StyleShapeOutsideShapeBox::Padding },
-  { eCSSKeyword_border_box, StyleShapeOutsideShapeBox::Border },
-  { eCSSKeyword_margin_box, StyleShapeOutsideShapeBox::Margin },
+  { eCSSKeyword_content_box, StyleGeometryBox::Content },
+  { eCSSKeyword_padding_box, StyleGeometryBox::Padding },
+  { eCSSKeyword_border_box, StyleGeometryBox::Border },
+  { eCSSKeyword_margin_box, StyleGeometryBox::Margin },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 

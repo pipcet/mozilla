@@ -232,7 +232,7 @@ public:
   NS_IMETHOD BindToFrame(nsTextControlFrame* aFrame) override;
   NS_IMETHOD_(void) UnbindFromFrame(nsTextControlFrame* aFrame) override;
   NS_IMETHOD CreateEditor() override;
-  NS_IMETHOD_(nsIContent*) GetRootEditorNode() override;
+  NS_IMETHOD_(Element*) GetRootEditorNode() override;
   NS_IMETHOD_(Element*) CreatePlaceholderNode() override;
   NS_IMETHOD_(Element*) GetPlaceholderNode() override;
   NS_IMETHOD_(void) UpdatePlaceholderVisibility(bool aNotify) override;
@@ -240,6 +240,8 @@ public:
   NS_IMETHOD_(void) InitializeKeyboardEventListeners() override;
   NS_IMETHOD_(void) OnValueChanged(bool aNotify, bool aWasInteractiveUserChange) override;
   NS_IMETHOD_(bool) HasCachedSelection() override;
+  NS_IMETHOD GetSelectionRange(int32_t* aSelectionStart,
+                               int32_t* aSelectionEnd) override;
 
   void GetDisplayFileName(nsAString& aFileName) const;
 
@@ -782,6 +784,12 @@ public:
   void MozSetFileArray(const Sequence<OwningNonNull<File>>& aFiles);
   void MozSetDirectory(const nsAString& aDirectoryPath, ErrorResult& aRv);
 
+  bool MozInputRangeIgnorePreventDefault() const
+  {
+    return (IsInChromeDocument() || IsInNativeAnonymousSubtree()) &&
+      GetBoolAttr(nsGkAtoms::mozinputrangeignorepreventdefault);
+  }
+
   /*
    * The following functions are called from datetime picker to let input box
    * know the current state of the picker or to update the input box on changes.
@@ -949,8 +957,6 @@ protected:
 
   void SetIndeterminateInternal(bool aValue,
                                 bool aShouldInvalidate);
-
-  nsresult GetSelectionRange(int32_t* aSelectionStart, int32_t* aSelectionEnd);
 
   /**
    * Called when an attribute is about to be changed
@@ -1468,7 +1474,7 @@ protected:
   void ClearGetFilesHelpers();
 
   /**
-   * nsINode::SetMayBeApzAware() will be invoked in this function if necessary 
+   * nsINode::SetMayBeApzAware() will be invoked in this function if necessary
    * to prevent default action of APZC so that we can increase/decrease the
    * value of this InputElement when mouse wheel event comes without scrolling
    * the page.
@@ -1643,6 +1649,69 @@ private:
            aType == NS_FORM_INPUT_NUMBER ||
            aType == NS_FORM_INPUT_TIME;
   }
+
+  /**
+   * Checks if aDateTimeInputType should be supported based on "dom.forms.datetime",
+   * "dom.forms.datepicker" and "dom.experimental_forms".
+   */
+  static bool
+  IsDateTimeTypeSupported(uint8_t aDateTimeInputType);
+
+  /**
+   * Checks preference "dom.webkitBlink.dirPicker.enabled" to determine if
+   * webkitdirectory should be supported.
+   */
+  static bool
+  IsWebkitDirPickerEnabled();
+
+  /**
+   * Checks preference "dom.webkitBlink.filesystem.enabled" to determine if
+   * webkitEntries should be supported.
+   */
+  static bool
+  IsWebkitFileSystemEnabled();
+
+  /**
+   * Checks preference "dom.input.dirpicker" to determine if file and directory
+   * entries API should be supported.
+   */
+  static bool
+  IsDirPickerEnabled();
+
+  /**
+   * Checks preference "dom.forms.datepicker" to determine if date picker should
+   * be supported.
+   */
+  static bool
+  IsDatePickerEnabled();
+
+  /**
+   * Checks preference "dom.experimental_forms" to determine if experimental
+   * implementation of input element should be enabled.
+   */
+  static bool
+  IsExperimentalFormsEnabled();
+
+  /**
+   * Checks preference "dom.forms.datetime" to determine if input date/time
+   * related types should be supported.
+   */
+  static bool
+  IsInputDateTimeEnabled();
+
+  /**
+   * Checks preference "dom.forms.number" to determine if input type=number
+   * should be supported.
+   */
+  static bool
+  IsInputNumberEnabled();
+
+  /**
+   * Checks preference "dom.forms.color" to determine if date/time related
+   * types should be supported.
+   */
+  static bool
+  IsInputColorEnabled();
 
   struct nsFilePickerFilter {
     nsFilePickerFilter()

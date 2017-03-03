@@ -45,6 +45,7 @@
 #define LARGE_ALLOCATION_REMOTE_TYPE "webLargeAllocation"
 
 class nsConsoleService;
+class nsIContentProcessInfo;
 class nsICycleCollectorLogSink;
 class nsIDumpGCAndCCLogsCallback;
 class nsITabParent;
@@ -54,9 +55,6 @@ class nsIWidget;
 
 namespace mozilla {
 class PRemoteSpellcheckEngineParent;
-#ifdef MOZ_GECKO_PROFILER
-class ProfileGatherer;
-#endif
 
 #if defined(XP_LINUX) && defined(MOZ_CONTENT_SANDBOX)
 class SandboxBroker;
@@ -153,6 +151,8 @@ public:
 
   static bool IsMaxProcessCountReached(const nsAString& aContentProcessType);
 
+  static void ReleaseCachedProcesses();
+
   /**
    * Picks a random content parent from |aContentParents| with a given |aOpener|
    * respecting the index limit set by |aMaxContentParents|.
@@ -173,9 +173,7 @@ public:
   GetNewOrUsedBrowserProcess(const nsAString& aRemoteType = NS_LITERAL_STRING(NO_REMOTE_TYPE),
                              hal::ProcessPriority aPriority =
                              hal::ProcessPriority::PROCESS_PRIORITY_FOREGROUND,
-                             ContentParent* aOpener = nullptr,
-                             bool aLargeAllocationProcess = false,
-                             bool* anew = nullptr);
+                             ContentParent* aOpener = nullptr);
 
   /**
    * Get or create a content process for the given TabContext.  aFrameElement
@@ -185,8 +183,7 @@ public:
   static TabParent*
   CreateBrowser(const TabContext& aContext,
                 Element* aFrameElement,
-                ContentParent* aOpenerContentParent,
-                bool aFreshProcess = false);
+                ContentParent* aOpenerContentParent);
 
   static void GetAll(nsTArray<ContentParent*>& aArray);
 
@@ -374,6 +371,10 @@ public:
   ContentParent* Opener() const
   {
     return mOpener;
+  }
+  nsIContentProcessInfo* ScriptableHelper() const
+  {
+    return mScriptableHelper;
   }
 
   bool NeedsPermissionsUpdate() const
@@ -578,6 +579,14 @@ public:
   RecvUnstoreAndBroadcastBlobURLUnregistration(const nsCString& aURI) override;
 
   virtual mozilla::ipc::IPCResult
+  RecvBroadcastLocalStorageChange(const nsString& aDocumentURI,
+                                  const nsString& aKey,
+                                  const nsString& aOldValue,
+                                  const nsString& aNewValue,
+                                  const IPC::Principal& aPrincipal,
+                                  const bool& aIsPrivate) override;
+
+  virtual mozilla::ipc::IPCResult
   RecvGetA11yContentId(uint32_t* aContentId) override;
 
   virtual int32_t Pid() const override;
@@ -667,9 +676,6 @@ private:
 
   ContentParent(ContentParent* aOpener,
                 const nsAString& aRemoteType);
-
-  // The common initialization for the constructors.
-  void InitializeMembers();
 
   // Launch the subprocess and associated initialization.
   // Returns false if the process fails to start.
@@ -807,11 +813,14 @@ private:
                                                       nsTArray<uint8_t>* aSignature) override;
 
   virtual mozilla::ipc::IPCResult RecvIsSecureURI(const uint32_t& aType, const URIParams& aURI,
-                                                  const uint32_t& aFlags, bool* aIsSecureURI) override;
+                                                  const uint32_t& aFlags,
+                                                  const OriginAttributes& aOriginAttributes,
+                                                  bool* aIsSecureURI) override;
 
   virtual mozilla::ipc::IPCResult RecvAccumulateMixedContentHSTS(const URIParams& aURI,
                                                                  const bool& aActive,
-                                                                 const bool& aHSTSPriming) override;
+                                                                 const bool& aHSTSPriming,
+                                                                 const OriginAttributes& aOriginAttributes) override;
 
   virtual bool DeallocPHalParent(PHalParent*) override;
 
@@ -1103,6 +1112,7 @@ private:
                           const nsString& aType, const nsString& aName,
                           const bool& aLastModifiedPassed,
                           const int64_t& aLastModified,
+                          const bool& aExistenceCheck,
                           const bool& aIsFromNsIFile) override;
 
   virtual mozilla::ipc::IPCResult RecvAccumulateChildHistograms(
@@ -1169,6 +1179,7 @@ private:
 
   RefPtr<nsConsoleService>  mConsoleService;
   nsConsoleService* GetConsoleService();
+  nsCOMPtr<nsIContentProcessInfo> mScriptableHelper;
 
   nsTArray<nsCOMPtr<nsIObserver>> mIdleListeners;
 
@@ -1181,7 +1192,7 @@ private:
   PProcessHangMonitorParent* mHangMonitorActor;
 
 #ifdef MOZ_GECKO_PROFILER
-  RefPtr<mozilla::ProfileGatherer> mGatherer;
+  bool mIsProfilerActive;
 #endif
   nsCString mProfile;
 

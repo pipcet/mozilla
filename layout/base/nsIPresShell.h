@@ -78,7 +78,8 @@ class nsIDOMNode;
 class nsCSSFrameConstructor;
 class nsISelection;
 template<class E> class nsCOMArray;
-class nsWeakFrame;
+class AutoWeakFrame;
+class WeakFrame;
 class nsIScrollableFrame;
 class gfxContext;
 class nsIDOMEvent;
@@ -580,11 +581,41 @@ public:
    * than the document itself) should probably be calling
    * nsIDocument::FlushPendingNotifications.
    *
+   * This method can execute script, which can destroy this presshell object
+   * unless someone is holding a reference to it on the stack.  The presshell
+   * itself will ensure it lives up until the method returns, but callers who
+   * plan to use the presshell after this call should hold a strong ref
+   * themselves!
+   *
    * @param aType the type of notifications to flush
    */
-  virtual void FlushPendingNotifications(mozilla::FlushType aType) = 0;
-  virtual void FlushPendingNotifications(mozilla::ChangesToFlush aType) = 0;
+public:
+  void FlushPendingNotifications(mozilla::FlushType aType)
+  {
+    if (!NeedFlush(aType)) {
+      return;
+    }
 
+    DoFlushPendingNotifications(aType);
+  }
+
+  void FlushPendingNotifications(mozilla::ChangesToFlush aType)
+  {
+    if (!NeedFlush(aType.mFlushType)) {
+      return;
+    }
+
+    DoFlushPendingNotifications(aType);
+  }
+
+protected:
+  /**
+   * Implementation methods for FlushPendingNotifications.
+   */
+  virtual void DoFlushPendingNotifications(mozilla::FlushType aType) = 0;
+  virtual void DoFlushPendingNotifications(mozilla::ChangesToFlush aType) = 0;
+
+public:
   /**
    * Whether we might need a flush for the given flush type.  If this
    * function returns false, we definitely don't need to flush.
@@ -1162,10 +1193,20 @@ public:
                   mozilla::LayoutDeviceIntRect* aScreenRect,
                   uint32_t aFlags) = 0;
 
-  void AddWeakFrameInternal(nsWeakFrame* aWeakFrame);
-  virtual void AddWeakFrameExternal(nsWeakFrame* aWeakFrame);
+  void AddAutoWeakFrameInternal(AutoWeakFrame* aWeakFrame);
+  virtual void AddAutoWeakFrameExternal(AutoWeakFrame* aWeakFrame);
+  void AddWeakFrameInternal(WeakFrame* aWeakFrame);
+  virtual void AddWeakFrameExternal(WeakFrame* aWeakFrame);
 
-  void AddWeakFrame(nsWeakFrame* aWeakFrame)
+  void AddAutoWeakFrame(AutoWeakFrame* aWeakFrame)
+  {
+#ifdef MOZILLA_INTERNAL_API
+    AddAutoWeakFrameInternal(aWeakFrame);
+#else
+    AddAutoWeakFrameExternal(aWeakFrame);
+#endif
+  }
+  void AddWeakFrame(WeakFrame* aWeakFrame)
   {
 #ifdef MOZILLA_INTERNAL_API
     AddWeakFrameInternal(aWeakFrame);
@@ -1174,10 +1215,20 @@ public:
 #endif
   }
 
-  void RemoveWeakFrameInternal(nsWeakFrame* aWeakFrame);
-  virtual void RemoveWeakFrameExternal(nsWeakFrame* aWeakFrame);
+  void RemoveAutoWeakFrameInternal(AutoWeakFrame* aWeakFrame);
+  virtual void RemoveAutoWeakFrameExternal(AutoWeakFrame* aWeakFrame);
+  void RemoveWeakFrameInternal(WeakFrame* aWeakFrame);
+  virtual void RemoveWeakFrameExternal(WeakFrame* aWeakFrame);
 
-  void RemoveWeakFrame(nsWeakFrame* aWeakFrame)
+  void RemoveAutoWeakFrame(AutoWeakFrame* aWeakFrame)
+  {
+#ifdef MOZILLA_INTERNAL_API
+    RemoveAutoWeakFrameInternal(aWeakFrame);
+#else
+    RemoveAutoWeakFrameExternal(aWeakFrame);
+#endif
+  }
+  void RemoveWeakFrame(WeakFrame* aWeakFrame)
   {
 #ifdef MOZILLA_INTERNAL_API
     RemoveWeakFrameInternal(aWeakFrame);
@@ -1596,12 +1647,6 @@ public:
     mFontSizeInflationEnabledIsDirty = true;
   }
 
-  virtual void AddInvalidateHiddenPresShellObserver(nsRefreshDriver *aDriver) = 0;
-
-  void InvalidatePresShellIfHidden();
-  void CancelInvalidatePresShellIfHidden();
-
-
   //////////////////////////////////////////////////////////////////////////////
   // Approximate frame visibility tracking public API.
   //////////////////////////////////////////////////////////////////////////////
@@ -1741,6 +1786,12 @@ public:
 
   virtual nsIDocument* GetPrimaryContentDocument() = 0;
 
+  // aSheetType is one of the nsIStyleSheetService *_SHEET constants.
+  virtual void NotifyStyleSheetServiceSheetAdded(mozilla::StyleSheet* aSheet,
+                                                 uint32_t aSheetType) = 0;
+  virtual void NotifyStyleSheetServiceSheetRemoved(mozilla::StyleSheet* aSheet,
+                                                   uint32_t aSheetType) = 0;
+
 protected:
   friend class nsRefreshDriver;
 
@@ -1761,10 +1812,6 @@ protected:
   // GetRootFrame() can be inlined:
   nsFrameManagerBase*       mFrameManager;
   mozilla::WeakPtr<nsDocShell>                 mForwardingContainer;
-  nsRefreshDriver* MOZ_UNSAFE_REF("These two objects hold weak references "
-                                  "to each other, and the validity of this "
-                                  "member is ensured by the logic in nsIPresShell.")
-                            mHiddenInvalidationObserverRefreshDriver;
 #ifdef ACCESSIBILITY
   mozilla::a11y::DocAccessible* mDocAccessible;
 #endif
@@ -1789,8 +1836,11 @@ protected:
 
   nsSize                    mScrollPositionClampingScrollPortSize;
 
-  // A list of weak frames. This is a pointer to the last item in the list.
-  nsWeakFrame*              mWeakFrames;
+  // A list of stack weak frames. This is a pointer to the last item in the list.
+  AutoWeakFrame*            mAutoWeakFrames;
+
+  // A hash table of heap allocated weak frames.
+  nsTHashtable<nsPtrHashKey<WeakFrame>> mWeakFrames;
 
   // Most recent canvas background color.
   nscolor                   mCanvasBackgroundColor;

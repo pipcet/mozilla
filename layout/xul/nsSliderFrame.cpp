@@ -355,10 +355,9 @@ nsSliderFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
     // that the event region that gets created for the thumb is included in
     // the nsDisplayOwnLayer contents.
 
-    uint32_t flags = 0;
+    uint32_t flags = aBuilder->GetCurrentScrollbarFlags();
     mozilla::layers::FrameMetrics::ViewID scrollTargetId =
-      mozilla::layers::FrameMetrics::NULL_SCROLL_ID;
-    aBuilder->GetScrollbarInfo(&scrollTargetId, &flags);
+      aBuilder->GetCurrentScrollbarTarget();
     bool thumbGetsLayer = (scrollTargetId != layers::FrameMetrics::NULL_SCROLL_ID);
     nsLayoutUtils::SetScrollbarThumbLayerization(thumb, thumbGetsLayer);
 
@@ -610,7 +609,7 @@ nsSliderFrame::HandleEvent(nsPresContext* aPresContext,
         (uint32_t) ScrollInputMethod::MainThreadScrollbarTrackClick);
 
     // set it
-    nsWeakFrame weakFrame(this);
+    AutoWeakFrame weakFrame(this);
     // should aMaySnap be true here?
     SetCurrentThumbPosition(scrollbar, pos - thumbLength/2, false, false);
     NS_ENSURE_TRUE(weakFrame.IsAlive(), NS_OK);
@@ -877,7 +876,7 @@ nsSliderFrame::SetCurrentPositionInternal(nsIContent* aScrollbar, int32_t aNewPo
 {
   nsCOMPtr<nsIContent> scrollbar = aScrollbar;
   nsIFrame* scrollbarBox = GetScrollbar();
-  nsWeakFrame weakFrame(this);
+  AutoWeakFrame weakFrame(this);
 
   mUserChanged = true;
 

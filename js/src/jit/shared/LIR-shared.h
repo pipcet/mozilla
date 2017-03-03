@@ -7050,6 +7050,42 @@ class LFunctionEnvironment : public LInstructionHelper<1, 1, 0>
     }
 };
 
+// Allocate a new LexicalEnvironmentObject.
+class LNewLexicalEnvironmentObject : public LCallInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(NewLexicalEnvironmentObject)
+
+    explicit LNewLexicalEnvironmentObject(const LAllocation& enclosing) {
+        setOperand(0, enclosing);
+    }
+    const LAllocation* enclosing() {
+        return getOperand(0);
+    }
+
+    MNewLexicalEnvironmentObject* mir() const {
+        return mir_->toNewLexicalEnvironmentObject();
+    }
+};
+
+// Copy a LexicalEnvironmentObject.
+class LCopyLexicalEnvironmentObject : public LCallInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(CopyLexicalEnvironmentObject)
+
+    explicit LCopyLexicalEnvironmentObject(const LAllocation& env) {
+        setOperand(0, env);
+    }
+    const LAllocation* env() {
+        return getOperand(0);
+    }
+
+    MCopyLexicalEnvironmentObject* mir() const {
+        return mir_->toCopyLexicalEnvironmentObject();
+    }
+};
+
 class LCallGetProperty : public LCallInstructionHelper<BOX_PIECES, BOX_PIECES, 0>
 {
   public:
@@ -7177,22 +7213,20 @@ class LCallDeleteElement : public LCallInstructionHelper<1, 2 * BOX_PIECES, 0>
 };
 
 // Patchable jump to stubs generated for a SetProperty cache.
-class LSetPropertyCache : public LInstructionHelper<0, 1 + 2 * BOX_PIECES, 4>
+class LSetPropertyCache : public LInstructionHelper<0, 1 + 2 * BOX_PIECES, 3>
 {
   public:
     LIR_HEADER(SetPropertyCache)
 
     LSetPropertyCache(const LAllocation& object, const LBoxAllocation& id,
                       const LBoxAllocation& value, const LDefinition& temp,
-                      const LDefinition& tempToUnboxIndex, const LDefinition& tempDouble,
-                      const LDefinition& tempFloat32) {
+                      const LDefinition& tempDouble, const LDefinition& tempFloat32) {
         setOperand(0, object);
         setBoxOperand(Id, id);
         setBoxOperand(Value, value);
         setTemp(0, temp);
-        setTemp(1, tempToUnboxIndex);
-        setTemp(2, tempDouble);
-        setTemp(3, tempFloat32);
+        setTemp(1, tempDouble);
+        setTemp(2, tempFloat32);
     }
 
     static const size_t Id = 1;
@@ -7205,16 +7239,13 @@ class LSetPropertyCache : public LInstructionHelper<0, 1 + 2 * BOX_PIECES, 4>
     const LDefinition* temp() {
         return getTemp(0);
     }
-    const LDefinition* tempToUnboxIndex() {
-        return getTemp(1);
-    }
     const LDefinition* tempDouble() {
-        return getTemp(2);
+        return getTemp(1);
     }
     const LDefinition* tempFloat32() {
         if (hasUnaliasedDouble())
-            return getTemp(3);
-        return getTemp(2);
+            return getTemp(2);
+        return getTemp(1);
     }
 };
 
@@ -8528,12 +8559,14 @@ class LWasmCallBase : public LInstruction
 {
     LAllocation* operands_;
     uint32_t numOperands_;
+    uint32_t needsBoundsCheck_;
 
   public:
 
-    LWasmCallBase(LAllocation* operands, uint32_t numOperands)
+    LWasmCallBase(LAllocation* operands, uint32_t numOperands, bool needsBoundsCheck)
       : operands_(operands),
-        numOperands_(numOperands)
+        numOperands_(numOperands),
+        needsBoundsCheck_(needsBoundsCheck)
     {}
 
     MWasmCall* mir() const {
@@ -8581,6 +8614,9 @@ class LWasmCallBase : public LInstruction
     void setSuccessor(size_t i, MBasicBlock*) override {
         MOZ_CRASH("no successors");
     }
+    bool needsBoundsCheck() const {
+        return needsBoundsCheck_;
+    }
 };
 
 class LWasmCall : public LWasmCallBase
@@ -8590,8 +8626,8 @@ class LWasmCall : public LWasmCallBase
   public:
     LIR_HEADER(WasmCall);
 
-    LWasmCall(LAllocation* operands, uint32_t numOperands)
-      : LWasmCallBase(operands, numOperands),
+    LWasmCall(LAllocation* operands, uint32_t numOperands, bool needsBoundsCheck)
+      : LWasmCallBase(operands, numOperands, needsBoundsCheck),
         def_(LDefinition::BogusTemp())
     {}
 
@@ -8617,8 +8653,8 @@ class LWasmCallI64 : public LWasmCallBase
   public:
     LIR_HEADER(WasmCallI64);
 
-    LWasmCallI64(LAllocation* operands, uint32_t numOperands)
-      : LWasmCallBase(operands, numOperands)
+    LWasmCallI64(LAllocation* operands, uint32_t numOperands, bool needsBoundsCheck)
+      : LWasmCallBase(operands, numOperands, needsBoundsCheck)
     {
         for (size_t i = 0; i < numDefs(); i++)
             defs_[i] = LDefinition::BogusTemp();
@@ -8953,6 +8989,27 @@ class LCheckIsObj : public LInstructionHelper<BOX_PIECES, BOX_PIECES, 0>
 
     MCheckIsObj* mir() const {
         return mir_->toCheckIsObj();
+    }
+};
+
+class LCheckIsCallable : public LInstructionHelper<BOX_PIECES, BOX_PIECES, 1>
+{
+  public:
+    LIR_HEADER(CheckIsCallable)
+
+    static const size_t CheckValue = 0;
+
+    LCheckIsCallable(const LBoxAllocation& value, const LDefinition& temp) {
+        setBoxOperand(CheckValue, value);
+        setTemp(0, temp);
+    }
+
+    const LDefinition* temp() {
+        return getTemp(0);
+    }
+
+    MCheckIsCallable* mir() const {
+        return mir_->toCheckIsCallable();
     }
 };
 

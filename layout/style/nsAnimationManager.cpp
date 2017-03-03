@@ -359,7 +359,7 @@ static void
 UpdateOldAnimationPropertiesWithNew(
     CSSAnimation& aOld,
     TimingParams& aNewTiming,
-    nsTArray<Keyframe>& aNewKeyframes,
+    nsTArray<Keyframe>&& aNewKeyframes,
     bool aNewIsStylePaused,
     nsStyleContext* aStyleContext)
 {
@@ -467,14 +467,6 @@ nsAnimationManager::UpdateAnimations(nsStyleContext* aStyleContext,
   // Cancel removed animations
   for (size_t newAnimIdx = newAnimations.Length(); newAnimIdx-- != 0; ) {
     newAnimations[newAnimIdx]->CancelFromStyle();
-  }
-
-  // We don't actually dispatch the pending events now.  We'll either
-  // dispatch them the next time we get a refresh driver notification
-  // or the next time somebody calls
-  // nsPresShell::FlushPendingNotifications.
-  if (mEventDispatcher.HasQueuedEvents()) {
-    mPresContext->PresShell()->SetNeedStyleFlush();
   }
 }
 
@@ -584,22 +576,13 @@ private:
   nsCSSValue GetComputedValue(nsPresContext* aPresContext,
                               nsCSSPropertyID aProperty);
 
-  static TimingParams TimingParamsFrom(
-    const StyleAnimation& aStyleAnimation)
+  static TimingParams TimingParamsFrom(const StyleAnimation& aStyleAnimation)
   {
-    TimingParams timing;
-
-    timing.mDuration.emplace(StickyTimeDuration::FromMilliseconds(
-                               aStyleAnimation.GetDuration()));
-    timing.mDelay = TimeDuration::FromMilliseconds(aStyleAnimation.GetDelay());
-    timing.mIterations = aStyleAnimation.GetIterationCount();
-    MOZ_ASSERT(timing.mIterations >= 0.0 && !IsNaN(timing.mIterations),
-               "mIterations should be nonnegative & finite, as ensured by "
-               "CSSParser");
-    timing.mDirection = aStyleAnimation.GetDirection();
-    timing.mFill = aStyleAnimation.GetFillMode();
-
-    return timing;
+    return TimingParamsFromCSSParams(aStyleAnimation.GetDuration(),
+                                     aStyleAnimation.GetDelay(),
+                                     aStyleAnimation.GetIterationCount(),
+                                     aStyleAnimation.GetDirection(),
+                                     aStyleAnimation.GetFillMode());
   }
 
   RefPtr<nsStyleContext> mStyleContext;
@@ -665,7 +648,7 @@ CSSAnimationBuilder::Build(nsPresContext* aPresContext,
     // In order to honor what the spec said, we'd copy more data over.
     UpdateOldAnimationPropertiesWithNew(*oldAnim,
                                         timing,
-                                        keyframes,
+                                        Move(keyframes),
                                         isStylePaused,
                                         mStyleContext);
     return oldAnim.forget();

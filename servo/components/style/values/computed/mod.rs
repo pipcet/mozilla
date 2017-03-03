@@ -10,18 +10,20 @@ use font_metrics::FontMetricsProvider;
 use properties::ComputedValues;
 use std::fmt;
 use style_traits::ToCss;
-use super::{CSSFloat, specified};
+use super::{CSSFloat, RGBA, specified};
+use super::specified::grid::{TrackBreadth as GenericTrackBreadth, TrackSize as GenericTrackSize};
 
 pub use cssparser::Color as CSSColor;
 pub use self::image::{AngleOrCorner, EndingShape as GradientShape, Gradient, GradientKind, Image};
 pub use self::image::{LengthOrKeyword, LengthOrPercentageOrKeyword};
 pub use super::{Auto, Either, None_};
 #[cfg(feature = "gecko")]
-pub use super::specified::{AlignJustifyContent, AlignJustifySelf};
+pub use super::specified::{AlignItems, AlignJustifyContent, AlignJustifySelf, JustifyItems};
 pub use super::specified::{Angle, BorderStyle, GridLine, Time, UrlOrNone};
-pub use super::specified::url::UrlExtraData;
+pub use super::specified::url::{SpecifiedUrl, UrlExtraData};
 pub use self::length::{CalcLengthOrPercentage, Length, LengthOrNumber, LengthOrPercentage, LengthOrPercentageOrAuto};
 pub use self::length::{LengthOrPercentageOrAutoOrContent, LengthOrPercentageOrNone, LengthOrNone};
+pub use self::length::{MaxLength, MinLength};
 pub use self::position::Position;
 
 pub mod basic_shape;
@@ -40,6 +42,12 @@ pub struct Context<'a> {
 
     /// The style we're inheriting from.
     pub inherited_style: &'a ComputedValues,
+
+    /// The style of the layout parent node. This will almost always be
+    /// `inherited_style`, except when `display: contents` is at play, in which
+    /// case it's the style of the last ancestor with a `display` value that
+    /// isn't `contents`.
+    pub layout_parent_style: &'a ComputedValues,
 
     /// Values access through this need to be in the properties "computed
     /// early": color, text-decoration, font-size, display, position, float,
@@ -123,6 +131,32 @@ impl ToComputedValue for specified::CSSColor {
 }
 
 #[cfg(feature = "gecko")]
+impl ToComputedValue for specified::JustifyItems {
+    type ComputedValue = JustifyItems;
+
+    // https://drafts.csswg.org/css-align/#valdef-justify-items-auto
+    fn to_computed_value(&self, context: &Context) -> JustifyItems {
+        use values::specified::align;
+        // If the inherited value of `justify-items` includes the `legacy` keyword, `auto` computes
+        // to the inherited value.
+        if self.0 == align::ALIGN_AUTO {
+            let inherited = context.inherited_style.get_position().clone_justify_items();
+            if inherited.0.contains(align::ALIGN_LEGACY) {
+                return inherited
+            }
+        }
+        return *self
+    }
+
+    #[inline]
+    fn from_computed_value(computed: &JustifyItems) -> Self {
+        *computed
+    }
+}
+
+#[cfg(feature = "gecko")]
+impl ComputedValueAsSpecified for specified::AlignItems {}
+#[cfg(feature = "gecko")]
 impl ComputedValueAsSpecified for specified::AlignJustifyContent {}
 #[cfg(feature = "gecko")]
 impl ComputedValueAsSpecified for specified::AlignJustifySelf {}
@@ -185,22 +219,104 @@ pub type Number = CSSFloat;
 pub type Opacity = CSSFloat;
 
 
+/// An SVG paint value
+///
+/// https://www.w3.org/TR/SVG2/painting.html#SpecifyingPaint
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+pub struct SVGPaint {
+    /// The paint source
+    pub kind: SVGPaintKind,
+    /// The fallback color
+    pub fallback: Option<CSSColor>,
+}
+
+impl Default for SVGPaint {
+    fn default() -> Self {
+        SVGPaint {
+            kind: SVGPaintKind::None,
+            fallback: None,
+        }
+    }
+}
+
+impl SVGPaint {
+    /// Opaque black color
+    pub fn black() -> Self {
+        let rgba = RGBA::from_floats(0., 0., 0., 1.);
+        SVGPaint {
+            kind: SVGPaintKind::Color(CSSColor::RGBA(rgba)),
+            fallback: None,
+        }
+    }
+}
+
+/// An SVG paint value without the fallback
+///
+/// Whereas the spec only allows PaintServer
+/// to have a fallback, Gecko lets the context
+/// properties have a fallback as well.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+pub enum SVGPaintKind {
+    /// `none`
+    None,
+    /// `<color>`
+    Color(CSSColor),
+    /// `url(...)`
+    PaintServer(SpecifiedUrl),
+    /// `context-fill`
+    ContextFill,
+    /// `context-stroke`
+    ContextStroke,
+}
+
+impl ToCss for SVGPaintKind {
+    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+        match *self {
+            SVGPaintKind::None => dest.write_str("none"),
+            SVGPaintKind::ContextStroke => dest.write_str("context-stroke"),
+            SVGPaintKind::ContextFill => dest.write_str("context-fill"),
+            SVGPaintKind::Color(ref color) => color.to_css(dest),
+            SVGPaintKind::PaintServer(ref server) => server.to_css(dest),
+        }
+    }
+}
+
+impl ToCss for SVGPaint {
+    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+        self.kind.to_css(dest)?;
+        if let Some(ref fallback) = self.fallback {
+            fallback.to_css(dest)?;
+        }
+        Ok(())
+    }
+}
+
+/// <length> | <percentage> | <number>
+pub type LoPOrNumber = Either<LengthOrPercentage, Number>;
+
 #[derive(Clone, PartialEq, Eq, Copy, Debug)]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 #[allow(missing_docs)]
 /// A computed cliprect for clip and image-region
 pub struct ClipRect {
-    pub top: Au,
+    pub top: Option<Au>,
     pub right: Option<Au>,
     pub bottom: Option<Au>,
-    pub left: Au,
+    pub left: Option<Au>,
 }
 
 impl ToCss for ClipRect {
     fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
         try!(dest.write_str("rect("));
-        try!(self.top.to_css(dest));
-        try!(dest.write_str(", "));
+        if let Some(top) = self.top {
+            try!(top.to_css(dest));
+            try!(dest.write_str(", "));
+        } else {
+            try!(dest.write_str("auto, "));
+        }
+
         if let Some(right) = self.right {
             try!(right.to_css(dest));
             try!(dest.write_str(", "));
@@ -215,13 +331,23 @@ impl ToCss for ClipRect {
             try!(dest.write_str("auto, "));
         }
 
-        try!(self.left.to_css(dest));
+        if let Some(left) = self.left {
+            try!(left.to_css(dest));
+        } else {
+            try!(dest.write_str("auto"));
+        }
         dest.write_str(")")
     }
 }
 
 /// rect(...) | auto
 pub type ClipRectOrAuto = Either<ClipRect, Auto>;
+
+/// The computed value of a grid `<track-breadth>`
+pub type TrackBreadth = GenericTrackBreadth<LengthOrPercentage>;
+
+/// The computed value of a grid `<track-size>`
+pub type TrackSize = GenericTrackSize<LengthOrPercentage>;
 
 impl ClipRectOrAuto {
     /// Return an auto (default for clip-rect and image-region) value

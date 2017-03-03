@@ -580,6 +580,37 @@ CurrentWindowOrNull(JSContext* cx)
     return glob ? WindowOrNull(glob) : nullptr;
 }
 
+// Nukes all wrappers into or out of the given compartment, and prevents new
+// wrappers from being created. Additionally marks the compartment as
+// unscriptable after wrappers have been nuked.
+//
+// Note: This should *only* be called for browser or extension compartments.
+// Wrappers between web compartments must never be cut in web-observable
+// ways.
+void
+NukeAllWrappersForCompartment(JSContext* cx, JSCompartment* compartment,
+                              js::NukeReferencesToWindow nukeReferencesToWindow)
+{
+    // First, nuke all wrappers into or out of the target compartment. Once
+    // the compartment is marked as nuked, WrapperFactory will refuse to
+    // create new live wrappers for it, in either direction. This means that
+    // we need to be sure that we don't have any existing cross-compartment
+    // wrappers which may be replaced with dead wrappers during unrelated
+    // wrapper recomputation *before* we set that bit.
+    js::NukeCrossCompartmentWrappers(cx, js::AllCompartments(),
+                                     js::SingleCompartment(compartment),
+                                     nukeReferencesToWindow,
+                                     js::NukeAllReferences);
+
+    // At this point, we should cross-compartment wrappers for the nuked
+    // compartment. Set the wasNuked bit so WrapperFactory will return a
+    // DeadObjectProxy when asked to create a new wrapper for it, and mark as
+    // unscriptable.
+    auto compartmentPrivate = xpc::CompartmentPrivate::Get(compartment);
+    compartmentPrivate->wasNuked = true;
+    compartmentPrivate->scriptability.Block();
+}
+
 } // namespace xpc
 
 static void
@@ -1954,7 +1985,7 @@ ReportZoneStats(const JS::ZoneStats& zStats,
         bool truncated = notableString.Length() < info.length;
 
         nsCString path = pathPrefix +
-            nsPrintfCString("strings/" STRING_LENGTH "%d, copies=%d, \"%s\"%s)/",
+            nsPrintfCString("strings/" STRING_LENGTH "%" PRIuSIZE ", copies=%d, \"%s\"%s)/",
                             info.length, info.numCopies, escapedString.get(),
                             truncated ? " (truncated)" : "");
 
@@ -3658,11 +3689,11 @@ XPCJSContext::DebugDump(int16_t depth)
 {
 #ifdef DEBUG
     depth--;
-    XPC_LOG_ALWAYS(("XPCJSContext @ %x", this));
+    XPC_LOG_ALWAYS(("XPCJSContext @ %p", this));
         XPC_LOG_INDENT();
-        XPC_LOG_ALWAYS(("mJSContext @ %x", Context()));
+        XPC_LOG_ALWAYS(("mJSContext @ %p", Context()));
 
-        XPC_LOG_ALWAYS(("mWrappedJSClassMap @ %x with %d wrapperclasses(s)",
+        XPC_LOG_ALWAYS(("mWrappedJSClassMap @ %p with %d wrapperclasses(s)",
                         mWrappedJSClassMap, mWrappedJSClassMap->Count()));
         // iterate wrappersclasses...
         if (depth && mWrappedJSClassMap->Count()) {
@@ -3675,7 +3706,7 @@ XPCJSContext::DebugDump(int16_t depth)
         }
 
         // iterate wrappers...
-        XPC_LOG_ALWAYS(("mWrappedJSMap @ %x with %d wrappers(s)",
+        XPC_LOG_ALWAYS(("mWrappedJSMap @ %p with %d wrappers(s)",
                         mWrappedJSMap, mWrappedJSMap->Count()));
         if (depth && mWrappedJSMap->Count()) {
             XPC_LOG_INDENT();
@@ -3683,18 +3714,18 @@ XPCJSContext::DebugDump(int16_t depth)
             XPC_LOG_OUTDENT();
         }
 
-        XPC_LOG_ALWAYS(("mIID2NativeInterfaceMap @ %x with %d interface(s)",
+        XPC_LOG_ALWAYS(("mIID2NativeInterfaceMap @ %p with %d interface(s)",
                         mIID2NativeInterfaceMap,
                         mIID2NativeInterfaceMap->Count()));
 
-        XPC_LOG_ALWAYS(("mClassInfo2NativeSetMap @ %x with %d sets(s)",
+        XPC_LOG_ALWAYS(("mClassInfo2NativeSetMap @ %p with %d sets(s)",
                         mClassInfo2NativeSetMap,
                         mClassInfo2NativeSetMap->Count()));
 
-        XPC_LOG_ALWAYS(("mThisTranslatorMap @ %x with %d translator(s)",
+        XPC_LOG_ALWAYS(("mThisTranslatorMap @ %p with %d translator(s)",
                         mThisTranslatorMap, mThisTranslatorMap->Count()));
 
-        XPC_LOG_ALWAYS(("mNativeSetMap @ %x with %d sets(s)",
+        XPC_LOG_ALWAYS(("mNativeSetMap @ %p with %d sets(s)",
                         mNativeSetMap, mNativeSetMap->Count()));
 
         // iterate sets...
@@ -3707,7 +3738,7 @@ XPCJSContext::DebugDump(int16_t depth)
             XPC_LOG_OUTDENT();
         }
 
-        XPC_LOG_ALWAYS(("mPendingResult of %x", mPendingResult));
+        XPC_LOG_ALWAYS(("mPendingResult of %" PRIx32, static_cast<uint32_t>(mPendingResult)));
 
         XPC_LOG_OUTDENT();
 #endif

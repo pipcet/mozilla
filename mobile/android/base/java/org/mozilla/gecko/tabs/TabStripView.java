@@ -90,12 +90,11 @@ public class TabStripView extends RecyclerView {
     }
 
     /* package */ void addTab(Tab tab, int position) {
-        adapter.addTab(tab, position);
-        position = position == -1 ? adapter.getItemCount() - 1 : position;
-        if (position == 0 || position == adapter.getItemCount() - 1) {
-            // A new first or last tab gets added off screen, so scroll to make it visible.
-            scrollToPosition(position);
+        if (tab.isPrivate() != isPrivate) {
+            return;
         }
+
+        adapter.addTab(tab, position);
     }
 
     /* package */ void removeTab(Tab tab) {
@@ -113,13 +112,15 @@ public class TabStripView extends RecyclerView {
             return;
         }
         // scrollToPosition sometimes needlessly scrolls even when position is already in view, so
-        // don't scrollToPosition unless necessary.
+        // don't scrollToPosition unless necessary.  (The position == 0 case is needed to scroll
+        // tab 0 into view when it's added back after a close undo (in which case the adapter and
+        // layout may be temporarily out of sync, so the rest of the if doesn't work).)
         final LinearLayoutManager layoutManager = (LinearLayoutManager) getLayoutManager();
         if (position < layoutManager.findFirstCompletelyVisibleItemPosition() ||
-                position > layoutManager.findLastCompletelyVisibleItemPosition()) {
+                position > layoutManager.findLastCompletelyVisibleItemPosition() ||
+                position == 0) {
             scrollToPosition(position);
         }
-
     }
 
     /* package */ void updateTab(Tab tab) {

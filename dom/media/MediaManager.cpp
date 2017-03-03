@@ -898,7 +898,7 @@ nsresult MediaDevice::Deallocate() {
 void
 MediaOperationTask::ReturnCallbackError(nsresult rv, const char* errorLog)
 {
-  MM_LOG(("%s , rv=%d", errorLog, rv));
+  MM_LOG(("%s , rv=%" PRIu32, errorLog, static_cast<uint32_t>(rv)));
   NS_DispatchToMainThread(do_AddRef(new ReleaseMediaOperationResource(mStream.forget(),
     mOnTracksAvailableCallback.forget())));
   nsString log;
@@ -1472,7 +1472,7 @@ public:
       }
     }
     if (errorMsg) {
-      LOG(("%s %d", errorMsg, rv));
+      LOG(("%s %" PRIu32, errorMsg, static_cast<uint32_t>(rv)));
       if (badConstraint) {
         Fail(NS_LITERAL_STRING("OverconstrainedError"),
              NS_LITERAL_STRING(""),
@@ -2295,23 +2295,23 @@ if (privileged) {
 
   RefPtr<PledgeSourceSet> p = EnumerateDevicesImpl(windowID, videoType,
                                                    audioType, fake);
-  p->Then([this, onSuccess, onFailure, windowID, c, listener, askPermission,
+  RefPtr<MediaManager> self = this;
+  p->Then([self, onSuccess, onFailure, windowID, c, listener, askPermission,
            prefs, isHTTPS, callID, principalInfo,
            isChrome](SourceSet*& aDevices) mutable {
 
     RefPtr<Refcountable<UniquePtr<SourceSet>>> devices(
          new Refcountable<UniquePtr<SourceSet>>(aDevices)); // grab result
 
-    // Ensure that the captured 'this' pointer and our windowID are still good.
-    if (!MediaManager::Exists() ||
-        !nsGlobalWindow::GetInnerWindowWithId(windowID)) {
+    // Ensure that our windowID is still good.
+    if (!nsGlobalWindow::GetInnerWindowWithId(windowID)) {
       return;
     }
 
     // Apply any constraints. This modifies the passed-in list.
-    RefPtr<PledgeChar> p2 = SelectSettings(c, isChrome, devices);
+    RefPtr<PledgeChar> p2 = self->SelectSettings(c, isChrome, devices);
 
-    p2->Then([this, onSuccess, onFailure, windowID, c,
+    p2->Then([self, onSuccess, onFailure, windowID, c,
               listener, askPermission, prefs, isHTTPS, callID, principalInfo,
               isChrome, devices](const char*& badConstraint) mutable {
 
@@ -2359,13 +2359,13 @@ if (privileged) {
                                                           isChrome,
                                                           devices->release()));
       // Store the task w/callbacks.
-      mActiveCallbacks.Put(callID, task.forget());
+      self->mActiveCallbacks.Put(callID, task.forget());
 
       // Add a WindowID cross-reference so OnNavigation can tear things down
       nsTArray<nsString>* array;
-      if (!mCallIds.Get(windowID, &array)) {
+      if (!self->mCallIds.Get(windowID, &array)) {
         array = new nsTArray<nsString>();
-        mCallIds.Put(windowID, array);
+        self->mCallIds.Put(windowID, array);
       }
       array->AppendElement(callID);
 
@@ -2672,7 +2672,7 @@ void
 MediaManager::OnNavigation(uint64_t aWindowID)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  LOG(("OnNavigation for %llu", aWindowID));
+  LOG(("OnNavigation for %" PRIu64, aWindowID));
 
   // Stop the streams for this window. The runnables check this value before
   // making a call to content.
@@ -2740,13 +2740,13 @@ MediaManager::RemoveWindowID(uint64_t aWindowId)
   // get outer windowID
   auto* window = nsGlobalWindow::GetInnerWindowWithId(aWindowId);
   if (!window) {
-    LOG(("No inner window for %llu", aWindowId));
+    LOG(("No inner window for %" PRIu64, aWindowId));
     return;
   }
 
   nsPIDOMWindowOuter* outer = window->AsInner()->GetOuterWindow();
   if (!outer) {
-    LOG(("No outer window for inner %llu", aWindowId));
+    LOG(("No outer window for inner %" PRIu64, aWindowId));
     return;
   }
 
@@ -2759,7 +2759,7 @@ MediaManager::RemoveWindowID(uint64_t aWindowId)
 
   nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
   obs->NotifyObservers(nullptr, "recording-window-ended", data.get());
-  LOG(("Sent recording-window-ended for window %llu (outer %llu)",
+  LOG(("Sent recording-window-ended for window %" PRIu64 " (outer %" PRIu64 ")",
        aWindowId, outerID));
 }
 
@@ -3002,7 +3002,9 @@ MediaManager::Shutdown()
   // cleared until the lambda function clears it.
 
   // note that this == sSingleton
-  RefPtr<MediaManager> that(sSingleton);
+  MOZ_ASSERT(this == sSingleton);
+  RefPtr<MediaManager> that = this;
+
   // Release the backend (and call Shutdown()) from within the MediaManager thread
   // Don't use MediaManager::PostTask() because we're sInShutdown=true here!
   RefPtr<ShutdownTask> shutdown = new ShutdownTask(this,
@@ -3126,14 +3128,14 @@ MediaManager::Observe(nsISupports* aSubject, const char* aTopic,
       uint64_t windowID = PromiseFlatString(Substring(data, strlen("screen:"))).ToInteger64(&rv);
       MOZ_ASSERT(NS_SUCCEEDED(rv));
       if (NS_SUCCEEDED(rv)) {
-        LOG(("Revoking Screen/windowCapture access for window %llu", windowID));
+        LOG(("Revoking Screen/windowCapture access for window %" PRIu64, windowID));
         StopScreensharing(windowID);
       }
     } else {
       uint64_t windowID = nsString(aData).ToInteger64(&rv);
       MOZ_ASSERT(NS_SUCCEEDED(rv));
       if (NS_SUCCEEDED(rv)) {
-        LOG(("Revoking MediaCapture access for window %llu", windowID));
+        LOG(("Revoking MediaCapture access for window %" PRIu64, windowID));
         OnNavigation(windowID);
       }
     }
@@ -3272,7 +3274,7 @@ MediaManager::MediaCaptureWindowState(nsIDOMWindow* aWindow, bool* aVideo,
     IterateWindowListeners(piWin, CaptureWindowStateCallback, &data);
   }
 #ifdef DEBUG
-  LOG(("%s: window %lld capturing %s %s %s %s %s %s", __FUNCTION__, piWin ? piWin->WindowID() : -1,
+  LOG(("%s: window %" PRIu64 " capturing %s %s %s %s %s %s", __FUNCTION__, piWin ? piWin->WindowID() : -1,
        *aVideo ? "video" : "", *aAudio ? "audio" : "",
        *aScreenShare ? "screenshare" : "",  *aWindowShare ? "windowshare" : "",
        *aAppShare ? "appshare" : "", *aBrowserShare ? "browsershare" : ""));
@@ -3284,7 +3286,7 @@ NS_IMETHODIMP
 MediaManager::SanitizeDeviceIds(int64_t aSinceWhen)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  LOG(("%s: sinceWhen = %llu", __FUNCTION__, aSinceWhen));
+  LOG(("%s: sinceWhen = %" PRId64, __FUNCTION__, aSinceWhen));
 
   media::SanitizeOriginKeys(aSinceWhen, false); // we fire and forget
   return NS_OK;

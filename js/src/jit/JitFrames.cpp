@@ -331,7 +331,6 @@ static void
 CloseLiveIteratorIon(JSContext* cx, const InlineFrameIterator& frame, JSTryNote* tn)
 {
     MOZ_ASSERT(tn->kind == JSTRY_FOR_IN ||
-               tn->kind == JSTRY_ITERCLOSE ||
                tn->kind == JSTRY_DESTRUCTURING_ITERCLOSE);
 
     bool isDestructuring = tn->kind == JSTRY_DESTRUCTURING_ITERCLOSE;
@@ -442,7 +441,6 @@ HandleExceptionIon(JSContext* cx, const InlineFrameIterator& frame, ResumeFromEx
 
         switch (tn->kind) {
           case JSTRY_FOR_IN:
-          case JSTRY_ITERCLOSE:
           case JSTRY_DESTRUCTURING_ITERCLOSE:
             MOZ_ASSERT_IF(tn->kind == JSTRY_FOR_IN,
                           JSOp(*(script->main() + tn->start + tn->length)) == JSOP_ENDITER);
@@ -464,8 +462,14 @@ HandleExceptionIon(JSContext* cx, const InlineFrameIterator& frame, ResumeFromEx
                 jsbytecode* catchPC = script->main() + tn->start + tn->length;
                 ExceptionBailoutInfo excInfo(frame.frameNo(), catchPC, tn->stackDepth);
                 uint32_t retval = ExceptionHandlerBailout(cx, frame, rfe, excInfo, overrecursed);
-                if (retval == BAILOUT_RETURN_OK)
+                if (retval == BAILOUT_RETURN_OK) {
+                    // Record exception locations to allow scope unwinding in
+                    // |FinishBailoutToBaseline|
+                    MOZ_ASSERT(cx->isExceptionPending());
+                    rfe->bailoutInfo->tryPC = UnwindEnvironmentToTryPc(frame.script(), tn);
+                    rfe->bailoutInfo->faultPC = frame.pc();
                     return;
+                }
 
                 // Error on bailout clears pending exception.
                 MOZ_ASSERT(!cx->isExceptionPending());
@@ -632,19 +636,6 @@ ProcessTryNotesBaseline(JSContext* cx, const JitFrameIterator& frame, Environmen
                 // ProcessTryNotes.
                 SettleOnTryNote(cx, tn, frame, ei, rfe, pc);
                 MOZ_ASSERT(**pc == JSOP_ENDITER);
-                return false;
-            }
-            break;
-          }
-
-          case JSTRY_ITERCLOSE: {
-            uint8_t* framePointer;
-            uint8_t* stackPointer;
-            BaselineFrameAndStackPointersFromTryNote(tn, frame, &framePointer, &stackPointer);
-            Value iterValue(*reinterpret_cast<Value*>(stackPointer));
-            RootedObject iterObject(cx, &iterValue.toObject());
-            if (!IteratorCloseForException(cx, iterObject)) {
-                SettleOnTryNote(cx, tn, frame, ei, rfe, pc);
                 return false;
             }
             break;
@@ -1523,14 +1514,16 @@ TopmostIonActivationCompartment(JSContext* cx)
     return nullptr;
 }
 
-void UpdateJitActivationsForMinorGC(ZoneGroup* group, JSTracer* trc)
+void UpdateJitActivationsForMinorGC(JSRuntime* rt, JSTracer* trc)
 {
     MOZ_ASSERT(JS::CurrentThreadIsHeapMinorCollecting());
     JSContext* cx = TlsContext.get();
-    for (JitActivationIterator activations(cx, group->ownerContext()); !activations.done(); ++activations) {
-        for (JitFrameIterator frames(activations); !frames.done(); ++frames) {
-            if (frames.type() == JitFrame_IonJS)
-                UpdateIonJSFrameForMinorGC(trc, frames);
+    for (const CooperatingContext& target : rt->cooperatingContexts()) {
+        for (JitActivationIterator activations(cx, target); !activations.done(); ++activations) {
+            for (JitFrameIterator frames(activations); !frames.done(); ++frames) {
+                if (frames.type() == JitFrame_IonJS)
+                    UpdateIonJSFrameForMinorGC(trc, frames);
+            }
         }
     }
 }

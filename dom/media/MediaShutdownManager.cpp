@@ -74,14 +74,7 @@ MediaShutdownManager::InitStatics()
     sInstance, NS_LITERAL_STRING(__FILE__), __LINE__,
     NS_LITERAL_STRING("MediaShutdownManager shutdown"));
   if (NS_FAILED(rv)) {
-    // Leak the buffer on the heap to make sure that it lives long enough,
-    // as MOZ_CRASH_ANNOTATE expects the pointer passed to it to live to
-    // the end of the program.
-    const size_t CAPACITY = 256;
-    auto buf = new char[CAPACITY];
-    snprintf(buf, CAPACITY, "Failed to add shutdown blocker! rv=%x", uint32_t(rv));
-    MOZ_CRASH_ANNOTATE(buf);
-    MOZ_REALLY_CRASH();
+    MOZ_CRASH_UNSAFE_PRINTF("Failed to add shutdown blocker! rv=%x", uint32_t(rv));
   }
 }
 
@@ -98,24 +91,29 @@ MediaShutdownManager::RemoveBlocker()
   DECODER_LOG(LogLevel::Debug, ("MediaShutdownManager::BlockShutdown() end."));
 }
 
-void
+nsresult
 MediaShutdownManager::Register(MediaDecoder* aDecoder)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_RELEASE_ASSERT(!mIsDoingXPCOMShutDown);
+  if (mIsDoingXPCOMShutDown) {
+    return NS_ERROR_ABORT;
+  }
   // Don't call Register() after you've Unregistered() all the decoders,
   // that's not going to work.
   MOZ_ASSERT(!mDecoders.Contains(aDecoder));
   mDecoders.PutEntry(aDecoder);
   MOZ_ASSERT(mDecoders.Contains(aDecoder));
   MOZ_ASSERT(mDecoders.Count() > 0);
+  return NS_OK;
 }
 
 void
 MediaShutdownManager::Unregister(MediaDecoder* aDecoder)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(mDecoders.Contains(aDecoder));
+  if (!mDecoders.Contains(aDecoder)) {
+    return;
+  }
   mDecoders.RemoveEntry(aDecoder);
   if (mIsDoingXPCOMShutDown && mDecoders.Count() == 0) {
     RemoveBlocker();

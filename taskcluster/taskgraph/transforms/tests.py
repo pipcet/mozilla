@@ -78,6 +78,9 @@ test_description_schema = Schema({
     # the name by which this talos test is addressed in try syntax
     Optional('talos-try-name'): basestring,
 
+    # additional tags to mark up this type of test
+    Optional('tags'): {basestring: object},
+
     # the symbol, or group(symbol), under which this task should appear in
     # treeherder.
     'treeherder-symbol': basestring,
@@ -119,7 +122,7 @@ test_description_schema = Schema({
     # one task without e10s.  E10s tasks have "-e10s" appended to the test name
     # and treeherder group.
     Required('e10s', default='both'): optionally_keyed_by(
-        'test-platform',
+        'test-platform', 'project',
         Any(bool, 'both')),
 
     # The EC2 instance size to run these tests on.
@@ -176,7 +179,7 @@ test_description_schema = Schema({
     Required('checkout', default=False): bool,
 
     # Wheter to perform a machine reboot after test is done
-    Optional('reboot', default=False): bool,
+    Optional('reboot', default=True): bool,
 
     # What to run
     Required('mozharness'): optionally_keyed_by(
@@ -224,7 +227,9 @@ test_description_schema = Schema({
 
             # If true, include chunking information in the command even if the number
             # of chunks is 1
-            Required('chunked', default=False): bool,
+            Required('chunked', default=False): optionally_keyed_by(
+                'test-platform',
+                bool),
 
             # The chunking argument format to use
             Required('chunking-args', default='this-chunk'): Any(
@@ -266,6 +271,11 @@ test_description_schema = Schema({
 
     # the product name, defaults to firefox
     Optional('product'): basestring,
+
+    # conditional files to determine when these tests should be run
+    Optional('when'): Any({
+        Optional('files-changed'): [basestring],
+    }),
 
 }, required=True)
 
@@ -314,7 +324,7 @@ def set_defaults(config, tests):
         test.setdefault('run-on-projects', ['all'])
         test.setdefault('instance-size', 'default')
         test.setdefault('max-run-time', 3600)
-        test.setdefault('reboot', False)
+        test.setdefault('reboot', True)
         test['mozharness'].setdefault('extra-options', [])
         yield test
 
@@ -371,13 +381,15 @@ def set_asan_docker_image(config, tests):
 @transforms.add
 def set_worker_implementation(config, tests):
     """Set the worker implementation based on the test platform."""
+    use_tc_worker = config.config['args'].taskcluster_worker
     for test in tests:
-        if test.get('suite', '') == 'talos':
+        if test['test-platform'].startswith('macosx'):
+            test['worker-implementation'] = \
+                'native-engine' if use_tc_worker else 'buildbot-bridge'
+        elif test.get('suite', '') == 'talos':
             test['worker-implementation'] = 'buildbot-bridge'
         elif test['test-platform'].startswith('win'):
             test['worker-implementation'] = 'generic-worker'
-        elif test['test-platform'].startswith('macosx'):
-            test['worker-implementation'] = 'native-engine'
         else:
             test['worker-implementation'] = 'docker-worker'
         yield test
@@ -403,7 +415,8 @@ def set_tier(config, tests):
                                          'android-4.3-arm7-api-15/debug',
                                          'android-4.2-x86/opt']:
                 test['tier'] = 1
-            elif test['test-platform'].startswith('windows'):
+            elif test['test-platform'].startswith('windows') \
+                    or test['worker-implementation'] == 'native-engine':
                 test['tier'] = 3
             else:
                 test['tier'] = 2
@@ -451,12 +464,14 @@ def handle_keyed_by(config, tests):
         'suite',
         'run-on-projects',
         'os-groups',
+        'mozharness.chunked',
         'mozharness.config',
         'mozharness.extra-options',
     ]
     for test in tests:
         for field in fields:
-            resolve_keyed_by(test, field, item_name=test['test-name'])
+            resolve_keyed_by(test, field, item_name=test['test-name'],
+                             project=config.params['project'])
         yield test
 
 
@@ -580,15 +595,6 @@ def remove_linux_pgo_try_talos(config, tests):
 
 
 @transforms.add
-def remove_native(config, tests):
-    """Remove native-engine jobs if -w is not given."""
-    for test in tests:
-        if test['worker-implementation'] != 'native-engine' \
-                or config.config['args'].taskcluster_worker:
-            yield test
-
-
-@transforms.add
 def make_job_description(config, tests):
     """Convert *test* descriptions to *job* descriptions (input to
     taskgraph.transforms.job)"""
@@ -632,12 +638,14 @@ def make_job_description(config, tests):
         jobdesc['name'] = name
         jobdesc['label'] = label
         jobdesc['description'] = test['description']
+        jobdesc['when'] = test.get('when', {})
         jobdesc['attributes'] = attributes
         jobdesc['dependencies'] = {'build': build_label}
         jobdesc['expires-after'] = test['expires-after']
         jobdesc['routes'] = []
         jobdesc['run-on-projects'] = test.get('run-on-projects', ['all'])
         jobdesc['scopes'] = []
+        jobdesc['tags'] = test.get('tags', {})
         jobdesc['extra'] = {
             'chunks': {
                 'current': test['this-chunk'],
@@ -664,7 +672,6 @@ def make_job_description(config, tests):
             jobdesc['worker-type'] = 'buildbot-bridge/buildbot-bridge'
         elif implementation == 'native-engine':
             jobdesc['worker-type'] = 'tc-worker-provisioner/gecko-t-osx-10-10'
-            jobdesc['worker']['command'] = []
         elif implementation == 'generic-worker':
             test_platform = test['test-platform'].split('/')[0]
             jobdesc['worker-type'] = WORKER_TYPE[test_platform]

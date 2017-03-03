@@ -25,9 +25,6 @@ if (AppConstants.ACCESSIBILITY) {
 XPCOMUtils.defineLazyModuleGetter(this, "Manifests",
                                   "resource://gre/modules/Manifest.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "SpatialNavigation",
-                                  "resource://gre/modules/SpatialNavigation.jsm");
-
 XPCOMUtils.defineLazyModuleGetter(this, "DownloadNotifications",
                                   "resource://gre/modules/DownloadNotifications.jsm");
 
@@ -545,7 +542,6 @@ var BrowserApp = {
       });
 
       InitLater(() => LightWeightThemeWebInstaller.init());
-      InitLater(() => SpatialNavigation.init(BrowserApp.deck, null), window, "SpatialNavigation");
       InitLater(() => CastingApps.init(), window, "CastingApps");
       InitLater(() => Services.search.init(), Services, "search");
       InitLater(() => DownloadNotifications.init(), window, "DownloadNotifications");
@@ -1218,7 +1214,7 @@ var BrowserApp = {
 
     if (fullscreenState) {
        this.fullscreenTransitionTab = newTab;
-       doc.exitFullscreen();
+       this.selectedBrowser.contentDocument.exitFullscreen();
     }
 
     if (typeof aParams.tabIndex == "number") {
@@ -3434,10 +3430,6 @@ function Tab(aURL, aParams) {
   this.id = 0;
   this._parentId = -1;
   this.lastTouchedAt = Date.now();
-  this._zoom = 1.0;
-  this._drawZoom = 1.0;
-  this._restoreZoom = false;
-  this.userScrollPos = { x: 0, y: 0 };
   this.contentDocumentIsDisplayed = true;
   this.pluginDoorhangerTimeout = null;
   this.shouldShowPluginDoorhanger = true;
@@ -3635,6 +3627,7 @@ Tab.prototype = {
       // If this is a zombie tab, mark the browser for delay loading, which will
       // restore the tab when selected using the session data added above
       this.browser.__SS_restore = true;
+      this.browser.setAttribute("pending", "true");
     } else {
       let flags = "flags" in aParams ? aParams.flags : Ci.nsIWebNavigation.LOAD_FLAGS_NONE;
       let postData = ("postData" in aParams && aParams.postData) ? aParams.postData.value : null;
@@ -4512,89 +4505,65 @@ Tab.prototype = {
     // notifications using nsBrowserStatusFilter.
   },
 
-  _getGeckoZoom: function() {
-    let res = {};
-    let cwu = this.browser.contentWindow.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
-    cwu.getResolution(res);
-    let zoom = res.value * window.devicePixelRatio;
-    return zoom;
+  OnHistoryNewEntry: function(newURI, oldIndex) {
+    Services.obs.notifyObservers(this.browser, "Content:HistoryChange", null);
   },
 
-  saveSessionZoom: function(aZoom) {
-    let cwu = this.browser.contentWindow.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
-    cwu.setResolutionAndScaleTo(aZoom / window.devicePixelRatio);
-  },
-
-  restoredSessionZoom: function() {
-    let cwu = this.browser.contentWindow.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
-
-    if (this._restoreZoom && cwu.isResolutionSet) {
-      return this._getGeckoZoom();
-    }
-    return null;
-  },
-
-  _updateZoomFromHistoryEvent: function(aHistoryEventName) {
-    // Restore zoom only when moving in session history, not for new page loads.
-    this._restoreZoom = aHistoryEventName !== "New";
-  },
-
-  OnHistoryNewEntry: function(aUri) {
-    this._updateZoomFromHistoryEvent("New");
-  },
-
-  OnHistoryGoBack: function(aUri) {
-    this._updateZoomFromHistoryEvent("Back");
+  OnHistoryGoBack: function(backURI) {
+    Services.obs.notifyObservers(this.browser, "Content:HistoryChange", null);
     return true;
   },
 
-  OnHistoryGoForward: function(aUri) {
-    this._updateZoomFromHistoryEvent("Forward");
+  OnHistoryGoForward: function(forwardURI) {
+    Services.obs.notifyObservers(this.browser, "Content:HistoryChange", null);
     return true;
   },
 
-  OnHistoryReload: function(aUri, aFlags) {
-    // we don't do anything with this, so don't propagate it
-    // for now anyway
+  OnHistoryReload: function(reloadURI, reloadFlags) {
+    Services.obs.notifyObservers(this.browser, "Content:HistoryChange", null);
     return true;
   },
 
-  OnHistoryGotoIndex: function(aIndex, aUri) {
-    this._updateZoomFromHistoryEvent("Goto");
+  OnHistoryGotoIndex: function(index, gotoURI) {
+    Services.obs.notifyObservers(this.browser, "Content:HistoryChange", null);
     return true;
   },
 
-  OnHistoryPurge: function(aNumEntries) {
-    this._updateZoomFromHistoryEvent("Purge");
+  OnHistoryPurge: function(numEntries) {
+    Services.obs.notifyObservers(this.browser, "Content:HistoryChange", null);
     return true;
   },
 
-  OnHistoryReplaceEntry: function(aIndex) {
-    // we don't do anything with this, so don't propogate it
-    // for now anyway.
+  OnHistoryReplaceEntry: function(index) {
+    Services.obs.notifyObservers(this.browser, "Content:HistoryChange", null);
   },
 
-  ShouldNotifyMediaPlaybackChange: function(inactive) {
-    // We don't want to show the media control interface for the short sound
-    // which duration is smaller than the threshold. The basic unit is second.
+  ShouldNotifyMediaPlaybackChange: function(activeState) {
+    // If the media is active, we would check it's duration, because we don't
+    // want to show the media control interface for the short sound which
+    // duration is smaller than the threshold. The basic unit is second.
     // Note : the streaming format's duration is infinite.
+    if (activeState === "inactive") {
+      return true;
+    }
+
     const mediaDurationThreshold = 1.0;
 
     let audioElements = this.browser.contentDocument.getElementsByTagName("audio");
     for (let audio of audioElements) {
-      if (audio.paused == inactive && audio.duration > mediaDurationThreshold) {
-        return true;
+      if (!audio.paused && audio.duration < mediaDurationThreshold) {
+        return false;
       }
     }
 
     let videoElements = this.browser.contentDocument.getElementsByTagName("video");
     for (let video of videoElements) {
-      if (video.paused == inactive && video.duration > mediaDurationThreshold) {
-        return true;
+      if (!video.paused && video.duration < mediaDurationThreshold) {
+        return false;
       }
     }
 
-    return false;
+    return true;
   },
 
   observe: function(aSubject, aTopic, aData) {
@@ -4625,14 +4594,13 @@ Tab.prototype = {
           return;
         }
 
-        let isInactive = (aData === "inactive");
-        if (!this.ShouldNotifyMediaPlaybackChange(isInactive)) {
+        if (!this.ShouldNotifyMediaPlaybackChange(aData)) {
           return;
         }
 
         let status;
         if (aTopic == "media-playback") {
-          status = isInactive ? "end" : "start";
+          status = (aData === "inactive") ? "end" : "start";
         } else if (aTopic == "media-playback-resumed") {
           status = "resume";
         }
@@ -4651,10 +4619,6 @@ Tab.prototype = {
     if (!this.browser)
       return null;
     return this.browser.contentWindow;
-  },
-
-  get scale() {
-    return this._zoom;
   },
 
   QueryInterface: XPCOMUtils.generateQI([

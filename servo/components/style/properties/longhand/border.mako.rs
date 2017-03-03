@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 <%namespace name="helpers" file="/helpers.mako.rs" />
-<% from data import Method, PHYSICAL_SIDES, ALL_SIDES, maybe_moz_logical_alias %>
+<% from data import Keyword, Method, PHYSICAL_SIDES, ALL_SIDES, maybe_moz_logical_alias %>
 
 <% data.new_style_struct("Border", inherited=False,
                    additional_methods=[Method("border_" + side + "_has_nonzero_width",
@@ -32,9 +32,12 @@
                               animatable=False, logical = side[1])}
 % endfor
 
+${helpers.gecko_keyword_conversion(Keyword('border-style',
+                                   "none solid double dotted dashed hidden groove ridge inset outset"),
+                                   type="::values::specified::BorderStyle")}
 % for side in ALL_SIDES:
     <%helpers:longhand name="border-${side[0]}-width" animatable="True" logical="${side[1]}"
-                       alias=maybe_moz_logical_alias(product, side, "-moz-border-%s-width")
+                       alias="${maybe_moz_logical_alias(product, side, '-moz-border-%s-width')}"
                        spec="${maybe_logical_spec(side, 'width')}">
         use app_units::Au;
         use std::fmt;
@@ -83,7 +86,7 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
                          spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-float-edge)",
                          animatable=False)}
 
-<%helpers:longhand name="border-image-source" products="gecko" animatable="False" boxed="True"
+<%helpers:longhand name="border-image-source" animatable="False" boxed="True"
                    spec="https://drafts.csswg.org/css-backgrounds/#border-image-source">
     use std::fmt;
     use style_traits::ToCss;
@@ -159,7 +162,7 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
     }
 </%helpers:longhand>
 
-<%helpers:longhand name="border-image-outset" products="gecko" animatable="False"
+<%helpers:longhand name="border-image-outset" animatable="False"
                    spec="https://drafts.csswg.org/css-backgrounds/#border-image-outset">
     use std::fmt;
     use style_traits::ToCss;
@@ -275,7 +278,7 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
     }
 </%helpers:longhand>
 
-<%helpers:longhand name="border-image-repeat" products="gecko" animatable="False"
+<%helpers:longhand name="border-image-repeat" animatable="False"
                    spec="https://drafts.csswg.org/css-backgrounds/#border-image-repeat">
     use std::fmt;
     use style_traits::ToCss;
@@ -353,7 +356,7 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
     }
 </%helpers:longhand>
 
-<%helpers:longhand name="border-image-width" products="gecko" animatable="False"
+<%helpers:longhand name="border-image-width" animatable="False"
                    spec="https://drafts.csswg.org/css-backgrounds/#border-image-width">
     use std::fmt;
     use style_traits::ToCss;
@@ -553,7 +556,7 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
     }
 </%helpers:longhand>
 
-<%helpers:longhand name="border-image-slice" products="gecko" animatable="False"
+<%helpers:longhand name="border-image-slice" animatable="False"
                    spec="https://drafts.csswg.org/css-backgrounds/#border-image-slice">
     use std::fmt;
     use style_traits::ToCss;

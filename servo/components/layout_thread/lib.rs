@@ -7,9 +7,6 @@
 
 #![feature(box_syntax)]
 #![feature(mpsc_select)]
-#![feature(plugin)]
-
-#![plugin(plugins)]
 
 extern crate app_units;
 extern crate euclid;
@@ -66,6 +63,7 @@ use layout::flow::{self, Flow, ImmutableFlowUtils, MutableFlowUtils, MutableOwne
 use layout::flow_ref::FlowRef;
 use layout::incremental::{LayoutDamageComputation, REFLOW_ENTIRE_DOCUMENT};
 use layout::layout_debug;
+use layout::opaque_node::OpaqueNodeMethods;
 use layout::parallel;
 use layout::query::{LayoutRPCImpl, LayoutThreadData, process_content_box_request, process_content_boxes_request};
 use layout::query::{process_margin_style_query, process_node_overflow_request, process_resolved_style_request};
@@ -78,7 +76,7 @@ use layout::wrapper::LayoutNodeLayoutData;
 use layout::wrapper::drop_style_and_layout_data;
 use layout_traits::LayoutThreadFactory;
 use msg::constellation_msg::{FrameId, PipelineId};
-use net_traits::image_cache_thread::{ImageCacheChan, ImageCacheResult, ImageCacheThread};
+use net_traits::image_cache_thread::ImageCacheThread;
 use net_traits::image_cache_thread::UsePlaceholder;
 use parking_lot::RwLock;
 use profile_traits::mem::{self, Report, ReportKind, ReportsChan};
@@ -101,6 +99,7 @@ use servo_url::ServoUrl;
 use std::borrow::ToOwned;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
+use std::mem as std_mem;
 use std::ops::{Deref, DerefMut};
 use std::process;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -139,12 +138,6 @@ pub struct LayoutThread {
 
     /// The port on which we receive messages from the constellation.
     pipeline_port: Receiver<LayoutControlMsg>,
-
-    /// The port on which we receive messages from the image cache
-    image_cache_receiver: Receiver<ImageCacheResult>,
-
-    /// The channel on which the image cache can send messages to ourself.
-    image_cache_sender: ImageCacheChan,
 
     /// The port on which we receive messages from the font cache thread.
     font_cache_receiver: Receiver<()>,
@@ -407,11 +400,6 @@ impl LayoutThread {
         // Proxy IPC messages from the pipeline to the layout thread.
         let pipeline_receiver = ROUTER.route_ipc_receiver_to_new_mpsc_receiver(pipeline_port);
 
-        // Ask the router to proxy IPC messages from the image cache thread to the layout thread.
-        let (ipc_image_cache_sender, ipc_image_cache_receiver) = ipc::channel().unwrap();
-        let image_cache_receiver =
-            ROUTER.route_ipc_receiver_to_new_mpsc_receiver(ipc_image_cache_receiver);
-
         // Ask the router to proxy IPC messages from the font cache thread to the layout thread.
         let (ipc_font_cache_sender, ipc_font_cache_receiver) = ipc::channel().unwrap();
         let font_cache_receiver =
@@ -440,8 +428,6 @@ impl LayoutThread {
             image_cache_thread: image_cache_thread,
             font_cache_thread: font_cache_thread,
             first_reflow: true,
-            image_cache_receiver: image_cache_receiver,
-            image_cache_sender: ImageCacheChan(ipc_image_cache_sender),
             font_cache_receiver: font_cache_receiver,
             font_cache_sender: ipc_font_cache_sender,
             parallel_traversal: parallel_traversal,
@@ -473,6 +459,8 @@ impl LayoutThread {
                     margin_style_response: MarginStyleResponse::empty(),
                     stacking_context_scroll_offsets: HashMap::new(),
                     text_index_response: TextIndexResponse(None),
+                    pending_images: vec![],
+                    nodes_from_point_response: vec![],
                 })),
             error_reporter: CSSErrorReporter {
                 pipelineid: id,
@@ -508,8 +496,7 @@ impl LayoutThread {
     // Create a layout context for use in building display lists, hit testing, &c.
     fn build_layout_context(&self,
                             rw_data: &LayoutThreadData,
-                            screen_size_changed: bool,
-                            goal: ReflowGoal)
+                            request_images: bool)
                             -> LayoutContext {
         let thread_local_style_context_creation_data =
             ThreadLocalStyleContextCreationInfo::new(self.new_animations_sender.clone());
@@ -517,9 +504,7 @@ impl LayoutThread {
         LayoutContext {
             style_context: SharedStyleContext {
                 viewport_size: self.viewport_size.clone(),
-                screen_size_changed: screen_size_changed,
                 stylist: rw_data.stylist.clone(),
-                goal: goal,
                 running_animations: self.running_animations.clone(),
                 expired_animations: self.expired_animations.clone(),
                 error_reporter: self.error_reporter.clone(),
@@ -533,9 +518,9 @@ impl LayoutThread {
                 default_computed_values: Arc::new(ComputedValues::initial_values().clone()),
             },
             image_cache_thread: Mutex::new(self.image_cache_thread.clone()),
-            image_cache_sender: Mutex::new(self.image_cache_sender.clone()),
             font_cache_thread: Mutex::new(self.font_cache_thread.clone()),
             webrender_image_cache: self.webrender_image_cache.clone(),
+            pending_images: if request_images { Some(Mutex::new(vec![])) } else { None },
         }
     }
 
@@ -544,14 +529,12 @@ impl LayoutThread {
         enum Request {
             FromPipeline(LayoutControlMsg),
             FromScript(Msg),
-            FromImageCache,
             FromFontCache,
         }
 
         let request = {
             let port_from_script = &self.port;
             let port_from_pipeline = &self.pipeline_port;
-            let port_from_image_cache = &self.image_cache_receiver;
             let port_from_font_cache = &self.font_cache_receiver;
             select! {
                 msg = port_from_pipeline.recv() => {
@@ -559,10 +542,6 @@ impl LayoutThread {
                 },
                 msg = port_from_script.recv() => {
                     Request::FromScript(msg.unwrap())
-                },
-                msg = port_from_image_cache.recv() => {
-                    msg.unwrap();
-                    Request::FromImageCache
                 },
                 msg = port_from_font_cache.recv() => {
                     msg.unwrap();
@@ -593,9 +572,6 @@ impl LayoutThread {
             Request::FromScript(msg) => {
                 self.handle_request_helper(msg, possibly_locked_rw_data)
             },
-            Request::FromImageCache => {
-                self.repaint(possibly_locked_rw_data)
-            },
             Request::FromFontCache => {
                 let _rw_data = possibly_locked_rw_data.lock();
                 self.outstanding_web_fonts.fetch_sub(1, Ordering::SeqCst);
@@ -604,37 +580,6 @@ impl LayoutThread {
                 true
             },
         }
-    }
-
-    /// Repaint the scene, without performing style matching. This is typically
-    /// used when an image arrives asynchronously and triggers a relayout and
-    /// repaint.
-    /// TODO: In the future we could detect if the image size hasn't changed
-    /// since last time and avoid performing a complete layout pass.
-    fn repaint<'a, 'b>(&mut self, possibly_locked_rw_data: &mut RwData<'a, 'b>) -> bool {
-        let mut rw_data = possibly_locked_rw_data.lock();
-
-        if let Some(mut root_flow) = self.root_flow.clone() {
-            let flow = flow::mut_base(FlowRef::deref_mut(&mut root_flow));
-            flow.restyle_damage.insert(REPAINT);
-        }
-
-        let reflow_info = Reflow {
-            goal: ReflowGoal::ForDisplay,
-            page_clip_rect: max_rect(),
-        };
-        let mut layout_context = self.build_layout_context(&*rw_data,
-                                                           false,
-                                                           reflow_info.goal);
-
-        self.perform_post_style_recalc_layout_passes(&reflow_info,
-                                                     None,
-                                                     None,
-                                                     &mut *rw_data,
-                                                     &mut layout_context);
-
-
-        true
     }
 
     /// Receives and dispatches messages from other threads.
@@ -987,7 +932,7 @@ impl LayoutThread {
                 Some(get_root_flow_background_color(layout_root)),
                 webrender_traits::Epoch(epoch_number),
                 viewport_size,
-                builder,
+                builder.finalize(),
                 true);
             self.webrender_api.generate_frame(None);
         });
@@ -1029,6 +974,9 @@ impl LayoutThread {
                     },
                     ReflowQueryType::HitTestQuery(..) => {
                         rw_data.hit_test_response = (None, false);
+                    },
+                    ReflowQueryType::NodesFromPoint(..) => {
+                        rw_data.nodes_from_point_response = Vec::new();
                     },
                     ReflowQueryType::NodeGeometryQuery(_) => {
                         rw_data.client_rect_response = Rect::zero();
@@ -1083,9 +1031,6 @@ impl LayoutThread {
                             Au::from_f32_px(constraints.size.height))
             });
 
-        // Handle conditions where the entire flow tree is invalid.
-        let mut needs_dirtying = false;
-
         let viewport_size_changed = self.viewport_size != old_viewport_size;
         if viewport_size_changed {
             if let Some(constraints) = rw_data.stylist.viewport_constraints() {
@@ -1119,9 +1064,9 @@ impl LayoutThread {
         }
 
         // If the entire flow tree is invalid, then it will be reflowed anyhow.
-        needs_dirtying |= Arc::get_mut(&mut rw_data.stylist).unwrap().update(&data.document_stylesheets,
-                                                                             Some(&*UA_STYLESHEETS),
-                                                                             data.stylesheets_changed);
+        let needs_dirtying = Arc::get_mut(&mut rw_data.stylist).unwrap().update(&data.document_stylesheets,
+                                                                                 Some(&*UA_STYLESHEETS),
+                                                                                 data.stylesheets_changed);
         let needs_reflow = viewport_size_changed && !needs_dirtying;
         if needs_dirtying {
             if let Some(mut d) = element.mutate_data() {
@@ -1167,9 +1112,7 @@ impl LayoutThread {
         }
 
         // Create a layout context for use throughout the following passes.
-        let mut layout_context = self.build_layout_context(&*rw_data,
-                                                           viewport_size_changed,
-                                                           data.reflow_info.goal);
+        let mut layout_context = self.build_layout_context(&*rw_data, true);
 
         // NB: Type inference falls apart here for some reason, so we need to be very verbose. :-(
         let traversal_driver = if self.parallel_flag && self.parallel_traversal.is_some() {
@@ -1250,6 +1193,12 @@ impl LayoutThread {
                                      query_type: &ReflowQueryType,
                                      rw_data: &mut LayoutThreadData,
                                      context: &mut LayoutContext) {
+        let pending_images = match context.pending_images {
+            Some(ref pending) => std_mem::replace(&mut *pending.lock().unwrap(), vec![]),
+            None => vec![],
+        };
+        rw_data.pending_images = pending_images;
+
         let mut root_flow = match self.root_flow.clone() {
             Some(root_flow) => root_flow,
             None => return,
@@ -1325,6 +1274,29 @@ impl LayoutThread {
                 let node = unsafe { ServoLayoutNode::new(&node) };
                 rw_data.margin_style_response = process_margin_style_query(node);
             },
+            ReflowQueryType::NodesFromPoint(page_point, client_point) => {
+                let page_point = Point2D::new(Au::from_f32_px(page_point.x),
+                                              Au::from_f32_px(page_point.y));
+                let client_point = Point2D::new(Au::from_f32_px(client_point.x),
+                                                Au::from_f32_px(client_point.y));
+                let nodes_from_point_list = {
+                    let result = match rw_data.display_list {
+                        None => panic!("Tried to hit test without a DisplayList"),
+                        Some(ref display_list) => {
+                            display_list.hit_test(&page_point,
+                                                  &client_point,
+                                                  &rw_data.stacking_context_scroll_offsets)
+                        }
+                    };
+
+                    result
+                };
+
+                rw_data.nodes_from_point_response = nodes_from_point_list.iter()
+                   .rev()
+                   .map(|metadata| metadata.node.to_untrusted_node_address())
+                   .collect()
+            },
             ReflowQueryType::NoQuery => {}
         }
     }
@@ -1368,9 +1340,7 @@ impl LayoutThread {
             page_clip_rect: max_rect(),
         };
 
-        let mut layout_context = self.build_layout_context(&*rw_data,
-                                                           false,
-                                                           reflow_info.goal);
+        let mut layout_context = self.build_layout_context(&*rw_data, false);
 
         if let Some(mut root_flow) = self.root_flow.clone() {
             // Perform an abbreviated style recalc that operates without access to the DOM.
@@ -1390,6 +1360,8 @@ impl LayoutThread {
                                                      None,
                                                      &mut *rw_data,
                                                      &mut layout_context);
+
+        assert!(layout_context.pending_images.is_none());
     }
 
     fn reflow_with_newly_loaded_web_font<'a, 'b>(&mut self, possibly_locked_rw_data: &mut RwData<'a, 'b>) {
@@ -1401,9 +1373,7 @@ impl LayoutThread {
             page_clip_rect: max_rect(),
         };
 
-        let mut layout_context = self.build_layout_context(&*rw_data,
-                                                           false,
-                                                           reflow_info.goal);
+        let mut layout_context = self.build_layout_context(&*rw_data, false);
 
         // No need to do a style recalc here.
         if self.root_flow.is_none() {
@@ -1530,7 +1500,9 @@ impl LayoutThread {
 
     fn reflow_all_nodes(flow: &mut Flow) {
         debug!("reflowing all nodes!");
-        flow::mut_base(flow).restyle_damage.insert(REPAINT | STORE_OVERFLOW | REFLOW);
+        flow::mut_base(flow)
+            .restyle_damage
+            .insert(REPAINT | STORE_OVERFLOW | REFLOW | REPOSITION);
 
         for child in flow::child_iter_mut(flow) {
             LayoutThread::reflow_all_nodes(child);
@@ -1627,7 +1599,8 @@ fn get_ua_stylesheets() -> Result<UserAgentStylesheets, &'static str> {
 /// or false if it only needs stacking-relative positions.
 fn reflow_query_type_needs_display_list(query_type: &ReflowQueryType) -> bool {
     match *query_type {
-        ReflowQueryType::HitTestQuery(..) | ReflowQueryType::TextIndexQuery(..) => true,
+        ReflowQueryType::HitTestQuery(..) | ReflowQueryType::TextIndexQuery(..) |
+        ReflowQueryType::NodesFromPoint(..) => true,
         ReflowQueryType::ContentBoxQuery(_) | ReflowQueryType::ContentBoxesQuery(_) |
         ReflowQueryType::NodeGeometryQuery(_) | ReflowQueryType::NodeScrollGeometryQuery(_) |
         ReflowQueryType::NodeOverflowQuery(_) | ReflowQueryType::NodeScrollRootIdQuery(_) |

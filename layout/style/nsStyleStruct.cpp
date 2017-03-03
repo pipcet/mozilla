@@ -2054,10 +2054,29 @@ CachedBorderImageData::GetCachedSVGViewportSize()
   return mCachedSVGViewportSize;
 }
 
+struct PurgeCachedImagesTask : mozilla::Runnable
+{
+  NS_IMETHOD Run() final
+  {
+    mSubImages.Clear();
+    return NS_OK;
+  }
+
+  nsCOMArray<imgIContainer> mSubImages;
+};
+
 void
 CachedBorderImageData::PurgeCachedImages()
 {
-  mSubImages.Clear();
+  if (ServoStyleSet::IsInServoTraversal()) {
+    RefPtr<PurgeCachedImagesTask> task = new PurgeCachedImagesTask();
+    task->mSubImages.SwapElements(mSubImages);
+    // This will run the task immediately if we're already on the main thread,
+    // but that is fine.
+    NS_DispatchToMainThread(task.forget());
+  } else {
+    mSubImages.Clear();
+  }
 }
 
 void
@@ -3591,6 +3610,8 @@ nsStyleVisibility::CalcDifference(const nsStyleVisibility& aNewData) const
     // It's important that a change in mWritingMode results in frame
     // reconstruction, because it may affect intrinsic size (see
     // nsSubDocumentFrame::GetIntrinsicISize/BSize).
+    // Also, the used writing-mode value is now a field on nsIFrame and some
+    // classes (e.g. table rows/cells) copy their value from an ancestor.
     hint |= nsChangeHint_ReconstructFrame;
   } else {
     if ((mImageOrientation != aNewData.mImageOrientation)) {
@@ -3825,6 +3846,7 @@ nsStyleText::nsStyleText(const nsPresContext* aContext)
   , mTextAlignLast(NS_STYLE_TEXT_ALIGN_AUTO)
   , mTextAlignTrue(false)
   , mTextAlignLastTrue(false)
+  , mTextJustify(StyleTextJustify::Auto)
   , mTextTransform(NS_STYLE_TEXT_TRANSFORM_NONE)
   , mWhiteSpace(NS_STYLE_WHITESPACE_NORMAL)
   , mWordBreak(NS_STYLE_WORDBREAK_NORMAL)
@@ -3861,6 +3883,7 @@ nsStyleText::nsStyleText(const nsStyleText& aSource)
   , mTextAlignLast(aSource.mTextAlignLast)
   , mTextAlignTrue(false)
   , mTextAlignLastTrue(false)
+  , mTextJustify(aSource.mTextJustify)
   , mTextTransform(aSource.mTextTransform)
   , mWhiteSpace(aSource.mWhiteSpace)
   , mWordBreak(aSource.mWordBreak)
@@ -3923,6 +3946,7 @@ nsStyleText::CalcDifference(const nsStyleText& aNewData) const
       (mLetterSpacing != aNewData.mLetterSpacing) ||
       (mLineHeight != aNewData.mLineHeight) ||
       (mTextIndent != aNewData.mTextIndent) ||
+      (mTextJustify != aNewData.mTextJustify) ||
       (mWordSpacing != aNewData.mWordSpacing) ||
       (mTabSize != aNewData.mTabSize)) {
     return NS_STYLE_HINT_REFLOW;

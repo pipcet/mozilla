@@ -391,6 +391,14 @@ public:
   virtual mozilla::ipc::IPCResult
   RecvInitBlobURLs(nsTArray<BlobURLRegistrationData>&& aRegistations) override;
 
+  virtual mozilla::ipc::IPCResult
+  RecvDispatchLocalStorageChange(const nsString& aDocumentURI,
+                                 const nsString& aKey,
+                                 const nsString& aOldValue,
+                                 const nsString& aNewValue,
+                                 const IPC::Principal& aPrincipal,
+                                 const bool& aIsPrivate) override;
+
   virtual mozilla::ipc::IPCResult RecvLastPrivateDocShellDestroyed() override;
 
   virtual mozilla::ipc::IPCResult RecvFilePathUpdate(const nsString& aStorageType,
@@ -625,7 +633,7 @@ public:
                       const nsAString& aFullPath, const nsAString& aType,
                       const nsAString& aName,
                       const Optional<int64_t>& aLastModified,
-                      bool aIsFromNsIFile);
+                      bool aExistenceCheck, bool aIsFromNsIFile);
 
 private:
   static void ForceKillTimerCallback(nsITimer* aTimer, void* aClosure);

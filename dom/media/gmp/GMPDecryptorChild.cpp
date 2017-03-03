@@ -20,9 +20,12 @@
 namespace mozilla {
 namespace gmp {
 
+static uint32_t sDecryptorCount = 1;
+
 GMPDecryptorChild::GMPDecryptorChild(GMPContentChild* aPlugin)
   : mSession(nullptr)
   , mPlugin(aPlugin)
+  , mDecryptorId(sDecryptorCount++)
 {
   MOZ_ASSERT(mPlugin);
 }
@@ -73,7 +76,7 @@ GMPDecryptorChild::Init(GMPDecryptor* aSession)
   // the child process, but not necessarily across all gecko processes. However,
   // since GMPDecryptors are segregated by node ID/origin, we shouldn't end up
   // with clashes in the content process.
-  SendSetDecryptorId(Id());
+  SendSetDecryptorId(DecryptorId());
 }
 
 void
@@ -332,8 +335,7 @@ GMPDecryptorChild::RecvSetServerCertificate(const uint32_t& aPromiseId,
 mozilla::ipc::IPCResult
 GMPDecryptorChild::RecvDecrypt(const uint32_t& aId,
                                InfallibleTArray<uint8_t>&& aBuffer,
-                               const GMPDecryptionData& aMetadata,
-                               const uint64_t& aDurationUsecs)
+                               const GMPDecryptionData& aMetadata)
 {
   if (!mSession) {
     return IPC_FAIL_NO_REASON(this);
@@ -347,7 +349,7 @@ GMPDecryptorChild::RecvDecrypt(const uint32_t& aId,
   GMPEncryptedBufferDataImpl* metadata = new GMPEncryptedBufferDataImpl(aMetadata);
   buffer->SetMetadata(metadata);
 
-  mSession->Decrypt(buffer, metadata, aDurationUsecs);
+  mSession->Decrypt(buffer, metadata);
   return IPC_OK();
 }
 

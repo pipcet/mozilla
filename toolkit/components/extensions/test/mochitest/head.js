@@ -1,6 +1,6 @@
 "use strict";
 
-/* exported AppConstants */
+/* exported AppConstants, Assert */
 
 var {AppConstants} = SpecialPowers.Cu.import("resource://gre/modules/AppConstants.jsm", {});
 
@@ -10,7 +10,6 @@ var {AppConstants} = SpecialPowers.Cu.import("resource://gre/modules/AppConstant
 // use to select our configuration.
 if (location.pathname.includes("test-oop-extensions")) {
   SpecialPowers.pushPrefEnv({set: [
-    ["dom.ipc.processCount.extension", 1],
     ["extensions.webextensions.remote", true],
   ]});
   // We don't want to reset this at the end of the test, so that we don't have
@@ -35,6 +34,16 @@ if (location.pathname.includes("test-oop-extensions")) {
     }
   });
 }
+
+let Assert = {
+  rejects(promise, msg) {
+    return promise.then(() => {
+      ok(false, msg);
+    }, () => {
+      ok(true, msg);
+    });
+  },
+};
 
 /* exported waitForLoad */
 

@@ -8,13 +8,15 @@
 
 use app_units::Au;
 use cssparser::RGBA;
-use gecko_bindings::structs::{nsStyleCoord, StyleShapeRadius};
+use gecko_bindings::structs::{nsStyleCoord, StyleGridTrackBreadth, StyleShapeRadius};
 use gecko_bindings::sugar::ns_style_coord::{CoordData, CoordDataMut, CoordDataValue};
 use std::cmp::max;
-use values::{Auto, Either, None_};
+use values::{Auto, Either, ExtremumLength, None_, Normal};
 use values::computed::{Angle, LengthOrPercentageOrNone, Number};
 use values::computed::{LengthOrPercentage, LengthOrPercentageOrAuto};
+use values::computed::{MaxLength, MinLength};
 use values::computed::basic_shape::ShapeRadius;
+use values::specified::grid::{TrackBreadth, TrackKeyword};
 
 /// A trait that defines an interface to convert from and to `nsStyleCoord`s.
 pub trait GeckoStyleCoordConvertible : Sized {
@@ -137,6 +139,39 @@ impl GeckoStyleCoordConvertible for LengthOrPercentageOrNone {
     }
 }
 
+impl<L: GeckoStyleCoordConvertible> GeckoStyleCoordConvertible for TrackBreadth<L> {
+    fn to_gecko_style_coord<T: CoordDataMut>(&self, coord: &mut T) {
+        match *self {
+            TrackBreadth::Breadth(ref lop) => lop.to_gecko_style_coord(coord),
+            TrackBreadth::Flex(fr) => coord.set_value(CoordDataValue::FlexFraction(fr)),
+            TrackBreadth::Keyword(TrackKeyword::Auto) => coord.set_value(CoordDataValue::Auto),
+            TrackBreadth::Keyword(TrackKeyword::MinContent) =>
+                coord.set_value(CoordDataValue::Enumerated(StyleGridTrackBreadth::MinContent as u32)),
+            TrackBreadth::Keyword(TrackKeyword::MaxContent) =>
+                coord.set_value(CoordDataValue::Enumerated(StyleGridTrackBreadth::MaxContent as u32)),
+        }
+    }
+
+    fn from_gecko_style_coord<T: CoordData>(coord: &T) -> Option<Self> {
+        L::from_gecko_style_coord(coord).map(TrackBreadth::Breadth).or_else(|| {
+            match coord.as_value() {
+                CoordDataValue::Enumerated(v) => {
+                    if v == StyleGridTrackBreadth::MinContent as u32 {
+                        Some(TrackBreadth::Keyword(TrackKeyword::MinContent))
+                    } else if v == StyleGridTrackBreadth::MaxContent as u32 {
+                        Some(TrackBreadth::Keyword(TrackKeyword::MaxContent))
+                    } else {
+                        None
+                    }
+                },
+                CoordDataValue::FlexFraction(fr) => Some(TrackBreadth::Flex(fr)),
+                CoordDataValue::Auto => Some(TrackBreadth::Keyword(TrackKeyword::Auto)),
+                _ => L::from_gecko_style_coord(coord).map(TrackBreadth::Breadth),
+            }
+        })
+    }
+}
+
 impl GeckoStyleCoordConvertible for ShapeRadius {
     fn to_gecko_style_coord<T: CoordDataMut>(&self, coord: &mut T) {
         match *self {
@@ -220,6 +255,88 @@ impl GeckoStyleCoordConvertible for None_ {
         } else {
             None
         }
+    }
+}
+
+impl GeckoStyleCoordConvertible for Normal {
+    fn to_gecko_style_coord<T: CoordDataMut>(&self, coord: &mut T) {
+        coord.set_value(CoordDataValue::Normal)
+    }
+
+    fn from_gecko_style_coord<T: CoordData>(coord: &T) -> Option<Self> {
+        if let CoordDataValue::Normal = coord.as_value() {
+            Some(Normal)
+        } else {
+            None
+        }
+    }
+}
+
+impl GeckoStyleCoordConvertible for ExtremumLength {
+    fn to_gecko_style_coord<T: CoordDataMut>(&self, coord: &mut T) {
+        use gecko_bindings::structs::{NS_STYLE_WIDTH_AVAILABLE, NS_STYLE_WIDTH_FIT_CONTENT};
+        use gecko_bindings::structs::{NS_STYLE_WIDTH_MAX_CONTENT, NS_STYLE_WIDTH_MIN_CONTENT};
+        coord.set_value(CoordDataValue::Enumerated(
+            match *self {
+                ExtremumLength::MaxContent => NS_STYLE_WIDTH_MAX_CONTENT,
+                ExtremumLength::MinContent => NS_STYLE_WIDTH_MIN_CONTENT,
+                ExtremumLength::FitContent => NS_STYLE_WIDTH_FIT_CONTENT,
+                ExtremumLength::FillAvailable => NS_STYLE_WIDTH_AVAILABLE,
+            }
+        ))
+    }
+
+    fn from_gecko_style_coord<T: CoordData>(coord: &T) -> Option<Self> {
+        use gecko_bindings::structs::{NS_STYLE_WIDTH_AVAILABLE, NS_STYLE_WIDTH_FIT_CONTENT};
+        use gecko_bindings::structs::{NS_STYLE_WIDTH_MAX_CONTENT, NS_STYLE_WIDTH_MIN_CONTENT};
+        match coord.as_value() {
+            CoordDataValue::Enumerated(NS_STYLE_WIDTH_MAX_CONTENT) =>
+                Some(ExtremumLength::MaxContent),
+            CoordDataValue::Enumerated(NS_STYLE_WIDTH_MIN_CONTENT) =>
+                Some(ExtremumLength::MinContent),
+            CoordDataValue::Enumerated(NS_STYLE_WIDTH_FIT_CONTENT) =>
+                Some(ExtremumLength::FitContent),
+            CoordDataValue::Enumerated(NS_STYLE_WIDTH_AVAILABLE) => Some(ExtremumLength::FillAvailable),
+            _ => None,
+        }
+    }
+}
+
+impl GeckoStyleCoordConvertible for MinLength {
+    fn to_gecko_style_coord<T: CoordDataMut>(&self, coord: &mut T) {
+        match *self {
+            MinLength::LengthOrPercentage(ref lop) => lop.to_gecko_style_coord(coord),
+            MinLength::Auto => coord.set_value(CoordDataValue::Auto),
+            MinLength::ExtremumLength(ref e) => e.to_gecko_style_coord(coord),
+        }
+    }
+
+    fn from_gecko_style_coord<T: CoordData>(coord: &T) -> Option<Self> {
+        LengthOrPercentage::from_gecko_style_coord(coord).map(MinLength::LengthOrPercentage)
+            .or_else(|| ExtremumLength::from_gecko_style_coord(coord).map(MinLength::ExtremumLength))
+            .or_else(|| match coord.as_value() {
+                CoordDataValue::Auto => Some(MinLength::Auto),
+                _ => None,
+            })
+    }
+}
+
+impl GeckoStyleCoordConvertible for MaxLength {
+    fn to_gecko_style_coord<T: CoordDataMut>(&self, coord: &mut T) {
+        match *self {
+            MaxLength::LengthOrPercentage(ref lop) => lop.to_gecko_style_coord(coord),
+            MaxLength::None => coord.set_value(CoordDataValue::None),
+            MaxLength::ExtremumLength(ref e) => e.to_gecko_style_coord(coord),
+        }
+    }
+
+    fn from_gecko_style_coord<T: CoordData>(coord: &T) -> Option<Self> {
+        LengthOrPercentage::from_gecko_style_coord(coord).map(MaxLength::LengthOrPercentage)
+            .or_else(|| ExtremumLength::from_gecko_style_coord(coord).map(MaxLength::ExtremumLength))
+            .or_else(|| match coord.as_value() {
+                CoordDataValue::None => Some(MaxLength::None),
+                _ => None,
+            })
     }
 }
 

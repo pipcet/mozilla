@@ -9,7 +9,7 @@
 use dom::TElement;
 use properties::ComputedValues;
 use properties::longhands::display::computed_value as display;
-use restyle_hints::{RESTYLE_LATER_SIBLINGS, RESTYLE_SELF, RestyleHint};
+use restyle_hints::{RESTYLE_DESCENDANTS, RESTYLE_LATER_SIBLINGS, RESTYLE_SELF, RestyleHint};
 use rule_tree::StrongRuleNode;
 use selector_parser::{PseudoElement, RestyleDamage, Snapshot};
 use std::collections::HashMap;
@@ -126,99 +126,53 @@ impl ElementStyles {
     }
 }
 
-/// Enum to describe the different requirements that a restyle hint may impose
-/// on its descendants.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum DescendantRestyleHint {
-    /// This hint does not require any descendants to be restyled.
-    Empty,
-    /// This hint requires direct children to be restyled.
-    Children,
-    /// This hint requires all descendants to be restyled.
-    Descendants,
-}
-
-impl DescendantRestyleHint {
-    /// Propagates this descendant behavior to a child element.
-    fn propagate(self) -> Self {
-        use self::DescendantRestyleHint::*;
-        if self == Descendants {
-            Descendants
-        } else {
-            Empty
-        }
-    }
-
-    fn union(self, other: Self) -> Self {
-        use self::DescendantRestyleHint::*;
-        if self == Descendants || other == Descendants {
-            Descendants
-        } else if self == Children || other == Children {
-            Children
-        } else {
-            Empty
-        }
-    }
-}
-
-/// Restyle hint for storing on ElementData. We use a separate representation
-/// to provide more type safety while propagating restyle hints down the tree.
+/// Restyle hint for storing on ElementData.
+///
+/// We wrap it in a newtype to force the encapsulation of the complexity of
+/// handling the correct invalidations in this file.
 #[derive(Clone, Debug)]
-pub struct StoredRestyleHint {
-    /// Whether this element should be restyled during the traversal, and how.
-    ///
-    /// This hint is stripped down, and only contains hints that are a subset of
-    /// RestyleHint::for_single_element().
-    pub self_: RestyleHint,
-    /// Whether the descendants of this element need to be restyled.
-    pub descendants: DescendantRestyleHint,
-}
+pub struct StoredRestyleHint(RestyleHint);
 
 impl StoredRestyleHint {
     /// Propagates this restyle hint to a child element.
     pub fn propagate(&self) -> Self {
-        StoredRestyleHint {
-            self_: if self.descendants == DescendantRestyleHint::Empty {
-                RestyleHint::empty()
-            } else {
-                RESTYLE_SELF
-            },
-            descendants: self.descendants.propagate(),
-        }
+        StoredRestyleHint(if self.0.contains(RESTYLE_DESCENDANTS) {
+            RESTYLE_SELF | RESTYLE_DESCENDANTS
+        } else {
+            RestyleHint::empty()
+        })
     }
 
     /// Creates an empty `StoredRestyleHint`.
     pub fn empty() -> Self {
-        StoredRestyleHint {
-            self_: RestyleHint::empty(),
-            descendants: DescendantRestyleHint::Empty,
-        }
+        StoredRestyleHint(RestyleHint::empty())
     }
 
     /// Creates a restyle hint that forces the whole subtree to be restyled,
     /// including the element.
     pub fn subtree() -> Self {
-        StoredRestyleHint {
-            self_: RESTYLE_SELF,
-            descendants: DescendantRestyleHint::Descendants,
-        }
+        StoredRestyleHint(RESTYLE_SELF | RESTYLE_DESCENDANTS)
     }
 
     /// Returns true if the hint indicates that our style may be invalidated.
     pub fn has_self_invalidations(&self) -> bool {
-        !self.self_.is_empty()
+        self.0.intersects(RestyleHint::for_self())
+    }
+
+    /// Returns true if the hint indicates that our sibling's style may be
+    /// invalidated.
+    pub fn has_sibling_invalidations(&self) -> bool {
+        self.0.intersects(RESTYLE_LATER_SIBLINGS)
     }
 
     /// Whether the restyle hint is empty (nothing requires to be restyled).
     pub fn is_empty(&self) -> bool {
-        !self.has_self_invalidations() &&
-            self.descendants == DescendantRestyleHint::Empty
+        self.0.is_empty()
     }
 
     /// Insert another restyle hint, effectively resulting in the union of both.
     pub fn insert(&mut self, other: &Self) {
-        self.self_ |= other.self_;
-        self.descendants = self.descendants.union(other.descendants);
+        self.0 |= other.0
     }
 }
 
@@ -230,13 +184,7 @@ impl Default for StoredRestyleHint {
 
 impl From<RestyleHint> for StoredRestyleHint {
     fn from(hint: RestyleHint) -> Self {
-        use restyle_hints::*;
-        use self::DescendantRestyleHint::*;
-        debug_assert!(!hint.contains(RESTYLE_LATER_SIBLINGS), "Caller should apply sibling hints");
-        StoredRestyleHint {
-            self_: hint & RestyleHint::for_self(),
-            descendants: if hint.contains(RESTYLE_DESCENDANTS) { Descendants } else { Empty },
-        }
+        StoredRestyleHint(hint)
     }
 }
 
@@ -245,7 +193,7 @@ static NO_SNAPSHOT: Option<Snapshot> = None;
 /// We really want to store an Option<Snapshot> here, but we can't drop Gecko
 /// Snapshots off-main-thread. So we make a convenient little wrapper to provide
 /// the semantics of Option<Snapshot>, while deferring the actual drop.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SnapshotOption {
     snapshot: Option<Snapshot>,
     destroyed: bool,
@@ -292,7 +240,7 @@ impl Deref for SnapshotOption {
 /// Transient data used by the restyle algorithm. This structure is instantiated
 /// either before or during restyle traversal, and is cleared at the end of node
 /// processing.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct RestyleData {
     /// The restyle hint, which indicates whether selectors need to be rematched
     /// for this element, its children, and its descendants.
@@ -306,41 +254,46 @@ pub struct RestyleData {
     /// afte restyling.
     pub damage: RestyleDamage,
 
+    /// The restyle damage that has already been handled by our ancestors, and does
+    /// not need to be applied again at this element. Only non-empty during the
+    /// traversal, once ancestor damage has been calculated.
+    ///
+    /// Note that this optimization mostly makes sense in terms of Gecko's top-down
+    /// frame constructor and change list processing model. We don't bother with it
+    /// for Servo for now.
+    #[cfg(feature = "gecko")]
+    pub damage_handled: RestyleDamage,
+
     /// An optional snapshot of the original state and attributes of the element,
     /// from which we may compute additional restyle hints at traversal time.
     pub snapshot: SnapshotOption,
 }
 
-impl Default for RestyleData {
-    fn default() -> Self {
-        RestyleData {
-            hint: StoredRestyleHint::default(),
-            recascade: false,
-            damage: RestyleDamage::empty(),
-            snapshot: SnapshotOption::empty(),
-        }
-    }
-}
-
 impl RestyleData {
-    /// Expands the snapshot (if any) into a restyle hint. Returns true if later
-    /// siblings must be restyled.
-    pub fn expand_snapshot<E: TElement>(&mut self, element: E, stylist: &Stylist) -> bool {
-        if self.snapshot.is_none() {
-            return false;
-        }
+    /// Computes the final restyle hint for this element.
+    ///
+    /// This expands the snapshot (if any) into a restyle hint, and handles
+    /// explicit sibling restyle hints from the stored restyle hint.
+    ///
+    /// Returns true if later siblings must be restyled.
+    pub fn compute_final_hint<E: TElement>(&mut self,
+                                           element: E,
+                                           stylist: &Stylist)
+                                           -> bool {
+        let mut hint = self.hint.0;
 
-        // Compute the hint.
-        let mut hint = stylist.compute_restyle_hint(&element,
-                                                    self.snapshot.as_ref().unwrap());
+        if let Some(snapshot) = self.snapshot.as_ref() {
+            hint |= stylist.compute_restyle_hint(&element, snapshot);
+        }
 
         // If the hint includes a directive for later siblings, strip it out and
         // notify the caller to modify the base hint for future siblings.
         let later_siblings = hint.contains(RESTYLE_LATER_SIBLINGS);
         hint.remove(RESTYLE_LATER_SIBLINGS);
 
-        // Insert the hint.
-        self.hint.insert(&hint.into());
+        // Insert the hint, overriding the previous hint. This effectively takes
+        // care of removing the later siblings restyle hint.
+        self.hint = hint.into();
 
         // Destroy the snapshot.
         self.snapshot.destroy();
@@ -354,6 +307,33 @@ impl RestyleData {
             self.recascade ||
             self.snapshot.is_some()
     }
+
+    /// Returns true if this RestyleData might invalidate sibling styles.
+    pub fn has_sibling_invalidations(&self) -> bool {
+        self.hint.has_sibling_invalidations() || self.snapshot.is_some()
+    }
+
+    /// Returns damage handled.
+    #[cfg(feature = "gecko")]
+    pub fn damage_handled(&self) -> RestyleDamage {
+        self.damage_handled
+    }
+
+    /// Returns damage handled (always empty for servo).
+    #[cfg(feature = "servo")]
+    pub fn damage_handled(&self) -> RestyleDamage {
+        RestyleDamage::empty()
+    }
+
+    /// Sets damage handled.
+    #[cfg(feature = "gecko")]
+    pub fn set_damage_handled(&mut self, d: RestyleDamage) {
+        self.damage_handled = d;
+    }
+
+    /// Sets damage handled. No-op for Servo.
+    #[cfg(feature = "servo")]
+    pub fn set_damage_handled(&mut self, _: RestyleDamage) {}
 }
 
 /// Style system data associated with an Element.
@@ -415,7 +395,8 @@ impl ElementData {
 
         debug_assert!(self.restyle.is_some());
         let restyle_data = self.restyle.as_ref().unwrap();
-        let hint = restyle_data.hint.self_;
+
+        let hint = restyle_data.hint.0;
         if hint.contains(RESTYLE_SELF) {
             return RestyleKind::MatchAndCascade;
         }

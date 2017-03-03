@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "jsarray.h"
+#include "jsarrayinlines.h"
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/CheckedInt.h"
@@ -250,21 +250,6 @@ static inline bool
 GetElement(JSContext* cx, HandleObject obj, uint32_t index, bool* hole, MutableHandleValue vp)
 {
     return GetElement(cx, obj, obj, index, hole, vp);
-}
-
-static bool
-GetElement(JSContext* cx, HandleObject obj, uint32_t index, MutableHandleValue vp)
-{
-    if (index < GetAnyBoxedOrUnboxedInitializedLength(obj)) {
-        vp.set(GetAnyBoxedOrUnboxedDenseElement(obj, index));
-        if (!vp.isMagic(JS_ELEMENTS_HOLE))
-            return true;
-    }
-    if (obj->is<ArgumentsObject>()) {
-        if (obj->as<ArgumentsObject>().maybeGetElement(index, vp))
-            return true;
-    }
-    return GetElement(cx, obj, obj, index, vp);
 }
 
 bool
@@ -948,7 +933,9 @@ ArraySpeciesCreate(JSContext* cx, HandleObject origArray, uint32_t length, Mutab
 static bool
 array_toSource(JSContext* cx, unsigned argc, Value* vp)
 {
-    JS_CHECK_RECURSION(cx, return false);
+    if (!CheckRecursionLimit(cx))
+        return false;
+
     CallArgs args = CallArgsFromVp(argc, vp);
 
     if (!args.thisv().isObject()) {
@@ -1161,7 +1148,8 @@ ArrayJoinKernel(JSContext* cx, SeparatorOp sepOp, HandleObject obj, uint32_t len
 bool
 js::array_join(JSContext* cx, unsigned argc, Value* vp)
 {
-    JS_CHECK_RECURSION(cx, return false);
+    if (!CheckRecursionLimit(cx))
+        return false;
 
     AutoGeckoProfilerEntry pseudoFrame(cx->runtime(), "Array.prototype.join");
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -1264,7 +1252,8 @@ js::array_join(JSContext* cx, unsigned argc, Value* vp)
 static bool
 array_toLocaleString(JSContext* cx, unsigned argc, Value* vp)
 {
-    JS_CHECK_RECURSION(cx, return false);
+    if (!CheckRecursionLimit(cx))
+        return false;
 
     CallArgs args = CallArgsFromVp(argc, vp);
 

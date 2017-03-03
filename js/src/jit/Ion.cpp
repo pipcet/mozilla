@@ -1275,6 +1275,9 @@ void
 IonScript::toggleBarriers(bool enabled, ReprotectCode reprotect)
 {
     method()->togglePreBarriers(enabled, reprotect);
+
+    for (size_t i = 0; i < numICs(); i++)
+        getICFromIndex(i).togglePreBarriers(enabled, reprotect);
 }
 
 void
@@ -2356,7 +2359,9 @@ IonCompile(JSContext* cx, JSScript* script,
 static bool
 CheckFrame(JSContext* cx, BaselineFrame* frame)
 {
-    MOZ_ASSERT(!frame->script()->isGenerator());
+    MOZ_ASSERT(!frame->script()->isStarGenerator());
+    MOZ_ASSERT(!frame->script()->isLegacyGenerator());
+    MOZ_ASSERT(!frame->script()->isAsync());
     MOZ_ASSERT(!frame->isDebuggerEvalFrame());
     MOZ_ASSERT(!frame->isEvalFrame());
 
@@ -2387,8 +2392,12 @@ CheckScript(JSContext* cx, JSScript* script, bool osr)
         return false;
     }
 
-    if (script->isGenerator()) {
+    if (script->isStarGenerator() || script->isLegacyGenerator()) {
         TrackAndSpewIonAbort(cx, script, "generator script");
+        return false;
+    }
+    if (script->isAsync()) {
+        TrackAndSpewIonAbort(cx, script, "async script");
         return false;
     }
 
@@ -2859,7 +2868,9 @@ jit::CanEnterUsingFastInvoke(JSContext* cx, HandleScript script, uint32_t numAct
 static JitExecStatus
 EnterIon(JSContext* cx, EnterJitData& data)
 {
-    JS_CHECK_RECURSION(cx, return JitExec_Aborted);
+    if (!CheckRecursionLimit(cx))
+        return JitExec_Aborted;
+
     MOZ_ASSERT(jit::IsIonEnabled(cx));
     MOZ_ASSERT(!data.osrFrame);
 
@@ -2993,7 +3004,8 @@ jit::IonCannon(JSContext* cx, RunState& state)
 JitExecStatus
 jit::FastInvoke(JSContext* cx, HandleFunction fun, CallArgs& args)
 {
-    JS_CHECK_RECURSION(cx, return JitExec_Error);
+    if (!CheckRecursionLimit(cx))
+        return JitExec_Error;
 
     RootedScript script(cx, fun->nonLazyScript());
 

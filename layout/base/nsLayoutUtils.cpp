@@ -3972,21 +3972,47 @@ struct BoxToRect : public nsLayoutUtils::BoxCallback {
   }
 };
 
-struct BoxToRectAndText : public BoxToRect {
-  mozilla::dom::DOMStringList* mTextList;
+struct MOZ_RAII BoxToRectAndText : public BoxToRect {
+  Sequence<nsString>* mTextList;
 
   BoxToRectAndText(nsIFrame* aRelativeTo, nsLayoutUtils::RectCallback* aCallback,
-                   mozilla::dom::DOMStringList* aTextList, uint32_t aFlags)
+                   Sequence<nsString>* aTextList, uint32_t aFlags)
     : BoxToRect(aRelativeTo, aCallback, aFlags), mTextList(aTextList) {}
+
+  static void AccumulateText(nsIFrame* aFrame, nsAString& aResult) {
+    MOZ_ASSERT(aFrame);
+
+    // Get all the text in aFrame and child frames, while respecting
+    // the content offsets in each of the nsTextFrames.
+    if (aFrame->GetType() == nsGkAtoms::textFrame) {
+      nsTextFrame* textFrame = static_cast<nsTextFrame*>(aFrame);
+
+      nsIContent* content = textFrame->GetContent();
+      nsAutoString textContent;
+      mozilla::ErrorResult err; // ignored
+      content->GetTextContent(textContent, err);
+
+      const nsAString& textSubstring =
+        Substring(textContent,
+                  textFrame->GetContentOffset(),
+                  textFrame->GetContentLength());
+      aResult.Append(textSubstring);
+    }
+
+    for (nsIFrame* child = aFrame->PrincipalChildList().FirstChild();
+         child;
+         child = child->GetNextSibling()) {
+      AccumulateText(child, aResult);
+    }
+  }
 
   virtual void AddBox(nsIFrame* aFrame) override {
     BoxToRect::AddBox(aFrame);
     if (mTextList) {
-      nsIContent* content = aFrame->GetContent();
-      nsAutoString textContent;
-      mozilla::ErrorResult err; // ignored
-      content->GetTextContent(textContent, err);
-      mTextList->Add(textContent);
+      nsString* textForFrame = mTextList->AppendElement(fallible);
+      if (textForFrame) {
+        AccumulateText(aFrame, *textForFrame);
+      }
     }
   }
 };
@@ -4002,7 +4028,7 @@ nsLayoutUtils::GetAllInFlowRects(nsIFrame* aFrame, nsIFrame* aRelativeTo,
 void
 nsLayoutUtils::GetAllInFlowRectsAndTexts(nsIFrame* aFrame, nsIFrame* aRelativeTo,
                                          RectCallback* aCallback,
-                                         mozilla::dom::DOMStringList* aTextList,
+                                         Sequence<nsString>* aTextList,
                                          uint32_t aFlags)
 {
   BoxToRectAndText converter(aRelativeTo, aCallback, aTextList, aFlags);
@@ -6949,7 +6975,8 @@ nsLayoutUtils::GetTextRunFlagsForStyle(nsStyleContext* aStyleContext,
                                        nscoord aLetterSpacing)
 {
   uint32_t result = 0;
-  if (aLetterSpacing != 0) {
+  if (aLetterSpacing != 0 ||
+      aStyleText->mTextJustify == StyleTextJustify::InterCharacter) {
     result |= gfxTextRunFactory::TEXT_DISABLE_OPTIONAL_LIGATURES;
   }
   if (aStyleText->mControlCharacterVisibility == NS_STYLE_CONTROL_CHARACTER_VISIBILITY_HIDDEN) {

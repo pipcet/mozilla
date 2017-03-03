@@ -232,6 +232,24 @@ mod bindings {
         File::create(&out_file).unwrap().write_all(&result.into_bytes()).expect("Unable to write output");
     }
 
+    fn get_arc_types() -> Vec<String> {
+        // Read the file
+        let mut list_file = File::open(DISTDIR_PATH.join("include/mozilla/ServoArcTypeList.h"))
+            .expect("Unable to open ServoArcTypeList.h");
+        let mut content = String::new();
+        list_file.read_to_string(&mut content).expect("Fail to read ServoArcTypeList.h");
+        // Remove comments
+        let block_comment_re = Regex::new(r#"(?s)/\*.*?\*/"#).unwrap();
+        let content = block_comment_re.replace_all(&content, "");
+        // Extract the list
+        let re = Regex::new(r#"^SERVO_ARC_TYPE\(\w+,\s*(\w+)\)$"#).unwrap();
+        content.lines().map(|line| line.trim()).filter(|line| !line.is_empty())
+            .map(|line| re.captures(&line)
+                 .expect(&format!("Unrecognized line in ServoArcTypeList.h: '{}'", line))
+                 .get(1).unwrap().as_str().to_string())
+            .collect()
+    }
+
     pub fn generate_structs(build_type: BuildType) {
         let mut builder = Builder::get_initial_builder(build_type)
             .enable_cxx_namespaces()
@@ -285,6 +303,7 @@ mod bindings {
             "mozilla::PropertyStyleAnimationValuePair",
             "mozilla::TraversalRootBehavior",
             "mozilla::StyleShapeRadius",
+            "mozilla::StyleGrid.*",
             ".*ThreadSafe.*Holder",
             "AnonymousContent",
             "AudioContext",
@@ -365,6 +384,7 @@ mod bindings {
             "nsStylePadding",
             "nsStylePosition",
             "nsStyleSVG",
+            "nsStyleSVGPaint",
             "nsStyleSVGReset",
             "nsStyleTable",
             "nsStyleTableBorder",
@@ -383,14 +403,15 @@ mod bindings {
             "PropertyValuePair",
             "Runnable",
             "ServoAttrSnapshot",
+            "ServoBundledURI",
             "ServoElementSnapshot",
             "SheetParsingMode",
             "StaticRefPtr",
             "StyleAnimation",
             "StyleBasicShape",
             "StyleBasicShapeType",
-            "StyleClipPath",
             "StyleGeometryBox",
+            "StyleShapeSource",
             "StyleTransition",
             "mozilla::UniquePtr",
             "mozilla::DefaultDelete",
@@ -500,15 +521,17 @@ mod bindings {
             .header(add_include("mozilla/ServoBindings.h"))
             .hide_type("nsACString_internal")
             .hide_type("nsAString_internal")
-            .raw_line("pub use nsstring::{nsACString, nsAString};")
+            .raw_line("pub use nsstring::{nsACString, nsAString, nsString};")
             .raw_line("type nsACString_internal = nsACString;")
             .raw_line("type nsAString_internal = nsAString;")
             .whitelisted_function("Servo_.*")
             .whitelisted_function("Gecko_.*");
         let structs_types = [
+            "mozilla::css::URLValue",
             "RawGeckoDocument",
             "RawGeckoElement",
             "RawGeckoKeyframeList",
+            "RawGeckoComputedKeyframeValuesList",
             "RawGeckoNode",
             "RawGeckoAnimationValueList",
             "RawServoAnimationValue",
@@ -523,11 +546,12 @@ mod bindings {
             "FontFamilyList",
             "FontFamilyType",
             "Keyframe",
+            "ServoBundledURI",
             "ServoElementSnapshot",
             "SheetParsingMode",
             "StyleBasicShape",
             "StyleBasicShapeType",
-            "StyleClipPath",
+            "StyleShapeSource",
             "nsCSSKeyword",
             "nsCSSPropertyID",
             "nsCSSShadowArray",
@@ -550,6 +574,7 @@ mod bindings {
             "nsStyleCoord_CalcValue",
             "nsStyleDisplay",
             "nsStyleEffects",
+            "nsStyleFilter",
             "nsStyleFont",
             "nsStyleGradient",
             "nsStyleGradientStop",
@@ -565,6 +590,7 @@ mod bindings {
             "nsStylePosition",
             "nsStyleQuoteValues",
             "nsStyleSVG",
+            "nsStyleSVGPaint",
             "nsStyleSVGReset",
             "nsStyleTable",
             "nsStyleTableBorder",
@@ -578,6 +604,7 @@ mod bindings {
             "nsStyleVisibility",
             "nsStyleXUL",
             "nsTimingFunction",
+            "nscolor",
             "nscoord",
             "nsresult",
             "Loader",
@@ -591,15 +618,6 @@ mod bindings {
         }
         let array_types = [
             ArrayType { cpp_type: "uintptr_t", rust_type: "usize" },
-        ];
-        let servo_nullable_arc_types = [
-            "ServoComputedValues",
-            "ServoCssRules",
-            "RawServoStyleSheet",
-            "RawServoDeclarationBlock",
-            "RawServoStyleRule",
-            "RawServoImportRule",
-            "RawServoAnimationValue",
         ];
         struct ServoOwnedType {
             name: &'static str,
@@ -621,6 +639,7 @@ mod bindings {
             "nsCSSValue",
             "RawGeckoAnimationValueList",
             "RawGeckoKeyframeList",
+            "RawGeckoComputedKeyframeValuesList",
         ];
         for &ty in structs_types.iter() {
             builder = builder.hide_type(ty)
@@ -638,7 +657,7 @@ mod bindings {
                 .raw_line(format!("pub type nsTArrayBorrowed_{}<'a> = &'a mut ::gecko_bindings::structs::nsTArray<{}>;",
                                   cpp_type, rust_type))
         }
-        for &ty in servo_nullable_arc_types.iter() {
+        for ty in get_arc_types().iter() {
             builder = builder
                 .hide_type(format!("{}Strong", ty))
                 .raw_line(format!("pub type {0}Strong = ::gecko_bindings::sugar::ownership::Strong<{0}>;", ty))

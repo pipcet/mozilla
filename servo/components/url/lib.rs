@@ -7,23 +7,29 @@
 #![crate_name = "servo_url"]
 #![crate_type = "rlib"]
 
-#![cfg_attr(feature = "servo", feature(plugin))]
-
-#[cfg(feature = "servo")] #[macro_use] extern crate serde_derive;
-#[cfg(feature = "servo")] extern crate heapsize;
+#[cfg(feature = "servo")] #[macro_use] extern crate heapsize;
 #[cfg(feature = "servo")] #[macro_use] extern crate heapsize_derive;
+#[cfg(feature = "servo")] extern crate serde;
+#[cfg(feature = "servo")] #[macro_use] extern crate serde_derive;
+#[cfg(feature = "servo")] extern crate url_serde;
 
+extern crate servo_rand;
 extern crate url;
+extern crate uuid;
+
+pub mod origin;
+
+pub use origin::{OpaqueOrigin, ImmutableOrigin, MutableOrigin};
 
 use std::fmt;
 use std::net::IpAddr;
 use std::ops::{Range, RangeFrom, RangeTo, RangeFull, Index};
 use std::path::Path;
 use std::sync::Arc;
-use url::{Url, Origin, Position};
+use url::{Url, Position};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf, Serialize, Deserialize))]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 pub struct ServoUrl(Arc<Url>);
 
 impl ServoUrl {
@@ -69,8 +75,8 @@ impl ServoUrl {
         self.0.path()
     }
 
-    pub fn origin(&self) -> Origin {
-        self.0.origin()
+    pub fn origin(&self) -> ImmutableOrigin {
+        ImmutableOrigin::new(self.0.origin())
     }
 
     pub fn scheme(&self) -> &str {
@@ -194,5 +200,23 @@ impl Index<Range<Position>> for ServoUrl {
 impl From<Url> for ServoUrl {
     fn from(url: Url) -> Self {
         ServoUrl::from_url(url)
+    }
+}
+
+#[cfg(feature = "servo")]
+impl serde::Serialize for ServoUrl {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where S: serde::Serializer,
+    {
+        url_serde::serialize(&*self.0, serializer)
+    }
+}
+
+#[cfg(feature = "servo")]
+impl serde::Deserialize for ServoUrl {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where D: serde::Deserializer,
+    {
+        url_serde::deserialize(deserializer).map(Self::from_url)
     }
 }

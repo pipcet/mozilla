@@ -241,6 +241,10 @@ class SyntaxParseHandler
         return NodeUnparenthesizedUnary;
     }
 
+    Node newNullary(ParseNodeKind kind, JSOp op, const TokenPos& pos) {
+        return NodeGeneric;
+    }
+
     Node newUnary(ParseNodeKind kind, JSOp op, uint32_t begin, Node kid) {
         return NodeUnparenthesizedUnary;
     }
@@ -296,9 +300,9 @@ class SyntaxParseHandler
     MOZ_MUST_USE bool addShorthand(Node literal, Node name, Node expr) { return true; }
     MOZ_MUST_USE bool addObjectMethodDefinition(Node literal, Node name, Node fn, JSOp op) { return true; }
     MOZ_MUST_USE bool addClassMethodDefinition(Node literal, Node name, Node fn, JSOp op, bool isStatic) { return true; }
-    Node newYieldExpression(uint32_t begin, Node value, Node gen) { return NodeGeneric; }
-    Node newYieldStarExpression(uint32_t begin, Node value, Node gen) { return NodeGeneric; }
-    Node newAwaitExpression(uint32_t begin, Node value, Node gen) { return NodeGeneric; }
+    Node newYieldExpression(uint32_t begin, Node value) { return NodeGeneric; }
+    Node newYieldStarExpression(uint32_t begin, Node value) { return NodeGeneric; }
+    Node newAwaitExpression(uint32_t begin, Node value) { return NodeGeneric; }
 
     // Statements
 
@@ -307,6 +311,16 @@ class SyntaxParseHandler
     void addCaseStatementToList(Node list, Node stmt) {}
     MOZ_MUST_USE bool prependInitialYield(Node stmtList, Node gen) { return true; }
     Node newEmptyStatement(const TokenPos& pos) { return NodeEmptyStatement; }
+
+    Node newExportDeclaration(Node kid, const TokenPos& pos) {
+        return NodeGeneric;
+    }
+    Node newExportFromDeclaration(uint32_t begin, Node exportSpecSet, Node moduleSpec) {
+        return NodeGeneric;
+    }
+    Node newExportDefaultDeclaration(Node kid, Node maybeBinding, const TokenPos& pos) {
+        return NodeGeneric;
+    }
 
     Node newSetThis(Node thisName, Node value) { return value; }
 

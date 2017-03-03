@@ -4,6 +4,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+with Files("**"):
+    BUG_COMPONENT = ("Core", "DOM: Content Processes")
+
 XPIDL_SOURCES += [
     'nsIHangReport.idl',
 ]
@@ -24,8 +27,6 @@ EXPORTS.mozilla.dom += [
     'ContentProcess.h',
     'ContentProcessManager.h',
     'CPOWManagerGetter.h',
-    'CrashReporterChild.h',
-    'CrashReporterParent.h',
     'FilePickerParent.h',
     'MemoryReportRequest.h',
     'nsIContentChild.h',
@@ -54,7 +55,6 @@ UNIFIED_SOURCES += [
     'ContentPrefs.cpp',
     'ContentProcess.cpp',
     'ContentProcessManager.cpp',
-    'CrashReporterParent.cpp',
     'DatePickerParent.cpp',
     'FilePickerParent.cpp',
     'MemoryReportRequest.cpp',
@@ -73,12 +73,9 @@ UNIFIED_SOURCES += [
     'URLClassifierParent.cpp',
 ]
 
-# CrashReporterChild.cpp cannot be compiled in unified mode because of name clashes
-# in OS X headers.
 # ContentChild.cpp cannot be compiled in unified mode on  linux due to Time conflict
 SOURCES += [
     'ContentChild.cpp',
-    'CrashReporterChild.cpp',
     'ProcessHangMonitor.cpp',
 ]
 
@@ -92,7 +89,6 @@ IPDL_SOURCES += [
     'PContentBridge.ipdl',
     'PContentPermission.ipdlh',
     'PContentPermissionRequest.ipdl',
-    'PCrashReporter.ipdl',
     'PCycleCollectWithLogs.ipdl',
     'PDatePicker.ipdl',
     'PDocumentRenderer.ipdl',
@@ -102,6 +98,7 @@ IPDL_SOURCES += [
     'PScreenManager.ipdl',
     'PTabContext.ipdlh',
     'PURLClassifier.ipdl',
+    'PURLClassifierInfo.ipdlh',
     'ServiceWorkerConfiguration.ipdlh',
 ]
 

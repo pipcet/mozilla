@@ -795,6 +795,7 @@ nsDocShell::nsDocShell()
   , mIsAppTab(false)
   , mUseGlobalHistory(false)
   , mUseRemoteTabs(false)
+  , mUseTrackingProtection(false)
   , mDeviceSizeIsPageSize(false)
   , mWindowDraggingAllowed(false)
   , mInFrameSwap(false)
@@ -4994,6 +4995,8 @@ nsDocShell::DisplayLoadError(nsresult aError, nsIURI* aURI,
         // 12.1, HPKP draft spec section 2.6).
         uint32_t flags =
           UsePrivateBrowsing() ? nsISocketProvider::NO_PERMANENT_STORAGE : 0;
+        OriginAttributes originAttributes;
+        originAttributes.Inherit(mOriginAttributes);
         bool isStsHost = false;
         bool isPinnedHost = false;
         if (XRE_IsParentProcess()) {
@@ -5001,10 +5004,11 @@ nsDocShell::DisplayLoadError(nsresult aError, nsIURI* aURI,
             do_GetService(NS_SSSERVICE_CONTRACTID, &rv);
           NS_ENSURE_SUCCESS(rv, rv);
           rv = sss->IsSecureURI(nsISiteSecurityService::HEADER_HSTS, aURI,
-                                flags, nullptr, &isStsHost);
+                                flags, originAttributes, nullptr, &isStsHost);
           NS_ENSURE_SUCCESS(rv, rv);
           rv = sss->IsSecureURI(nsISiteSecurityService::HEADER_HPKP, aURI,
-                                flags, nullptr, &isPinnedHost);
+                                flags, originAttributes, nullptr,
+                                &isPinnedHost);
           NS_ENSURE_SUCCESS(rv, rv);
         } else {
           mozilla::dom::ContentChild* cc =
@@ -5012,9 +5016,9 @@ nsDocShell::DisplayLoadError(nsresult aError, nsIURI* aURI,
           mozilla::ipc::URIParams uri;
           SerializeURI(aURI, uri);
           cc->SendIsSecureURI(nsISiteSecurityService::HEADER_HSTS, uri, flags,
-                              &isStsHost);
+                              originAttributes, &isStsHost);
           cc->SendIsSecureURI(nsISiteSecurityService::HEADER_HPKP, uri, flags,
-                              &isPinnedHost);
+                              originAttributes, &isPinnedHost);
         }
 
         if (Preferences::GetBool(
@@ -8849,14 +8853,7 @@ nsDocShell::RestoreFromHistory()
       nsCOMPtr<nsIDocument> d = parent->GetDocument();
       if (d) {
         if (d->EventHandlingSuppressed()) {
-          document->SuppressEventHandling(nsIDocument::eEvents,
-                                          d->EventHandlingSuppressed());
-        }
-
-        // Ick, it'd be nicer to not rewalk all of the subdocs here.
-        if (d->AnimationsPaused()) {
-          document->SuppressEventHandling(nsIDocument::eAnimationsOnly,
-                                          d->AnimationsPaused());
+          document->SuppressEventHandling(d->EventHandlingSuppressed());
         }
       }
     }
@@ -9895,9 +9892,14 @@ nsDocShell::InternalLoad(nsIURI* aURI,
   if (IsFrame() && !isTargetTopLevelDocShell) {
     nsCOMPtr<Element> requestingElement =
       mScriptGlobal->AsOuter()->GetFrameElementInternal();
-    NS_ASSERTION(requestingElement, "A frame but no DOM element!?");
-    contentType = requestingElement->IsHTMLElement(nsGkAtoms::iframe) ?
-      nsIContentPolicy::TYPE_INTERNAL_IFRAME : nsIContentPolicy::TYPE_INTERNAL_FRAME;
+    if (requestingElement) {
+      contentType = requestingElement->IsHTMLElement(nsGkAtoms::iframe) ?
+        nsIContentPolicy::TYPE_INTERNAL_IFRAME : nsIContentPolicy::TYPE_INTERNAL_FRAME;
+    } else {
+      // If we have lost our frame element by now, just assume we're
+      // an iframe since that's more common.
+      contentType = nsIContentPolicy::TYPE_INTERNAL_IFRAME;
+    }
   } else {
     contentType = nsIContentPolicy::TYPE_DOCUMENT;
     isTargetTopLevelDocShell = true;
@@ -9927,13 +9929,15 @@ nsDocShell::InternalLoad(nsIURI* aURI,
       requestingContext = requestingElement;
 
 #ifdef DEBUG
-      // Get the docshell type for requestingElement.
-      nsCOMPtr<nsIDocument> requestingDoc = requestingElement->OwnerDoc();
-      nsCOMPtr<nsIDocShell> elementDocShell = requestingDoc->GetDocShell();
+      if (requestingElement) {
+        // Get the docshell type for requestingElement.
+        nsCOMPtr<nsIDocument> requestingDoc = requestingElement->OwnerDoc();
+        nsCOMPtr<nsIDocShell> elementDocShell = requestingDoc->GetDocShell();
 
-      // requestingElement docshell type = current docshell type.
-      MOZ_ASSERT(mItemType == elementDocShell->ItemType(),
-                "subframes should have the same docshell type as their parent");
+        // requestingElement docshell type = current docshell type.
+        MOZ_ASSERT(mItemType == elementDocShell->ItemType(),
+                  "subframes should have the same docshell type as their parent");
+      }
 #endif
     }
 
@@ -13683,17 +13687,40 @@ nsDocShell::GetNestedFrameId(uint64_t* aId)
 }
 
 NS_IMETHODIMP
-nsDocShell::IsTrackingProtectionOn(bool* aIsTrackingProtectionOn)
+nsDocShell::GetUseTrackingProtection(bool* aUseTrackingProtection)
 {
-  if (Preferences::GetBool("privacy.trackingprotection.enabled", false)) {
-    *aIsTrackingProtectionOn = true;
-  } else if (UsePrivateBrowsing() &&
-             Preferences::GetBool("privacy.trackingprotection.pbmode.enabled", false)) {
-    *aIsTrackingProtectionOn = true;
-  } else {
-    *aIsTrackingProtectionOn = false;
+  *aUseTrackingProtection  = false;
+
+  static bool sTPEnabled = false;
+  static bool sTPInPBEnabled = false;
+  static bool sPrefsInit = false;
+
+  if (!sPrefsInit) {
+    sPrefsInit = true;
+    Preferences::AddBoolVarCache(&sTPEnabled,
+      "privacy.trackingprotection.enabled", false);
+    Preferences::AddBoolVarCache(&sTPInPBEnabled,
+      "privacy.trackingprotection.pbmode.enabled", false);
   }
 
+  if (mUseTrackingProtection || sTPEnabled ||
+      (UsePrivateBrowsing() && sTPInPBEnabled)) {
+    *aUseTrackingProtection = true;
+    return NS_OK;
+  }
+
+  RefPtr<nsDocShell> parent = GetParentDocshell();
+  if (parent) {
+    return parent->GetUseTrackingProtection(aUseTrackingProtection);
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDocShell::SetUseTrackingProtection(bool aUseTrackingProtection)
+{
+  mUseTrackingProtection = aUseTrackingProtection;
   return NS_OK;
 }
 
@@ -14344,10 +14371,19 @@ nsDocShell::GetPrintPreview(nsIWebBrowserPrint** aPrintPreview)
 #if NS_PRINT_PREVIEW
   nsCOMPtr<nsIDocumentViewerPrint> print = do_QueryInterface(mContentViewer);
   if (!print || !print->IsInitializedForPrintPreview()) {
+    // XXX: Creating a brand new content viewer to host preview every
+    // time we enter here seems overwork. We could skip ahead to where
+    // we QI the mContentViewer if the current URI is either about:blank
+    // or about:printpreview.
     Stop(nsIWebNavigation::STOP_ALL);
     nsCOMPtr<nsIPrincipal> principal = nsNullPrincipal::CreateWithInheritedAttributes(this);
-    nsresult rv = CreateAboutBlankContentViewer(principal, nullptr);
+    nsCOMPtr<nsIURI> uri;
+    NS_NewURI(getter_AddRefs(uri), NS_LITERAL_CSTRING("about:printpreview"));
+    nsresult rv = CreateAboutBlankContentViewer(principal, uri);
     NS_ENSURE_SUCCESS(rv, rv);
+    // Here we manually set current URI since we have just created a
+    // brand new content viewer (about:blank) to host preview.
+    SetCurrentURI(uri, nullptr, true, 0);
     print = do_QueryInterface(mContentViewer);
     NS_ENSURE_STATE(print);
     print->InitializeForPrintPreview();
@@ -14909,13 +14945,5 @@ nsDocShell::GetAwaitingLargeAlloc(bool* aResult)
     return NS_OK;
   }
   *aResult = static_cast<TabChild*>(tabChild.get())->IsAwaitingLargeAlloc();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDocShell::GetInLargeAllocProcess(bool* aResult)
-{
-  MOZ_ASSERT(aResult);
-  *aResult = TabChild::InLargeAllocProcess();
   return NS_OK;
 }

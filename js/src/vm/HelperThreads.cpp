@@ -10,7 +10,6 @@
 #include "mozilla/Unused.h"
 
 #include "jsnativestack.h"
-#include "jsnum.h" // For FIX_FPU()
 
 #include "builtin/Promise.h"
 #include "frontend/BytecodeCompiler.h"
@@ -27,6 +26,8 @@
 #include "jscompartmentinlines.h"
 #include "jsobjinlines.h"
 #include "jsscriptinlines.h"
+
+#include "vm/NativeObject-inl.h"
 
 using namespace js;
 
@@ -352,6 +353,11 @@ ParseTask::trace(JSTracer* trc)
 {
     if (parseGlobal->runtimeFromAnyThread() != trc->runtime())
         return;
+    Zone* zone = MaybeForwarded(parseGlobal)->zoneFromAnyThread();
+    if (zone->usedByHelperThread()) {
+        MOZ_ASSERT(!zone->isCollecting());
+        return;
+    }
 
     TraceManuallyBarrieredEdge(trc, &parseGlobal, "ParseTask::parseGlobal");
     if (script)
@@ -537,8 +543,7 @@ CreateGlobalForOffThreadParse(JSContext* cx, ParseTaskKind kind, const gc::AutoS
 
     creationOptions.setInvisibleToDebugger(true)
                    .setMergeable(true)
-                   .setNewZoneInNewZoneGroup()
-                   .setDisableNursery(true);
+                   .setNewZoneInNewZoneGroup();
 
     // Don't falsely inherit the host's global trace hook.
     creationOptions.setTrace(nullptr);
@@ -1229,7 +1234,7 @@ HelperThread::handleGCParallelWorkload(AutoLockHelperThreadState& locked)
 static void
 LeaveParseTaskZone(JSRuntime* rt, ParseTask* task)
 {
-    // Mark the zone as no longer in use by an JSContext, and available
+    // Mark the zone as no longer in use by a helper thread, and available
     // to be collected by the GC.
     rt->clearUsedByHelperThread(task->parseGlobal->zone());
 }
@@ -1443,12 +1448,6 @@ HelperThread::ThreadMain(void* arg)
 {
     ThisThread::SetName("JS Helper");
 
-    //See bug 1104658.
-    //Set the FPU control word to be the same as the active thread's, or math
-    //computations on this thread may use incorrect precision rules during
-    //Ion compilation.
-    FIX_FPU();
-
     static_cast<HelperThread*>(arg)->threadLoop();
     Mutex::ShutDown();
 }
@@ -1657,7 +1656,7 @@ JSContext::addPendingOutOfMemory()
 }
 
 void
-HelperThread::handleParseWorkload(AutoLockHelperThreadState& locked, uintptr_t stackLimit)
+HelperThread::handleParseWorkload(AutoLockHelperThreadState& locked)
 {
     MOZ_ASSERT(HelperThreadState().canStartParseTask(locked));
     MOZ_ASSERT(idle());
@@ -1891,15 +1890,13 @@ HelperThread::threadLoop()
     AutoLockHelperThreadState lock;
 
     JSContext cx(nullptr, JS::ContextOptions());
+    {
+        AutoEnterOOMUnsafeRegion oomUnsafe;
+        if (!cx.init(ContextKind::Background))
+            oomUnsafe.crash("HelperThread cx.init()");
+    }
     cx.setHelperThread(this);
-
-    // Compute the thread's stack limit, for over-recursed checks.
-    uintptr_t stackLimit = GetNativeStackBase();
-#if JS_STACK_GROWTH_DIRECTION > 0
-    stackLimit += HELPER_STACK_QUOTA;
-#else
-    stackLimit -= HELPER_STACK_QUOTA;
-#endif
+    JS_SetNativeStackQuota(&cx, HELPER_STACK_QUOTA);
 
     while (true) {
         MOZ_ASSERT(idle());
@@ -1935,7 +1932,7 @@ HelperThread::threadLoop()
             handlePromiseTaskWorkload(lock);
         } else if (HelperThreadState().canStartParseTask(lock)) {
             js::oom::SetThreadType(js::oom::THREAD_TYPE_PARSE);
-            handleParseWorkload(lock, stackLimit);
+            handleParseWorkload(lock);
         } else if (HelperThreadState().canStartCompressionTask(lock)) {
             js::oom::SetThreadType(js::oom::THREAD_TYPE_COMPRESS);
             handleCompressionWorkload(lock);

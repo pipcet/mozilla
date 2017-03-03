@@ -874,15 +874,8 @@ nsXPConnect::CreateSandbox(JSContext* cx, nsIPrincipal* principal,
 NS_IMETHODIMP
 nsXPConnect::EvalInSandboxObject(const nsAString& source, const char* filename,
                                  JSContext* cx, JSObject* sandboxArg,
-                                 int32_t jsVersion,
                                  MutableHandleValue rval)
 {
-#ifdef DEBUG
-    {
-        const char *version = JS_VersionToString(JSVersion(jsVersion));
-        MOZ_ASSERT(version && strcmp(version, "unknown") != 0, "Illegal JS version passed");
-    }
-#endif
     if (!sandboxArg)
         return NS_ERROR_INVALID_ARG;
 
@@ -894,7 +887,7 @@ nsXPConnect::EvalInSandboxObject(const nsAString& source, const char* filename,
         filenameStr = NS_LITERAL_CSTRING("x-bogus://XPConnect/Sandbox");
     }
     return EvalInSandbox(cx, sandbox, source, filenameStr, 1,
-                         JSVersion(jsVersion), rval);
+                         JSVERSION_DEFAULT, rval);
 }
 
 NS_IMETHODIMP
@@ -932,15 +925,15 @@ nsXPConnect::DebugDump(int16_t depth)
 {
 #ifdef DEBUG
     depth-- ;
-    XPC_LOG_ALWAYS(("nsXPConnect @ %x with mRefCnt = %d", this, mRefCnt.get()));
+    XPC_LOG_ALWAYS(("nsXPConnect @ %p with mRefCnt = %" PRIuPTR, this, mRefCnt.get()));
     XPC_LOG_INDENT();
-        XPC_LOG_ALWAYS(("gSelf @ %x", gSelf));
+        XPC_LOG_ALWAYS(("gSelf @ %p", gSelf));
         XPC_LOG_ALWAYS(("gOnceAliveNowDead is %d", (int)gOnceAliveNowDead));
         if (mContext) {
             if (depth)
                 mContext->DebugDump(depth);
             else
-                XPC_LOG_ALWAYS(("XPCJSContext @ %x", mContext));
+                XPC_LOG_ALWAYS(("XPCJSContext @ %p", mContext));
         } else
             XPC_LOG_ALWAYS(("mContext is null"));
         XPCWrappedNativeScope::DebugDumpAllScopes(depth);
@@ -982,7 +975,7 @@ nsXPConnect::DebugDumpObject(nsISupports* p, int16_t depth)
         XPC_LOG_ALWAYS(("Dumping a nsIXPConnectWrappedJS..."));
         wjs->DebugDump(depth);
     } else {
-        XPC_LOG_ALWAYS(("*** Could not dump the nsISupports @ %x", p));
+        XPC_LOG_ALWAYS(("*** Could not dump the nsISupports @ %p", p));
     }
 #endif
     return NS_OK;

@@ -57,7 +57,6 @@
 #include "gfxUtils.h"
 
 #include "nsFrameLoader.h"
-#include "nsBidi.h"
 #include "nsBidiPresUtils.h"
 #include "Layers.h"
 #include "LayerUserData.h"
@@ -1059,6 +1058,8 @@ NS_INTERFACE_MAP_END
 // Initialize our static variables.
 uint32_t CanvasRenderingContext2D::sNumLivingContexts = 0;
 DrawTarget* CanvasRenderingContext2D::sErrorTarget = nullptr;
+static bool sMaxContextsInitialized = false;
+static int32_t sMaxContexts = 0;
 
 
 
@@ -1079,6 +1080,11 @@ CanvasRenderingContext2D::CanvasRenderingContext2D(layers::LayersBackend aCompos
   , mPathTransformWillUpdate(false)
   , mInvalidateCount(0)
 {
+  if (!sMaxContextsInitialized) {
+    sMaxContexts = gfxPrefs::CanvasAzureAcceleratedLimit();
+    sMaxContextsInitialized = true;
+  }
+
   sNumLivingContexts++;
 
   mShutdownObserver = new CanvasShutdownObserver(this);
@@ -1431,10 +1437,13 @@ CanvasRenderingContext2D::DemotableContexts()
 void
 CanvasRenderingContext2D::DemoteOldestContextIfNecessary()
 {
-  const size_t kMaxContexts = 64;
+  MOZ_ASSERT(sMaxContextsInitialized);
+  if (sMaxContexts <= 0) {
+    return;
+  }
 
   std::vector<CanvasRenderingContext2D*>& contexts = DemotableContexts();
-  if (contexts.size() < kMaxContexts)
+  if (contexts.size() < (size_t)sMaxContexts)
     return;
 
   CanvasRenderingContext2D* oldest = contexts.front();
@@ -1446,6 +1455,10 @@ CanvasRenderingContext2D::DemoteOldestContextIfNecessary()
 void
 CanvasRenderingContext2D::AddDemotableContext(CanvasRenderingContext2D* aContext)
 {
+  MOZ_ASSERT(sMaxContextsInitialized);
+  if (sMaxContexts <= 0)
+    return;
+
   std::vector<CanvasRenderingContext2D*>::iterator iter = std::find(DemotableContexts().begin(), DemotableContexts().end(), aContext);
   if (iter != DemotableContexts().end())
     return;
@@ -1456,6 +1469,10 @@ CanvasRenderingContext2D::AddDemotableContext(CanvasRenderingContext2D* aContext
 void
 CanvasRenderingContext2D::RemoveDemotableContext(CanvasRenderingContext2D* aContext)
 {
+  MOZ_ASSERT(sMaxContextsInitialized);
+  if (sMaxContexts <= 0)
+    return;
+
   std::vector<CanvasRenderingContext2D*>::iterator iter = std::find(DemotableContexts().begin(), DemotableContexts().end(), aContext);
   if (iter != DemotableContexts().end())
     DemotableContexts().erase(iter);
@@ -1888,11 +1905,7 @@ CanvasRenderingContext2D::GetHeight() const
 NS_IMETHODIMP
 CanvasRenderingContext2D::SetDimensions(int32_t aWidth, int32_t aHeight)
 {
-  bool retainBuffer = false;
-  if (aWidth == mWidth && aHeight == mHeight) {
-    retainBuffer = true;
-  }
-  ClearTarget(retainBuffer);
+  ClearTarget();
 
   // Zero sized surfaces can cause problems.
   mZero = false;
@@ -1911,22 +1924,9 @@ CanvasRenderingContext2D::SetDimensions(int32_t aWidth, int32_t aHeight)
 }
 
 void
-CanvasRenderingContext2D::ClearTarget(bool aRetainBuffer)
+CanvasRenderingContext2D::ClearTarget()
 {
-  RefPtr<PersistentBufferProvider> provider = mBufferProvider;
-  if (aRetainBuffer && provider) {
-    // We should reset the buffer data before reusing the buffer.
-    if (mTarget) {
-      mTarget->SetTransform(Matrix());
-    }
-    ClearRect(0, 0, mWidth, mHeight);
-  }
-
   Reset();
-
-  if (aRetainBuffer) {
-    mBufferProvider = provider;
-  }
 
   mResetLayer = true;
 
@@ -4275,7 +4275,6 @@ CanvasRenderingContext2D::DrawOrMeasureText(const nsAString& aRawText,
 
   // calls bidi algo twice since it needs the full text width and the
   // bounding boxes before rendering anything
-  nsBidi bidiEngine;
   rv = nsBidiPresUtils::ProcessText(textToDraw.get(),
                                     textToDraw.Length(),
                                     isRTL ? NSBIDI_RTL : NSBIDI_LTR,
@@ -4285,7 +4284,7 @@ CanvasRenderingContext2D::DrawOrMeasureText(const nsAString& aRawText,
                                     nullptr,
                                     0,
                                     &totalWidthCoord,
-                                    &bidiEngine);
+                                    &mBidiEngine);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -4400,7 +4399,7 @@ CanvasRenderingContext2D::DrawOrMeasureText(const nsAString& aRawText,
                                     nullptr,
                                     0,
                                     nullptr,
-                                    &bidiEngine);
+                                    &mBidiEngine);
 
 
   mTarget->SetTransform(oldTransform);

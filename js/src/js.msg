@@ -61,6 +61,7 @@ MSG_DEF(JSMSG_SPREAD_TOO_LARGE,        0, JSEXN_RANGEERR, "array too large due t
 MSG_DEF(JSMSG_BAD_WEAKMAP_KEY,         0, JSEXN_TYPEERR, "cannot use the given object as a weak map key")
 MSG_DEF(JSMSG_BAD_GETTER_OR_SETTER,    1, JSEXN_TYPEERR, "invalid {0} usage")
 MSG_DEF(JSMSG_BAD_ARRAY_LENGTH,        0, JSEXN_RANGEERR, "invalid array length")
+MSG_DEF(JSMSG_REDECLARED_PREV,         2, JSEXN_NOTE, "Previously declared at line {0}, column {1}")
 MSG_DEF(JSMSG_REDECLARED_VAR,          2, JSEXN_SYNTAXERR, "redeclaration of {0} {1}")
 MSG_DEF(JSMSG_UNDECLARED_VAR,          1, JSEXN_REFERENCEERR, "assignment to undeclared variable {0}")
 MSG_DEF(JSMSG_GETTER_ONLY,             0, JSEXN_TYPEERR, "setting a property that has only a getter")
@@ -431,7 +432,6 @@ MSG_DEF(JSMSG_SC_SAB_DISABLED,         0, JSEXN_TYPEERR, "SharedArrayBuffer not 
 
 // Debugger
 MSG_DEF(JSMSG_ASSIGN_FUNCTION_OR_NULL, 1, JSEXN_TYPEERR, "value assigned to {0} must be a function or null")
-MSG_DEF(JSMSG_DEBUG_BAD_AWAIT,         0, JSEXN_TYPEERR, "await expression received invalid value")
 MSG_DEF(JSMSG_DEBUG_BAD_LINE,          0, JSEXN_TYPEERR, "invalid line number")
 MSG_DEF(JSMSG_DEBUG_BAD_OFFSET,        0, JSEXN_TYPEERR, "invalid script offset")
 MSG_DEF(JSMSG_DEBUG_BAD_REFERENT,      2, JSEXN_TYPEERR, "{0} does not refer to {1}")

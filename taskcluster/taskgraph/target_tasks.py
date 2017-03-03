@@ -153,14 +153,15 @@ def target_tasks_graphics(full_task_graph, parameters):
 def target_tasks_valgrind(full_task_graph, parameters):
     """Target tasks that only run on the cedar branch."""
     def filter(task):
-        platform = task.attributes.get('build_platform')
-        # only select platforms
+        platform = task.attributes.get('test_platform')
         if platform not in ['linux64']:
             return False
-        if task.attributes.get('unittest_suite'):
-            if not (task.attributes['unittest_suite'].startswith('mochitest-valgrind')):
-                return False
-        return True
+
+        if task.attributes.get('unittest_suite', '').startswith('mochitest') and \
+           task.attributes.get('unittest_flavor', '').startswith('valgrind-plain'):
+            return True
+        return False
+
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
 
 
@@ -168,8 +169,8 @@ def target_tasks_valgrind(full_task_graph, parameters):
 def target_tasks_code_coverage(full_task_graph, parameters):
     """Target tasks that generate coverage data."""
     def filter(task):
-        platform = task.attributes.get('build_platform')
-        if platform not in ('linux64-ccov/opt', 'linux64-jsdcov/opt'):
+        platform = task.attributes.get('test_platform')
+        if platform not in ('linux64-ccov', 'linux64-jsdcov'):
             return False
         return True
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
@@ -196,6 +197,58 @@ def target_tasks_nightly_linux(full_task_graph, parameters):
         platform = task.attributes.get('build_platform')
         if platform in ('linux64-nightly', 'linux-nightly'):
             return task.attributes.get('nightly', False)
+    return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
+
+
+@_target_task('mozilla_beta_tasks')
+def target_tasks_mozilla_beta(full_task_graph, parameters):
+    """Select the set of tasks required for a promotable beta or release build
+    of linux, plus android CI. The candidates build process involves a pipeline
+    of builds and signing, but does not include beetmover or balrog jobs."""
+    def filter(task):
+        platform = task.attributes.get('build_platform')
+        if platform in ('android-api-15', 'android-x86'):
+            return True
+        if platform in ('linux64-nightly', 'linux-nightly'):
+            if task.kind not in [
+                'balrog', 'beetmover', 'beetmover-checksums', 'beetmover-l10n',
+                'checksums-signing', 'nightly-l10n', 'nightly-l10n-signing'
+            ]:
+                return task.attributes.get('nightly', False)
+    return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
+
+
+@_target_task('mozilla_release_tasks')
+def target_tasks_mozilla_release(full_task_graph, parameters):
+    """Select the set of tasks required for a promotable beta or release build
+    of linux, plus android CI. The candidates build process involves a pipeline
+    of builds and signing, but does not include beetmover or balrog jobs."""
+    return target_tasks_mozilla_beta(full_task_graph, parameters)
+
+
+@_target_task('candidates_fennec')
+def target_tasks_candidates_fennec(full_task_graph, parameters):
+    """Select the set of tasks required for a candidates build of fennec. The
+    nightly build process involves a pipeline of builds, signing,
+    and, eventually, uploading the tasks to balrog."""
+    filtered_for_project = target_tasks_nightly(full_task_graph, parameters)
+
+    def filter(task):
+        if task.kind not in ['balrog']:
+            return task.attributes.get('nightly', False)
+
+    return [l for l in filtered_for_project if filter(full_task_graph[l])]
+
+
+@_target_task('pine_tasks')
+def target_tasks_pine(full_task_graph, parameters):
+    """Bug 1339179 - no mobile automation needed on pine"""
+    def filter(task):
+        platform = task.attributes.get('build_platform')
+        # disable mobile jobs
+        if str(platform).startswith('android'):
+            return False
+        return True
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
 
 

@@ -12,11 +12,9 @@
 #include "mozilla/Telemetry.h"
 #include "browser_logging/WebRtcLog.h"
 
-#if !defined(MOZILLA_EXTERNAL_LINKAGE)
 #include "mozilla/dom/RTCPeerConnectionBinding.h"
 #include "mozilla/Preferences.h"
 #include <mozilla/Types.h>
-#endif
 
 #include "nsNetCID.h" // NS_SOCKETTRANSPORTSERVICE_CONTRACTID
 #include "nsServiceManagerUtils.h" // do_GetService
@@ -46,7 +44,6 @@ public:
 
   void Init()
     {
-#ifdef MOZILLA_INTERNAL_API
       nsCOMPtr<nsIObserverService> observerService =
         services::GetObserverService();
       if (!observerService)
@@ -63,7 +60,6 @@ public:
                                         false);
       MOZ_ALWAYS_SUCCEEDS(rv);
       (void) rv;
-#endif
     }
 
   NS_IMETHOD Observe(nsISupports* aSubject, const char* aTopic,
@@ -72,7 +68,6 @@ public:
       CSFLogDebug(logTag, "Shutting down PeerConnectionCtx");
       PeerConnectionCtx::Destroy();
 
-#ifdef MOZILLA_INTERNAL_API
       nsCOMPtr<nsIObserverService> observerService =
         services::GetObserverService();
       if (!observerService)
@@ -84,7 +79,6 @@ public:
       rv = observerService->RemoveObserver(this,
                                            NS_XPCOM_SHUTDOWN_OBSERVER_ID);
       MOZ_ALWAYS_SUCCEEDS(rv);
-#endif
 
       // Make sure we're not deleted while still inside ::Observe()
       RefPtr<PeerConnectionCtxObserver> kungFuDeathGrip(this);
@@ -110,14 +104,12 @@ public:
 private:
   virtual ~PeerConnectionCtxObserver()
     {
-#ifdef MOZILLA_INTERNAL_API
       nsCOMPtr<nsIObserverService> observerService =
         services::GetObserverService();
       if (observerService) {
         observerService->RemoveObserver(this, NS_IOSERVICE_OFFLINE_STATUS_TOPIC);
         observerService->RemoveObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID);
       }
-#endif
     }
 };
 
@@ -190,7 +182,6 @@ void PeerConnectionCtx::Destroy() {
   StopWebRtcLog();
 }
 
-#if !defined(MOZILLA_EXTERNAL_LINKAGE)
 typedef Vector<nsAutoPtr<RTCStatsQuery>> RTCStatsQueries;
 
 // Telemetry reporting every second after start of first call.
@@ -362,7 +353,6 @@ PeerConnectionCtx::EverySecondTelemetryCallback_m(nsITimer* timer, void *closure
     NS_ENSURE_SUCCESS_VOID(rv);
   }
 }
-#endif
 
 void
 PeerConnectionCtx::UpdateNetworkState(bool online) {
@@ -378,7 +368,6 @@ PeerConnectionCtx::UpdateNetworkState(bool online) {
 nsresult PeerConnectionCtx::Initialize() {
   initGMP();
 
-#if !defined(MOZILLA_EXTERNAL_LINKAGE)
   mTelemetryTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
   MOZ_ASSERT(mTelemetryTimer);
   nsresult rv = mTelemetryTimer->SetTarget(gMainThread);
@@ -389,7 +378,6 @@ nsresult PeerConnectionCtx::Initialize() {
   if (XRE_IsContentProcess()) {
     WebrtcGlobalChild::Create();
   }
-#endif // MOZILLA_INTERNAL_API
 
   return NS_OK;
 }
@@ -442,11 +430,9 @@ nsresult PeerConnectionCtx::Cleanup() {
 PeerConnectionCtx::~PeerConnectionCtx() {
     // ensure mTelemetryTimer ends on main thread
   MOZ_ASSERT(NS_IsMainThread());
-#if !defined(MOZILLA_EXTERNAL_LINKAGE)
   if (mTelemetryTimer) {
     mTelemetryTimer->Cancel();
   }
-#endif
 };
 
 void PeerConnectionCtx::queueJSEPOperation(nsIRunnable* aOperation) {

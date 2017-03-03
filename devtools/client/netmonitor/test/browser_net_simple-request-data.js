@@ -8,14 +8,14 @@
  */
 
 function test() {
-  let { L10N } = require("devtools/client/netmonitor/l10n");
+  let { L10N } = require("devtools/client/netmonitor/utils/l10n");
 
   initNetMonitor(SIMPLE_SJS).then(({ tab, monitor }) => {
     info("Starting test... ");
 
     let { document, gStore, windowRequire } = monitor.panelWin;
     let Actions = windowRequire("devtools/client/netmonitor/actions/index");
-    let { EVENTS } = windowRequire("devtools/client/netmonitor/events");
+    let { EVENTS } = windowRequire("devtools/client/netmonitor/constants");
     let {
       getDisplayedRequests,
       getSelectedRequest,
@@ -223,12 +223,15 @@ function test() {
 
       ok(requestItem.responseContent,
         "There should be a responseContent data available.");
+      // eslint-disable-next-line mozilla/no-cpows-in-tests
       is(requestItem.responseContent.content.mimeType,
         "text/plain; charset=utf-8",
         "The responseContent data has an incorrect |content.mimeType| property.");
+      // eslint-disable-next-line mozilla/no-cpows-in-tests
       is(requestItem.responseContent.content.text,
         "Hello world!",
         "The responseContent data has an incorrect |content.text| property.");
+      // eslint-disable-next-line mozilla/no-cpows-in-tests
       is(requestItem.responseContent.content.size,
         12,
         "The responseContent data has an incorrect |content.size| property.");

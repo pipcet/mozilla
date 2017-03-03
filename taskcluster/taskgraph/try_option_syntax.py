@@ -35,9 +35,8 @@ BUILD_KINDS = set([
 
 # anything in this list is governed by -j
 JOB_KINDS = set([
-    'source-check',
+    'source-test',
     'toolchain',
-    'marionette-harness',
     'android-stuff',
 ])
 
@@ -88,12 +87,12 @@ UNITTEST_ALIASES = {
     'mochitest-debug': alias_prefix('mochitest-debug-'),
     'mochitest-a11y': alias_contains('mochitest-a11y'),
     'mochitest-bc': alias_prefix('mochitest-browser-chrome'),
-    'mochitest-e10s-bc': alias_prefix('mochitest-e10s-browser-chrome'),
+    'mochitest-e10s-bc': alias_prefix('mochitest-browser-chrome-e10s'),
     'mochitest-browser-chrome': alias_prefix('mochitest-browser-chrome'),
-    'mochitest-e10s-browser-chrome': alias_prefix('mochitest-e10s-browser-chrome'),
+    'mochitest-e10s-browser-chrome': alias_prefix('mochitest-browser-chrome-e10s'),
     'mochitest-chrome': alias_contains('mochitest-chrome'),
     'mochitest-dt': alias_prefix('mochitest-devtools-chrome'),
-    'mochitest-e10s-dt': alias_prefix('mochitest-e10s-devtools-chrome'),
+    'mochitest-e10s-dt': alias_prefix('mochitest-devtools-chrome-e10s'),
     'mochitest-gl': alias_prefix('mochitest-webgl'),
     'mochitest-gl-e10s': alias_prefix('mochitest-webgl-e10s'),
     'mochitest-gpu': alias_prefix('mochitest-gpu'),

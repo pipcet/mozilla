@@ -22,7 +22,7 @@ pub enum ExprKind {
     /// First expr is the place; second expr is the value.
     InPlace(Box<Expr>, Box<Expr>),
     /// An array (`[a, b, c, d]`)
-    Vec(Vec<Expr>),
+    Array(Vec<Expr>),
     /// A function call
     ///
     /// The first field resolves to the function itself,
@@ -150,6 +150,7 @@ pub struct FieldValue {
     pub ident: Ident,
     pub expr: Expr,
     pub is_shorthand: bool,
+    pub attrs: Vec<Attribute>,
 }
 
 /// A Block (`{ .. }`).
@@ -203,7 +204,7 @@ pub struct Local {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 // Clippy false positive
 // https://github.com/Manishearth/rust-clippy/issues/1241
-#[cfg_attr(feature = "clippy", allow(enum_variant_names))]
+#[cfg_attr(feature = "cargo-clippy", allow(enum_variant_names))]
 pub enum Pat {
     /// Represents a wildcard pattern (`_`)
     Wild,
@@ -294,6 +295,7 @@ pub struct FieldPat {
     /// The pattern the field is destructured to
     pub pat: Box<Pat>,
     pub is_shorthand: bool,
+    pub attrs: Vec<Attribute>,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -313,7 +315,7 @@ pub mod parsing {
     use item::parsing::item;
     use lit::parsing::{digits, lit};
     use mac::parsing::{mac, token_trees};
-    use nom::IResult::{self, Error};
+    use synom::IResult::{self, Error};
     use op::parsing::{assign_op, binop, unop};
     use ty::parsing::{mutability, path, qpath, ty, unsafety};
 
@@ -321,7 +323,7 @@ pub mod parsing {
     // https://github.com/rust-lang/rfcs/pull/92
     macro_rules! named_ambiguous_expr {
         ($name:ident -> $o:ty, $allow_struct:ident, $submac:ident!( $($args:tt)* )) => {
-            fn $name(i: &str, $allow_struct: bool) -> $crate::nom::IResult<&str, $o> {
+            fn $name(i: &str, $allow_struct: bool) -> $crate::synom::IResult<&str, $o> {
                 $submac!(i, $($args)*)
             }
         };
@@ -337,6 +339,7 @@ pub mod parsing {
 
     named!(expr_no_struct -> Expr, ambiguous_expr!(false));
 
+    #[cfg_attr(feature = "cargo-clippy", allow(cyclomatic_complexity))]
     fn ambiguous_expr(i: &str, allow_struct: bool, allow_block: bool) -> IResult<&str, Expr> {
         do_parse!(
             i,
@@ -359,7 +362,7 @@ pub mod parsing {
                 |
                 expr_in_place
                 |
-                expr_vec
+                expr_array
                 |
                 expr_tup
                 |
@@ -474,11 +477,11 @@ pub mod parsing {
         ))
     ));
 
-    named!(expr_vec -> ExprKind, do_parse!(
+    named!(expr_array -> ExprKind, do_parse!(
         punct!("[") >>
         elems: terminated_list!(punct!(","), expr) >>
         punct!("]") >>
-        (ExprKind::Vec(elems))
+        (ExprKind::Array(elems))
     ));
 
     named!(and_call -> Vec<Expr>, do_parse!(
@@ -746,6 +749,7 @@ pub mod parsing {
                 ident: name,
                 expr: value,
                 is_shorthand: false,
+                attrs: Vec::new(),
             })
         )
         |
@@ -753,6 +757,7 @@ pub mod parsing {
             ident: name.clone(),
             expr: ExprKind::Path(None, name.into()).into(),
             is_shorthand: true,
+            attrs: Vec::new(),
         })
     ));
 
@@ -826,7 +831,7 @@ pub mod parsing {
 
     named!(pub within_block -> Vec<Stmt>, do_parse!(
         many0!(punct!(";")) >>
-        mut standalone: many0!(terminated!(standalone_stmt, many0!(punct!(";")))) >>
+        mut standalone: many0!(terminated!(stmt, many0!(punct!(";")))) >>
         last: option!(expr) >>
         (match last {
             None => standalone,
@@ -837,7 +842,7 @@ pub mod parsing {
         })
     ));
 
-    named!(standalone_stmt -> Stmt, alt!(
+    named!(pub stmt -> Stmt, alt!(
         stmt_mac
         |
         stmt_local
@@ -966,8 +971,8 @@ pub mod parsing {
             |
             keyword!("self") => { Into::into }
         ) >>
-        not!(peek!(punct!("<"))) >>
-        not!(peek!(punct!("::"))) >>
+        not!(punct!("<")) >>
+        not!(punct!("::")) >>
         subpat: option!(preceded!(punct!("@"), pat)) >>
         (Pat::Ident(
             if mode.is_some() {
@@ -1008,6 +1013,7 @@ pub mod parsing {
                 ident: ident,
                 pat: Box::new(pat),
                 is_shorthand: false,
+                attrs: Vec::new(),
             })
         )
         |
@@ -1033,6 +1039,7 @@ pub mod parsing {
                     ident: ident,
                     pat: Box::new(pat),
                     is_shorthand: true,
+                    attrs: Vec::new(),
                 }
             })
         )
@@ -1160,7 +1167,7 @@ mod printing {
                     place.to_tokens(tokens);
                     value.to_tokens(tokens);
                 }
-                ExprKind::Vec(ref tys) => {
+                ExprKind::Array(ref tys) => {
                     tokens.append("[");
                     tokens.append_separated(tys, ",");
                     tokens.append("]");

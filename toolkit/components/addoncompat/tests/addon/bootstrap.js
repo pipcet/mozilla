@@ -1,3 +1,6 @@
+// This file also defines a frame script.
+/* eslint-env mozilla/frame-script */
+
 var Cc = Components.classes;
 var Ci = Components.interfaces;
 var Cu = Components.utils;
@@ -426,6 +429,8 @@ function testAboutModuleRegistration() {
    */
   let testAboutModulesWork = (browser) => {
     let testConnection = () => {
+      // This section is loaded into a frame script.
+      /* global content:false */
       let request = new content.XMLHttpRequest();
       try {
         request.open("GET", "about:test1", false);
@@ -627,4 +632,3 @@ function install(aData, aReason) {
 
 function uninstall(aData, aReason) {
 }
-

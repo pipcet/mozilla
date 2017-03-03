@@ -1158,12 +1158,18 @@ static_assert((mozilla::pkix::ERROR_BASE - mozilla::pkix::END_OF_LIST) < 31,
               "too many moz::pkix errors");
 
 static void
-reportHandshakeResult(int32_t bytesTransferred, PRErrorCode err)
+reportHandshakeResult(int32_t bytesTransferred, bool wasReading, PRErrorCode err)
 {
   uint32_t bucket;
 
-  if (bytesTransferred >= 0) {
+  // A negative bytesTransferred or a 0 read are errors.
+  if (bytesTransferred > 0) {
     bucket = 0;
+  } else if ((bytesTransferred == 0) && !wasReading) {
+    // PR_Write() is defined to never return 0, but let's make sure.
+    // https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSPR/Reference/PR_Write.
+    MOZ_ASSERT(false);
+    bucket = 671;
   } else if (IS_SSL_ERROR(err)) {
     bucket = err - SSL_ERROR_BASE;
     MOZ_ASSERT(bucket > 0);   // SSL_ERROR_EXPORT_ONLY_SERVER isn't used.
@@ -1261,7 +1267,7 @@ checkHandshake(int32_t bytesTransfered, bool wasReading,
     // Report the result once for each handshake. Note that this does not
     // get handshakes which are cancelled before any reads or writes
     // happen.
-    reportHandshakeResult(bytesTransfered, originalError);
+    reportHandshakeResult(bytesTransfered, wasReading, originalError);
     socketInfo->SetHandshakeNotPending();
   }
 
@@ -2453,6 +2459,8 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
   if (range.max > SSL_LIBRARY_VERSION_TLS_1_2) {
     SSL_CipherPrefSet(fd, TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA, false);
     SSL_CipherPrefSet(fd, TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA, false);
+    SSL_CipherPrefSet(fd, TLS_DHE_RSA_WITH_AES_128_CBC_SHA, false);
+    SSL_CipherPrefSet(fd, TLS_DHE_RSA_WITH_AES_256_CBC_SHA, false);
   }
 
   // Include a modest set of named groups.

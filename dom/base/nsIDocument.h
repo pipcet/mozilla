@@ -2158,31 +2158,20 @@ public:
   virtual mozilla::PendingAnimationTracker*
   GetOrCreatePendingAnimationTracker() = 0;
 
-  enum SuppressionType {
-    eAnimationsOnly = 0x1,
-
-    // Note that suppressing events also suppresses animation frames, so
-    // there's no need to split out events in its own bitmask.
-    eEvents = 0x3,
-  };
-
   /**
    * Prevents user initiated events from being dispatched to the document and
    * subdocuments.
    */
-  virtual void SuppressEventHandling(SuppressionType aWhat,
-                                     uint32_t aIncrease = 1) = 0;
+  virtual void SuppressEventHandling(uint32_t aIncrease = 1) = 0;
 
   /**
    * Unsuppress event handling.
    * @param aFireEvents If true, delayed events (focus/blur) will be fired
    *                    asynchronously.
    */
-  virtual void UnsuppressEventHandlingAndFireEvents(SuppressionType aWhat,
-                                                    bool aFireEvents) = 0;
+  virtual void UnsuppressEventHandlingAndFireEvents(bool aFireEvents) = 0;
 
   uint32_t EventHandlingSuppressed() const { return mEventsSuppressed; }
-  uint32_t AnimationsPaused() const { return mAnimationsPaused; }
 
   bool IsEventHandlingEnabled() {
     return !EventHandlingSuppressed() && mScriptGlobalObject;
@@ -2667,6 +2656,8 @@ public:
   }
   Element* GetActiveElement();
   bool HasFocus(mozilla::ErrorResult& rv) const;
+  mozilla::TimeStamp LastFocusTime() const;
+  void SetLastFocusTime(const mozilla::TimeStamp& aFocusTime);
   // Event handlers are all on nsINode already
   bool MozSyntheticDocument() const
   {
@@ -3036,12 +3027,9 @@ protected:
   // container for per-context fonts (downloadable, SVG, etc.)
   RefPtr<mozilla::dom::FontFaceSet> mFontFaceSet;
 
-  // XXXheycam rust-bindgen currently doesn't generate correctly aligned fields
-  // to represent the following bitfields if they are preceded by something
-  // non-pointer aligned, so if adding non-pointer sized fields, please do so
-  // somewhere other than right here.
-  //
-  // https://github.com/servo/rust-bindgen/issues/111
+  // Last time this document or a one of its sub-documents was focused.  If
+  // focus has never occurred then mLastFocusTime.IsNull() will be true.
+  mozilla::TimeStamp mLastFocusTime;
 
   // True if BIDI is enabled.
   bool mBidiEnabled : 1;
@@ -3288,8 +3276,6 @@ protected:
   nsCOMPtr<nsIDocument> mDisplayDocument;
 
   uint32_t mEventsSuppressed;
-
-  uint32_t mAnimationsPaused;
 
   /**
    * The number number of external scripts (ones with the src attribute) that

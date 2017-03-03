@@ -8,6 +8,7 @@
 # include <valgrind/memcheck.h>
 #endif
 
+#include "mozilla/DebugOnly.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Sprintf.h"
 
@@ -179,8 +180,13 @@ gc::GCRuntime::startVerifyPreBarriers()
     if (verifyPreData || isIncrementalGCInProgress())
         return;
 
-    if (IsIncrementalGCUnsafe(rt) != AbortReason::None || TlsContext.get()->keepAtoms || rt->hasHelperThreadZones())
+    if (IsIncrementalGCUnsafe(rt) != AbortReason::None ||
+        TlsContext.get()->keepAtoms ||
+        rt->hasHelperThreadZones() ||
+        rt->cooperatingContexts().length() != 1)
+    {
         return;
+    }
 
     number++;
 
@@ -297,7 +303,7 @@ CheckEdgeTracer::onChild(const JS::GCCellPtr& thing)
 void
 js::gc::AssertSafeToSkipBarrier(TenuredCell* thing)
 {
-    Zone* zone = thing->zoneFromAnyThread();
+    mozilla::DebugOnly<Zone*> zone = thing->zoneFromAnyThread();
     MOZ_ASSERT(!zone->needsIncrementalBarrier() || zone->isAtomsZone());
 }
 
@@ -525,6 +531,10 @@ CheckHeapTracer::onChild(const JS::GCCellPtr& thing)
         fprintf(stderr, "  from root %s\n", name);
         return;
     }
+
+    // Don't trace into GC things owned by another runtime.
+    if (cell->runtimeFromAnyThread() != rt)
+        return;
 
     WorkItem item(thing, contextName(), parentIndex);
     if (!stack.append(item))

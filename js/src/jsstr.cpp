@@ -454,7 +454,8 @@ const Class StringObject::class_ = {
 static MOZ_ALWAYS_INLINE JSString*
 ToStringForStringFunction(JSContext* cx, HandleValue thisv)
 {
-    JS_CHECK_RECURSION(cx, return nullptr);
+    if (!CheckRecursionLimit(cx))
+        return nullptr;
 
     if (thisv.isString())
         return thisv.toString();
@@ -3145,7 +3146,8 @@ SymbolToSource(JSContext* cx, Symbol* symbol)
 JSString*
 js::ValueToSource(JSContext* cx, HandleValue v)
 {
-    JS_CHECK_RECURSION(cx, return nullptr);
+    if (!CheckRecursionLimit(cx))
+        return nullptr;
     assertSameCompartment(cx, v);
 
     if (v.isUndefined())
@@ -4019,7 +4021,7 @@ js::PutEscapedStringImpl(char* buffer, size_t bufferSize, GenericPrinter* out, c
                 buffer = nullptr;
             }
         } else if (out) {
-            if (out->put(&c, 1) < 0)
+            if (!out->put(&c, 1))
                 return size_t(-1);
         }
         n++;

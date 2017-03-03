@@ -1,3 +1,6 @@
+// This file is loaded into the browser window scope.
+/* eslint-env mozilla/browser-window */
+
 // -*- tab-width: 2; indent-tabs-mode: nil; js-indent-level: 2 -*-
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -558,7 +561,7 @@ var PrintUtils = {
     }
 
     let onEntered = (message) => {
-      mm.removeMessageListener("Printing:PrintPreview:Entered", onEntered);
+      mm.removeMessageListener("Printing:Preview:Entered", onEntered);
 
       if (message.data.failed) {
         // Something went wrong while putting the document into print preview

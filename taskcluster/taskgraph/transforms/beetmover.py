@@ -9,6 +9,8 @@ from __future__ import absolute_import, print_function, unicode_literals
 
 from taskgraph.transforms.base import TransformSequence
 from taskgraph.util.schema import validate_schema
+from taskgraph.util.scriptworker import (get_beetmover_bucket_scope,
+                                         get_beetmover_action_scope)
 from taskgraph.transforms.task import task_description_schema
 from voluptuous import Schema, Any, Required, Optional
 
@@ -47,6 +49,7 @@ _DESKTOP_UPSTREAM_ARTIFACTS_SIGNED_L10N = [
 _MOBILE_UPSTREAM_ARTIFACTS_UNSIGNED_EN_US = [
     "en-US/target.common.tests.zip",
     "en-US/target.cppunittest.tests.zip",
+    "en-US/target.crashreporter-symbols.zip",
     "en-US/target.json",
     "en-US/target.mochitest.tests.zip",
     "en-US/target.mozinfo.json",
@@ -201,12 +204,15 @@ def make_task_description(config, jobs):
         if job.get('locale'):
             attributes['locale'] = job['locale']
 
+        bucket_scope = get_beetmover_bucket_scope(config)
+        action_scope = get_beetmover_action_scope(config)
+
         task = {
             'label': label,
             'description': "{} Beetmover".format(
                 dep_job.task["metadata"]["description"]),
             'worker-type': 'scriptworker-prov-v1/beetmoverworker-v1',
-            'scopes': ["project:releng:beetmover:nightly"],
+            'scopes': [bucket_scope, action_scope],
             'dependencies': dependencies,
             'attributes': attributes,
             'run-on-projects': dep_job.attributes.get('run_on_projects'),

@@ -878,10 +878,11 @@ LIRGenerator::visitTest(MTest* test)
             return;
         }
 
-        // Compare and branch Int32 or Object pointers.
+        // Compare and branch Int32, Symbol or Object pointers.
         if (comp->isInt32Comparison() ||
             comp->compareType() == MCompare::Compare_UInt32 ||
-            comp->compareType() == MCompare::Compare_Object)
+            comp->compareType() == MCompare::Compare_Object ||
+            comp->compareType() == MCompare::Compare_Symbol)
         {
             JSOp op = ReorderComparison(comp->jsop(), &left, &right);
             LAllocation lhs = useRegister(left);
@@ -1123,10 +1124,11 @@ LIRGenerator::visitCompare(MCompare* comp)
         return;
     }
 
-    // Compare Int32 or Object pointers.
+    // Compare Int32, Symbol or Object pointers.
     if (comp->isInt32Comparison() ||
         comp->compareType() == MCompare::Compare_UInt32 ||
-        comp->compareType() == MCompare::Compare_Object)
+        comp->compareType() == MCompare::Compare_Object ||
+        comp->compareType() == MCompare::Compare_Symbol)
     {
         JSOp op = ReorderComparison(comp->jsop(), &left, &right);
         LAllocation lhs = useRegister(left);
@@ -2512,6 +2514,32 @@ LIRGenerator::visitSetFunName(MSetFunName* ins)
     LSetFunName* lir = new(alloc()) LSetFunName(useRegisterAtStart(ins->fun()),
                                                 useBoxAtStart(ins->name()));
     add(lir, ins);
+    assignSafepoint(lir, ins);
+}
+
+void
+LIRGenerator::visitNewLexicalEnvironmentObject(MNewLexicalEnvironmentObject* ins)
+{
+    MDefinition* enclosing = ins->enclosing();
+    MOZ_ASSERT(enclosing->type() == MIRType::Object);
+
+    LNewLexicalEnvironmentObject* lir =
+        new(alloc()) LNewLexicalEnvironmentObject(useRegisterAtStart(enclosing));
+
+    defineReturn(lir, ins);
+    assignSafepoint(lir, ins);
+}
+
+void
+LIRGenerator::visitCopyLexicalEnvironmentObject(MCopyLexicalEnvironmentObject* ins)
+{
+    MDefinition* env = ins->env();
+    MOZ_ASSERT(env->type() == MIRType::Object);
+
+    LCopyLexicalEnvironmentObject* lir =
+        new(alloc()) LCopyLexicalEnvironmentObject(useRegisterAtStart(env));
+
+    defineReturn(lir, ins);
     assignSafepoint(lir, ins);
 }
 
@@ -3947,15 +3975,11 @@ LIRGenerator::visitSetPropertyCache(MSetPropertyCache* ins)
     // that calls this script recursively.
     gen->setPerformsCall();
 
-    // If the index might be an integer, we need some extra temp registers for
-    // the dense and typed array element stubs.
-    LDefinition tempToUnboxIndex = LDefinition::BogusTemp();
+    // We need a double/float32 temp register for typed array stubs if this is
+    // a SETELEM.
     LDefinition tempD = LDefinition::BogusTemp();
     LDefinition tempF32 = LDefinition::BogusTemp();
-
-    if (id->mightBeType(MIRType::Int32)) {
-        if (id->type() != MIRType::Int32)
-            tempToUnboxIndex = tempToUnbox();
+    if (IsSetElemPC(ins->resumePoint()->pc())) {
         tempD = tempDouble();
         tempF32 = hasUnaliasedDouble() ? tempFloat32() : LDefinition::BogusTemp();
     }
@@ -3964,8 +3988,7 @@ LIRGenerator::visitSetPropertyCache(MSetPropertyCache* ins)
         new(alloc()) LSetPropertyCache(useRegister(ins->object()),
                                        useBoxOrTypedOrConstant(id, useConstId),
                                        useBoxOrTypedOrConstant(ins->value(), useConstValue),
-                                       temp(),
-                                       tempToUnboxIndex, tempD, tempF32);
+                                       temp(), tempD, tempF32);
     add(lir, ins);
     assignSafepoint(lir, ins);
 }
@@ -4388,14 +4411,23 @@ LIRGenerator::visitWasmCall(MWasmCall* ins)
     for (unsigned i = 0; i < ins->numArgs(); i++)
         args[i] = useFixedAtStart(ins->getOperand(i), ins->registerForArg(i));
 
-    if (ins->callee().isTable())
-        args[ins->numArgs()] = useFixedAtStart(ins->getOperand(ins->numArgs()), WasmTableCallIndexReg);
+    bool needsBoundsCheck = true;
+    if (ins->callee().isTable()) {
+        MDefinition* index = ins->getOperand(ins->numArgs());
+
+        if (ins->callee().which() == wasm::CalleeDesc::WasmTable && index->isConstant()) {
+            if (uint32_t(index->toConstant()->toInt32()) < ins->callee().wasmTableMinLength())
+                needsBoundsCheck = false;
+        }
+
+        args[ins->numArgs()] = useFixedAtStart(index, WasmTableCallIndexReg);
+    }
 
     LInstruction* lir;
     if (ins->type() == MIRType::Int64)
-        lir = new(alloc()) LWasmCallI64(args, ins->numOperands());
+        lir = new(alloc()) LWasmCallI64(args, ins->numOperands(), needsBoundsCheck);
     else
-        lir = new(alloc()) LWasmCall(args, ins->numOperands());
+        lir = new(alloc()) LWasmCall(args, ins->numOperands(), needsBoundsCheck);
 
     if (ins->type() == MIRType::None)
         add(lir, ins);
@@ -4753,6 +4785,19 @@ LIRGenerator::visitCheckIsObj(MCheckIsObj* ins)
     MOZ_ASSERT(checkVal->type() == MIRType::Value);
 
     LCheckIsObj* lir = new(alloc()) LCheckIsObj(useBoxAtStart(checkVal));
+    redefine(ins, checkVal);
+    add(lir, ins);
+    assignSafepoint(lir, ins);
+}
+
+void
+LIRGenerator::visitCheckIsCallable(MCheckIsCallable* ins)
+{
+    MDefinition* checkVal = ins->checkValue();
+    MOZ_ASSERT(checkVal->type() == MIRType::Value);
+
+    LCheckIsCallable* lir = new(alloc()) LCheckIsCallable(useBox(checkVal),
+                                                          temp());
     redefine(ins, checkVal);
     add(lir, ins);
     assignSafepoint(lir, ins);

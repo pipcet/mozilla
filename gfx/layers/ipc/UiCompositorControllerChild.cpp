@@ -10,9 +10,11 @@
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/StaticPtr.h"
 #include "nsThreadUtils.h"
+#include "mozilla/gfx/GPUProcessManager.h"
 
 namespace mozilla {
 namespace layers {
+using namespace gfx;
 
 static bool sInitialized = false;
 static StaticRefPtr<UiCompositorControllerChild> sChild;
@@ -57,7 +59,7 @@ DoCachedResize()
     sChild->SendResumeAndResize(cache.first, cache.second.mSurfaceWidth, cache.second.mSurfaceHeight);
   }
 
-  sResizeCache.empty();
+  sResizeCache.clear();
 }
 
 } // namespace

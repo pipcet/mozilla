@@ -315,7 +315,7 @@ protected:
 
     LOG("[%p] ticking drivers...", this);
     // RD is short for RefreshDriver
-    GeckoProfilerTracingRAII tracer("Paint", "RD");
+    GeckoProfilerTracingRAII tracer("Paint", "RefreshDriverTick");
 
     TickRefreshDrivers(jsnow, now, mContentRefreshDrivers);
     TickRefreshDrivers(jsnow, now, mRootRefreshDrivers);
@@ -325,7 +325,7 @@ protected:
 
   static void TickDriver(nsRefreshDriver* driver, int64_t jsnow, TimeStamp now)
   {
-    LOG(">> TickDriver: %p (jsnow: %lld)", driver, jsnow);
+    LOG(">> TickDriver: %p (jsnow: %" PRId64 ")", driver, jsnow);
     driver->Tick(jsnow, now);
   }
 
@@ -610,7 +610,9 @@ private:
       } else {
         // Request the vsync rate from the parent process. Might be a few vsyncs
         // until the parent responds.
-        mVsyncRate = mVsyncRefreshDriverTimer->mVsyncChild->GetVsyncRate();
+        if (mVsyncRefreshDriverTimer) {
+          mVsyncRate = mVsyncRefreshDriverTimer->mVsyncChild->GetVsyncRate();
+        }
       }
     #endif
     }
@@ -1197,10 +1199,6 @@ nsRefreshDriver::~nsRefreshDriver()
     mRootRefresh->RemoveRefreshObserver(this, FlushType::Style);
     mRootRefresh = nullptr;
   }
-  for (nsIPresShell* shell : mPresShellsToInvalidateIfHidden) {
-    shell->InvalidatePresShellIfHidden();
-  }
-  mPresShellsToInvalidateIfHidden.Clear();
 }
 
 // Method for testing.  See nsIDOMWindowUtils.advanceTimeAndRefresh
@@ -1242,7 +1240,11 @@ nsRefreshDriver::RestoreNormalRefresh()
 TimeStamp
 nsRefreshDriver::MostRecentRefresh() const
 {
-  const_cast<nsRefreshDriver*>(this)->EnsureTimerStarted();
+  // In case of stylo traversal, we have already activated the refresh driver in
+  // ServoRestyleManager::ProcessPendingRestyles().
+  if (!ServoStyleSet::IsInServoTraversal()) {
+    const_cast<nsRefreshDriver*>(this)->EnsureTimerStarted();
+  }
 
   return mMostRecentRefresh;
 }
@@ -1325,6 +1327,10 @@ nsRefreshDriver::RemoveImageRequest(imgIRequest* aRequest)
 void
 nsRefreshDriver::EnsureTimerStarted(EnsureTimerStartedFlags aFlags)
 {
+  MOZ_ASSERT(!ServoStyleSet::IsInServoTraversal(),
+             "EnsureTimerStarted should be called only when we are not "
+             "in servo traversal");
+
   if (mTestControllingRefreshes)
     return;
 
@@ -2027,11 +2033,6 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
     }
   }
 
-  for (nsIPresShell* shell : mPresShellsToInvalidateIfHidden) {
-    shell->InvalidatePresShellIfHidden();
-  }
-  mPresShellsToInvalidateIfHidden.Clear();
-
   bool notifyGC = false;
   if (mViewManagerFlushIsPending) {
     RefPtr<TimelineConsumers> timelines = TimelineConsumers::Get();
@@ -2093,6 +2094,7 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
   }
 
   if (notifyGC && nsContentUtils::XPConnect()) {
+    GeckoProfilerTracingRAII tracer("Paint", "NotifyDidPaint");
     nsContentUtils::XPConnect()->NotifyDidPaint();
     nsJSContext::NotifyDidPaint();
   }
@@ -2151,7 +2153,7 @@ nsRefreshDriver::FinishedWaitingForTransaction()
   if (mSkippedPaints &&
       !IsInRefresh() &&
       (ObserverCount() || ImageRequestCount())) {
-    GeckoProfilerTracingRAII tracer("Paint", "RD");
+    GeckoProfilerTracingRAII tracer("Paint", "RefreshDriverTick");
     DoRefresh();
   }
   mSkippedPaints = false;

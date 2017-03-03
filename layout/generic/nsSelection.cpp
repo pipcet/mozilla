@@ -304,7 +304,7 @@ public:
   {
     if (mSelection && mPresContext)
     {
-      nsWeakFrame frame =
+      AutoWeakFrame frame =
         mContent ? mPresContext->GetPrimaryFrameFor(mContent) : nullptr;
       if (!frame)
         return NS_OK;
@@ -4860,8 +4860,8 @@ Selection::DoAutoScroll(nsIFrame* aFrame, nsPoint& aPoint)
   if (!rootPC)
     return NS_OK;
   nsIFrame* rootmostFrame = rootPC->PresShell()->FrameManager()->GetRootFrame();
-  nsWeakFrame weakRootFrame(rootmostFrame);
-  nsWeakFrame weakFrame(aFrame);
+  AutoWeakFrame weakRootFrame(rootmostFrame);
+  AutoWeakFrame weakFrame(aFrame);
   // Get the point relative to the root most frame because the scroll we are
   // about to do will change the coordinates of aFrame.
   nsPoint globalPoint = aPoint + aFrame->GetOffsetToCrossDoc(rootmostFrame);
@@ -4964,6 +4964,22 @@ Selection::AddRange(nsIDOMRange* aDOMRange)
 void
 Selection::AddRange(nsRange& aRange, ErrorResult& aRv)
 {
+  return AddRangeInternal(aRange, GetParentObject(), aRv);
+}
+
+void
+Selection::AddRangeInternal(nsRange& aRange, nsIDocument* aDocument,
+                            ErrorResult& aRv)
+{
+  nsINode* rangeRoot = aRange.GetRoot();
+  if (aDocument != rangeRoot && (!rangeRoot ||
+                                 aDocument != rangeRoot->GetComposedDoc())) {
+    // http://w3c.github.io/selection-api/#dom-selection-addrange
+    // "...  if the root of the range's boundary points are the document
+    // associated with context object. Otherwise, this method must do nothing."
+    return;
+  }
+
   // This inserts a table cell range in proper document order
   // and returns NS_OK if range doesn't contain just one table cell
   bool didAddRange;

@@ -13,10 +13,6 @@ add_task(function* () {
 
   let { document, gStore, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/actions/index");
-  let {
-    getDisplayedRequests,
-    getSortedRequests,
-  } = windowRequire("devtools/client/netmonitor/selectors/index");
 
   gStore.dispatch(Actions.batchEnable(false));
 
@@ -35,7 +31,7 @@ add_task(function* () {
   // Context menu is appending in XUL document, we must select it from
   // toolbox.doc
   monitor.toolbox.doc
-    .querySelector("#request-menu-context-newtab").click();
+    .querySelector("#request-list-context-newtab").click();
   yield onTabOpen;
 
   ok(true, "A new tab has been opened");

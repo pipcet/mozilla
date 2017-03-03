@@ -6,6 +6,10 @@
 
 #include "ContentPrefs.h"
 
+/************************************************************
+ *    DO NOT ADD PREFS TO THIS LIST WITHOUT DOM PEER REVIEW *
+ ************************************************************/
+
 const char* mozilla::dom::ContentPrefs::gInitPrefs[] = {
   "accessibility.monoaudio.enable",
   "accessibility.mouse_focuses_formcontrol",
@@ -52,6 +56,7 @@ const char* mozilla::dom::ContentPrefs::gInitPrefs[] = {
   "dom.vibrator.enabled",
   "dom.vibrator.max_vibrate_list_len",
   "dom.vibrator.max_vibrate_ms",
+  "dom.webcomponents.enabled",
   "focusmanager.testmode",
   "font.size.inflation.disabledInMasterProcess",
   "font.size.inflation.emPerLine",
@@ -63,6 +68,9 @@ const char* mozilla::dom::ContentPrefs::gInitPrefs[] = {
   "full-screen-api.allow-trusted-requests-only",
   "full-screen-api.enabled",
   "full-screen-api.unprefix.enabled",
+#ifdef FUZZING
+  "fuzzing.enabled",
+#endif
   "gfx.font_rendering.opentype_svg.enabled",
   "hangmonitor.timeout",
   "html5.flushtimer.initialdelay",
@@ -113,7 +121,6 @@ const char* mozilla::dom::ContentPrefs::gInitPrefs[] = {
   "layout.css.initial-letter.enabled",
   "layout.css.isolation.enabled",
   "layout.css.mix-blend-mode.enabled",
-  "layout.css.object-fit-and-position.enabled",
   "layout.css.osx-font-smoothing.enabled",
   "layout.css.overflow-clip-box.enabled",
   "layout.css.prefixes.animations",
@@ -133,6 +140,7 @@ const char* mozilla::dom::ContentPrefs::gInitPrefs[] = {
   "layout.css.text-align-unsafe-value.enabled",
   "layout.css.text-combine-upright-digits.enabled",
   "layout.css.text-combine-upright.enabled",
+  "layout.css.text-justify.enabled",
   "layout.css.touch_action.enabled",
   "layout.css.unprefixing-service.enabled",
   "layout.css.unprefixing-service.globally-whitelisted",
@@ -159,6 +167,7 @@ const char* mozilla::dom::ContentPrefs::gInitPrefs[] = {
   "media.eme.video.blank",
   "media.ffmpeg.enabled",
   "media.ffvpx.enabled",
+  "media.ffvpx.low-latency.enabled",
   "media.flac.enabled",
   "media.forcestereo.enabled",
   "media.gmp.async-shutdown-timeout",

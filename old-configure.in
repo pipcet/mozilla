@@ -3216,13 +3216,6 @@ x86_64)
   ;;
 esac
 
-# This is potentially set in external mozconfig files; if it's set,
-# then the build exposes the "webgl" context name, which is reserved
-# for conformant implementations.
-if test -n "$MOZ_WEBGL_CONFORMANT"; then
-  AC_DEFINE(MOZ_WEBGL_CONFORMANT)
-fi
-
 dnl ========================================================
 dnl D3D compiler DLL
 dnl ========================================================
@@ -3748,14 +3741,14 @@ if test -n "$gonkdir"; then
     MOZ_CONTENT_SANDBOX=$MOZ_SANDBOX
 fi
 
-case "$OS_TARGET:$NIGHTLY_BUILD" in
-WINNT:*)
+case "$OS_TARGET" in
+WINNT)
     MOZ_CONTENT_SANDBOX=$MOZ_SANDBOX
     ;;
-Darwin:*)
+Darwin)
     MOZ_CONTENT_SANDBOX=$MOZ_SANDBOX
     ;;
-Linux:1)
+Linux)
     case $CPU_ARCH in
         x86_64|x86)
             MOZ_CONTENT_SANDBOX=$MOZ_SANDBOX
@@ -5319,7 +5312,11 @@ dnl ========================================================
 dnl ICU Support
 dnl ========================================================
 
-_INTL_API=yes
+if test "$MOZ_WIDGET_TOOLKIT" != "android" -o -z "$RELEASE_OR_BETA"; then
+    _INTL_API=yes
+else
+    _INTL_API=no
+fi
 
 if test "$MOZ_WIDGET_TOOLKIT" = "cocoa"; then
     USE_ICU=1

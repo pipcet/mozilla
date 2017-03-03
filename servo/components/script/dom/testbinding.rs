@@ -34,6 +34,7 @@ use dom::globalscope::GlobalScope;
 use dom::promise::Promise;
 use dom::promisenativehandler::{PromiseNativeHandler, Callback};
 use dom::url::URL;
+use dom_struct::dom_struct;
 use js::jsapi::{HandleObject, HandleValue, Heap, JSContext, JSObject, JSAutoCompartment};
 use js::jsapi::{JS_NewPlainObject, JS_NewUint8ClampedArray};
 use js::jsval::{JSVal, NullValue};
@@ -435,7 +436,9 @@ impl TestBindingMethods for TestBinding {
     fn PassUnion6(&self, _: UnsignedLongOrBoolean) {}
     fn PassUnion7(&self, _: StringSequenceOrUnsignedLong) {}
     fn PassUnion8(&self, _: ByteStringSequenceOrLong) {}
-    fn PassUnion9(&self, _: UnionTypes::TestDictionaryOrLong) {}
+    fn PassUnion9(&self, _: RootedTraceableBox<UnionTypes::TestDictionaryOrLong>) {}
+    #[allow(unsafe_code)]
+    unsafe fn PassUnion10(&self, _: *mut JSContext, _: RootedTraceableBox<UnionTypes::StringOrObject>) {}
     fn PassUnionWithTypedef(&self, _: DocumentOrTestTypedef) {}
     fn PassUnionWithTypedef2(&self, _: LongSequenceOrTestTypedef) {}
     #[allow(unsafe_code)]

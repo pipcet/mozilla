@@ -8,7 +8,7 @@
  */
 
 add_task(function* () {
-  let { L10N } = require("devtools/client/netmonitor/l10n");
+  let { L10N } = require("devtools/client/netmonitor/utils/l10n");
 
   let { monitor } = yield initNetMonitor(SIMPLE_URL);
   info("Starting test... ");
@@ -66,7 +66,6 @@ add_task(function* () {
     "The first column of the header displays the correct text.");
   is(rows[0].querySelectorAll("span")[1].textContent, "label2header",
     "The second column of the header displays the correct text.");
-
 
   ok(rows[1].querySelector(".table-chart-row-box.chart-colored-blob"),
     "A colored blob exists for the firt row.");

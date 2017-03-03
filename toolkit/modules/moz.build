@@ -6,7 +6,6 @@
 
 XPCSHELL_TESTS_MANIFESTS += ['tests/xpcshell/xpcshell.ini']
 BROWSER_CHROME_MANIFESTS += ['tests/browser/browser.ini']
-MOCHITEST_MANIFESTS += ['tests/mochitest/mochitest.ini']
 MOCHITEST_CHROME_MANIFESTS += ['tests/chrome/chrome.ini']
 
 TESTING_JS_MODULES += [
@@ -78,6 +77,7 @@ EXTRA_JS_MODULES += [
     'RemoteSecurityUI.jsm',
     'RemoteWebProgress.jsm',
     'ResetProfile.jsm',
+    'ResponsivenessMonitor.jsm',
     'secondscreen/RokuApp.jsm',
     'secondscreen/SimpleServiceDiscovery.jsm',
     'SelectContentHelper.jsm',
@@ -90,7 +90,6 @@ EXTRA_JS_MODULES += [
     'sessionstore/XPathGenerator.jsm',
     'ShortcutUtils.jsm',
     'Sntp.jsm',
-    'SpatialNavigation.jsm',
     'Sqlite.jsm',
     'Task.jsm',
     'Timer.jsm',

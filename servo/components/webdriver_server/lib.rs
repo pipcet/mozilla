@@ -5,9 +5,6 @@
 #![crate_name = "webdriver_server"]
 #![crate_type = "rlib"]
 
-#![feature(plugin)]
-#![plugin(plugins)]
-
 #![deny(unsafe_code)]
 
 extern crate cookie as cookie_rs;
@@ -402,7 +399,7 @@ impl Handler {
         self.constellation_chan.send(ConstellationMsg::WebDriverCommand(cmd_msg)).unwrap();
 
         let window_size = receiver.recv().unwrap();
-        let vp = window_size.visible_viewport;
+        let vp = window_size.initial_viewport;
         let window_size_response = WindowSizeResponse::new(vp.width as u64, vp.height as u64);
         Ok(WebDriverResponse::WindowSize(window_size_response))
     }
@@ -426,7 +423,7 @@ impl Handler {
         });
 
         let window_size = receiver.recv().unwrap();
-        let vp = window_size.visible_viewport;
+        let vp = window_size.initial_viewport;
         let window_size_response = WindowSizeResponse::new(vp.width as u64, vp.height as u64);
         Ok(WebDriverResponse::WindowSize(window_size_response))
     }

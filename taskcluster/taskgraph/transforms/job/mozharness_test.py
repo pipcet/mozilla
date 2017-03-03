@@ -3,6 +3,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from voluptuous import Schema, Required
+from taskgraph.util.taskcluster import get_artifact_url
 from taskgraph.transforms.job import run_job_using
 from taskgraph.transforms.tests import (
     test_description_schema,
@@ -14,8 +15,6 @@ from taskgraph.transforms.job.common import (
 )
 import os
 import re
-
-ARTIFACT_URL = 'https://queue.taskcluster.net/v1/task/{}/artifacts/{}'
 
 ARTIFACTS = [
     # (artifact name prefix, in-image path)
@@ -59,11 +58,11 @@ def mozharness_test_on_docker(config, job, taskdesc):
         ("public/test_info/", "/home/worker/workspace/build/blobber_upload_dir/"),
     ]
 
-    installer_url = ARTIFACT_URL.format('<build>', mozharness['build-artifact-name'])
-    test_packages_url = ARTIFACT_URL.format('<build>',
-                                            'public/build/target.test_packages.json')
-    mozharness_url = ARTIFACT_URL.format('<build>',
-                                         'public/build/mozharness.zip')
+    installer_url = get_artifact_url('<build>', mozharness['build-artifact-name'])
+    test_packages_url = get_artifact_url('<build>',
+                                         'public/build/target.test_packages.json')
+    mozharness_url = get_artifact_url('<build>',
+                                      'public/build/mozharness.zip')
 
     worker['artifacts'] = [{
         'name': prefix,
@@ -206,11 +205,11 @@ def mozharness_test_on_windows(config, job, taskdesc):
 
     target = 'firefox-{}.en-US.{}'.format(get_firefox_version(), build_platform)
 
-    installer_url = ARTIFACT_URL.format(
+    installer_url = get_artifact_url(
         '<build>', 'public/build/{}.zip'.format(target))
-    test_packages_url = ARTIFACT_URL.format(
+    test_packages_url = get_artifact_url(
         '<build>', 'public/build/{}.test_packages.json'.format(target))
-    mozharness_url = ARTIFACT_URL.format(
+    mozharness_url = get_artifact_url(
         '<build>', 'public/build/mozharness.zip')
 
     taskdesc['scopes'].extend(
@@ -264,17 +263,17 @@ def mozharness_test_on_windows(config, job, taskdesc):
     ]
 
 
-@run_job_using('macosx-engine', 'mozharness-test', schema=mozharness_test_run_schema)
-def mozharness_test_on_mac_osx(config, job, taskdesc):
+@run_job_using('native-engine', 'mozharness-test', schema=mozharness_test_run_schema)
+def mozharness_test_on_native_engine(config, job, taskdesc):
     test = taskdesc['run']['test']
     mozharness = test['mozharness']
     worker = taskdesc['worker']
 
-    installer_url = ARTIFACT_URL.format('<build>', mozharness['build-artifact-name'])
-    test_packages_url = ARTIFACT_URL.format('<build>',
-                                            'public/build/target.test_packages.json')
-    mozharness_url = ARTIFACT_URL.format('<build>',
-                                         'public/build/mozharness.zip')
+    installer_url = get_artifact_url('<build>', mozharness['build-artifact-name'])
+    test_packages_url = get_artifact_url('<build>',
+                                         'public/build/target.test_packages.json')
+    mozharness_url = get_artifact_url('<build>',
+                                      'public/build/mozharness.zip')
 
     worker['artifacts'] = [{
         'name': prefix.rstrip('/'),
@@ -282,6 +281,7 @@ def mozharness_test_on_mac_osx(config, job, taskdesc):
         'type': 'directory',
     } for (prefix, path) in ARTIFACTS]
 
+    worker['reboot'] = test['reboot']
     worker['env'] = {
         'GECKO_HEAD_REPOSITORY': config.params['head_repository'],
         'GECKO_HEAD_REV': config.params['head_rev'],
@@ -289,9 +289,15 @@ def mozharness_test_on_mac_osx(config, job, taskdesc):
         'MOZHARNESS_SCRIPT': mozharness['script'],
         'MOZHARNESS_URL': {'task-reference': mozharness_url},
         'MOZILLA_BUILD_URL': {'task-reference': installer_url},
+        "MOZ_NO_REMOTE": '1',
+        "NO_EM_RESTART": '1',
+        "XPCOM_DEBUG_BREAK": 'warn',
+        "NO_FAIL_ON_TEST_ERRORS": '1',
+        "MOZ_HIDE_RESULTS_TABLE": '1',
+        "MOZ_NODE_PATH": "/usr/local/bin/node",
     }
 
-    worker['link'] = '{}/raw-file/{}/taskcluster/scripts/tester/test-macosx.sh'.format(
+    worker['context'] = '{}/raw-file/{}/taskcluster/scripts/tester/test-macosx.sh'.format(
         config.params['head_repository'], config.params['head_rev']
     )
 
@@ -335,8 +341,40 @@ def mozharness_test_buildbot_bridge(config, job, taskdesc):
     test_name = test.get('talos-try-name', test['test-name'])
     mozharness = test['mozharness']
 
-    if test['e10s'] and not test_name.endswith('-e10s'):
+    # mochitest e10s follows the pattern mochitest-e10s-<suffix>
+    # in buildbot, except for these special cases
+    buildbot_specials = [
+        'mochitest-webgl',
+        'mochitest-clipboard',
+        'mochitest-media',
+        'mochitest-gpu',
+        'mochitest-e10s',
+    ]
+    test_name = test.get(
+                    'talos-try-name',
+                    test.get(
+                        'unittest-try-name',
+                        test['test-name']
+                    )
+                )
+    if test['e10s'] and 'e10s' not in test_name:
         test_name += '-e10s'
+
+    if test_name.startswith('mochitest') \
+            and test_name.endswith('e10s') \
+            and not any(map(
+                lambda name: test_name.startswith(name),
+                buildbot_specials
+            )):
+        split_mochitest = test_name.split('-')
+        test_name = '-'.join([
+            split_mochitest[0],
+            split_mochitest[-1],
+            '-'.join(split_mochitest[1:-1])
+        ])
+
+    # in buildbot, mochitest-webgl is called mochitest-gl
+    test_name = test_name.replace('webgl', 'gl')
 
     if mozharness.get('chunked', False):
         this_chunk = test.get('this-chunk')

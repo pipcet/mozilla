@@ -1,6 +1,7 @@
 import json
 import os
 import inspect
+import re
 from types import FunctionType
 from collections import namedtuple
 from taskgraph.util.docker import docker_image
@@ -159,6 +160,13 @@ def register_callback_action(title, symbol, description, order=10000, context=[]
         def build_callback_action_task(parameters):
             if not available(parameters):
                 return None
+
+            match = re.match(r'https://(hg.mozilla.org)/(.*?)/?$', parameters['head_repository'])
+            if not match:
+                raise Exception('Unrecognized head_repository')
+            repo_scope = 'assume:repo:{}/{}:*'.format(
+                match.group(1), match.group(2))
+
             return {
                 'created': {'$fromNow': ''},
                 'deadline': {'$fromNow': '12 hours'},
@@ -174,7 +182,7 @@ def register_callback_action(title, symbol, description, order=10000, context=[]
                 'workerType': 'gecko-decision',
                 'provisionerId': 'aws-provisioner-v1',
                 'scopes': [
-                    'assume:repo:hg.mozilla.org/projects/{}:*'.format(parameters['project']),
+                    repo_scope,
                 ],
                 'tags': {
                     'createdForUser': parameters['owner'],
@@ -216,19 +224,7 @@ def register_callback_action(title, symbol, description, order=10000, context=[]
                         """\
 cd /home/worker/checkouts/gecko &&
 ln -s /home/worker/artifacts artifacts &&
-./mach --log-no-times taskgraph action-callback """ + ' '.join([
-                            "--pushlog-id='{}'".format(parameters['pushlog_id']),
-                            "--pushdate='{}'".format(parameters['pushdate']),
-                            "--project='{}'".format(parameters['project']),
-                            "--message='{}'".format(parameters['message'].replace("'", "'\\''")),
-                            "--owner='{}'".format(parameters['owner']),
-                            "--level='{}'".format(parameters['level']),
-                            "--base-repository='https://hg.mozilla.org/mozilla-central'",
-                            "--head-repository='{}'".format(parameters['head_repository']),
-                            "--head-ref='{}'".format(parameters['head_ref']),
-                            "--head-rev='{}'".format(parameters['head_rev']),
-                            "--revision-hash='{}'\n".format(parameters['head_rev']),
-                        ]),
+./mach --log-no-times taskgraph action-callback""",
                     ],
                 },
                 'extra': {

@@ -62,10 +62,6 @@ namespace widget {
 struct AutoCacheNativeKeyCommands;
 } // namespace widget
 
-namespace plugins {
-class PluginWidgetChild;
-} // namespace plugins
-
 namespace dom {
 
 class TabChild;
@@ -609,7 +605,9 @@ public:
 
   bool DeallocPPluginWidgetChild(PPluginWidgetChild* aActor) override;
 
+#ifdef XP_WIN
   nsresult CreatePluginWidget(nsIWidget* aParent, nsIWidget** aOut);
+#endif
 
   LayoutDeviceIntPoint GetClientOffset() const { return mClientOffset; }
   LayoutDeviceIntPoint GetChromeDisplacement() const { return mChromeDisp; };
@@ -664,16 +662,8 @@ public:
 
   // These methods return `true` if this TabChild is currently awaiting a
   // Large-Allocation header.
-  bool TakeAwaitingLargeAlloc();
+  bool StopAwaitingLargeAlloc();
   bool IsAwaitingLargeAlloc();
-
-  // Returns `true` if this this process was created to load a docshell in a
-  // "Fresh Process". This value is initialized to `false`, and is set to `true`
-  // in RecvSetFreshProcess.
-  static bool InLargeAllocProcess()
-  {
-    return sInLargeAllocProcess;
-  }
 
   already_AddRefed<nsISHistory> GetRelatedSHistory();
 
@@ -716,8 +706,7 @@ protected:
 
   virtual mozilla::ipc::IPCResult RecvNotifyPartialSHistoryDeactive() override;
 
-  virtual mozilla::ipc::IPCResult RecvSetIsLargeAllocation(const bool& aIsLA,
-                                                           const bool& aNewProcess) override;
+  virtual mozilla::ipc::IPCResult RecvAwaitLargeAlloc() override;
 
 private:
   void HandleDoubleTap(const CSSPoint& aPoint, const Modifiers& aModifiers,
@@ -828,8 +817,6 @@ private:
   // The handle associated with the native window that contains this tab
   uintptr_t mNativeWindowHandle;
 #endif // defined(XP_WIN)
-
-  static bool sInLargeAllocProcess;
 
   DISALLOW_EVIL_CONSTRUCTORS(TabChild);
 };

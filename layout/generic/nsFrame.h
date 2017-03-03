@@ -479,7 +479,7 @@ public:
    */
   void Trace(const char* aMethod, bool aEnter);
   void Trace(const char* aMethod, bool aEnter, nsReflowStatus aStatus);
-  void TraceMsg(const char* fmt, ...);
+  void TraceMsg(const char* fmt, ...) MOZ_FORMAT_PRINTF(2, 3);
 
   // Helper function that verifies that each frame in the list has the
   // NS_FRAME_IS_DIRTY bit set
@@ -507,11 +507,11 @@ public:
                                           const char* aType);
   static void* DisplayIntrinsicSizeEnter(nsIFrame* aFrame,
                                          const char* aType);
-  static void DisplayReflowExit(nsPresContext*      aPresContext,
-                                 nsIFrame*            aFrame,
-                                 ReflowOutput& aMetrics,
-                                 uint32_t             aStatus,
-                                 void*                aFrameTreeNode);
+  static void DisplayReflowExit(nsPresContext* aPresContext,
+                                nsIFrame* aFrame,
+                                ReflowOutput& aMetrics,
+                                const nsReflowStatus& aStatus,
+                                void* aFrameTreeNode);
   static void DisplayLayoutExit(nsIFrame* aFrame,
                                  void* aFrameTreeNode);
   static void DisplayIntrinsicISizeExit(nsIFrame* aFrame,
@@ -687,8 +687,6 @@ protected:
 
   // Fire DOM event. If no aContent argument use frame's mContent.
   void FireDOMEvent(const nsAString& aDOMEventName, nsIContent *aContent = nullptr);
-
-  mozilla::WritingMode GetWritingModeDeferringToRootElem() const;
 
 private:
   void BoxReflow(nsBoxLayoutState& aState,

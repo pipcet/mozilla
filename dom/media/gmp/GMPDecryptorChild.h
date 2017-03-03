@@ -75,6 +75,7 @@ public:
                                const GMPMediaKeyInfo* aKeyInfos,
                                uint32_t aKeyInfosLength) override;
 
+  uint32_t DecryptorId() const { return mDecryptorId; }
 private:
   ~GMPDecryptorChild();
 
@@ -103,8 +104,7 @@ private:
 
   mozilla::ipc::IPCResult RecvDecrypt(const uint32_t& aId,
                                       InfallibleTArray<uint8_t>&& aBuffer,
-                                      const GMPDecryptionData& aMetadata,
-                                      const uint64_t& aDurationUsecs) override;
+                                      const GMPDecryptionData& aMetadata) override;
 
   // Resolve/reject promise on completion.
   mozilla::ipc::IPCResult RecvSetServerCertificate(const uint32_t& aPromiseId,
@@ -122,6 +122,8 @@ private:
   // Only call into this on the (GMP process) main thread.
   GMPDecryptor* mSession;
   GMPContentChild* mPlugin;
+
+  const uint32_t mDecryptorId;
 };
 
 } // namespace gmp

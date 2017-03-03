@@ -722,6 +722,9 @@ def getJSToNativeConversionInfo(type, descriptorProvider, failureCode=None,
         if type.nullable():
             declType = CGWrapper(declType, pre="Option<", post=" >")
 
+        if isMember != "Dictionary" and type_needs_tracing(type):
+            declType = CGTemplatedType("RootedTraceableBox", declType)
+
         templateBody = ("match FromJSValConvertible::from_jsval(cx, ${val}, ()) {\n"
                         "    Ok(ConversionResult::Success(value)) => value,\n"
                         "    Ok(ConversionResult::Failure(error)) => {\n"
@@ -964,14 +967,11 @@ def getJSToNativeConversionInfo(type, descriptorProvider, failureCode=None,
             handleInvalidEnumValueCode = "return true;"
 
         template = (
-            "match find_enum_string_index(cx, ${val}, %(values)s) {\n"
+            "match find_enum_value(cx, ${val}, %(pairs)s) {\n"
             "    Err(_) => { %(exceptionCode)s },\n"
             "    Ok((None, search)) => { %(handleInvalidEnumValueCode)s },\n"
-            "    Ok((Some(index), _)) => {\n"
-            "        //XXXjdm need some range checks up in here.\n"
-            "        mem::transmute(index)\n"
-            "    },\n"
-            "}" % {"values": enum + "Values::strings",
+            "    Ok((Some(&value), _)) => value,\n"
+            "}" % {"pairs": enum + "Values::pairs",
                    "exceptionCode": exceptionCode,
                    "handleInvalidEnumValueCode": handleInvalidEnumValueCode})
 
@@ -3975,39 +3975,41 @@ class CGEnum(CGThing):
     def __init__(self, enum):
         CGThing.__init__(self)
 
+        ident = enum.identifier.name
         decl = """\
 #[repr(usize)]
 #[derive(JSTraceable, PartialEq, Copy, Clone, HeapSizeOf, Debug)]
 pub enum %s {
     %s
 }
-""" % (enum.identifier.name, ",\n    ".join(map(getEnumValueName, enum.values())))
+""" % (ident, ",\n    ".join(map(getEnumValueName, enum.values())))
+
+        pairs = ",\n    ".join(['("%s", super::%s::%s)' % (val, ident, getEnumValueName(val)) for val in enum.values()])
 
         inner = """\
 use dom::bindings::conversions::ToJSValConvertible;
 use js::jsapi::{JSContext, MutableHandleValue};
 use js::jsval::JSVal;
 
-pub const strings: &'static [&'static str] = &[
+pub const pairs: &'static [(&'static str, super::%s)] = &[
     %s,
 ];
 
 impl super::%s {
     pub fn as_str(&self) -> &'static str {
-        strings[*self as usize]
+        pairs[*self as usize].0
     }
 }
 
 impl ToJSValConvertible for super::%s {
     unsafe fn to_jsval(&self, cx: *mut JSContext, rval: MutableHandleValue) {
-        strings[*self as usize].to_jsval(cx, rval);
+        pairs[*self as usize].0.to_jsval(cx, rval);
     }
 }
-""" % (",\n    ".join(['"%s"' % val for val in enum.values()]), enum.identifier.name, enum.identifier.name)
-
+    """ % (ident, pairs, ident, ident)
         self.cgRoot = CGList([
             CGGeneric(decl),
-            CGNamespace.build([enum.identifier.name + "Values"],
+            CGNamespace.build([ident + "Values"],
                               CGIndenter(CGGeneric(inner)), public=True),
         ])
 
@@ -4032,17 +4034,14 @@ def convertConstIDLValueToRust(value):
 
 
 class CGConstant(CGThing):
-    def __init__(self, constants):
+    def __init__(self, constant):
         CGThing.__init__(self)
-        self.constants = constants
+        self.constant = constant
 
     def define(self):
-        def stringDecl(const):
-            name = const.identifier.name
-            value = convertConstIDLValueToRust(const.value)
-            return CGGeneric("pub const %s: %s = %s;\n" % (name, builtinNames[const.value.type.tag()], value))
-
-        return CGIndenter(CGList(stringDecl(m) for m in self.constants)).define()
+        name = self.constant.identifier.name
+        value = convertConstIDLValueToRust(self.constant.value)
+        return "pub const %s: %s = %s;\n" % (name, builtinNames[self.constant.value.type.tag()], value)
 
 
 def getUnionTypeTemplateVars(type, descriptorProvider):
@@ -5573,7 +5572,7 @@ def generate_imports(config, cgthings, descriptors, callbacks=None, dictionaries
         'dom::bindings::utils::ProtoOrIfaceArray',
         'dom::bindings::utils::enumerate_global',
         'dom::bindings::utils::finalize_global',
-        'dom::bindings::utils::find_enum_string_index',
+        'dom::bindings::utils::find_enum_value',
         'dom::bindings::utils::generic_getter',
         'dom::bindings::utils::generic_lenient_getter',
         'dom::bindings::utils::generic_lenient_setter',
@@ -5720,10 +5719,10 @@ class CGDescriptor(CGThing):
             cgThings.append(CGClassTraceHook(descriptor))
 
         # If there are no constant members, don't make a module for constants
-        constMembers = [m for m in descriptor.interface.members if m.isConst()]
+        constMembers = [CGConstant(m) for m in descriptor.interface.members if m.isConst()]
         if constMembers:
             cgThings.append(CGNamespace.build([descriptor.name + "Constants"],
-                                              CGConstant(constMembers),
+                                              CGIndenter(CGList(constMembers)),
                                               public=True))
             reexports.append(descriptor.name + 'Constants')
 
@@ -6195,6 +6194,9 @@ def type_needs_tracing(t):
 
         if t.isSequence():
             return type_needs_tracing(t.inner)
+
+        if t.isUnion():
+            return any(type_needs_tracing(member) for member in t.flatMemberTypes)
 
         return False
 

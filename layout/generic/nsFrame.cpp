@@ -188,9 +188,54 @@ IsXULBoxWrapped(const nsIFrame* aFrame)
          !aFrame->IsXULBoxFrame();
 }
 
+void
+nsReflowStatus::UpdateTruncated(const ReflowInput& aReflowInput,
+                                const ReflowOutput& aMetrics)
+{
+  const WritingMode containerWM = aMetrics.GetWritingMode();
+  if (aReflowInput.GetWritingMode().IsOrthogonalTo(containerWM)) {
+    // Orthogonal flows are always reflowed with an unconstrained dimension,
+    // so should never end up truncated (see ReflowInput::Init()).
+    mTruncated = false;
+  } else if (aReflowInput.AvailableBSize() != NS_UNCONSTRAINEDSIZE &&
+             aReflowInput.AvailableBSize() < aMetrics.BSize(containerWM) &&
+             !aReflowInput.mFlags.mIsTopOfPage) {
+    mTruncated = true;
+  } else {
+    mTruncated = false;
+  }
+}
+
 // Formerly the nsIFrameDebug interface
 
 #ifdef DEBUG
+std::ostream& operator<<(std::ostream& aStream,
+                         const nsReflowStatus& aStatus)
+{
+  char complete = 'Y';
+  if (aStatus.IsIncomplete()) {
+    complete = 'N';
+  } else if (aStatus.IsOverflowIncomplete()) {
+    complete = 'O';
+  }
+
+  char brk = 'N';
+  if (aStatus.IsInlineBreakBefore()) {
+    brk = 'B';
+  } else if (aStatus.IsInlineBreakAfter()) {
+    brk = 'A';
+  }
+
+  aStream << "["
+          << "Complete=" << complete << ","
+          << "NIF=" << (aStatus.NextInFlowNeedsReflow() ? 'Y' : 'N') << ","
+          << "Truncated=" << (aStatus.IsTruncated() ? 'Y' : 'N') << ","
+          << "Break=" << brk << ","
+          << "FirstLetter=" << (aStatus.FirstLetterComplete() ? 'Y' : 'N')
+          << "]";
+  return aStream;
+}
+
 static bool gShowFrameBorders = false;
 
 void nsFrame::ShowFrameBorders(bool aEnable)
@@ -361,25 +406,36 @@ nsIFrame::ContentStatesChanged(mozilla::EventStates aStates)
 {
 }
 
-void
-NS_MergeReflowStatusInto(nsReflowStatus* aPrimary, nsReflowStatus aSecondary)
+AutoWeakFrame::AutoWeakFrame(const WeakFrame& aOther)
+  : mPrev(nullptr), mFrame(nullptr)
 {
-  *aPrimary |= aSecondary &
-    (NS_FRAME_NOT_COMPLETE | NS_FRAME_OVERFLOW_INCOMPLETE |
-     NS_FRAME_TRUNCATED | NS_FRAME_REFLOW_NEXTINFLOW);
-  if (*aPrimary & NS_FRAME_NOT_COMPLETE) {
-    *aPrimary &= ~NS_FRAME_OVERFLOW_INCOMPLETE;
-  }
+  Init(aOther.GetFrame());
 }
 
 void
-nsWeakFrame::Init(nsIFrame* aFrame)
+AutoWeakFrame::Init(nsIFrame* aFrame)
 {
   Clear(mFrame ? mFrame->PresContext()->GetPresShell() : nullptr);
   mFrame = aFrame;
   if (mFrame) {
     nsIPresShell* shell = mFrame->PresContext()->GetPresShell();
-    NS_WARNING_ASSERTION(shell, "Null PresShell in nsWeakFrame!");
+    NS_WARNING_ASSERTION(shell, "Null PresShell in AutoWeakFrame!");
+    if (shell) {
+      shell->AddAutoWeakFrame(this);
+    } else {
+      mFrame = nullptr;
+    }
+  }
+}
+
+void
+WeakFrame::Init(nsIFrame* aFrame)
+{
+  Clear(mFrame ? mFrame->PresContext()->GetPresShell() : nullptr);
+  mFrame = aFrame;
+  if (mFrame) {
+    nsIPresShell* shell = mFrame->PresContext()->GetPresShell();
+    MOZ_ASSERT(shell, "Null PresShell in WeakFrame!");
     if (shell) {
       shell->AddWeakFrame(this);
     } else {
@@ -400,6 +456,7 @@ nsFrame::nsFrame(nsStyleContext* aContext)
 
   mState = NS_FRAME_FIRST_REFLOW | NS_FRAME_IS_DIRTY;
   mStyleContext = aContext;
+  mWritingMode = WritingMode(mStyleContext);
   mStyleContext->AddRef();
 #ifdef DEBUG
   mStyleContext->FrameAddRef();
@@ -525,6 +582,8 @@ nsFrame::Init(nsIContent*       aContent,
   }
 
   if (aPrevInFlow) {
+    mWritingMode = aPrevInFlow->GetWritingMode();
+
     // Make sure the general flags bits are the same
     nsFrameState state = aPrevInFlow->GetStateBits();
 
@@ -1436,16 +1495,19 @@ bool
 nsIFrame::GetShapeBoxBorderRadii(nscoord aRadii[8]) const
 {
   switch (StyleDisplay()->mShapeOutside.GetReferenceBox()) {
-    case StyleShapeOutsideShapeBox::NoBox:
+    case StyleGeometryBox::NoBox:
       return false;
-    case StyleShapeOutsideShapeBox::Content:
+    case StyleGeometryBox::Content:
       return GetContentBoxBorderRadii(aRadii);
-    case StyleShapeOutsideShapeBox::Padding:
+    case StyleGeometryBox::Padding:
       return GetPaddingBoxBorderRadii(aRadii);
-    case StyleShapeOutsideShapeBox::Border:
+    case StyleGeometryBox::Border:
       return GetBorderRadii(aRadii);
-    case StyleShapeOutsideShapeBox::Margin:
+    case StyleGeometryBox::Margin:
       return GetMarginBoxBorderRadii(aRadii);
+    default:
+      MOZ_ASSERT_UNREACHABLE("Unexpected box value");
+      return false;
   }
   return false;
 }
@@ -3046,19 +3108,6 @@ nsFrame::FireDOMEvent(const nsAString& aDOMEventName, nsIContent *aContent)
   }
 }
 
-WritingMode
-nsFrame::GetWritingModeDeferringToRootElem() const
-{
-  Element* rootElem = PresContext()->Document()->GetRootElement();
-  if (rootElem) {
-    nsIFrame* primaryFrame = rootElem->GetPrimaryFrame();
-    if (primaryFrame) {
-      return primaryFrame->GetWritingMode();
-    }
-  }
-  return nsIFrame::GetWritingMode();
-}
-
 nsresult
 nsFrame::HandleEvent(nsPresContext* aPresContext, 
                      WidgetGUIEvent* aEvent,
@@ -3393,7 +3442,7 @@ nsFrame::HandlePress(nsPresContext* aPresContext,
   RefPtr<nsFrameSelection> fc = const_cast<nsFrameSelection*>(frameselection);
   if (mouseEvent->mClickCount > 1) {
     // These methods aren't const but can't actually delete anything,
-    // so no need for nsWeakFrame.
+    // so no need for AutoWeakFrame.
     fc->SetDragState(true);
     fc->SetMouseDoubleDown(true);
     return HandleMultiplePress(aPresContext, mouseEvent, aEventStatus, control);
@@ -3724,7 +3773,7 @@ NS_IMETHODIMP nsFrame::HandleDrag(nsPresContext* aPresContext,
                                     getter_AddRefs(parentContent),
                                     &contentOffset, &target);      
 
-  nsWeakFrame weakThis = this;
+  AutoWeakFrame weakThis = this;
   if (NS_SUCCEEDED(result) && parentContent) {
     frameselection->HandleTableSelection(parentContent, contentOffset, target,
                                          mouseEvent);
@@ -4936,7 +4985,7 @@ nsFrame::ComputeSize(nsRenderingContext* aRenderingContext,
   result.ISize(aWM) = std::max(minISize, result.ISize(aWM));
 
   // Compute block-axis size
-  // (but not if we have auto bsize or if we recieved the "eUseAutoBSize"
+  // (but not if we have auto bsize or if we received the "eUseAutoBSize"
   // flag -- then, we'll just stick with the bsize that we already calculated
   // in the initial ComputeAutoSize() call.)
   if (!(aFlags & nsIFrame::eUseAutoBSize)) {
@@ -5714,7 +5763,7 @@ nsFrame::Reflow(nsPresContext*          aPresContext,
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsFrame");
   aDesiredSize.ClearSize();
-  aStatus = NS_FRAME_COMPLETE;
+  aStatus.Reset();
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowInput, aDesiredSize);
 }
 
@@ -6180,10 +6229,6 @@ SchedulePaintInternal(nsIFrame* aFrame, nsIFrame::PaintType aType = nsIFrame::PA
 
   if (aType == nsIFrame::PAINT_DEFAULT) {
     displayRoot->AddStateBits(NS_FRAME_UPDATE_LAYER_TREE);
-  }
-  nsIPresShell* shell = aFrame->PresContext()->PresShell();
-  if (shell) {
-    shell->AddInvalidateHiddenPresShellObserver(pres->RefreshDriver());
   }
 }
 
@@ -6753,13 +6798,12 @@ nsFrame::IsFrameTreeTooDeep(const ReflowInput& aReflowInput,
     aMetrics.mCarriedOutBEndMargin.Zero();
     aMetrics.mOverflowAreas.Clear();
 
+    aStatus.Reset();
     if (GetNextInFlow()) {
       // Reflow depth might vary between reflows, so we might have
       // successfully reflowed and split this frame before.  If so, we
       // shouldn't delete its continuations.
-      aStatus = NS_FRAME_NOT_COMPLETE;
-    } else {
-      aStatus = NS_FRAME_COMPLETE;
+      aStatus.SetIncomplete();
     }
 
     return true;
@@ -9109,7 +9153,8 @@ GetCorrectedParent(const nsIFrame* aFrame)
   // box, or a non-NAC-backed pseudo like ::first-line) that does not match the
   // one that the NAC implements, if any.
   nsIContent* content = aFrame->GetContent();
-  Element* element = content->IsElement() ? content->AsElement() : nullptr;
+  Element* element =
+    content && content->IsElement() ? content->AsElement() : nullptr;
   if (element && element->IsNativeAnonymous() &&
       element->GetPseudoElementType() == aFrame->StyleContext()->GetPseudoType()) {
     while (parent->GetContent() && parent->GetContent()->IsNativeAnonymous()) {
@@ -9734,7 +9779,7 @@ nsFrame::DoXULLayout(nsBoxLayoutState& aState)
     AddStateBits(NS_FRAME_IN_REFLOW);
     // Set up a |reflowStatus| to pass into ReflowAbsoluteFrames
     // (just a dummy value; hopefully that's OK)
-    nsReflowStatus reflowStatus = NS_FRAME_COMPLETE;
+    nsReflowStatus reflowStatus;
     ReflowAbsoluteFrames(aState.PresContext(), desiredSize,
                          reflowInput, reflowStatus);
     RemoveStateBits(NS_FRAME_IN_REFLOW);
@@ -9771,7 +9816,7 @@ nsFrame::BoxReflow(nsBoxLayoutState&        aState,
 #endif
 
   nsBoxLayoutMetrics *metrics = BoxMetrics();
-  nsReflowStatus status = NS_FRAME_COMPLETE;
+  nsReflowStatus status;
   WritingMode wm = aDesiredSize.GetWritingMode();
 
   bool needsReflow = NS_SUBTREE_DIRTY(this);
@@ -9946,7 +9991,7 @@ nsFrame::BoxReflow(nsBoxLayoutState&        aState,
 
     Reflow(aPresContext, aDesiredSize, reflowInput, status);
 
-    NS_ASSERTION(NS_FRAME_IS_COMPLETE(status), "bad status");
+    NS_ASSERTION(status.IsComplete(), "bad status");
 
     uint32_t layoutFlags = aState.LayoutFlags();
     nsContainerFrame::FinishReflowChild(this, aPresContext, aDesiredSize,
@@ -10340,8 +10385,8 @@ nsFrame::Trace(const char* aMethod, bool aEnter, nsReflowStatus aStatus)
     GetTagName(this, mContent, sizeof(tagbuf), tagbuf);
     PR_LogPrint("%s: %s %s, status=%scomplete%s",
                 tagbuf, aEnter ? "enter" : "exit", aMethod,
-                NS_FRAME_IS_NOT_COMPLETE(aStatus) ? "not" : "",
-                (NS_FRAME_REFLOW_NEXTINFLOW & aStatus) ? "+reflow" : "");
+                aStatus.IsIncomplete() ? "not" : "",
+                (aStatus.NextInFlowNeedsReflow()) ? "+reflow" : "");
   }
 }
 
@@ -10353,7 +10398,7 @@ nsFrame::TraceMsg(const char* aFormatString, ...)
     char argbuf[200];
     va_list ap;
     va_start(ap, aFormatString);
-    PR_vsnprintf(argbuf, sizeof(argbuf), aFormatString, ap);
+    VsprintfLiteral(argbuf, aFormatString, ap);
     va_end(ap);
 
     char tagbuf[40];
@@ -11202,11 +11247,11 @@ void* nsFrame::DisplayIntrinsicSizeEnter(nsIFrame* aFrame,
   return treeNode;
 }
 
-void nsFrame::DisplayReflowExit(nsPresContext*      aPresContext,
-                                nsIFrame*            aFrame,
+void nsFrame::DisplayReflowExit(nsPresContext* aPresContext,
+                                nsIFrame* aFrame,
                                 ReflowOutput& aMetrics,
-                                nsReflowStatus       aStatus,
-                                void*                aFrameTreeNode)
+                                const nsReflowStatus& aStatus,
+                                void* aFrameTreeNode)
 {
   if (!DR_state->mActive) return;
 
@@ -11225,8 +11270,8 @@ void nsFrame::DisplayReflowExit(nsPresContext*      aPresContext,
     DR_state->PrettyUC(aMetrics.Height(), height, 16);
     printf("Reflow d=%s,%s", width, height);
 
-    if (!NS_FRAME_IS_FULLY_COMPLETE(aStatus)) {
-      printf(" status=0x%x", aStatus);
+    if (!aStatus.IsFullyComplete()) {
+      printf(" status=%s", ToString(aStatus).c_str());
     }
     if (aFrame->HasOverflowAreas()) {
       DR_state->PrettyUC(aMetrics.VisualOverflow().x, x, 16);

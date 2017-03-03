@@ -122,7 +122,6 @@
 #include "mozAutoDocUpdate.h"
 
 #include "nsCSSParser.h"
-#include "prprf.h"
 #include "nsDOMMutationObserver.h"
 #include "nsWrapperCacheInlines.h"
 #include "xpcpublic.h"
@@ -859,7 +858,7 @@ Element::ScrollByNoFlush(int32_t aDx, int32_t aDy)
     return false;
   }
 
-  nsWeakFrame weakRef(sf->GetScrolledFrame());
+  AutoWeakFrame weakRef(sf->GetScrolledFrame());
 
   CSSIntPoint before = sf->GetScrollPositionCSSPixels();
   sf->ScrollToCSSPixelsApproximate(CSSIntPoint(before.x + aDx, before.y + aDy));
@@ -3852,7 +3851,7 @@ Element::ClearDataset()
   slots->mDataset = nullptr;
 }
 
-nsDataHashtable<nsPtrHashKey<DOMIntersectionObserver>, int32_t>*
+nsDataHashtable<nsRefPtrHashKey<DOMIntersectionObserver>, int32_t>*
 Element::RegisteredIntersectionObservers()
 {
   nsDOMSlots* slots = DOMSlots();
@@ -3862,7 +3861,7 @@ Element::RegisteredIntersectionObservers()
 void
 Element::RegisterIntersectionObserver(DOMIntersectionObserver* aObserver)
 {
-  nsDataHashtable<nsPtrHashKey<DOMIntersectionObserver>, int32_t>* observers =
+  nsDataHashtable<nsRefPtrHashKey<DOMIntersectionObserver>, int32_t>* observers =
     RegisteredIntersectionObservers();
   if (observers->Contains(aObserver)) {
     return;
@@ -3873,7 +3872,7 @@ Element::RegisterIntersectionObserver(DOMIntersectionObserver* aObserver)
 void
 Element::UnregisterIntersectionObserver(DOMIntersectionObserver* aObserver)
 {
-  nsDataHashtable<nsPtrHashKey<DOMIntersectionObserver>, int32_t>* observers =
+  nsDataHashtable<nsRefPtrHashKey<DOMIntersectionObserver>, int32_t>* observers =
     RegisteredIntersectionObservers();
   observers->Remove(aObserver);
 }
@@ -3881,7 +3880,7 @@ Element::UnregisterIntersectionObserver(DOMIntersectionObserver* aObserver)
 bool
 Element::UpdateIntersectionObservation(DOMIntersectionObserver* aObserver, int32_t aThreshold)
 {
-  nsDataHashtable<nsPtrHashKey<DOMIntersectionObserver>, int32_t>* observers =
+  nsDataHashtable<nsRefPtrHashKey<DOMIntersectionObserver>, int32_t>* observers =
     RegisteredIntersectionObservers();
   if (!observers->Contains(aObserver)) {
     return false;

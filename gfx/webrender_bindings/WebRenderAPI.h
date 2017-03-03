@@ -48,9 +48,7 @@ public:
 
   void SetRootPipeline(wr::PipelineId aPipeline);
 
-  wr::ImageKey AddImageBuffer(gfx::IntSize aSize,
-                              uint32_t aStride,
-                              gfx::SurfaceFormat aFormat,
+  wr::ImageKey AddImageBuffer(const ImageDescriptor& aDescriptor,
                               Range<uint8_t> aBytes);
 
   wr::ImageKey AddExternalImageHandle(gfx::IntSize aSize,
@@ -58,8 +56,7 @@ public:
                                       uint64_t aHandle);
 
   void UpdateImageBuffer(wr::ImageKey aKey,
-                         gfx::IntSize aSize,
-                         gfx::SurfaceFormat aFormat,
+                         const ImageDescriptor& aDescriptor,
                          Range<uint8_t> aBytes);
 
   void DeleteImage(wr::ImageKey aKey);
@@ -74,12 +71,14 @@ public:
   void Readback(gfx::IntSize aSize, uint8_t *aBuffer, uint32_t aBufferSize);
 
   GLint GetMaxTextureSize() const { return mMaxTextureSize; }
+  bool GetUseANGLE() const { return mUseANGLE; }
 
 protected:
-  WebRenderAPI(WrAPI* aRawApi, wr::WindowId aId, GLint aMaxTextureSize)
+  WebRenderAPI(WrAPI* aRawApi, wr::WindowId aId, GLint aMaxTextureSize, bool aUseANGLE)
     : mWrApi(aRawApi)
     , mId(aId)
     , mMaxTextureSize(aMaxTextureSize)
+    , mUseANGLE(aUseANGLE)
   {}
 
   ~WebRenderAPI();
@@ -87,6 +86,7 @@ protected:
   WrAPI* mWrApi;
   wr::WindowId mId;
   GLint mMaxTextureSize;
+  bool mUseANGLE;
 
   friend class DisplayListBuilder;
 };
@@ -114,14 +114,37 @@ public:
 
   void PopStackingContext();
 
+  void PushScrollLayer(const WrRect& aBounds, // TODO: We should work with strongly typed rects
+                       const WrRect& aOverflow,
+                       const WrImageMask* aMask); // TODO: needs a wrapper.
+
+  void PopScrollLayer();
+
+
   void PushRect(const WrRect& aBounds,
                 const WrRect& aClip,
                 const WrColor& aColor);
 
+  void PushLinearGradient(const WrRect& aBounds,
+                          const WrRect& aClip,
+                          const WrPoint& aStartPoint,
+                          const WrPoint& aEndPoint,
+                          const nsTArray<WrGradientStop>& aStops,
+                          wr::GradientExtendMode aExtendMode);
+
+  void PushRadialGradient(const WrRect& aBounds,
+                          const WrRect& aClip,
+                          const WrPoint& aStartCenter,
+                          const WrPoint& aEndCenter,
+                          float aStartRadius,
+                          float aEndRadius,
+                          const nsTArray<WrGradientStop>& aStops,
+                          wr::GradientExtendMode aExtendMode);
+
   void PushImage(const WrRect& aBounds,
                  const WrRect& aClip,
                  const WrImageMask* aMask,
-                 const WrTextureFilter aFilter,
+                 wr::ImageRendering aFilter,
                  wr::ImageKey aImage);
 
   void PushIFrame(const WrRect& aBounds,
@@ -142,6 +165,16 @@ public:
                 wr::FontKey aFontKey,
                 Range<const WrGlyphInstance> aGlyphBuffer,
                 float aGlyphSize);
+
+  void PushBoxShadow(const WrRect& aRect,
+                     const WrRect& aClip,
+                     const WrRect& aBoxBounds,
+                     const WrPoint& aOffset,
+                     const WrColor& aColor,
+                     const float& aBlurRadius,
+                     const float& aSpreadRadius,
+                     const float& aBorderRadius,
+                     const WrBoxShadowClipMode& aClipMode);
 
   // Try to avoid using this when possible.
   WrState* Raw() { return mWrState; }

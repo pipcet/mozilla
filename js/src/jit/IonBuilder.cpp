@@ -870,9 +870,12 @@ IonBuilder::processIterators()
     Vector<MDefinition*, 8, SystemAllocPolicy> worklist;
 
     for (size_t i = 0; i < iterators_.length(); i++) {
-        if (!worklist.append(iterators_[i]))
-            return abort(AbortReason::Alloc);
-        iterators_[i]->setInWorklist();
+        MDefinition* iter = iterators_[i];
+        if (!iter->isInWorklist()) {
+            if (!worklist.append(iter))
+                return abort(AbortReason::Alloc);
+            iter->setInWorklist();
+        }
     }
 
     while (!worklist.empty()) {
@@ -1172,6 +1175,9 @@ IonBuilder::initEnvironmentChain(MDefinition* callee)
         env = constant(ObjectValue(script()->global().lexicalEnvironment()));
     }
 
+    // Update the environment slot from UndefinedValue only after initial
+    // environment is created so that bailout doesn't see a partial env.
+    // See: |InitFromBailout|
     current->setEnvironmentChain(env);
     return Ok();
 }
@@ -2204,6 +2210,19 @@ IonBuilder::inspectOpcode(JSOp op)
       case JSOP_SETFUNNAME:
         return jsop_setfunname(GET_UINT8(pc));
 
+      case JSOP_PUSHLEXICALENV:
+        return jsop_pushlexicalenv(GET_UINT32_INDEX(pc));
+
+      case JSOP_POPLEXICALENV:
+        current->setEnvironmentChain(walkEnvironmentChain(1));
+        return Ok();
+
+      case JSOP_FRESHENLEXICALENV:
+        return jsop_copylexicalenv(true);
+
+      case JSOP_RECREATELEXICALENV:
+        return jsop_copylexicalenv(false);
+
       case JSOP_ITER:
         return jsop_iter(GET_INT8(pc));
 
@@ -2248,6 +2267,9 @@ IonBuilder::inspectOpcode(JSOp op)
       case JSOP_CHECKISOBJ:
         return jsop_checkisobj(GET_UINT8(pc));
 
+      case JSOP_CHECKISCALLABLE:
+        return jsop_checkiscallable(GET_UINT8(pc));
+
       case JSOP_CHECKOBJCOERCIBLE:
         return jsop_checkobjcoercible();
 
@@ -2266,18 +2288,6 @@ IonBuilder::inspectOpcode(JSOp op)
         pushConstant(MagicValue(JS_IS_CONSTRUCTING));
         return Ok();
 
-#ifdef DEBUG
-      case JSOP_PUSHLEXICALENV:
-      case JSOP_FRESHENLEXICALENV:
-      case JSOP_RECREATELEXICALENV:
-      case JSOP_POPLEXICALENV:
-        // These opcodes are currently unhandled by Ion, but in principle
-        // there's no reason they couldn't be.  Whenever this happens, OSR
-        // will have to consider that JSOP_{FRESHEN,RECREATE}LEXICALENV
-        // mutates the env chain -- right now MBasicBlock::environmentChain()
-        // caches the env chain.  JSOP_{FRESHEN,RECREATE}LEXICALENV must
-        // update that stale value.
-#endif
       default:
         break;
     }
@@ -5534,9 +5544,8 @@ IonBuilder::jsop_compare(JSOp op, MDefinition* left, MDefinition* right)
 static bool
 ObjectOrSimplePrimitive(MDefinition* op)
 {
-    // Return true if op is either undefined/null/boolean/int32 or an object.
+    // Return true if op is either undefined/null/boolean/int32/symbol or an object.
     return !op->mightBeType(MIRType::String)
-        && !op->mightBeType(MIRType::Symbol)
         && !op->mightBeType(MIRType::Double)
         && !op->mightBeType(MIRType::Float32)
         && !op->mightBeType(MIRType::MagicOptimizedArguments)
@@ -5595,14 +5604,14 @@ IonBuilder::compareTryBitwise(bool* emitted, JSOp op, MDefinition* left, MDefini
     // Try to emit a bitwise compare. Check if a bitwise compare equals the wanted
     // result for all observed operand types.
 
-    // Onlye allow loose and strict equality.
+    // Only allow loose and strict equality.
     if (op != JSOP_EQ && op != JSOP_NE && op != JSOP_STRICTEQ && op != JSOP_STRICTNE) {
         trackOptimizationOutcome(TrackedOutcome::RelationalCompare);
         return Ok();
     }
 
     // Only primitive (not double/string) or objects are supported.
-    // I.e. Undefined/Null/Boolean/Int32 and Object
+    // I.e. Undefined/Null/Boolean/Int32/Symbol and Object
     if (!ObjectOrSimplePrimitive(left) || !ObjectOrSimplePrimitive(right)) {
         trackOptimizationOutcome(TrackedOutcome::OperandTypeNotBitwiseComparable);
         return Ok();
@@ -5638,10 +5647,14 @@ IonBuilder::compareTryBitwise(bool* emitted, JSOp op, MDefinition* left, MDefini
             return Ok();
         }
 
-        // For loosy comparison of an object with a Boolean/Number/String
+        // For loosy comparison of an object with a Boolean/Number/String/Symbol
         // the valueOf the object is taken. Therefore not supported.
-        bool simpleLHS = left->mightBeType(MIRType::Boolean) || left->mightBeType(MIRType::Int32);
-        bool simpleRHS = right->mightBeType(MIRType::Boolean) || right->mightBeType(MIRType::Int32);
+        bool simpleLHS = left->mightBeType(MIRType::Boolean) ||
+                         left->mightBeType(MIRType::Int32) ||
+                         left->mightBeType(MIRType::Symbol);
+        bool simpleRHS = right->mightBeType(MIRType::Boolean) ||
+                         right->mightBeType(MIRType::Int32) ||
+                         right->mightBeType(MIRType::Symbol);
         if ((left->mightBeType(MIRType::Object) && simpleRHS) ||
             (right->mightBeType(MIRType::Object) && simpleLHS))
         {
@@ -6619,12 +6632,14 @@ IonBuilder::maybeMarkEmpty(MDefinition* ins)
     // as having no possible types too. This is to avoid degrading
     // subsequent analysis.
     for (size_t i = 0; i < ins->numOperands(); i++) {
-        if (!ins->emptyResultTypeSet())
+        if (!ins->getOperand(i)->emptyResultTypeSet())
             continue;
 
         TemporaryTypeSet* types = alloc().lifoAlloc()->new_<TemporaryTypeSet>();
-        if (types)
+        if (types) {
             ins->setResultTypeSet(types);
+            return;
+        }
     }
 }
 
@@ -9410,6 +9425,15 @@ IonBuilder::jsop_checkisobj(uint8_t kind)
 }
 
 AbortReasonOr<Ok>
+IonBuilder::jsop_checkiscallable(uint8_t kind)
+{
+    MCheckIsCallable* check = MCheckIsCallable::New(alloc(), current->pop(), kind);
+    current->add(check);
+    current->push(check);
+    return Ok();
+}
+
+AbortReasonOr<Ok>
 IonBuilder::jsop_checkobjcoercible()
 {
     MDefinition* toCheck = current->peek(-1);
@@ -11839,6 +11863,35 @@ IonBuilder::jsop_setfunname(uint8_t prefixKind)
 
     current->add(ins);
     current->push(fun);
+
+    return resumeAfter(ins);
+}
+
+AbortReasonOr<Ok>
+IonBuilder::jsop_pushlexicalenv(uint32_t index)
+{
+    MOZ_ASSERT(analysis().usesEnvironmentChain());
+
+    LexicalScope* scope = &script()->getScope(index)->as<LexicalScope>();
+    MNewLexicalEnvironmentObject* ins =
+        MNewLexicalEnvironmentObject::New(alloc(), current->environmentChain(), scope);
+
+    current->add(ins);
+    current->setEnvironmentChain(ins);
+
+    return resumeAfter(ins);
+}
+
+AbortReasonOr<Ok>
+IonBuilder::jsop_copylexicalenv(bool copySlots)
+{
+    MOZ_ASSERT(analysis().usesEnvironmentChain());
+
+    MCopyLexicalEnvironmentObject* ins =
+        MCopyLexicalEnvironmentObject::New(alloc(), current->environmentChain(), copySlots);
+
+    current->add(ins);
+    current->setEnvironmentChain(ins);
 
     return resumeAfter(ins);
 }

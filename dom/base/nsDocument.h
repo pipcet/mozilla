@@ -907,21 +907,13 @@ public:
   virtual mozilla::PendingAnimationTracker*
   GetOrCreatePendingAnimationTracker() override;
 
-  virtual void SuppressEventHandling(SuppressionType aWhat,
-                                     uint32_t aIncrease) override;
+  virtual void SuppressEventHandling(uint32_t aIncrease) override;
 
-  virtual void UnsuppressEventHandlingAndFireEvents(SuppressionType aWhat,
-                                                    bool aFireEvents) override;
+  virtual void UnsuppressEventHandlingAndFireEvents(bool aFireEvents) override;
 
   void DecreaseEventSuppression() {
     MOZ_ASSERT(mEventsSuppressed);
     --mEventsSuppressed;
-    MaybeRescheduleAnimationFrameNotifications();
-  }
-
-  void ResumeAnimations() {
-    MOZ_ASSERT(mAnimationsPaused);
-    --mAnimationsPaused;
     MaybeRescheduleAnimationFrameNotifications();
   }
 
@@ -1359,7 +1351,8 @@ protected:
   nsTObserverArray<nsIDocumentObserver*> mObservers;
 
   // Array of intersection observers
-  nsTArray<RefPtr<mozilla::dom::DOMIntersectionObserver>> mIntersectionObservers;
+  nsTHashtable<nsPtrHashKey<mozilla::dom::DOMIntersectionObserver>>
+    mIntersectionObservers;
 
   // Tracker for animations that are waiting to start.
   // nullptr until GetOrCreatePendingAnimationTracker is called.
@@ -1535,7 +1528,7 @@ private:
   void ClearAllBoxObjects();
 
   // Returns true if the scheme for the url for this document is "about"
-  bool IsAboutPage();
+  bool IsAboutPage() const;
 
   // These are not implemented and not supported.
   nsDocument(const nsDocument& aOther);

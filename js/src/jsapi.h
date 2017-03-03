@@ -981,11 +981,37 @@ JS_IsBuiltinFunctionConstructor(JSFunction* fun);
  * See: http://developer.mozilla.org/en/docs/Category:JSAPI_Reference
  */
 
+// Create a new runtime, with a single cooperative context for this thread.
+// On success, the new context will be the active context for the runtime.
 extern JS_PUBLIC_API(JSContext*)
 JS_NewContext(uint32_t maxbytes,
               uint32_t maxNurseryBytes = JS::DefaultNurseryBytes,
               JSRuntime* parentRuntime = nullptr);
 
+// The methods below for controlling the active context in a cooperatively
+// multithreaded runtime are not threadsafe, and the caller must ensure they
+// are called serially if there is a chance for contention between threads.
+
+// Called from the active context for a runtime, yield execution so that
+// this context is no longer active and can no longer use the API.
+extern JS_PUBLIC_API(void)
+JS_YieldCooperativeContext(JSContext* cx);
+
+// Called from a context whose runtime has no active context, this thread
+// becomes the active context for that runtime and may use the API.
+extern JS_PUBLIC_API(void)
+JS_ResumeCooperativeContext(JSContext* cx);
+
+// Create a new context on this thread for cooperative multithreading in the
+// same runtime as siblingContext. Called on a runtime (as indicated by
+// siblingContet) which has no active context, on success the new context will
+// become the runtime's active context.
+extern JS_PUBLIC_API(JSContext*)
+JS_NewCooperativeContext(JSContext* siblingContext);
+
+// Destroy a context allocated with JS_NewContext or JS_NewCooperativeContext.
+// The context must be the current active context in the runtime, and after
+// this call the runtime will have no active context.
 extern JS_PUBLIC_API(void)
 JS_DestroyContext(JSContext* cx);
 
@@ -1006,6 +1032,31 @@ JS_EndRequest(JSContext* cx);
 
 extern JS_PUBLIC_API(void)
 JS_SetFutexCanWait(JSContext* cx);
+
+namespace JS {
+
+// Single threaded execution callbacks are used to notify API clients that a
+// feature is in use on a context's runtime that is not yet compatible with
+// cooperatively multithreaded execution.
+//
+// Between a call to BeginSingleThreadedExecutionCallback and a corresponding
+// call to EndSingleThreadedExecutionCallback, only one thread at a time may
+// enter compartments in the runtime. The begin callback may yield as necessary
+// to permit other threads to finish up what they're doing, while the end
+// callback may not yield or otherwise operate on the runtime (it may be called
+// during GC).
+//
+// These callbacks may be left unspecified for runtimes which only ever have a
+// single context.
+typedef void (*BeginSingleThreadedExecutionCallback)(JSContext* cx);
+typedef void (*EndSingleThreadedExecutionCallback)(JSContext* cx);
+
+extern JS_PUBLIC_API(void)
+SetSingleThreadedExecutionCallbacks(JSContext* cx,
+                                    BeginSingleThreadedExecutionCallback begin,
+                                    EndSingleThreadedExecutionCallback end);
+
+} // namespace JS
 
 namespace js {
 
@@ -2219,7 +2270,6 @@ class JS_PUBLIC_API(CompartmentCreationOptions)
         traceGlobal_(nullptr),
         zoneSpec_(NewZoneInSystemZoneGroup),
         zonePointer_(nullptr),
-        disableNursery_(false),
         invisibleToDebugger_(false),
         mergeable_(false),
         preserveJitCode_(false),
@@ -2254,14 +2304,6 @@ class JS_PUBLIC_API(CompartmentCreationOptions)
     CompartmentCreationOptions& setNewZoneInNewZoneGroup();
     CompartmentCreationOptions& setNewZoneInSystemZoneGroup();
     CompartmentCreationOptions& setNewZoneInExistingZoneGroup(JSObject* obj);
-
-    // If these options are creating a new zone group, prevent the use of a
-    // generational GC nursery by that group.
-    bool disableNursery() const { return disableNursery_; }
-    CompartmentCreationOptions& setDisableNursery(bool flag) {
-        disableNursery_ = flag;
-        return *this;
-    }
 
     // Certain scopes (i.e. XBL compilation scopes) are implementation details
     // of the embedding, and references to them should never leak out to script.
@@ -2332,7 +2374,6 @@ class JS_PUBLIC_API(CompartmentCreationOptions)
     JSTraceOp traceGlobal_;
     ZoneSpecifier zoneSpec_;
     void* zonePointer_; // Per zoneSpec_, either a Zone, ZoneGroup, or null.
-    bool disableNursery_;
     bool invisibleToDebugger_;
     bool mergeable_;
     bool preserveJitCode_;
@@ -3838,6 +3879,7 @@ class JS_FRIEND_API(TransitiveCompileOptions)
         forceAsync(false),
         installedFile(false),
         sourceIsLazy(false),
+        allowHTMLComments(true),
         introductionType(nullptr),
         introductionLineno(0),
         introductionOffset(0),
@@ -3874,6 +3916,7 @@ class JS_FRIEND_API(TransitiveCompileOptions)
     bool forceAsync;
     bool installedFile;  // 'true' iff pre-compiling js file in packaged app
     bool sourceIsLazy;
+    bool allowHTMLComments;
 
     // |introductionType| is a statically allocated C string:
     // one of "eval", "Function", or "GeneratorFunction".
@@ -6811,5 +6854,14 @@ SetGetPerformanceGroupsCallback(JSContext*, GetGroupsCallback, void*);
 
 } /* namespace js */
 
+namespace js {
+
+enum class CompletionKind {
+    Normal,
+    Return,
+    Throw
+};
+
+} /* namespace js */
 
 #endif /* jsapi_h */

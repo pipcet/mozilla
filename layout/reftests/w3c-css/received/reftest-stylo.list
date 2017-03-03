@@ -115,7 +115,7 @@ fails == css-multicol-1/multicol-nested-margin-002.xht css-multicol-1/multicol-n
 fails == css-multicol-1/multicol-nested-margin-003.xht css-multicol-1/multicol-nested-margin-003.xht
 fails == css-multicol-1/multicol-nested-margin-004.xht css-multicol-1/multicol-nested-margin-004.xht
 fails == css-multicol-1/multicol-nested-margin-005.xht css-multicol-1/multicol-nested-margin-005.xht
-fails asserts-if(stylo,4) == css-multicol-1/multicol-overflow-000.xht css-multicol-1/multicol-overflow-000.xht # bug 1324661
+fails == css-multicol-1/multicol-overflow-000.xht css-multicol-1/multicol-overflow-000.xht
 fails == css-multicol-1/multicol-overflowing-001.xht css-multicol-1/multicol-overflowing-001.xht
 fails == css-multicol-1/multicol-reduce-000.xht css-multicol-1/multicol-reduce-000.xht
 fails == css-multicol-1/multicol-rule-000.xht css-multicol-1/multicol-rule-000.xht
@@ -145,10 +145,10 @@ fails == css-multicol-1/multicol-rule-ridge-000.xht css-multicol-1/multicol-rule
 == css-multicol-1/multicol-rule-shorthand-001.xht css-multicol-1/multicol-rule-shorthand-001.xht
 fails == css-multicol-1/multicol-rule-solid-000.xht css-multicol-1/multicol-rule-solid-000.xht
 fails == css-multicol-1/multicol-rule-stacking-001.xht css-multicol-1/multicol-rule-stacking-001.xht
-asserts-if(stylo,4) == css-multicol-1/multicol-rule-style-groove-001.xht css-multicol-1/multicol-rule-style-groove-001.xht # bug 1324661
-asserts-if(stylo,4) == css-multicol-1/multicol-rule-style-inset-001.xht css-multicol-1/multicol-rule-style-inset-001.xht # bug 1324661
-asserts-if(stylo,4) == css-multicol-1/multicol-rule-style-outset-001.xht css-multicol-1/multicol-rule-style-outset-001.xht # bug 1324661
-asserts-if(stylo,4) == css-multicol-1/multicol-rule-style-ridge-001.xht css-multicol-1/multicol-rule-style-ridge-001.xht # bug 1324661
+== css-multicol-1/multicol-rule-style-groove-001.xht css-multicol-1/multicol-rule-style-groove-001.xht
+== css-multicol-1/multicol-rule-style-inset-001.xht css-multicol-1/multicol-rule-style-inset-001.xht
+== css-multicol-1/multicol-rule-style-outset-001.xht css-multicol-1/multicol-rule-style-outset-001.xht
+== css-multicol-1/multicol-rule-style-ridge-001.xht css-multicol-1/multicol-rule-style-ridge-001.xht
 fails == css-multicol-1/multicol-shorthand-001.xht css-multicol-1/multicol-shorthand-001.xht
 fails == css-multicol-1/multicol-span-000.xht css-multicol-1/multicol-span-000.xht
 fails == css-multicol-1/multicol-span-all-001.xht css-multicol-1/multicol-span-all-001.xht
@@ -230,9 +230,9 @@ fails == css-values-3/vh-calc-support-pct.html css-values-3/vh-calc-support-pct.
 fails == css-values-3/vh-calc-support.html css-values-3/vh-calc-support.html
 fails == css-values-3/vh-em-inherit.html css-values-3/vh-em-inherit.html
 fails == css-values-3/vh-inherit.html css-values-3/vh-inherit.html
-# == css-values-3/vh-interpolate-pct.html css-values-3/vh-interpolate-pct.html
-# == css-values-3/vh-interpolate-px.html css-values-3/vh-interpolate-px.html
-# == css-values-3/vh-interpolate-vh.html css-values-3/vh-interpolate-vh.html
+fails == css-values-3/vh-interpolate-pct.html css-values-3/vh-interpolate-pct.html
+fails == css-values-3/vh-interpolate-px.html css-values-3/vh-interpolate-px.html
+fails == css-values-3/vh-interpolate-vh.html css-values-3/vh-interpolate-vh.html
 fails == css-values-3/vh-support-atviewport.html css-values-3/vh-support-atviewport.html
 == css-values-3/vh-support-margin.html css-values-3/vh-support-margin.html
 == css-values-3/vh-support-transform-origin.html css-values-3/vh-support-transform-origin.html
@@ -240,7 +240,7 @@ fails == css-values-3/vh-support-atviewport.html css-values-3/vh-support-atviewp
 fails == css-values-3/vh-support.html css-values-3/vh-support.html
 == css-values-3/vh-zero-support.html css-values-3/vh-zero-support.html
 fails == css-values-3/vh_not_refreshing_on_chrome.html css-values-3/vh_not_refreshing_on_chrome.html
-# == css-values-3/vh_not_refreshing_on_chrome_iframe.html css-values-3/vh_not_refreshing_on_chrome_iframe.html
+skip-if(stylo) == css-values-3/vh_not_refreshing_on_chrome_iframe.html css-values-3/vh_not_refreshing_on_chrome_iframe.html # Why does this fail to load?
 fails needs-focus == selectors-4/focus-within-001.html selectors-4/focus-within-001.html
 fails needs-focus == selectors-4/focus-within-002.html selectors-4/focus-within-002.html
 fails needs-focus == selectors-4/focus-within-003.html selectors-4/focus-within-003.html
@@ -248,10 +248,10 @@ fails needs-focus == selectors-4/focus-within-004.html selectors-4/focus-within-
 fails needs-focus == selectors-4/focus-within-005.html selectors-4/focus-within-005.html
 fails needs-focus == selectors-4/focus-within-006.html selectors-4/focus-within-006.html
 needs-focus == selectors-4/focus-within-shadow-001.html selectors-4/focus-within-shadow-001.html
-# pref(dom.webcomponents.enabled,true) needs-focus == selectors-4/focus-within-shadow-002.html selectors-4/focus-within-shadow-002.html
-# pref(dom.webcomponents.enabled,true) needs-focus == selectors-4/focus-within-shadow-003.html selectors-4/focus-within-shadow-003.html
-# pref(dom.webcomponents.enabled,true) needs-focus == selectors-4/focus-within-shadow-004.html selectors-4/focus-within-shadow-004.html
-# pref(dom.webcomponents.enabled,true) needs-focus == selectors-4/focus-within-shadow-005.html selectors-4/focus-within-shadow-005.html
+skip-if(stylo) pref(dom.webcomponents.enabled,true) needs-focus == selectors-4/focus-within-shadow-002.html selectors-4/focus-within-shadow-002.html # Bug 1292285
+skip-if(stylo) pref(dom.webcomponents.enabled,true) needs-focus == selectors-4/focus-within-shadow-003.html selectors-4/focus-within-shadow-003.html # Bug 1292285
+skip-if(stylo) pref(dom.webcomponents.enabled,true) needs-focus == selectors-4/focus-within-shadow-004.html selectors-4/focus-within-shadow-004.html # Bug 1292285
+skip-if(stylo) pref(dom.webcomponents.enabled,true) needs-focus == selectors-4/focus-within-shadow-005.html selectors-4/focus-within-shadow-005.html # Bug 1292285
 == selectors-4/of-type-selectors.xhtml selectors-4/of-type-selectors.xhtml
 fails == selectors-4/selector-required.html selectors-4/selector-required.html
 fails == selectors-4/selectors-dir-selector-ltr-001.html selectors-4/selectors-dir-selector-ltr-001.html

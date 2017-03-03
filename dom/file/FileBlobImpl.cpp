@@ -28,6 +28,7 @@ FileBlobImpl::FileBlobImpl(nsIFile* aFile)
   , mWholeFile(true)
 {
   MOZ_ASSERT(mFile, "must have file");
+  MOZ_ASSERT(XRE_IsParentProcess());
   // Lazily get the content type and size
   mContentType.SetIsVoid(true);
   mFile->GetLeafName(mName);
@@ -41,6 +42,7 @@ FileBlobImpl::FileBlobImpl(const nsAString& aName,
   , mWholeFile(true)
 {
   MOZ_ASSERT(mFile, "must have file");
+  MOZ_ASSERT(XRE_IsParentProcess());
 }
 
 FileBlobImpl::FileBlobImpl(const nsAString& aName,
@@ -52,6 +54,7 @@ FileBlobImpl::FileBlobImpl(const nsAString& aName,
   , mWholeFile(true)
 {
   MOZ_ASSERT(mFile, "must have file");
+  MOZ_ASSERT(XRE_IsParentProcess());
 }
 
 FileBlobImpl::FileBlobImpl(nsIFile* aFile, const nsAString& aName,
@@ -61,6 +64,7 @@ FileBlobImpl::FileBlobImpl(nsIFile* aFile, const nsAString& aName,
   , mWholeFile(true)
 {
   MOZ_ASSERT(mFile, "must have file");
+  MOZ_ASSERT(XRE_IsParentProcess());
   if (aContentType.IsEmpty()) {
     // Lazily get the content type and size
     mContentType.SetIsVoid(true);
@@ -74,6 +78,7 @@ FileBlobImpl::FileBlobImpl(const FileBlobImpl* aOther, uint64_t aStart,
   , mWholeFile(false)
 {
   MOZ_ASSERT(mFile, "must have file");
+  MOZ_ASSERT(XRE_IsParentProcess());
   mImmutable = aOther->mImmutable;
 }
 
@@ -231,13 +236,21 @@ const uint32_t sFileStreamFlags =
 void
 FileBlobImpl::GetInternalStream(nsIInputStream** aStream, ErrorResult& aRv)
 {
-  if (mWholeFile) {
-    aRv = NS_NewLocalFileInputStream(aStream, mFile, -1, -1, sFileStreamFlags);
+  nsCOMPtr<nsIInputStream> stream;
+  aRv = NS_NewLocalFileInputStream(getter_AddRefs(stream), mFile, -1, -1,
+                                   sFileStreamFlags);
+  if (NS_WARN_IF(aRv.Failed())) {
     return;
   }
 
-  aRv = NS_NewPartialLocalFileInputStream(aStream, mFile, mStart, mLength,
-                                          -1, -1, sFileStreamFlags);
+  if (mWholeFile) {
+    stream.forget(aStream);
+    return;
+  }
+
+  RefPtr<SlicedInputStream> slicedInputStream =
+    new SlicedInputStream(stream, mStart, mLength);
+  slicedInputStream.forget(aStream);
 }
 
 bool

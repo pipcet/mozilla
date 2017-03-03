@@ -310,13 +310,7 @@ nsBaseWidget::RevokeTransactionIdAllocator()
   if (!mLayerManager) {
     return;
   }
-
-  ClientLayerManager* clm = mLayerManager->AsClientLayerManager();
-  if (!clm) {
-    return;
-  }
-
-  clm->SetTransactionIdAllocator(nullptr);
+  mLayerManager->SetTransactionIdAllocator(nullptr);
 }
 
 void nsBaseWidget::ReleaseContentController()
@@ -1229,7 +1223,8 @@ nsBaseWidget::DispatchInputEvent(WidgetInputEvent* aEvent)
       APZThreadUtils::RunOnControllerThread(r.forget());
       return nsEventStatus_eConsumeDoDefault;
     }
-    MOZ_CRASH();
+    // Allow dispatching keyboard events on Gecko thread.
+    MOZ_ASSERT(aEvent->AsKeyboardEvent());
   }
 
   nsEventStatus status;
@@ -1346,7 +1341,7 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
   if (lm->AsWebRenderLayerManager()) {
     TextureFactoryIdentifier textureFactoryIdentifier;
     lm->AsWebRenderLayerManager()->Initialize(mCompositorBridgeChild,
-                                              mCompositorSession->RootLayerTreeId(),
+                                              wr::AsPipelineId(mCompositorSession->RootLayerTreeId()),
                                               &textureFactoryIdentifier);
     ImageBridgeChild::IdentifyCompositorTextureHost(textureFactoryIdentifier);
     gfx::VRManagerChild::IdentifyTextureHost(textureFactoryIdentifier);
