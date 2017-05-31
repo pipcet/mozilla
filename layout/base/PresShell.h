@@ -56,6 +56,10 @@ class nsAutoCauseReflowNotifier;
 
 namespace mozilla {
 
+namespace dom {
+class Element;
+}  // namespace dom
+
 class EventDispatchingCallback;
 
 // A set type for tracking visible frames, for use by the visibility code in
@@ -118,7 +122,7 @@ public:
   virtual nsIPageSequenceFrame* GetPageSequenceFrame() const override;
   virtual nsCanvasFrame* GetCanvasFrame() const override;
 
-  virtual nsIFrame* GetPlaceholderFrameFor(nsIFrame* aFrame) const override;
+  virtual nsPlaceholderFrame* GetPlaceholderFrameFor(nsIFrame* aFrame) const override;
   virtual void FrameNeedsReflow(nsIFrame *aFrame, IntrinsicDirty aIntrinsicDirty,
                                 nsFrameState aBitToAdd,
                                 ReflowRootHandling aRootHandling =
@@ -131,11 +135,6 @@ public:
   virtual void DestroyFramesFor(nsIContent*  aContent,
                                 nsIContent** aDestroyedFramesFor) override;
   virtual void CreateFramesFor(nsIContent* aContent) override;
-
-  /**
-   * Recreates the frames for a node
-   */
-  virtual nsresult RecreateFramesFor(nsIContent* aContent) override;
 
   /**
    * Post a callback that should be handled after reflow has finished.
@@ -188,7 +187,7 @@ public:
 
   virtual void NotifyCounterStylesAreDirty() override;
 
-  virtual nsresult ReconstructFrames(void) override;
+  virtual void ReconstructFrames(void) override;
   virtual void Freeze() override;
   virtual void Thaw() override;
   virtual void FireOrClearDelayedEvents(bool aFireEvents) override;
@@ -524,7 +523,8 @@ protected:
   void ShowEventTargetDebug();
 #endif
 
-  void RecordStyleSheetChange(mozilla::StyleSheet* aStyleSheet);
+  void RecordStyleSheetChange(mozilla::StyleSheet* aStyleSheet,
+                              StyleSheet::ChangeType);
 
   void RemovePreferenceStyles();
 
@@ -906,6 +906,11 @@ protected:
   bool                      mIsLastKeyDownCanceled : 1;
 
   static bool               sDisableNonTestMouseEvents;
+
+  mozilla::TimeStamp        mLastOSWake;
+
+  static mozilla::TimeStamp sLastInputCreated;
+  static mozilla::TimeStamp sLastInputProcessed;
 };
 
 } // namespace mozilla

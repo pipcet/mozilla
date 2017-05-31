@@ -1,18 +1,19 @@
 "use strict";
 
-module.exports = { // eslint-disable-line no-undef
-  "extends": "../../../../../testing/mochitest/mochitest.eslintrc.js",
+module.exports = {
+  "extends": "plugin:mozilla/mochitest-test",
 
   "env": {
     "webextensions": true,
   },
 
   "globals": {
+    "BrowserTestUtils": true,
     "ExtensionTestUtils": false,
     "XPCOMUtils": true,
   },
 
   "rules": {
-    "no-shadow": 0,
+    "no-shadow": "off",
   },
 };

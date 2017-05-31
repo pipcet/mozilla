@@ -41,7 +41,8 @@ nsIRootBox::GetRootBox(nsIPresShell* aShell)
   return rootBox;
 }
 
-class nsRootBoxFrame : public nsBoxFrame, public nsIRootBox {
+class nsRootBoxFrame final : public nsBoxFrame, public nsIRootBox
+{
 public:
 
   friend nsIFrame* NS_NewBoxFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
@@ -49,7 +50,7 @@ public:
   explicit nsRootBoxFrame(nsStyleContext* aContext);
 
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsRootBoxFrame)
 
   virtual nsPopupSetFrame* GetPopupSetFrame() override;
   virtual void SetPopupSetFrame(nsPopupSetFrame* aPopupSet) override;
@@ -77,13 +78,6 @@ public:
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
-
-  /**
-   * Get the "type" of the frame
-   *
-   * @see nsGkAtoms::rootFrame
-   */
-  virtual nsIAtom* GetType() const override;
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
@@ -113,11 +107,11 @@ NS_NewRootBoxFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsRootBoxFrame)
 
-nsRootBoxFrame::nsRootBoxFrame(nsStyleContext* aContext):
-  nsBoxFrame(aContext, true)
+nsRootBoxFrame::nsRootBoxFrame(nsStyleContext* aContext)
+  : nsBoxFrame(aContext, kClassID, true)
+  , mPopupSetFrame(nullptr)
+  , mDefaultTooltip(nullptr)
 {
-  mPopupSetFrame = nullptr;
-
   nsCOMPtr<nsBoxLayout> layout;
   NS_NewStackLayout(layout);
   SetXULLayoutManager(layout);
@@ -210,14 +204,6 @@ nsRootBoxFrame::HandleEvent(nsPresContext* aPresContext,
   }
 
   return NS_OK;
-}
-
-// REVIEW: The override here was doing nothing since nsBoxFrame is our
-// parent class
-nsIAtom*
-nsRootBoxFrame::GetType() const
-{
-  return nsGkAtoms::rootFrame;
 }
 
 nsPopupSetFrame*

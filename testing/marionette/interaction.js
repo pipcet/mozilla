@@ -86,12 +86,12 @@ this.interaction = {};
  *
  * Selenium-style visibility checks will be performed if |specCompat|
  * is false (default).  Otherwise pointer-interactability checks will be
- * performed.  If either of these fail an {@code ElementNotVisibleError}
- * is returned.
+ * performed.  If either of these fail an
+ * {@code ElementNotInteractableError} is thrown.
  *
  * If |strict| is enabled (defaults to disabled), further accessibility
- * checks will be performed, and these may result in an {@code
- * ElementNotAccessibleError} being returned.
+ * checks will be performed, and these may result in an
+ * {@code ElementNotAccessibleError} being returned.
  *
  * When |el| is not enabled, an {@code InvalidElementStateError}
  * is returned.
@@ -103,34 +103,113 @@ this.interaction = {};
  * @param {boolean=} specCompat
  *     Use WebDriver specification compatible interactability definition.
  *
- * @throws {ElementNotVisibleError}
+ * @throws {ElementNotInteractableError}
  *     If either Selenium-style visibility check or
  *     pointer-interactability check fails.
+ * @throws {ElementClickInterceptedError}
+ *     If |el| is obscured by another element and a click would not hit,
+ *     in |specCompat| mode.
  * @throws {ElementNotAccessibleError}
  *     If |strict| is true and element is not accessible.
  * @throws {InvalidElementStateError}
  *     If |el| is not enabled.
  */
-interaction.clickElement = function*(el, strict = false, specCompat = false) {
+interaction.clickElement = function* (el, strict = false, specCompat = false) {
+  const a11y = accessibility.get(strict);
+  if (element.isXULElement(el)) {
+    yield chromeClick(el, a11y);
+  } else if (specCompat) {
+    yield webdriverClickElement(el, a11y);
+  } else {
+    yield seleniumClickElement(el, a11y);
+  }
+};
+
+function* webdriverClickElement (el, a11y) {
+  const win = getWindow(el);
+  const doc = win.document;
+
+  // step 3
+  if (el.localName == "input" && el.type == "file") {
+    throw new InvalidArgumentError(
+        "Cannot click <input type=file> elements");
+  }
+
+  let containerEl = element.getContainer(el);
+
+  // step 4
+  if (!element.isInView(containerEl)) {
+    element.scrollIntoView(containerEl);
+  }
+
+  // step 5
+  // TODO(ato): wait for containerEl to be in view
+
+  // step 6
+  // if we cannot bring the container element into the viewport
+  // there is no point in checking if it is pointer-interactable
+  if (!element.isInView(containerEl)) {
+    throw new ElementNotInteractableError(
+        error.pprint`Element ${el} could not be scrolled into view`);
+  }
+
+  // step 7
+  let rects = containerEl.getClientRects();
+  let clickPoint = element.getInViewCentrePoint(rects[0], win);
+
+  if (element.isObscured(containerEl)) {
+    throw new ElementClickInterceptedError(containerEl, clickPoint);
+  }
+
+  yield a11y.getAccessible(el, true).then(acc => {
+    a11y.assertVisible(acc, el, true);
+    a11y.assertEnabled(acc, el, true);
+    a11y.assertActionable(acc, el);
+  });
+
+  // step 8
+  if (el.localName == "option") {
+    interaction.selectOption(el);
+  } else {
+    event.synthesizeMouseAtPoint(clickPoint.x, clickPoint.y, {}, win);
+  }
+
+  // step 9
+  yield interaction.flushEventLoop(win);
+
+  // step 10
+  // if the click causes navigation, the post-navigation checks are
+  // handled by the load listener in listener.js
+}
+
+function* chromeClick (el, a11y) {
+  if (!atom.isElementEnabled(el)) {
+    throw new InvalidElementStateError("Element is not enabled");
+  }
+
+  yield a11y.getAccessible(el, true).then(acc => {
+    a11y.assertVisible(acc, el, true);
+    a11y.assertEnabled(acc, el, true);
+    a11y.assertActionable(acc, el);
+  });
+
+  if (el.localName == "option") {
+    interaction.selectOption(el);
+  } else {
+    el.click();
+  }
+}
+
+function* seleniumClickElement (el, a11y) {
   let win = getWindow(el);
-  let a11y = accessibility.get(strict);
 
   let visibilityCheckEl  = el;
   if (el.localName == "option") {
-    visibilityCheckEl = interaction.getSelectForOptionElement(el);
+    visibilityCheckEl = element.getContainer(el);
   }
 
-  let interactable = false;
-  if (specCompat) {
-    if (!element.isPointerInteractable(visibilityCheckEl)) {
-      element.scrollIntoView(el);
-    }
-    interactable = element.isPointerInteractable(visibilityCheckEl);
-  } else {
-    interactable = element.isVisible(visibilityCheckEl);
-  }
-  if (!interactable) {
-    throw new ElementNotVisibleError();
+  if (!element.isVisible(visibilityCheckEl)) {
+    throw new ElementNotInteractableError();
   }
 
   if (!atom.isElementEnabled(el)) {
@@ -138,47 +217,19 @@ interaction.clickElement = function*(el, strict = false, specCompat = false) {
   }
 
   yield a11y.getAccessible(el, true).then(acc => {
-    a11y.assertVisible(acc, el, interactable);
+    a11y.assertVisible(acc, el, true);
     a11y.assertEnabled(acc, el, true);
     a11y.assertActionable(acc, el);
   });
 
-  // chrome elements
-  if (element.isXULElement(el)) {
-    if (el.localName == "option") {
-      interaction.selectOption(el);
-    } else {
-      el.click();
-    }
-
-  // content elements
+  if (el.localName == "option") {
+    interaction.selectOption(el);
   } else {
-    if (el.localName == "option") {
-      interaction.selectOption(el);
-    } else {
-      let centre = interaction.calculateCentreCoords(el);
-      let opts = {};
-      event.synthesizeMouseAtPoint(centre.x, centre.y, opts, win);
-    }
+    let rects = el.getClientRects();
+    let centre = element.getInViewCentrePoint(rects[0], win);
+    let opts = {};
+    event.synthesizeMouseAtPoint(centre.x, centre.y, opts, win);
   }
-};
-
-/**
- * Calculate the in-view centre point, that is the centre point of the
- * area of the first DOM client rectangle that is inside the viewport.
- *
- * @param {DOMElement} el
- *     Element to calculate the visible centre point of.
- *
- * @return {Object.<string, number>}
- *     X- and Y-position.
- */
-interaction.calculateCentreCoords = function (el) {
-  let rects = el.getClientRects();
-  return {
-    x: rects[0].left + rects[0].width / 2.0,
-    y: rects[0].top + rects[0].height / 2.0,
-  };
 };
 
 /**
@@ -207,20 +258,53 @@ interaction.selectOption = function (el) {
   }
 
   let win = getWindow(el);
-  let parent = interaction.getSelectForOptionElement(el);
+  let containerEl = element.getContainer(el);
 
-  event.mouseover(parent);
-  event.mousemove(parent);
-  event.mousedown(parent);
-  event.focus(parent);
-  event.input(parent);
+  event.mouseover(containerEl);
+  event.mousemove(containerEl);
+  event.mousedown(containerEl);
+  event.focus(containerEl);
+  event.input(containerEl);
 
   // toggle selectedness the way holding down control works
   el.selected = !el.selected;
 
-  event.change(parent);
-  event.mouseup(parent);
-  event.click(parent);
+  event.change(containerEl);
+  event.mouseup(containerEl);
+  event.click(containerEl);
+};
+
+/**
+ * Flushes the event loop by requesting an animation frame.
+ *
+ * This will wait for the browser to repaint before returning, typically
+ * flushing any queued events.
+ *
+ * If the document is unloaded during this request, the promise is
+ * rejected.
+ *
+ * @param {Window} win
+ *     Associated window.
+ *
+ * @return {Promise}
+ *     Promise is accepted once event queue is flushed, or rejected if
+ *     |win| has closed or been unloaded before the queue can be flushed.
+ */
+interaction.flushEventLoop = function* (win) {
+  return new Promise(resolve => {
+    let handleEvent = event => {
+      win.removeEventListener("beforeunload", this);
+      resolve();
+    };
+
+    if (win.closed) {
+      resolve();
+      return;
+    }
+
+    win.addEventListener("beforeunload", handleEvent, false);
+    win.requestAnimationFrame(handleEvent);
+  });
 };
 
 /**
@@ -258,31 +342,6 @@ interaction.uploadFile = function* (el, path) {
   el.mozSetFileArray(fs);
 
   event.change(el);
-};
-
-/**
- * Locate the <select> element that encapsulate an <option> element.
- *
- * @param {HTMLOptionElement} optionEl
- *     Option element.
- *
- * @return {HTMLSelectElement}
- *     Select element wrapping |optionEl|.
- *
- * @throws {Error}
- *     If unable to find the <select> element.
- */
-interaction.getSelectForOptionElement = function (optionEl) {
-  let parent = optionEl;
-  while (parent.parentNode && parent.localName != "select") {
-    parent = parent.parentNode;
-  }
-
-  if (parent.localName != "select") {
-    throw new Error("Unable to find parent of <option> element");
-  }
-
-  return parent;
 };
 
 /**

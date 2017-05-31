@@ -468,13 +468,18 @@ IsInlinableFallback(ICFallbackStub* icEntry)
 static inline void*
 GetStubReturnAddress(JSContext* cx, jsbytecode* pc)
 {
+    JitCompartment* jitComp = cx->compartment()->jitCompartment();
+
     if (IsGetPropPC(pc))
-        return cx->compartment()->jitCompartment()->baselineGetPropReturnAddr();
+        return jitComp->bailoutReturnAddr(BailoutReturnStub::GetProp);
     if (IsSetPropPC(pc))
-        return cx->compartment()->jitCompartment()->baselineSetPropReturnAddr();
+        return jitComp->bailoutReturnAddr(BailoutReturnStub::SetProp);
+
     // This should be a call op of some kind, now.
-    MOZ_ASSERT(IsCallPC(pc));
-    return cx->compartment()->jitCompartment()->baselineCallReturnAddr(JSOp(*pc) == JSOP_NEW);
+    MOZ_ASSERT(IsCallPC(pc) && !IsSpreadCallPC(pc));
+    if (IsConstructorCallPC(pc))
+        return jitComp->bailoutReturnAddr(BailoutReturnStub::New);
+    return jitComp->bailoutReturnAddr(BailoutReturnStub::Call);
 }
 
 static inline jsbytecode*
@@ -511,10 +516,9 @@ HasLiveStackValueAtDepth(JSScript* script, jsbytecode* pc, uint32_t stackDepth)
             break;
 
           case JSTRY_FOR_OF:
-            // For-of loops have the iterator, the result object, and the value
-            // of the result object on stack. The iterator is below the result
-            // object and the value.
-            if (stackDepth == tn->stackDepth - 2)
+            // For-of loops have the iterator and the result.value on stack.
+            // The iterator is below the result.value.
+            if (stackDepth == tn->stackDepth - 1)
                 return true;
             break;
 
@@ -737,6 +741,21 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
         } else {
             MOZ_ASSERT(v.isUndefined() || v.isMagic(JS_OPTIMIZED_OUT));
 
+#ifdef DEBUG
+            // The |envChain| slot must not be optimized out if the currently
+            // active scope requires any EnvironmentObjects beyond what is
+            // available at body scope. This checks that scope chain does not
+            // require any such EnvironmentObjects.
+            // See also: |CompileInfo::isObservableFrameSlot|
+            jsbytecode* pc = script->offsetToPC(iter.pcOffset());
+            Scope* scopeIter = script->innermostScope(pc);
+            while (scopeIter != script->bodyScope()) {
+                MOZ_ASSERT(scopeIter);
+                MOZ_ASSERT(!scopeIter->hasEnvironment());
+                scopeIter = scopeIter->enclosing();
+            }
+#endif
+
             // Get env chain from function or script.
             if (fun) {
                 // If pcOffset == 0, we may have to push a new call object, so
@@ -852,6 +871,9 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
 
     JSOp op = JSOp(*pc);
 
+    // Inlining of SPREADCALL-like frames not currently supported.
+    MOZ_ASSERT_IF(IsSpreadCallPC(pc), !iter.moreFrames());
+
     // Fixup inlined JSOP_FUNCALL, JSOP_FUNAPPLY, and accessors on the caller side.
     // On the caller side this must represent like the function wasn't inlined.
     uint32_t pushedSlots = 0;
@@ -860,12 +882,14 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
     if (iter.moreFrames() && (op == JSOP_FUNCALL || needToSaveArgs))
     {
         uint32_t inlined_args = 0;
-        if (op == JSOP_FUNCALL)
+        if (op == JSOP_FUNCALL) {
             inlined_args = 2 + GET_ARGC(pc) - 1;
-        else if (op == JSOP_FUNAPPLY)
+        } else if (op == JSOP_FUNAPPLY) {
             inlined_args = 2 + blFrame->numActualArgs();
-        else
+        } else {
+            MOZ_ASSERT(IsGetPropPC(pc) || IsSetPropPC(pc));
             inlined_args = 2 + IsSetPropPC(pc);
+        }
 
         MOZ_ASSERT(exprStackSlots >= inlined_args);
         pushedSlots = exprStackSlots - inlined_args;
@@ -1001,7 +1025,6 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
     }
 
     uint32_t pcOff = script->pcToOffset(pc);
-    bool isCall = IsCallPC(pc);
     BaselineScript* baselineScript = script->baselineScript();
 
 #ifdef DEBUG
@@ -1046,7 +1069,7 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
             BailoutKindString(bailoutKind));
 #endif
 
-    bool pushedNewTarget = op == JSOP_NEW;
+    bool pushedNewTarget = IsConstructorCallPC(pc);
 
     // If this was the last inline frame, or we are bailing out to a catch or
     // finally block in this frame, then unpacking is almost done.
@@ -1068,7 +1091,7 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
                 enterMonitorChain = true;
         }
 
-        uint32_t numCallArgs = isCall ? GET_ARGC(pc) : 0;
+        uint32_t numUses = js::StackUses(script, pc);
 
         if (resumeAfter && !enterMonitorChain)
             pc = GetNextPc(pc);
@@ -1099,7 +1122,8 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
             // stack and pops them only after returning from the call IC.
             // Push undefs onto the stack in anticipation of the popping of the
             // callee, thisv, and actual arguments passed from the caller's frame.
-            if (isCall) {
+            if (IsCallPC(pc)) {
+                uint32_t numCallArgs = numUses - 2 - uint32_t(pushedNewTarget);
                 if (!builder.writeValue(UndefinedValue(), "CallOp FillerCallee"))
                     return false;
                 if (!builder.writeValue(UndefinedValue(), "CallOp FillerThis"))
@@ -1113,10 +1137,10 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
                         return false;
                 }
 
-                frameSize += (numCallArgs + 2 + pushedNewTarget) * sizeof(Value);
+                frameSize += numUses * sizeof(Value);
                 blFrame->setFrameSize(frameSize);
                 JitSpew(JitSpew_BaselineBailouts, "      Adjusted framesize += %d: %d",
-                                (int) ((numCallArgs + 2 + pushedNewTarget) * sizeof(Value)),
+                                (int) (numUses * sizeof(Value)),
                                 (int) frameSize);
             }
 
@@ -1347,7 +1371,7 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
     JitSpew(JitSpew_BaselineBailouts, "      Callee = %016" PRIx64, callee.asRawBits());
 
     JSFunction* calleeFun = &callee.toObject().as<JSFunction>();
-    if (!builder.writePtr(CalleeToToken(calleeFun, JSOp(*pc) == JSOP_NEW), "CalleeToken"))
+    if (!builder.writePtr(CalleeToToken(calleeFun, pushedNewTarget), "CalleeToken"))
         return false;
     nextCallee.set(calleeFun);
 
@@ -1449,7 +1473,7 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
         return false;
 
     // Push calleeToken again.
-    if (!builder.writePtr(CalleeToToken(calleeFun, JSOp(*pc) == JSOP_NEW), "CalleeToken"))
+    if (!builder.writePtr(CalleeToToken(calleeFun, pushedNewTarget), "CalleeToken"))
         return false;
 
     // Push rectifier frame descriptor
@@ -1976,6 +2000,7 @@ jit::FinishBailoutToBaseline(BaselineBailoutInfo* bailoutInfo)
       case Bailout_Debugger:
       case Bailout_UninitializedThis:
       case Bailout_BadDerivedConstructorReturn:
+      case Bailout_NotPure:
         // Do nothing.
         break;
 

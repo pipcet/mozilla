@@ -11,6 +11,7 @@
 #include "mozilla/gfx/2D.h"
 #include "mozilla/UniquePtr.h"
 #include "nsFrame.h"
+#include "nsFrameSelection.h"
 #include "nsSplittableFrame.h"
 #include "nsLineBox.h"
 #include "gfxSkipChars.h"
@@ -49,22 +50,19 @@ class nsTextFrame : public nsFrame
   typedef gfxTextRun::Range Range;
 
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsTextFrame)
-  NS_DECL_FRAMEARENA_HELPERS
-
-  friend class nsContinuingTextFrame;
-  friend class nsDisplayTextGeometry;
-  friend class nsDisplayText;
-
-  explicit nsTextFrame(nsStyleContext* aContext)
-    : nsFrame(aContext)
+  explicit nsTextFrame(nsStyleContext* aContext, ClassID aID = kClassID)
+    : nsFrame(aContext, aID)
     , mNextContinuation(nullptr)
     , mContentOffset(0)
     , mContentLengthHint(0)
     , mAscent(0)
-  {
-    NS_ASSERTION(mContentOffset == 0, "Bogus content offset");
-  }
+  {}
+
+  NS_DECL_FRAMEARENA_HELPERS(nsTextFrame)
+
+  friend class nsContinuingTextFrame;
+  friend class nsDisplayTextGeometry;
+  friend class nsDisplayText;
 
   // nsQueryFrame
   NS_DECL_QUERYFRAME
@@ -88,8 +86,7 @@ public:
   nsTextFrame* GetNextContinuation() const final { return mNextContinuation; }
   void SetNextContinuation(nsIFrame* aNextContinuation) final
   {
-    NS_ASSERTION(!aNextContinuation ||
-                   GetType() == aNextContinuation->GetType(),
+    NS_ASSERTION(!aNextContinuation || Type() == aNextContinuation->Type(),
                  "setting a next continuation with incorrect type!");
     NS_ASSERTION(
       !nsSplittableFrame::IsInNextContinuationChain(aNextContinuation, this),
@@ -97,6 +94,9 @@ public:
     mNextContinuation = static_cast<nsTextFrame*>(aNextContinuation);
     if (aNextContinuation)
       aNextContinuation->RemoveStateBits(NS_FRAME_IS_FLUID_CONTINUATION);
+    // Setting a non-fluid continuation might affect our flow length (they're
+    // quite rare so we assume it always does) so we delete our cached value:
+    GetContent()->DeleteProperty(nsGkAtoms::flowlength);
   }
   nsIFrame* GetNextInFlowVirtual() const override { return GetNextInFlow(); }
   nsTextFrame* GetNextInFlow() const
@@ -109,14 +109,21 @@ public:
   }
   void SetNextInFlow(nsIFrame* aNextInFlow) final
   {
-    NS_ASSERTION(!aNextInFlow || GetType() == aNextInFlow->GetType(),
+    NS_ASSERTION(!aNextInFlow || Type() == aNextInFlow->Type(),
                  "setting a next in flow with incorrect type!");
     NS_ASSERTION(
       !nsSplittableFrame::IsInNextContinuationChain(aNextInFlow, this),
       "creating a loop in continuation chain!");
     mNextContinuation = static_cast<nsTextFrame*>(aNextInFlow);
-    if (aNextInFlow)
+    if (mNextContinuation &&
+        !mNextContinuation->HasAnyStateBits(NS_FRAME_IS_FLUID_CONTINUATION)) {
+      // Changing from non-fluid to fluid continuation might affect our flow
+      // length, so we delete our cached value:
+      GetContent()->DeleteProperty(nsGkAtoms::flowlength);
+    }
+    if (aNextInFlow) {
       aNextInFlow->AddStateBits(NS_FRAME_IS_FLUID_CONTINUATION);
+    }
   }
   nsTextFrame* LastInFlow() const final;
   nsTextFrame* LastContinuation() const final;
@@ -125,13 +132,6 @@ public:
   {
     return NS_FRAME_SPLITTABLE;
   }
-
-  /**
-    * Get the "type" of the frame
-   *
-   * @see nsGkAtoms::textFrame
-   */
-  nsIAtom* GetType() const final;
 
   bool IsFrameOfType(uint32_t aFlags) const final
   {
@@ -147,7 +147,7 @@ public:
     // suppress line break inside. This check is necessary, because when
     // a whitespace is only contained by pseudo ruby frames, its style
     // context won't have SuppressLineBreak bit set.
-    if (mozilla::RubyUtils::IsRubyContentBox(GetParent()->GetType())) {
+    if (mozilla::RubyUtils::IsRubyContentBox(GetParent()->Type())) {
       return true;
     }
     return StyleContext()->ShouldSuppressLineBreak();
@@ -631,7 +631,7 @@ public:
   };
   TrimmedOffsets GetTrimmedOffsets(const nsTextFragment* aFrag,
                                    bool aTrimAfter,
-                                   bool aPostReflow = true);
+                                   bool aPostReflow = true) const;
 
   // Similar to Reflow(), but for use from nsLineLayout
   void ReflowText(nsLineLayout& aLineLayout,

@@ -18,8 +18,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
                                   "resource://gre/modules/AppConstants.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
                                   "resource://gre/modules/PluralForm.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-                                  "resource://gre/modules/Task.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
+                                  "resource://gre/modules/PrivateBrowsingUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "SitePermissions",
                                   "resource:///modules/SitePermissions.jsm");
 
@@ -32,40 +32,12 @@ this.webrtcUI = {
   emitter: new EventEmitter(),
 
   init() {
-    Services.obs.addObserver(maybeAddMenuIndicator, "browser-delayed-startup-finished", false);
-
-    let ppmm = Cc["@mozilla.org/parentprocessmessagemanager;1"]
-                 .getService(Ci.nsIMessageBroadcaster);
-    ppmm.addMessageListener("webrtc:UpdatingIndicators", this);
-    ppmm.addMessageListener("webrtc:UpdateGlobalIndicators", this);
-    ppmm.addMessageListener("child-process-shutdown", this);
-
-    let mm = Cc["@mozilla.org/globalmessagemanager;1"]
-               .getService(Ci.nsIMessageListenerManager);
-    mm.addMessageListener("rtcpeer:Request", this);
-    mm.addMessageListener("rtcpeer:CancelRequest", this);
-    mm.addMessageListener("webrtc:Request", this);
-    mm.addMessageListener("webrtc:StopRecording", this);
-    mm.addMessageListener("webrtc:CancelRequest", this);
-    mm.addMessageListener("webrtc:UpdateBrowserIndicators", this);
+    Services.obs.addObserver(maybeAddMenuIndicator, "browser-delayed-startup-finished");
+    Services.ppmm.addMessageListener("child-process-shutdown", this);
   },
 
   uninit() {
     Services.obs.removeObserver(maybeAddMenuIndicator, "browser-delayed-startup-finished");
-
-    let ppmm = Cc["@mozilla.org/parentprocessmessagemanager;1"]
-                 .getService(Ci.nsIMessageBroadcaster);
-    ppmm.removeMessageListener("webrtc:UpdatingIndicators", this);
-    ppmm.removeMessageListener("webrtc:UpdateGlobalIndicators", this);
-
-    let mm = Cc["@mozilla.org/globalmessagemanager;1"]
-               .getService(Ci.nsIMessageListenerManager);
-    mm.removeMessageListener("rtcpeer:Request", this);
-    mm.removeMessageListener("rtcpeer:CancelRequest", this);
-    mm.removeMessageListener("webrtc:Request", this);
-    mm.removeMessageListener("webrtc:StopRecording", this);
-    mm.removeMessageListener("webrtc:CancelRequest", this);
-    mm.removeMessageListener("webrtc:UpdateBrowserIndicators", this);
 
     if (gIndicatorWindow) {
       gIndicatorWindow.close();
@@ -154,6 +126,13 @@ this.webrtcUI = {
     webrtcUI.forgetActivePermissionsFromBrowser(aBrowser);
   },
 
+  forgetStreamsFromProcess(aProcessMM) {
+    // stream.processMM is null when e10s is disabled.
+    this._streams =
+      this._streams.filter(stream => stream.processMM &&
+                                     stream.processMM != aProcessMM);
+  },
+
   showSharingDoorhanger(aActiveStream) {
     let browserWindow = aActiveStream.browser.ownerGlobal;
     if (aActiveStream.tab) {
@@ -165,9 +144,9 @@ this.webrtcUI = {
     let identityBox = browserWindow.document.getElementById("identity-box");
     if (AppConstants.platform == "macosx" && !Services.focus.activeWindow) {
       browserWindow.addEventListener("activate", function() {
-        Services.tm.mainThread.dispatch(function() {
+        Services.tm.dispatchToMainThread(function() {
           identityBox.click();
-        }, Ci.nsIThread.DISPATCH_NORMAL);
+        });
       }, {once: true});
       Cc["@mozilla.org/widget/macdocksupport;1"].getService(Ci.nsIMacDockSupport)
         .activateApplication(true);
@@ -222,6 +201,7 @@ this.webrtcUI = {
     return this.emitter.off(...args);
   },
 
+  // Listeners and observers are registered in nsBrowserGlue.js
   receiveMessage(aMessage) {
     switch (aMessage.name) {
 
@@ -232,10 +212,10 @@ this.webrtcUI = {
 
         let blockers = Array.from(this.peerConnectionBlockers);
 
-        Task.spawn(function*() {
+        (async function() {
           for (let blocker of blockers) {
             try {
-              let result = yield blocker(params);
+              let result = await blocker(params);
               if (result == "deny") {
                 return false;
               }
@@ -244,7 +224,7 @@ this.webrtcUI = {
             }
           }
           return true;
-        }).then(decision => {
+        })().then(decision => {
           let message;
           if (decision) {
             this.emitter.emit("peer-request-allowed", params);
@@ -279,30 +259,40 @@ this.webrtcUI = {
         removePrompt(aMessage.target, aMessage.data);
         break;
       case "webrtc:UpdatingIndicators":
-        webrtcUI._streams = [];
+        webrtcUI.forgetStreamsFromProcess(aMessage.target);
         break;
       case "webrtc:UpdateGlobalIndicators":
         updateIndicators(aMessage.data, aMessage.target);
         break;
       case "webrtc:UpdateBrowserIndicators":
         let id = aMessage.data.windowId;
+        aMessage.targetFrameLoader.QueryInterface(Ci.nsIFrameLoader);
+        let processMM =
+          aMessage.targetFrameLoader.messageManager.processMessageManager;
         let index;
         for (index = 0; index < webrtcUI._streams.length; ++index) {
-          if (webrtcUI._streams[index].state.windowId == id)
+          let stream = webrtcUI._streams[index];
+          if (stream.state.windowId == id && stream.processMM == processMM)
             break;
         }
         // If there's no documentURI, the update is actually a removal of the
         // stream, triggered by the recording-window-ended notification.
-        if (!aMessage.data.documentURI && index < webrtcUI._streams.length)
+        if (!aMessage.data.documentURI && index < webrtcUI._streams.length) {
           webrtcUI._streams.splice(index, 1);
-        else
-          webrtcUI._streams[index] = {browser: aMessage.target, state: aMessage.data};
+        } else {
+          webrtcUI._streams[index] = {
+            browser: aMessage.target,
+            processMM,
+            state: aMessage.data
+          };
+        }
         let tabbrowser = aMessage.target.ownerGlobal.gBrowser;
         if (tabbrowser)
           tabbrowser.setBrowserSharing(aMessage.target, aMessage.data);
         break;
       case "child-process-shutdown":
         webrtcUI.processIndicators.delete(aMessage.target);
+        webrtcUI.forgetStreamsFromProcess(aMessage.target);
         updateIndicators(null, null);
         break;
     }
@@ -434,29 +424,9 @@ function prompt(aBrowser, aRequest) {
 
   let productName = gBrandBundle.GetStringFromName("brandShortName");
 
-  // Disable the permanent 'Allow' action if the connection isn't secure, or for
-  // screen/audio sharing (because we can't guess which window the user wants to
-  // share without prompting).
-  let reasonForNoPermanentAllow = "";
-  if (sharingScreen) {
-    reasonForNoPermanentAllow = "getUserMedia.reasonForNoPermanentAllow.screen2";
-  } else if (sharingAudio) {
-    reasonForNoPermanentAllow = "getUserMedia.reasonForNoPermanentAllow.audio";
-  } else if (!aRequest.secure) {
-    reasonForNoPermanentAllow = "getUserMedia.reasonForNoPermanentAllow.insecure";
-  }
-
   let options = {
     persistent: true,
     hideClose: !Services.prefs.getBoolPref("privacy.permissionPrompts.showCloseButton"),
-    checkbox: {
-      label: stringBundle.getString("getUserMedia.remember"),
-      checkedState: reasonForNoPermanentAllow ? {
-        disableMainAction: true,
-        warningLabel: stringBundle.getFormattedString(reasonForNoPermanentAllow,
-                                                      [productName])
-      } : undefined,
-    },
     eventCallback(aTopic, aNewBrowser) {
       if (aTopic == "swapping")
         return true;
@@ -727,8 +697,8 @@ function prompt(aBrowser, aRequest) {
         if (videoDevices.length) {
           let listId = "webRTC-select" + (sharingScreen ? "Window" : "Camera") + "-menulist";
           let videoDeviceIndex = doc.getElementById(listId).value;
-          let allowCamera = videoDeviceIndex != "-1";
-          if (allowCamera) {
+          let allowVideoDevice = videoDeviceIndex != "-1";
+          if (allowVideoDevice) {
             allowedDevices.push(videoDeviceIndex);
             // Session permission will be removed after use
             // (it's really one-shot, not for the entire session)
@@ -747,9 +717,6 @@ function prompt(aBrowser, aRequest) {
             }
             if (remember)
               SitePermissions.set(uri, "camera", SitePermissions.ALLOW);
-          } else {
-            let scope = remember ? SitePermissions.SCOPE_PERSISTENT : SitePermissions.SCOPE_TEMPORARY;
-            SitePermissions.set(uri, "camera", SitePermissions.BLOCK, scope, aBrowser);
           }
         }
         if (audioDevices.length) {
@@ -771,9 +738,6 @@ function prompt(aBrowser, aRequest) {
               }
               if (remember)
                 SitePermissions.set(uri, "microphone", SitePermissions.ALLOW);
-            } else {
-                let scope = remember ? SitePermissions.SCOPE_PERSISTENT : SitePermissions.SCOPE_TEMPORARY;
-                SitePermissions.set(uri, "microphone", SitePermissions.BLOCK, scope, aBrowser);
             }
           } else {
             // Only one device possible for audio capture.
@@ -801,6 +765,31 @@ function prompt(aBrowser, aRequest) {
       return false;
     }
   };
+
+  // Don't offer "always remember" action in PB mode.
+  if (!PrivateBrowsingUtils.isBrowserPrivate(aBrowser)) {
+
+    // Disable the permanent 'Allow' action if the connection isn't secure, or for
+    // screen/audio sharing (because we can't guess which window the user wants to
+    // share without prompting).
+    let reasonForNoPermanentAllow = "";
+    if (sharingScreen) {
+      reasonForNoPermanentAllow = "getUserMedia.reasonForNoPermanentAllow.screen3";
+    } else if (sharingAudio) {
+      reasonForNoPermanentAllow = "getUserMedia.reasonForNoPermanentAllow.audio";
+    } else if (!aRequest.secure) {
+      reasonForNoPermanentAllow = "getUserMedia.reasonForNoPermanentAllow.insecure";
+    }
+
+    options.checkbox = {
+      label: stringBundle.getString("getUserMedia.remember"),
+      checkedState: reasonForNoPermanentAllow ? {
+        disableMainAction: true,
+        warningLabel: stringBundle.getFormattedString(reasonForNoPermanentAllow,
+                                                      [productName])
+      } : undefined,
+    };
+  }
 
   let iconType = "Devices";
   if (requestTypes.length == 1 && (requestTypes[0] == "Microphone" ||

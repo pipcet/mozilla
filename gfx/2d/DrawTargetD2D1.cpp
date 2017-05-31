@@ -8,6 +8,7 @@
 #include "FilterNodeSoftware.h"
 #include "GradientStopsD2D.h"
 #include "SourceSurfaceD2D1.h"
+#include "SourceSurfaceDual.h"
 #include "RadialGradientEffectD2D1.h"
 
 #include "HelpersD2D.h"
@@ -42,6 +43,7 @@ DrawTargetD2D1::DrawTargetD2D1()
   : mPushedLayers(1)
   , mUsedCommandListsSincePurge(0)
   , mDidComplexBlendWithListInList(false)
+  , mDeviceSeq(0)
 {
 }
 
@@ -60,7 +62,7 @@ DrawTargetD2D1::~DrawTargetD2D1()
     // mSnapshot will be cleared now.
   }
 
-  if (mDC) {
+  if (mDC && IsDeviceContextValid()) {
     // The only way mDC can be null is if Init failed, but it can happen and the
     // destructor is the only place where we need to check for it since the
     // DrawTarget will destroyed right after Init fails.
@@ -106,18 +108,20 @@ static const uint32_t kPushedLayersBeforePurge = 25;
 void
 DrawTargetD2D1::Flush()
 {
-  if ((mUsedCommandListsSincePurge >= kPushedLayersBeforePurge) &&
-      mPushedLayers.size() == 1) {
-    // It's important to pop all clips as otherwise layers can forget about
-    // their clip when doing an EndDraw. When we have layers pushed we cannot
-    // easily pop all underlying clips to delay the purge until we have no
-    // layers pushed.
-    PopAllClips();
-    mUsedCommandListsSincePurge = 0;
-    mDC->EndDraw();
-    mDC->BeginDraw();
-  } else {
-    mDC->Flush();
+  if (IsDeviceContextValid()) {
+    if ((mUsedCommandListsSincePurge >= kPushedLayersBeforePurge) &&
+        mPushedLayers.size() == 1) {
+      // It's important to pop all clips as otherwise layers can forget about
+      // their clip when doing an EndDraw. When we have layers pushed we cannot
+      // easily pop all underlying clips to delay the purge until we have no
+      // layers pushed.
+      PopAllClips();
+      mUsedCommandListsSincePurge = 0;
+      mDC->EndDraw();
+      mDC->BeginDraw();
+    } else {
+      mDC->Flush();
+    }
   }
 
   // We no longer depend on any target.
@@ -229,7 +233,7 @@ DrawTargetD2D1::DrawSurfaceWithShadow(SourceSurface *aSurface,
   mTransformDirty = true;
 
   Matrix mat;
-  RefPtr<ID2D1Image> image = GetImageForSurface(aSurface, mat, ExtendMode::CLAMP);
+  RefPtr<ID2D1Image> image = GetImageForSurface(aSurface, mat, ExtendMode::CLAMP, nullptr, false);
 
   if (!image) {
     gfxWarning() << "Couldn't get image for surface.";
@@ -378,7 +382,7 @@ DrawTargetD2D1::CopySurface(SourceSurface *aSurface,
   mTransformDirty = true;
 
   Matrix mat = Matrix::Translation(aDestination.x - aSourceRect.x, aDestination.y - aSourceRect.y);
-  RefPtr<ID2D1Image> image = GetImageForSurface(aSurface, mat, ExtendMode::CLAMP);
+  RefPtr<ID2D1Image> image = GetImageForSurface(aSurface, mat, ExtendMode::CLAMP, nullptr, false);
 
   if (!image) {
     gfxWarning() << "Couldn't get image for surface.";
@@ -816,26 +820,27 @@ DrawTargetD2D1::PushLayer(bool aOpaque, Float aOpacity, SourceSurface* aMask,
     options |= D2D1_LAYER_OPTIONS1_INITIALIZE_FROM_BACKGROUND;
   }
 
-  RefPtr<ID2D1BitmapBrush> mask;
-
+  RefPtr<ID2D1ImageBrush> mask;
   Matrix maskTransform = aMaskTransform;
-
   RefPtr<ID2D1PathGeometry> clip;
+
   if (aMask) {
+    RefPtr<ID2D1Image> image = GetImageForSurface(aMask, maskTransform, ExtendMode::CLAMP);
     mDC->SetTransform(D2D1::IdentityMatrix());
     mTransformDirty = true;
-
-    RefPtr<ID2D1Image> image = GetImageForSurface(aMask, maskTransform, ExtendMode::CLAMP);
 
     // The mask is given in user space. Our layer will apply it in device space.
     maskTransform = maskTransform * mTransform;
 
     if (image) {
-      RefPtr<ID2D1Bitmap> bitmap;
-      image->QueryInterface((ID2D1Bitmap**)getter_AddRefs(bitmap));
-
-      mDC->CreateBitmapBrush(bitmap, D2D1::BitmapBrushProperties(), D2D1::BrushProperties(1.0f, D2DMatrix(maskTransform)), getter_AddRefs(mask));
-      MOZ_ASSERT(bitmap); // This should always be true since it was created for a surface.
+      IntSize maskSize = aMask->GetSize();
+      HRESULT hr = mDC->CreateImageBrush(image,
+                                         D2D1::ImageBrushProperties(D2D1::RectF(0, 0, maskSize.width, maskSize.height)),
+                                         D2D1::BrushProperties(1.0f, D2DMatrix(maskTransform)),
+                                         getter_AddRefs(mask));
+      if (FAILED(hr)) {
+        gfxWarning() <<"[D2D1.1] Failed to create a ImageBrush, code: " << hexa(hr);
+      }
 
       factory()->CreatePathGeometry(getter_AddRefs(clip));
       RefPtr<ID2D1GeometrySink> sink;
@@ -1006,6 +1011,8 @@ DrawTargetD2D1::Init(ID3D11Texture2D* aTexture, SurfaceFormat aFormat)
   if (!device) {
     gfxCriticalNote << "[D2D1.1] Failed to obtain a device for DrawTargetD2D1::Init(ID3D11Texture2D*, SurfaceFormat).";
     return false;
+  } else {
+    mDeviceSeq = Factory::GetD2D1DeviceSeq();
   }
 
   hr = device->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_ENABLE_MULTITHREADED_OPTIMIZATIONS, getter_AddRefs(mDC));
@@ -1071,6 +1078,8 @@ DrawTargetD2D1::Init(const IntSize &aSize, SurfaceFormat aFormat)
   if (!device) {
     gfxCriticalNote << "[D2D1.1] Failed to obtain a device for DrawTargetD2D1::Init(IntSize, SurfaceFormat).";
     return false;
+  } else {
+    mDeviceSeq = Factory::GetD2D1DeviceSeq();
   }
 
   hr = device->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_ENABLE_MULTITHREADED_OPTIMIZATIONS, getter_AddRefs(mDC));
@@ -1857,7 +1866,8 @@ DrawTargetD2D1::CreateBrushForPattern(const Pattern &aPattern, Float aAlpha)
 
 already_AddRefed<ID2D1Image>
 DrawTargetD2D1::GetImageForSurface(SourceSurface *aSurface, Matrix &aSourceTransform,
-                                   ExtendMode aExtendMode, const IntRect* aSourceRect)
+                                   ExtendMode aExtendMode, const IntRect* aSourceRect,
+                                   bool aUserSpace)
 {
   RefPtr<ID2D1Image> image;
 
@@ -1869,6 +1879,21 @@ DrawTargetD2D1::GetImageForSurface(SourceSurface *aSurface, Matrix &aSourceTrans
       AddDependencyOnSource(surf);
     }
     break;
+  case SurfaceType::DUAL_DT:
+    {
+      // Sometimes we have a dual drawtarget but the underlying targets
+      // are d2d surfaces. Let's not readback and reupload in those cases.
+      SourceSurfaceDual* surface = static_cast<SourceSurfaceDual*>(aSurface);
+      SourceSurface* first = surface->GetFirstSurface();
+      if (first->GetType() == SurfaceType::D2D1_1_IMAGE) {
+        MOZ_ASSERT(surface->SameSurfaceTypes());
+        SourceSurfaceD2D1* d2dSurface = static_cast<SourceSurfaceD2D1*>(first);
+        image = d2dSurface->GetImage();
+        AddDependencyOnSource(d2dSurface); 
+        break;
+      }
+      // Otherwise fall through
+  }
   default:
     {
       RefPtr<DataSourceSurface> dataSurf = aSurface->GetDataSurface();
@@ -1876,7 +1901,8 @@ DrawTargetD2D1::GetImageForSurface(SourceSurface *aSurface, Matrix &aSourceTrans
         gfxWarning() << "Invalid surface type.";
         return nullptr;
       }
-      return CreatePartialBitmapForSurface(dataSurf, mTransform, mSize, aExtendMode,
+      Matrix transform = aUserSpace ? mTransform : Matrix();
+      return CreatePartialBitmapForSurface(dataSurf, transform, mSize, aExtendMode,
                                            aSourceTransform, mDC, aSourceRect);
     }
     break;
@@ -1933,6 +1959,11 @@ DrawTargetD2D1::PushD2DLayer(ID2D1DeviceContext *aDC, ID2D1Geometry *aGeometry, 
 
   mDC->PushLayer(D2D1::LayerParameters1(aMaxRect, aGeometry, antialias, aTransform,
                                         1.0, nullptr, options), nullptr);
+}
+
+bool
+DrawTargetD2D1::IsDeviceContextValid() {
+  return (mDeviceSeq == Factory::GetD2D1DeviceSeq()) && Factory::GetD2D1Device();
 }
 
 }

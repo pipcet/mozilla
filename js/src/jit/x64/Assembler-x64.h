@@ -157,6 +157,7 @@ static constexpr Register WasmIonExitRegE1 = rdi;
 // Registers used in the GenerateFFIIonExit Disable Activation block.
 static constexpr Register WasmIonExitRegReturnData = ecx;
 static constexpr Register WasmIonExitRegReturnType = ecx;
+static constexpr Register WasmIonExitTlsReg = r14;
 static constexpr Register WasmIonExitRegD0 = rax;
 static constexpr Register WasmIonExitRegD1 = rdi;
 static constexpr Register WasmIonExitRegD2 = rbx;
@@ -316,7 +317,7 @@ class Assembler : public AssemblerX86Shared
 
     // Copy the assembly code to the given buffer, and perform any pending
     // relocations relying on the target address.
-    void executableCopy(uint8_t* buffer);
+    void executableCopy(uint8_t* buffer, bool flushICache = true);
 
     // Actual assembly emitting functions.
 

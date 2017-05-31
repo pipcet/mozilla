@@ -115,7 +115,7 @@ nsXBLResourceLoader::LoadResources(bool* aResult)
     if (curr->mType == nsGkAtoms::image) {
       // Now kick off the image load...
       // Passing nullptr for pretty much everything -- cause we don't care!
-      // XXX: initialDocumentURI is nullptr! 
+      // XXX: initialDocumentURI is nullptr!
       RefPtr<imgRequestProxy> req;
       nsContentUtils::LoadImage(url, doc, doc, docPrincipal, docURL,
                                 doc->GetReferrerPolicy(), nullptr,
@@ -156,7 +156,7 @@ nsXBLResourceLoader::LoadResources(bool* aResult)
 
   *aResult = (mPendingSheets == 0);
   mInLoadResourcesFunc = false;
-  
+
   // Destroy our resource list.
   delete mResourceList;
   mResourceList = nullptr;
@@ -172,15 +172,17 @@ nsXBLResourceLoader::StyleSheetLoaded(StyleSheet* aSheet,
     // Our resources got destroyed -- just bail out
     return NS_OK;
   }
-   
+
   mResources->AppendStyleSheet(aSheet);
 
   if (!mInLoadResourcesFunc)
     mPendingSheets--;
-  
+
   if (mPendingSheets == 0) {
-    // All stylesheets are loaded.  
-    mResources->GatherRuleProcessor();
+    // All stylesheets are loaded.
+    if (aSheet->IsGecko()) {
+      mResources->GatherRuleProcessor();
+    }
 
     // XXX Check for mPendingScripts when scripts also come online.
     if (!mInLoadResourcesFunc)
@@ -189,7 +191,7 @@ nsXBLResourceLoader::StyleSheetLoaded(StyleSheet* aSheet,
   return NS_OK;
 }
 
-void 
+void
 nsXBLResourceLoader::AddResource(nsIAtom* aResourceType, const nsAString& aSrc)
 {
   nsXBLResource* res = new nsXBLResource(aResourceType, aSrc);
@@ -202,7 +204,7 @@ nsXBLResourceLoader::AddResource(nsIAtom* aResourceType, const nsAString& aSrc)
 }
 
 void
-nsXBLResourceLoader::AddResourceListener(nsIContent* aBoundElement) 
+nsXBLResourceLoader::AddResourceListener(nsIContent* aBoundElement)
 {
   if (aBoundElement) {
     mBoundElements.AppendObject(aBoundElement);
@@ -221,7 +223,8 @@ nsXBLResourceLoader::NotifyBoundElements()
   uint32_t eltCount = mBoundElements.Count();
   for (uint32_t j = 0; j < eltCount; j++) {
     nsCOMPtr<nsIContent> content = mBoundElements.ObjectAt(j);
-    
+    MOZ_ASSERT(content->IsElement());
+
     bool ready = false;
     xblService->BindingReady(content, bindingURI, &ready);
 
@@ -229,7 +232,7 @@ nsXBLResourceLoader::NotifyBoundElements()
       // We need the document to flush out frame construction and
       // such, so we want to use the current document.
       nsIDocument* doc = content->GetUncomposedDoc();
-    
+
       if (doc) {
         // Flush first to make sure we can get the frame for content
         doc->FlushPendingNotifications(FlushType::Frames);
@@ -247,12 +250,17 @@ nsXBLResourceLoader::NotifyBoundElements()
         if (shell) {
           nsIFrame* childFrame = content->GetPrimaryFrame();
           if (!childFrame) {
-            // Check to see if it's in the undisplayed content map.
+            // Check to see if it's in the undisplayed content map, or the
+            // display: contents map.
             nsStyleContext* sc =
               shell->FrameManager()->GetUndisplayedContent(content);
 
             if (!sc) {
-              shell->RecreateFramesFor(content);
+              sc = shell->FrameManager()->GetDisplayContentsStyleFor(content);
+            }
+
+            if (!sc) {
+              shell->PostRecreateFramesFor(content->AsElement());
             }
           }
         }

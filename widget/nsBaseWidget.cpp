@@ -12,6 +12,7 @@
 
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
+#include "mozilla/layers/PLayerTransactionChild.h"
 #include "mozilla/layers/ImageBridgeChild.h"
 #include "LiveResizeListener.h"
 #include "nsBaseWidget.h"
@@ -108,7 +109,6 @@ using namespace mozilla::widget;
 using namespace mozilla;
 using base::Thread;
 
-nsIContent* nsBaseWidget::mLastRollup = nullptr;
 // Global user preference for disabling native theme. Used
 // in NativeWindowTheme.
 bool            gDisableNativeTheme               = false;
@@ -141,21 +141,6 @@ IMENotification::SelectionChangeDataBase::GetWritingMode() const
 } // namespace widget
 } // namespace mozilla
 
-nsAutoRollup::nsAutoRollup()
-{
-  // remember if mLastRollup was null, and only clear it upon destruction
-  // if so. This prevents recursive usage of nsAutoRollup from clearing
-  // mLastRollup when it shouldn't.
-  wasClear = !nsBaseWidget::mLastRollup;
-}
-
-nsAutoRollup::~nsAutoRollup()
-{
-  if (nsBaseWidget::mLastRollup && wasClear) {
-    NS_RELEASE(nsBaseWidget::mLastRollup);
-  }
-}
-
 NS_IMPL_ISUPPORTS(nsBaseWidget, nsIWidget, nsISupportsWeakReference)
 
 //-------------------------------------------------------------------------
@@ -178,6 +163,7 @@ nsBaseWidget::nsBaseWidget()
 , mSizeMode(nsSizeMode_Normal)
 , mPopupLevel(ePopupLevelTop)
 , mPopupType(ePopupTypeAny)
+, mHasRemoteContent(false)
 , mCompositorWidgetDelegate(nullptr)
 , mUpdateCursor(true)
 , mUseAttachedEvents(false)
@@ -331,42 +317,9 @@ void nsBaseWidget::DestroyLayerManager()
 }
 
 void
-nsBaseWidget::OnRenderingDeviceReset(uint64_t aSeqNo)
+nsBaseWidget::OnRenderingDeviceReset()
 {
-  if (!mLayerManager || !mCompositorSession) {
-    return;
-  }
-
-  nsTArray<LayersBackend> backendHints;
-  gfxPlatform::GetPlatform()->GetCompositorBackends(ComputeShouldAccelerate(), backendHints);
-
-  // If the existing compositor does not use acceleration, and this widget
-  // should not be accelerated, then there's no point in resetting.
-  //
-  // Note that if this widget should be accelerated, but instead has a basic
-  // compositor, we still reset just in case we're now in the position to get
-  // accelerated layers again.
-  RefPtr<ClientLayerManager> clm = mLayerManager->AsClientLayerManager();
-  if (!ComputeShouldAccelerate() &&
-      clm->GetCompositorBackendType() == LayersBackend::LAYERS_BASIC)
-  {
-    return;
-  }
-
-  // Recreate the compositor.
-  TextureFactoryIdentifier identifier;
-  if (!mCompositorSession->Reset(backendHints, aSeqNo, &identifier)) {
-    // No action was taken, so we don't have to do anything.
-    return;
-  }
-
-  // Invalidate all layers.
-  FrameLayerBuilder::InvalidateAllLayers(mLayerManager);
-
-  // Update the texture factory identifier.
-  clm->UpdateTextureFactoryIdentifier(identifier, aSeqNo);
-  ImageBridgeChild::IdentifyCompositorTextureHost(identifier);
-  gfx::VRManagerChild::IdentifyTextureHost(identifier);
+  DestroyLayerManager();
 }
 
 void
@@ -428,6 +381,7 @@ void nsBaseWidget::BaseCreate(nsIWidget* aParent,
     mBorderStyle = aInitData->mBorderStyle;
     mPopupLevel = aInitData->mPopupLevel;
     mPopupType = aInitData->mPopupHint;
+    mHasRemoteContent = aInitData->mHasRemoteContent;
   }
 
   if (aParent) {
@@ -595,11 +549,13 @@ double nsIWidget::DefaultScaleOverride()
   // The number of device pixels per CSS pixel. A value <= 0 means choose
   // automatically based on the DPI. A positive value is used as-is. This effectively
   // controls the size of a CSS "px".
-  double devPixelsPerCSSPixel = -1.0;
+  static float devPixelsPerCSSPixel = -1.0f;
 
-  nsAdoptingCString prefString = Preferences::GetCString("layout.css.devPixelsPerPx");
-  if (!prefString.IsEmpty()) {
-    devPixelsPerCSSPixel = PR_strtod(prefString, nullptr);
+  static bool valueCached = false;
+  if (!valueCached) {
+    Preferences::AddFloatVarCache(&devPixelsPerCSSPixel,
+                                  "layout.css.devPixelsPerPx", -1.0f);
+    valueCached = true;
   }
 
   return devPixelsPerCSSPixel;
@@ -936,7 +892,9 @@ bool
 nsBaseWidget::UseAPZ()
 {
   return (gfxPlatform::AsyncPanZoomEnabled() &&
-          (WindowType() == eWindowType_toplevel || WindowType() == eWindowType_child));
+          (WindowType() == eWindowType_toplevel ||
+           WindowType() == eWindowType_child ||
+           (WindowType() == eWindowType_popup && HasRemoteContent())));
 }
 
 void nsBaseWidget::CreateCompositor()
@@ -1299,9 +1257,8 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
 
   bool enableWR = gfx::gfxVars::UseWebRender();
   bool enableAPZ = UseAPZ();
-  if (enableWR && !gfxPrefs::APZAllowWithWebRender()) {
-    // Disable APZ on widgets using WebRender, since it doesn't work yet. Allow
-    // it on non-WR widgets or if the pref forces it on.
+  if (enableWR) {
+    // Disable APZ on widgets using WebRender, since it doesn't work yet.
     enableAPZ = false;
   }
   CompositorOptions options(enableAPZ, enableWR);
@@ -1358,8 +1315,13 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
 
     bool success = false;
     if (!backendHints.IsEmpty()) {
-      shadowManager = mCompositorBridgeChild->SendPLayerTransactionConstructor(
-        backendHints, 0, &textureFactoryIdentifier, &success);
+      shadowManager =
+        mCompositorBridgeChild->SendPLayerTransactionConstructor(backendHints, 0);
+      if (shadowManager->SendGetTextureFactoryIdentifier(&textureFactoryIdentifier) &&
+          textureFactoryIdentifier.mParentBackend != LayersBackend::LAYERS_NONE)
+      {
+        success = true;
+      }
     }
 
     if (!success) {
@@ -1737,7 +1699,7 @@ nsBaseWidget::NotifyWindowMoved(int32_t aX, int32_t aY)
     mWidgetListener->WindowMoved(this, aX, aY);
   }
 
-  if (mIMEHasFocus && GetIMEUpdatePreference().WantPositionChanged()) {
+  if (mIMEHasFocus && IMENotificationRequestsRef().WantPositionChanged()) {
     NotifyIME(IMENotification(IMEMessage::NOTIFY_IME_OF_POSITION_CHANGE));
   }
 }
@@ -2308,11 +2270,32 @@ nsIWidget::GetNativeIMEContext()
   return NativeIMEContext(this);
 }
 
+const IMENotificationRequests&
+nsIWidget::IMENotificationRequestsRef()
+{
+  TextEventDispatcher* dispatcher = GetTextEventDispatcher();
+  return dispatcher->IMENotificationRequestsRef();
+}
+
 nsresult
 nsIWidget::OnWindowedPluginKeyEvent(const NativeEventData& aKeyEventData,
                                     nsIKeyEventInPluginCallback* aCallback)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+void
+nsIWidget::PostHandleKeyEvent(mozilla::WidgetKeyboardEvent* aEvent)
+{
+}
+
+void
+nsIWidget::GetEditCommands(nsIWidget::NativeKeyBindingsType aType,
+                           const WidgetKeyboardEvent& aEvent,
+                           nsTArray<CommandInt>& aCommands)
+{
+  MOZ_ASSERT(aEvent.IsTrusted());
+  MOZ_ASSERT(aCommands.IsEmpty());
 }
 
 namespace mozilla {

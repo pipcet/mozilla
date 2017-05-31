@@ -11,10 +11,10 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(PARAMS_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/actions/index");
+  let { document, store, windowRequire } = monitor.panelWin;
+  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, 1, 6);
   yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
@@ -62,7 +62,7 @@ add_task(function* () {
       document.querySelectorAll(".request-list-item")[index]);
     EventUtils.sendMouseEvent({ type: "contextmenu" },
       document.querySelectorAll(".request-list-item")[index]);
-    let copyUrlParamsNode = monitor.toolbox.doc
+    let copyUrlParamsNode = monitor.panelWin.parent.document
       .querySelector("#request-list-context-copy-url-params");
     is(!!copyUrlParamsNode, !hidden,
       "The \"Copy URL Parameters\" context menu item should" + (hidden ? " " : " not ") +
@@ -75,7 +75,7 @@ add_task(function* () {
     EventUtils.sendMouseEvent({ type: "contextmenu" },
       document.querySelectorAll(".request-list-item")[index]);
     yield waitForClipboardPromise(function setup() {
-      monitor.toolbox.doc
+      monitor.panelWin.parent.document
         .querySelector("#request-list-context-copy-url-params").click();
     }, queryString);
     ok(true, "The url query string copied from the selected item is correct.");
@@ -86,7 +86,7 @@ add_task(function* () {
       document.querySelectorAll(".request-list-item")[index]);
     EventUtils.sendMouseEvent({ type: "contextmenu" },
       document.querySelectorAll(".request-list-item")[index]);
-    let copyPostDataNode = monitor.toolbox.doc
+    let copyPostDataNode = monitor.panelWin.parent.document
       .querySelector("#request-list-context-copy-post-data");
     is(!!copyPostDataNode, !hidden,
       "The \"Copy POST Data\" context menu item should" + (hidden ? " " : " not ") +
@@ -94,12 +94,20 @@ add_task(function* () {
   }
 
   function* testCopyPostData(index, postData) {
+    // Wait for formDataSections and requestPostData state are ready in redux store
+    // since copyPostData API needs to read these state.
+    yield waitUntil(() => {
+      let { requests } = store.getState().requests;
+      let actIDs = Object.keys(requests.toJS());
+      let { formDataSections, requestPostData } = requests.get(actIDs[index]).toJS();
+      return formDataSections && requestPostData;
+    });
     EventUtils.sendMouseEvent({ type: "mousedown" },
       document.querySelectorAll(".request-list-item")[index]);
     EventUtils.sendMouseEvent({ type: "contextmenu" },
       document.querySelectorAll(".request-list-item")[index]);
     yield waitForClipboardPromise(function setup() {
-      monitor.toolbox.doc
+      monitor.panelWin.parent.document
         .querySelector("#request-list-context-copy-post-data").click();
     }, postData);
     ok(true, "The post data string copied from the selected item is correct.");

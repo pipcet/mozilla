@@ -13,6 +13,7 @@
 #include "OCSPCache.h"
 #include "ScopedNSSTypes.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
 #include "pkix/pkixtypes.h"
 
@@ -114,6 +115,11 @@ public:
     OCSP_STAPLING_INVALID = 4,
   };
 
+  // As an optimization, a pointer to the certificate chain sent by the peer
+  // may be specified as peerCertChain. This can prevent NSSCertDBTrustDomain
+  // from calling CERT_CreateSubjectCertList to find potential issuers, which
+  // can be expensive.
+  //
   // *evOidPolicy == SEC_OID_UNKNOWN means the cert is NOT EV
   // Only one usage per verification is supported.
   mozilla::pkix::Result VerifyCert(
@@ -123,7 +129,8 @@ public:
                     void* pinArg,
                     const char* hostname,
             /*out*/ UniqueCERTCertList& builtChain,
-                    Flags flags = 0,
+    /*optional in*/ UniqueCERTCertList* peerCertChain = nullptr,
+    /*optional in*/ Flags flags = 0,
     /*optional in*/ const SECItem* stapledOCSPResponse = nullptr,
     /*optional in*/ const SECItem* sctsFromTLS = nullptr,
     /*optional in*/ const OriginAttributes& originAttributes =
@@ -143,6 +150,7 @@ public:
        /*optional*/ void* pinarg,
                     const char* hostname,
             /*out*/ UniqueCERTCertList& builtChain,
+       /*optional*/ UniqueCERTCertList* peerCertChain = nullptr,
        /*optional*/ bool saveIntermediatesInPermanentDatabase = false,
        /*optional*/ Flags flags = 0,
        /*optional*/ const OriginAttributes& originAttributes =
@@ -185,8 +193,10 @@ public:
     TelemetryOnly = 1,
   };
 
-  CertVerifier(OcspDownloadConfig odc, OcspStrictConfig osc,
-               OcspGetConfig ogc, uint32_t certShortLifetimeInDays,
+  CertVerifier(OcspDownloadConfig odc, OcspStrictConfig osc, OcspGetConfig ogc,
+               mozilla::TimeDuration ocspTimeoutSoft,
+               mozilla::TimeDuration ocspTimeoutHard,
+               uint32_t certShortLifetimeInDays,
                PinningMode pinningMode, SHA1Mode sha1Mode,
                BRNameMatchingPolicy::Mode nameMatchingMode,
                NetscapeStepUpPolicy netscapeStepUpPolicy,
@@ -198,6 +208,8 @@ public:
   const OcspDownloadConfig mOCSPDownloadConfig;
   const bool mOCSPStrict;
   const bool mOCSPGETEnabled;
+  const mozilla::TimeDuration mOCSPTimeoutSoft;
+  const mozilla::TimeDuration mOCSPTimeoutHard;
   const uint32_t mCertShortLifetimeInDays;
   const PinningMode mPinningMode;
   const SHA1Mode mSHA1Mode;

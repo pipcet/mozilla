@@ -63,6 +63,8 @@ class SandboxBrokerPolicyFactory;
 
 class PreallocatedProcessManagerImpl;
 
+using mozilla::loader::PScriptCacheParent;
+
 namespace embedding {
 class PrintingParent;
 }
@@ -159,7 +161,7 @@ public:
    * Returns null if non available.
    */
   static already_AddRefed<ContentParent>
-  RandomSelect(const nsTArray<ContentParent*>& aContentParents,
+  MinTabSelect(const nsTArray<ContentParent*>& aContentParents,
                ContentParent* aOpener,
                int32_t maxContentParents);
 
@@ -183,7 +185,9 @@ public:
   static TabParent*
   CreateBrowser(const TabContext& aContext,
                 Element* aFrameElement,
-                ContentParent* aOpenerContentParent);
+                ContentParent* aOpenerContentParent,
+                TabParent* aSameTabGroupAs,
+                uint64_t aNextTabParentId);
 
   static void GetAll(nsTArray<ContentParent*>& aArray);
 
@@ -272,9 +276,9 @@ public:
   virtual mozilla::ipc::IPCResult RecvCreateChildProcess(const IPCTabContext& aContext,
                                                          const hal::ProcessPriority& aPriority,
                                                          const TabId& aOpenerTabId,
+                                                         const TabId& aTabId,
                                                          ContentParentId* aCpId,
-                                                         bool* aIsForBrowser,
-                                                         TabId* aTabId) override;
+                                                         bool* aIsForBrowser) override;
 
   virtual mozilla::ipc::IPCResult RecvBridgeToChildProcess(const ContentParentId& aCpId,
                                                            Endpoint<PContentBridgeParent>* aEndpoint) override;
@@ -338,15 +342,10 @@ public:
 
   jsipc::CPOWManager* GetCPOWManager() override;
 
-  static TabId
-  AllocateTabId(const TabId& aOpenerTabId,
-                const IPCTabContext& aContext,
-                const ContentParentId& aCpId);
-
   static void
-  DeallocateTabId(const TabId& aTabId,
-                  const ContentParentId& aCpId,
-                  bool aMarkedDestroying);
+  UnregisterRemoteFrame(const TabId& aTabId,
+                        const ContentParentId& aCpId,
+                        bool aMarkedDestroying);
 
   void ReportChildAlreadyBlocked();
 
@@ -377,10 +376,7 @@ public:
     return mScriptableHelper;
   }
 
-  bool NeedsPermissionsUpdate() const
-  {
-    return mSendPermissionUpdates;
-  }
+  bool NeedsPermissionsUpdate(const nsACString& aPermissionKey) const;
 
   /**
    * Kill our subprocess and make sure it dies.  Should only be used
@@ -425,16 +421,19 @@ public:
   already_AddRefed<embedding::PrintingParent> GetPrintingParent();
 #endif
 
-  virtual PSendStreamParent* AllocPSendStreamParent() override;
-  virtual bool DeallocPSendStreamParent(PSendStreamParent* aActor) override;
-
-  virtual PScreenManagerParent*
-  AllocPScreenManagerParent(uint32_t* aNumberOfScreens,
-                            float* aSystemDefaultScale,
-                            bool* aSuccess) override;
-
+  virtual PChildToParentStreamParent* AllocPChildToParentStreamParent() override;
   virtual bool
-  DeallocPScreenManagerParent(PScreenManagerParent* aActor) override;
+  DeallocPChildToParentStreamParent(PChildToParentStreamParent* aActor) override;
+
+  virtual PParentToChildStreamParent*
+  SendPParentToChildStreamConstructor(PParentToChildStreamParent*) override;
+
+  virtual PFileDescriptorSetParent*
+  SendPFileDescriptorSetConstructor(const FileDescriptor&) override;
+
+  virtual PParentToChildStreamParent* AllocPParentToChildStreamParent() override;
+  virtual bool
+  DeallocPParentToChildStreamParent(PParentToChildStreamParent* aActor) override;
 
   virtual PHalParent* AllocPHalParent() override;
 
@@ -469,24 +468,13 @@ public:
                                                             const bool& aIsAudio,
                                                             const bool& aIsVideo) override;
 
-  virtual mozilla::ipc::IPCResult RecvGetGfxInfoFeatureStatus(nsTArray<mozilla::dom::GfxInfoFeatureStatus>* aFS) override;
-
   bool CycleCollectWithLogs(bool aDumpAllTraces,
                             nsICycleCollectorLogSink* aSink,
                             nsIDumpGCAndCCLogsCallback* aCallback);
 
-  virtual PBlobParent*
-  SendPBlobConstructor(PBlobParent* aActor,
-                       const BlobConstructorParams& aParams) override;
-
-  virtual mozilla::ipc::IPCResult RecvAllocateTabId(const TabId& aOpenerTabId,
-                                                    const IPCTabContext& aContext,
-                                                    const ContentParentId& aCpId,
-                                                    TabId* aTabId) override;
-
-  virtual mozilla::ipc::IPCResult RecvDeallocateTabId(const TabId& aTabId,
-                                                      const ContentParentId& aCpId,
-                                                      const bool& aMarkedDestroying) override;
+  virtual mozilla::ipc::IPCResult RecvUnregisterRemoteFrame(const TabId& aTabId,
+                                                            const ContentParentId& aCpId,
+                                                            const bool& aMarkedDestroying) override;
 
   virtual mozilla::ipc::IPCResult RecvNotifyTabDestroying(const TabId& aTabId,
                                                           const ContentParentId& aCpId) override;
@@ -544,7 +532,9 @@ public:
                    InfallibleTArray<FrameScriptInfo>* aFrameScripts,
                    nsCString* aURLToLoad,
                    layers::TextureFactoryIdentifier* aTextureFactoryIdentifier,
-                   uint64_t* aLayersId) override;
+                   uint64_t* aLayersId,
+                   mozilla::layers::CompositorOptions* aCompositorOptions,
+                   uint32_t* aMaxTouchPoints) override;
 
   virtual mozilla::ipc::IPCResult RecvCreateWindowInDifferentProcess(
     PBrowserParent* aThisTab,
@@ -572,7 +562,7 @@ public:
 
   virtual mozilla::ipc::IPCResult
   RecvStoreAndBroadcastBlobURLRegistration(const nsCString& aURI,
-                                           PBlobParent* aBlobParent,
+                                           const IPCBlob& aBlob,
                                            const Principal& aPrincipal) override;
 
   virtual mozilla::ipc::IPCResult
@@ -589,8 +579,13 @@ public:
   virtual mozilla::ipc::IPCResult
   RecvGetA11yContentId(uint32_t* aContentId) override;
 
+  virtual mozilla::ipc::IPCResult
+  RecvA11yHandlerControl(const uint32_t& aPid,
+                         const IHandlerControlHolder& aHandlerControl) override;
+
   virtual int32_t Pid() const override;
 
+  // PURLClassifierParent.
   virtual PURLClassifierParent*
   AllocPURLClassifierParent(const Principal& aPrincipal,
                             const bool& aUseTrackingProtection,
@@ -600,6 +595,35 @@ public:
                                 const Principal& aPrincipal,
                                 const bool& aUseTrackingProtection,
                                 bool* aSuccess) override;
+
+  // PURLClassifierLocalParent.
+  virtual PURLClassifierLocalParent*
+  AllocPURLClassifierLocalParent(const URIParams& aURI,
+                                 const nsCString& aTables) override;
+  virtual mozilla::ipc::IPCResult
+  RecvPURLClassifierLocalConstructor(PURLClassifierLocalParent* aActor,
+                                     const URIParams& aURI,
+                                     const nsCString& aTables) override;
+
+  virtual bool SendActivate(PBrowserParent* aTab) override
+  {
+    return PContentParent::SendActivate(aTab);
+  }
+
+  virtual bool SendDeactivate(PBrowserParent* aTab) override
+  {
+    return PContentParent::SendDeactivate(aTab);
+  }
+
+  virtual bool SendParentActivated(PBrowserParent* aTab,
+                                   const bool& aActivated) override
+  {
+    return PContentParent::SendParentActivated(aTab, aActivated);
+  }
+
+  virtual bool
+  DeallocPURLClassifierLocalParent(PURLClassifierLocalParent* aActor) override;
+
   virtual bool
   DeallocPURLClassifierParent(PURLClassifierParent* aActor) override;
 
@@ -611,6 +635,16 @@ public:
 
   // Use the PHangMonitor channel to ask the child to repaint a tab.
   void ForceTabPaint(TabParent* aTabParent, uint64_t aLayerObserverEpoch);
+
+  // This function is called when we are about to load a document from an
+  // HTTP(S), FTP or wyciwyg channel for a content process.  It is a useful
+  // place to start to kick off work as early as possible in response to such
+  // document loads.
+  nsresult AboutToLoadHttpFtpWyciwygDocumentForChild(nsIChannel* aChannel);
+
+  nsresult TransmitPermissionsForPrincipal(nsIPrincipal* aPrincipal);
+
+  void OnCompositorDeviceReset() override;
 
 protected:
   void OnChannelConnected(int32_t pid) override;
@@ -643,13 +677,14 @@ private:
   static ContentBridgeParent* CreateContentBridgeParent(const TabContext& aContext,
                                                         const hal::ProcessPriority& aPriority,
                                                         const TabId& aOpenerTabId,
-                                                        /*out*/ TabId* aTabId);
+                                                        const TabId& aTabId);
 
   // Hide the raw constructor methods since we don't want client code
   // using them.
   virtual PBrowserParent* SendPBrowserConstructor(
       PBrowserParent* actor,
       const TabId& aTabId,
+      const TabId& aSameTabGroupsAs,
       const IPCTabContext& context,
       const uint32_t& chromeFlags,
       const ContentParentId& aCpId,
@@ -668,6 +703,7 @@ private:
                      const nsCString& aBaseURI,
                      const OriginAttributes& aOpenerOriginAttributes,
                      const float& aFullZoom,
+                     uint64_t aNextTabParentId,
                      nsresult& aResult,
                      nsCOMPtr<nsITabParent>& aNewTabParent,
                      bool* aWindowIsNew);
@@ -752,6 +788,13 @@ private:
   // Start the force-kill timer on shutdown.
   void StartForceKillTimer();
 
+  // Ensure that the permissions for the giben Permission key are set in the
+  // content process.
+  //
+  // See nsIPermissionManager::GetPermissionsForKey for more information on
+  // these keys.
+  void EnsurePermissionsByKey(const nsCString& aKey);
+
   static void ForceKillTimerCallback(nsITimer* aTimer, void* aClosure);
 
   static bool AllocateLayerTreeId(ContentParent* aContent,
@@ -775,6 +818,7 @@ private:
   DeallocPRemoteSpellcheckEngineParent(PRemoteSpellcheckEngineParent*) override;
 
   virtual PBrowserParent* AllocPBrowserParent(const TabId& aTabId,
+                                              const TabId& aSameTabGroupAs,
                                               const IPCTabContext& aContext,
                                               const uint32_t& aChromeFlags,
                                               const ContentParentId& aCpId,
@@ -782,25 +826,23 @@ private:
 
   virtual bool DeallocPBrowserParent(PBrowserParent* frame) override;
 
-  virtual PDeviceStorageRequestParent*
-  AllocPDeviceStorageRequestParent(const DeviceStorageParams&) override;
+  virtual PIPCBlobInputStreamParent*
+  SendPIPCBlobInputStreamConstructor(PIPCBlobInputStreamParent* aActor,
+                                     const nsID& aID,
+                                     const uint64_t& aSize) override;
+
+  virtual PIPCBlobInputStreamParent*
+  AllocPIPCBlobInputStreamParent(const nsID& aID,
+                                 const uint64_t& aSize) override;
 
   virtual bool
-  DeallocPDeviceStorageRequestParent(PDeviceStorageRequestParent*) override;
-
-  virtual PBlobParent*
-  AllocPBlobParent(const BlobConstructorParams& aParams) override;
-
-  virtual bool DeallocPBlobParent(PBlobParent* aActor) override;
-
-  virtual mozilla::ipc::IPCResult
-  RecvPBlobConstructor(PBlobParent* aActor,
-                       const BlobConstructorParams& params) override;
+  DeallocPIPCBlobInputStreamParent(PIPCBlobInputStreamParent* aActor) override;
 
   virtual mozilla::ipc::IPCResult RecvNSSU2FTokenIsCompatibleVersion(const nsString& aVersion,
                                                                      bool* aIsCompatible) override;
 
   virtual mozilla::ipc::IPCResult RecvNSSU2FTokenIsRegistered(nsTArray<uint8_t>&& aKeyHandle,
+                                                              nsTArray<uint8_t>&& aApplication,
                                                               bool* aIsValidKeyHandle) override;
 
   virtual mozilla::ipc::IPCResult RecvNSSU2FTokenRegister(nsTArray<uint8_t>&& aApplication,
@@ -838,6 +880,12 @@ private:
   virtual PTestShellParent* AllocPTestShellParent() override;
 
   virtual bool DeallocPTestShellParent(PTestShellParent* shell) override;
+
+  virtual PScriptCacheParent*
+  AllocPScriptCacheParent(const FileDescOrError& cacheFile,
+                          const bool& wantCacheData) override;
+
+  virtual bool DeallocPScriptCacheParent(PScriptCacheParent* shell) override;
 
   virtual bool DeallocPNeckoParent(PNeckoParent* necko) override;
 
@@ -902,11 +950,6 @@ private:
   virtual mozilla::ipc::IPCResult RecvGetGfxVars(InfallibleTArray<GfxVarUpdate>* aVars) override;
 
   virtual mozilla::ipc::IPCResult RecvReadFontList(InfallibleTArray<FontListEntry>* retValue) override;
-
-  virtual mozilla::ipc::IPCResult RecvReadDataStorageArray(const nsString& aFilename,
-                                                           InfallibleTArray<DataStorageItem>* aValues) override;
-
-  virtual mozilla::ipc::IPCResult RecvReadPermissions(InfallibleTArray<IPC::Permission>* aPermissions) override;
 
   virtual mozilla::ipc::IPCResult RecvSetClipboard(const IPCDataTransfer& aDataTransfer,
                                                    const bool& aIsPrivateData,
@@ -973,11 +1016,6 @@ private:
                                                    const IPC::Principal& aPrincipal,
                                                    const ClonedMessageData& aData) override;
 
-  virtual mozilla::ipc::IPCResult RecvFilePathUpdateNotify(const nsString& aType,
-                                                           const nsString& aStorageName,
-                                                           const nsString& aFilePath,
-                                                           const nsCString& aReason) override;
-
   virtual mozilla::ipc::IPCResult RecvAddGeolocationListener(const IPC::Principal& aPrincipal,
                                                              const bool& aHighAccuracy) override;
   virtual mozilla::ipc::IPCResult RecvRemoveGeolocationListener() override;
@@ -998,16 +1036,9 @@ private:
 
   virtual mozilla::ipc::IPCResult RecvFirstIdle() override;
 
-  virtual mozilla::ipc::IPCResult RecvAudioChannelChangeDefVolChannel(const int32_t& aChannel,
-                                                                      const bool& aHidden) override;
-
-  virtual mozilla::ipc::IPCResult RecvAudioChannelServiceStatus(const bool& aTelephonyChannel,
-                                                                const bool& aContentOrNormalChannel,
-                                                                const bool& aAnyChannel) override;
-
   virtual mozilla::ipc::IPCResult RecvKeywordToURI(const nsCString& aKeyword,
                                                    nsString* aProviderName,
-                                                   OptionalInputStreamParams* aPostData,
+                                                   OptionalIPCStream* aPostData,
                                                    OptionalURIParams* aURI) override;
 
   virtual mozilla::ipc::IPCResult RecvNotifyKeywordSearchLoading(const nsString &aProvider,
@@ -1044,7 +1075,7 @@ private:
   RecvBackUpXResources(const FileDescriptor& aXSocketFd) override;
 
   virtual mozilla::ipc::IPCResult
-  RecvOpenAnonymousTemporaryFile(FileDescOrError* aFD) override;
+  RecvRequestAnonymousTemporaryFile(const uint64_t& aID) override;
 
   virtual mozilla::ipc::IPCResult
   RecvKeygenProcessValue(const nsString& oldValue, const nsString& challenge,
@@ -1068,16 +1099,9 @@ private:
   virtual mozilla::ipc::IPCResult RecvUpdateDropEffect(const uint32_t& aDragAction,
                                                        const uint32_t& aDropEffect) override;
 
-  virtual mozilla::ipc::IPCResult RecvProfile(const nsCString& aProfile) override;
+  virtual mozilla::ipc::IPCResult RecvShutdownProfile(const nsCString& aProfile) override;
 
   virtual mozilla::ipc::IPCResult RecvGetGraphicsDeviceInitData(ContentDeviceData* aOut) override;
-
-  void StartProfiler(nsIProfilerStartParams* aParams);
-
-  virtual mozilla::ipc::IPCResult RecvGetDeviceStorageLocation(const nsString& aType,
-                                                               nsString* aPath) override;
-
-  virtual mozilla::ipc::IPCResult RecvGetDeviceStorageLocations(DeviceStorageLocationInfo* info) override;
 
   virtual mozilla::ipc::IPCResult RecvGetAndroidSystemInfo(AndroidSystemInfo* aInfo) override;
 
@@ -1123,6 +1147,8 @@ private:
     InfallibleTArray<ScalarAction>&& aScalarActions) override;
   virtual mozilla::ipc::IPCResult RecvUpdateChildKeyedScalars(
     InfallibleTArray<KeyedScalarAction>&& aScalarActions) override;
+  virtual mozilla::ipc::IPCResult RecvRecordChildEvents(
+    nsTArray<ChildEventData>&& events) override;
 public:
   void SendGetFilesResponseAndForget(const nsID& aID,
                                      const GetFilesResponseResult& aResult);
@@ -1166,7 +1192,6 @@ private:
   // still pass through.
   bool mIsAlive;
 
-  bool mSendPermissionUpdates;
   bool mIsForBrowser;
 
   // These variables track whether we've called Close() and KillHard() on our
@@ -1191,11 +1216,6 @@ private:
 
   PProcessHangMonitorParent* mHangMonitorActor;
 
-#ifdef MOZ_GECKO_PROFILER
-  bool mIsProfilerActive;
-#endif
-  nsCString mProfile;
-
   UniquePtr<gfx::DriverCrashGuard> mDriverCrashGuard;
   UniquePtr<MemoryReportRequestHost> mMemoryReportRequest;
 
@@ -1213,10 +1233,15 @@ private:
   // GetFilesHelper can be aborted by receiving RecvDeleteGetFilesRequest.
   nsRefPtrHashtable<nsIDHashKey, GetFilesHelper> mGetFilesPendingRequests;
 
+  nsTHashtable<nsCStringHashKey> mActivePermissionKeys;
+
   nsTArray<nsCString> mBlobURLs;
 #ifdef MOZ_CRASHREPORTER
   UniquePtr<mozilla::ipc::CrashReporterHost> mCrashReporter;
 #endif
+
+  static uint64_t sNextTabParentId;
+  static nsDataHashtable<nsUint64HashKey, TabParent*> sNextTabParents;
 };
 
 } // namespace dom

@@ -190,6 +190,10 @@ struct VRDisplayInfo
 };
 
 struct VRHMDSensorState {
+  VRHMDSensorState()
+  {
+    Clear();
+  }
   double timestamp;
   int32_t inputFrameID;
   VRDisplayCapabilityFlags flags;
@@ -205,6 +209,21 @@ struct VRHMDSensorState {
   }
 };
 
+struct VRSubmitFrameResultInfo
+{
+  VRSubmitFrameResultInfo()
+   : mFrameNum(0),
+     mWidth(0),
+     mHeight(0)
+  {}
+
+  nsCString mBase64Image;
+  SurfaceFormat mFormat;
+  uint32_t mFrameNum;
+  uint32_t mWidth;
+  uint32_t mHeight;
+};
+
 struct VRControllerInfo
 {
   VRDeviceType GetType() const { return mType; }
@@ -214,6 +233,7 @@ struct VRControllerInfo
   dom::GamepadHand GetHand() const { return mHand; }
   uint32_t GetNumButtons() const { return mNumButtons; }
   uint32_t GetNumAxes() const { return mNumAxes; }
+  uint32_t GetNumHaptics() const { return mNumHaptics; }
 
   uint32_t mControllerID;
   VRDeviceType mType;
@@ -222,6 +242,7 @@ struct VRControllerInfo
   dom::GamepadHand mHand;
   uint32_t mNumButtons;
   uint32_t mNumAxes;
+  uint32_t mNumHaptics;
 
   bool operator==(const VRControllerInfo& other) const {
     return mType == other.mType &&
@@ -230,7 +251,8 @@ struct VRControllerInfo
            mMappingType == other.mMappingType &&
            mHand == other.mHand &&
            mNumButtons == other.mNumButtons &&
-           mNumAxes == other.mNumAxes;
+           mNumAxes == other.mNumAxes &&
+           mNumHaptics == other.mNumHaptics;
   }
 
   bool operator!=(const VRControllerInfo& other) const {
@@ -248,16 +270,22 @@ protected:
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VRSystemManager)
 
-  virtual bool Init() = 0;
   virtual void Destroy() = 0;
+  virtual void Shutdown() = 0;
   virtual void GetHMDs(nsTArray<RefPtr<VRDisplayHost>>& aHMDResult) = 0;
+  virtual bool GetIsPresenting() = 0;
   virtual void HandleInput() = 0;
   virtual void GetControllers(nsTArray<RefPtr<VRControllerHost>>& aControllerResult) = 0;
   virtual void ScanForControllers() = 0;
   virtual void RemoveControllers() = 0;
-  void NewButtonEvent(uint32_t aIndex, uint32_t aButton, bool aPressed);
+  virtual void VibrateHaptic(uint32_t aControllerIdx, uint32_t aHapticIndex,
+                             double aIntensity, double aDuration, uint32_t aPromiseID) = 0;
+  virtual void StopVibrateHaptic(uint32_t aControllerIdx) = 0;
+  void NewButtonEvent(uint32_t aIndex, uint32_t aButton, bool aPressed, bool aTouched,
+                      double aValue);
   void NewAxisMove(uint32_t aIndex, uint32_t aAxis, double aValue);
   void NewPoseState(uint32_t aIndex, const dom::GamepadPoseState& aPose);
+  void NewHandChangeEvent(uint32_t aIndex, const dom::GamepadHand aHand);
   void AddGamepad(const VRControllerInfo& controllerInfo);
   void RemoveGamepad(uint32_t aIndex);
 
@@ -266,15 +294,6 @@ protected:
   virtual ~VRSystemManager() { }
 
   uint32_t mControllerCount;
-
-private:
-  virtual void HandleButtonPress(uint32_t aControllerIdx,
-                                 uint64_t aButtonPressed) = 0;
-  virtual void HandleAxisMove(uint32_t aControllerIdx, uint32_t aAxis,
-                              float aValue) = 0;
-  virtual void HandlePoseTracking(uint32_t aControllerIdx,
-                                  const dom::GamepadPoseState& aPose,
-                                  VRControllerHost* aController) = 0;
 };
 
 } // namespace gfx

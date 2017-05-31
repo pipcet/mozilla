@@ -5,10 +5,10 @@
 
 #include "WidevineVideoDecoder.h"
 
-#include "mp4_demuxer/AnnexB.h"
 #include "WidevineUtils.h"
 #include "WidevineVideoFrame.h"
 #include "mozilla/Move.h"
+#include <inttypes.h>
 
 using namespace cdm;
 
@@ -18,7 +18,6 @@ WidevineVideoDecoder::WidevineVideoDecoder(GMPVideoHost* aVideoHost,
                                            RefPtr<CDMWrapper> aCDMWrapper)
   : mVideoHost(aVideoHost)
   , mCDMWrapper(Move(aCDMWrapper))
-  , mExtraData(new MediaByteBuffer())
   , mSentInput(false)
   , mCodecType(kGMPVideoCodecInvalid)
   , mReturnOutputCallDepth(0)
@@ -79,17 +78,20 @@ WidevineVideoDecoder::InitDecode(const GMPVideoCodec& aCodecSettings,
     return;
   }
   config.format = kYv12;
-  config.coded_size = Size(aCodecSettings.mWidth, aCodecSettings.mHeight);
-  mExtraData->AppendElements(aCodecSpecific + 1, aCodecSpecificLength);
-  config.extra_data = mExtraData->Elements();
-  config.extra_data_size = mExtraData->Length();
+  config.coded_size = mCodedSize = Size(aCodecSettings.mWidth, aCodecSettings.mHeight);
+  nsTArray<uint8_t> extraData;
+  if (aCodecSpecificLength > 0) {
+    // The first byte is the WebRTC packetization mode, which can be ignored.
+    extraData.AppendElements(aCodecSpecific + 1, aCodecSpecificLength - 1);
+    config.extra_data = extraData.Elements();
+    config.extra_data_size = extraData.Length();
+  }
   Status rv = CDM()->InitializeVideoDecoder(config);
   if (rv != kSuccess) {
     mCallback->Error(ToGMPErr(rv));
     return;
   }
   CDM_LOG("WidevineVideoDecoder::InitDecode() rv=%d", rv);
-  mAnnexB = mp4_demuxer::AnnexB::ConvertExtraDataToAnnexB(mExtraData);
 }
 
 void
@@ -110,34 +112,11 @@ WidevineVideoDecoder::Decode(GMPVideoEncodedFrame* aInputFrame,
   mSentInput = true;
   InputBuffer sample;
 
-  RefPtr<MediaRawData> raw(
-    new MediaRawData(aInputFrame->Buffer(), aInputFrame->Size()));
-  if (aInputFrame->Size() && !raw->Data()) {
-    // OOM.
-    mCallback->Error(GMPAllocErr);
-    return;
-  }
-  raw->mExtraData = mExtraData;
-  raw->mKeyframe = (aInputFrame->FrameType() == kGMPKeyFrame);
-  if (mCodecType == kGMPVideoCodecH264) {
-    // Convert input from AVCC, which GMPAPI passes in, to AnnexB, which
-    // Chromium uses internally.
-    mp4_demuxer::AnnexB::ConvertSampleToAnnexB(raw);
-  }
-
   const GMPEncryptedBufferMetadata* crypto = aInputFrame->GetDecryptionData();
   nsTArray<SubsampleEntry> subsamples;
-  InitInputBuffer(crypto, aInputFrame->TimeStamp(), raw->Data(), raw->Size(),
+  InitInputBuffer(crypto, aInputFrame->TimeStamp(),
+                  aInputFrame->Buffer(), aInputFrame->Size(),
                   sample, subsamples);
-
-  // For keyframes, ConvertSampleToAnnexB will stick the AnnexB extra data
-  // at the start of the input. So we need to account for that as clear data
-  // in the subsamples.
-  if (raw->mKeyframe
-      && !subsamples.IsEmpty()
-      && mCodecType == kGMPVideoCodecH264) {
-    subsamples[0].clear_bytes += mAnnexB->Length();
-  }
 
   WidevineVideoFrame frame;
   Status rv = CDM()->DecryptAndDecodeFrame(sample, &frame);
@@ -149,7 +128,22 @@ WidevineVideoDecoder::Decode(GMPVideoEncodedFrame* aInputFrame,
   aInputFrame->Destroy();
   aInputFrame = nullptr;
 
-  if (rv == kSuccess) {
+  if (rv == kSuccess || rv == kNoKey) {
+    if (rv == kNoKey) {
+      CDM_LOG("NoKey for sample at time=%" PRId64 "!", sample.timestamp);
+      // Somehow our key became unusable. Typically this would happen when
+      // a stream requires output protection, and the configuration changed
+      // such that output protection is no longer available. For example, a
+      // non-compliant monitor was attached. The JS player should notice the
+      // key status changing to "output-restricted", and is supposed to switch
+      // to a stream that doesn't require OP. In order to keep the playback
+      // pipeline rolling, just output a black frame. See bug 1343140.
+      if (!frame.InitToBlack(mCodedSize.width, mCodedSize.height,
+                             sample.timestamp)) {
+        mCallback->Error(GMPDecodeErr);
+        return;
+      }
+    }
     if (!ReturnOutput(frame)) {
       CDM_LOG("WidevineVideoDecoder::Decode() Failed in ReturnOutput()");
       mCallback->Error(GMPDecodeErr);

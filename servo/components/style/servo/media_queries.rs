@@ -5,11 +5,16 @@
 //! Servo's media-query device and expression representation.
 
 use app_units::Au;
-use cssparser::Parser;
+use context::QuirksMode;
+use cssparser::{Parser, RGBA};
 use euclid::{Size2D, TypedSize2D};
+use font_metrics::ServoMetricsProvider;
 use media_queries::MediaType;
-use properties::ComputedValues;
+use parser::ParserContext;
+use properties::{ComputedValues, StyleBuilder};
+use properties::longhands::font_size;
 use std::fmt;
+use std::sync::atomic::{AtomicIsize, Ordering};
 use style_traits::{CSSPixel, ToCss};
 use style_traits::viewport::ViewportConstraints;
 use values::computed::{self, ToComputedValue};
@@ -19,12 +24,23 @@ use values::specified;
 /// is displayed in.
 ///
 /// This is the struct against which media queries are evaluated.
-#[derive(Debug, HeapSizeOf)]
+#[derive(HeapSizeOf)]
 pub struct Device {
     /// The current media type used by de device.
     media_type: MediaType,
     /// The current viewport size, in CSS pixels.
     viewport_size: TypedSize2D<f32, CSSPixel>,
+
+    /// The font size of the root element
+    /// This is set when computing the style of the root
+    /// element, and used for rem units in other elements
+    ///
+    /// When computing the style of the root element, there can't be any
+    /// other style being computed at the same time, given we need the style of
+    /// the parent to compute everything else. So it is correct to just use
+    /// a relaxed atomic here.
+    #[ignore_heap_size_of = "Pure stack type"]
+    root_font_size: AtomicIsize,
 }
 
 impl Device {
@@ -35,12 +51,26 @@ impl Device {
         Device {
             media_type: media_type,
             viewport_size: viewport_size,
+            root_font_size: AtomicIsize::new(font_size::get_initial_value().0 as isize), // FIXME(bz): Seems dubious?
         }
     }
 
     /// Return the default computed values for this device.
-    pub fn default_values(&self) -> &ComputedValues {
+    pub fn default_computed_values(&self) -> &ComputedValues {
+        // FIXME(bz): This isn't really right, but it's no more wrong
+        // than what we used to do.  See
+        // https://github.com/servo/servo/issues/14773 for fixing it properly.
         ComputedValues::initial_values()
+    }
+
+    /// Get the font size of the root element (for rem)
+    pub fn root_font_size(&self) -> Au {
+        Au::new(self.root_font_size.load(Ordering::Relaxed) as i32)
+    }
+
+    /// Set the font size of the root element (for rem)
+    pub fn set_root_font_size(&self, size: Au) {
+        self.root_font_size.store(size.0 as isize, Ordering::Relaxed)
     }
 
     /// Returns the viewport size of the current device in app units, needed,
@@ -65,6 +95,16 @@ impl Device {
     /// Return the media type of the current device.
     pub fn media_type(&self) -> MediaType {
         self.media_type.clone()
+    }
+
+    /// Returns whether document colors are enabled.
+    pub fn use_document_colors(&self) -> bool {
+        true
+    }
+
+    /// Returns the default background color.
+    pub fn default_background_color(&self) -> RGBA {
+        RGBA::new(255, 255, 255, 255)
     }
 }
 
@@ -100,7 +140,7 @@ impl Expression {
     /// ```
     ///
     /// Only supports width and width ranges for now.
-    pub fn parse(input: &mut Parser) -> Result<Self, ()> {
+    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
         try!(input.expect_parenthesis_block());
         input.parse_nested_block(|input| {
             let name = try!(input.expect_ident());
@@ -108,13 +148,13 @@ impl Expression {
             // TODO: Handle other media features
             Ok(Expression(match_ignore_ascii_case! { &name,
                 "min-width" => {
-                    ExpressionKind::Width(Range::Min(try!(specified::Length::parse_non_negative(input))))
+                    ExpressionKind::Width(Range::Min(try!(specified::Length::parse_non_negative(context, input))))
                 },
                 "max-width" => {
-                    ExpressionKind::Width(Range::Max(try!(specified::Length::parse_non_negative(input))))
+                    ExpressionKind::Width(Range::Max(try!(specified::Length::parse_non_negative(context, input))))
                 },
                 "width" => {
-                    ExpressionKind::Width(Range::Eq(try!(specified::Length::parse_non_negative(input))))
+                    ExpressionKind::Width(Range::Eq(try!(specified::Length::parse_non_negative(context, input))))
                 },
                 _ => return Err(())
             }))
@@ -123,12 +163,12 @@ impl Expression {
 
     /// Evaluate this expression and return whether it matches the current
     /// device.
-    pub fn matches(&self, device: &Device) -> bool {
+    pub fn matches(&self, device: &Device, quirks_mode: QuirksMode) -> bool {
         let viewport_size = device.au_viewport_size();
         let value = viewport_size.width;
         match self.0 {
             ExpressionKind::Width(ref range) => {
-                match range.to_computed_range(viewport_size, device.default_values()) {
+                match range.to_computed_range(device, quirks_mode) {
                     Range::Min(ref width) => { value >= *width },
                     Range::Max(ref width) => { value <= *width },
                     Range::Eq(ref width) => { value == *width },
@@ -170,21 +210,23 @@ pub enum Range<T> {
 }
 
 impl Range<specified::Length> {
-    fn to_computed_range(&self,
-                         viewport_size: Size2D<Au>,
-                         default_values: &ComputedValues)
-                         -> Range<Au> {
+    fn to_computed_range(&self, device: &Device, quirks_mode: QuirksMode) -> Range<Au> {
+        let default_values = device.default_computed_values();
         // http://dev.w3.org/csswg/mediaqueries3/#units
         // em units are relative to the initial font-size.
         let context = computed::Context {
             is_root_element: false,
-            viewport_size: viewport_size,
+            device: device,
             inherited_style: default_values,
             layout_parent_style: default_values,
-            // This cloning business is kind of dumb.... It's because Context
-            // insists on having an actual ComputedValues inside itself.
-            style: default_values.clone(),
-            font_metrics_provider: None
+            style: StyleBuilder::for_derived_style(default_values),
+            // Servo doesn't support font metrics
+            // A real provider will be needed here once we do; since
+            // ch units can exist in media queries.
+            font_metrics_provider: &ServoMetricsProvider,
+            in_media_query: true,
+            cached_system_font: None,
+            quirks_mode: quirks_mode,
         };
 
         match *self {

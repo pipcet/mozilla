@@ -12,8 +12,6 @@ include PBackgroundSharedTypes;
 include NeckoChannelParams;
 include PURLClassifierInfo;
 
-include protocol PBlob; //FIXME: bug #792908
-
 include "mozilla/net/NeckoMessageUtils.h";
 
 using class nsHttpHeaderArray from "nsHttpHeaderArray.h";
@@ -108,7 +106,8 @@ child:
                        NetAddr             peerAddr,
                        int16_t             redirectCount,
                        uint32_t            cacheKey,
-                       nsCString           altDataType);
+                       nsCString           altDataType,
+                       int64_t             altDataLength);
 
   // Combines a single OnDataAvailable and its associated OnProgress &
   // OnStatus calls into one IPDL message
@@ -135,7 +134,8 @@ child:
                        uint32_t           redirectFlags,
                        nsHttpResponseHead responseHead,
                        nsCString          securityInfoSerialization,
-                       nsCString          channelId);
+                       uint64_t           channelId,
+                       NetAddr            oldPeerAddr);
 
   // Called if redirect successful so that child can complete setup.
   async Redirect3Complete();

@@ -40,6 +40,11 @@ extern LogModule* GetMediaManagerLog();
 #define LOG(msg) MOZ_LOG(GetMediaManagerLog(), mozilla::LogLevel::Debug, msg)
 #define LOG_FRAMES(msg) MOZ_LOG(GetMediaManagerLog(), mozilla::LogLevel::Verbose, msg)
 
+LogModule* AudioLogModule() {
+  static mozilla::LazyLogModule log("AudioLatency");
+  return static_cast<LogModule*>(log);
+}
+
 /**
  * Webrtc microphone source source.
  */
@@ -198,6 +203,8 @@ MediaEngineWebRTCMicrophoneSource::MediaEngineWebRTCMicrophoneSource(
   , mTrackID(TRACK_NONE)
   , mStarted(false)
   , mSampleFrequency(MediaEngine::DEFAULT_SAMPLE_RATE)
+  , mTotalFrames(0)
+  , mLastLogFrames(0)
   , mPlayoutDelay(0)
   , mNullTransport(nullptr)
   , mSkipProcessing(false)
@@ -208,8 +215,8 @@ MediaEngineWebRTCMicrophoneSource::MediaEngineWebRTCMicrophoneSource(
   mDeviceUUID.Assign(uuid);
   mListener = new mozilla::WebRTCAudioDataListener(this);
   mSettings.mEchoCancellation.Construct(0);
-  mSettings.mMozAutoGainControl.Construct(0);
-  mSettings.mMozNoiseSuppression.Construct(0);
+  mSettings.mAutoGainControl.Construct(0);
+  mSettings.mNoiseSuppression.Construct(0);
   // We'll init lazily as needed
 }
 
@@ -279,8 +286,8 @@ MediaEngineWebRTCMicrophoneSource::UpdateSingleSource(
 
   MediaEnginePrefs prefs = aPrefs;
   prefs.mAecOn = c.mEchoCancellation.Get(prefs.mAecOn);
-  prefs.mAgcOn = c.mMozAutoGainControl.Get(prefs.mAgcOn);
-  prefs.mNoiseOn = c.mMozNoiseSuppression.Get(prefs.mNoiseOn);
+  prefs.mAgcOn = c.mAutoGainControl.Get(prefs.mAgcOn);
+  prefs.mNoiseOn = c.mNoiseSuppression.Get(prefs.mNoiseOn);
 
   LOG(("Audio config: aec: %d, agc: %d, noise: %d, delay: %d",
        prefs.mAecOn ? prefs.mAec : -1,
@@ -375,8 +382,8 @@ MediaEngineWebRTCMicrophoneSource::SetLastPrefs(
 
   NS_DispatchToMainThread(media::NewRunnableFrom([that, aPrefs]() mutable {
     that->mSettings.mEchoCancellation.Value() = aPrefs.mAecOn;
-    that->mSettings.mMozAutoGainControl.Value() = aPrefs.mAgcOn;
-    that->mSettings.mMozNoiseSuppression.Value() = aPrefs.mNoiseOn;
+    that->mSettings.mAutoGainControl.Value() = aPrefs.mAgcOn;
+    that->mSettings.mNoiseSuppression.Value() = aPrefs.mNoiseOn;
     return NS_OK;
   }));
 }
@@ -576,6 +583,16 @@ MediaEngineWebRTCMicrophoneSource::InsertInGraph(const T* aBuffer,
 {
   if (mState != kStarted) {
     return;
+  }
+
+  if (MOZ_LOG_TEST(AudioLogModule(), LogLevel::Debug)) {
+    mTotalFrames += aFrames;
+    if (mTotalFrames > mLastLogFrames + mSampleFrequency) { // ~ 1 second
+      MOZ_LOG(AudioLogModule(), LogLevel::Debug,
+              ("%p: Inserting %" PRIuSIZE " samples into graph, total frames = %" PRIu64,
+               (void*)this, aFrames, mTotalFrames));
+      mLastLogFrames = mTotalFrames;
+    }
   }
 
   size_t len = mSources.Length();

@@ -20,8 +20,6 @@
 #include "mozilla/dom/ImageBitmapBinding.h"
 #include "mozilla/dom/ImageData.h"
 #include "mozilla/dom/ImageDataBinding.h"
-#include "mozilla/dom/ipc/BlobChild.h"
-#include "mozilla/dom/ipc/nsIRemoteBlob.h"
 #include "mozilla/dom/StructuredClone.h"
 #include "mozilla/dom/MessagePort.h"
 #include "mozilla/dom/MessagePortBinding.h"
@@ -302,12 +300,15 @@ StructuredCloneHolder::Read(nsISupports* aParent,
   if (!StructuredCloneHolderBase::Read(aCx, aValue)) {
     JS_ClearPendingException(aCx);
     aRv.Throw(NS_ERROR_DOM_DATA_CLONE_ERR);
+    return;
   }
 
   // If we are tranferring something, we cannot call 'Read()' more than once.
   if (mSupportsTransferring) {
     mBlobImplArray.Clear();
+    mWasmModuleArray.Clear();
     mClonedSurfaces.Clear();
+    mInputStreamArray.Clear();
     Clear();
   }
 }
@@ -498,95 +499,6 @@ StructuredCloneHolder::WriteFullySerializableObjects(JSContext* aCx,
 
 namespace {
 
-// Recursive!
-already_AddRefed<BlobImpl>
-EnsureBlobForBackgroundManager(BlobImpl* aBlobImpl,
-                               PBackgroundChild* aManager,
-                               ErrorResult& aRv)
-{
-  MOZ_ASSERT(aBlobImpl);
-  RefPtr<BlobImpl> blobImpl = aBlobImpl;
-
-  if (!aManager) {
-    aManager = BackgroundChild::GetForCurrentThread();
-    if (!aManager) {
-      return blobImpl.forget();
-    }
-  }
-
-  const nsTArray<RefPtr<BlobImpl>>* subBlobImpls =
-    aBlobImpl->GetSubBlobImpls();
-
-  if (!subBlobImpls || !subBlobImpls->Length()) {
-    if (nsCOMPtr<nsIRemoteBlob> remoteBlob = do_QueryObject(blobImpl)) {
-      // Always make sure we have a blob from an actor we can use on this
-      // thread.
-      BlobChild* blobChild = BlobChild::GetOrCreate(aManager, blobImpl);
-      MOZ_ASSERT(blobChild);
-
-      blobImpl = blobChild->GetBlobImpl();
-      MOZ_ASSERT(blobImpl);
-
-      DebugOnly<bool> isMutable;
-      MOZ_ASSERT(NS_SUCCEEDED(blobImpl->GetMutable(&isMutable)));
-      MOZ_ASSERT(!isMutable);
-    } else {
-      MOZ_ALWAYS_SUCCEEDS(blobImpl->SetMutable(false));
-    }
-
-    return blobImpl.forget();
-  }
-
-  const uint32_t subBlobCount = subBlobImpls->Length();
-  MOZ_ASSERT(subBlobCount);
-
-  nsTArray<RefPtr<BlobImpl>> newSubBlobImpls;
-  newSubBlobImpls.SetLength(subBlobCount);
-
-  bool newBlobImplNeeded = false;
-
-  for (uint32_t index = 0; index < subBlobCount; index++) {
-    const RefPtr<BlobImpl>& subBlobImpl = subBlobImpls->ElementAt(index);
-    MOZ_ASSERT(subBlobImpl);
-
-    RefPtr<BlobImpl>& newSubBlobImpl = newSubBlobImpls[index];
-
-    newSubBlobImpl = EnsureBlobForBackgroundManager(subBlobImpl, aManager, aRv);
-    if (NS_WARN_IF(aRv.Failed())) {
-      return nullptr;
-    }
-
-    MOZ_ASSERT(newSubBlobImpl);
-
-    if (subBlobImpl != newSubBlobImpl) {
-      newBlobImplNeeded = true;
-    }
-  }
-
-  if (newBlobImplNeeded) {
-    nsString contentType;
-    blobImpl->GetType(contentType);
-
-    if (blobImpl->IsFile()) {
-      nsString name;
-      blobImpl->GetName(name);
-
-      blobImpl = MultipartBlobImpl::Create(Move(newSubBlobImpls), name,
-                                           contentType, aRv);
-    } else {
-      blobImpl = MultipartBlobImpl::Create(Move(newSubBlobImpls), contentType, aRv);
-    }
-
-    if (NS_WARN_IF(aRv.Failed())) {
-      return nullptr;
-    }
-
-    MOZ_ALWAYS_SUCCEEDS(blobImpl->SetMutable(false));
-  }
-
-  return blobImpl.forget();
-}
-
 JSObject*
 ReadBlob(JSContext* aCx,
          uint32_t aIndex,
@@ -596,14 +508,7 @@ ReadBlob(JSContext* aCx,
   MOZ_ASSERT(aIndex < aHolder->BlobImpls().Length());
   RefPtr<BlobImpl> blobImpl = aHolder->BlobImpls()[aIndex];
 
-  ErrorResult rv;
-  blobImpl = EnsureBlobForBackgroundManager(blobImpl, nullptr, rv);
-  if (NS_WARN_IF(rv.Failed())) {
-    rv.SuppressException();
-    return nullptr;
-  }
-
-  MOZ_ASSERT(blobImpl);
+  MOZ_ALWAYS_SUCCEEDS(blobImpl->SetMutable(false));
 
   // RefPtr<File> needs to go out of scope before toObject() is
   // called because the static analysis thinks dereferencing XPCOM objects
@@ -635,16 +540,7 @@ WriteBlob(JSStructuredCloneWriter* aWriter,
     return false;
   }
 
-  ErrorResult rv;
-  RefPtr<BlobImpl> blobImpl =
-    EnsureBlobForBackgroundManager(aBlob->Impl(), nullptr, rv);
-  if (NS_WARN_IF(rv.Failed())) {
-    rv.SuppressException();
-    return false;
-  }
-
-  MOZ_ASSERT(blobImpl);
-
+  RefPtr<BlobImpl> blobImpl = aBlob->Impl();
   MOZ_ALWAYS_SUCCEEDS(blobImpl->SetMutable(false));
 
   // We store the position of the blobImpl in the array as index.
@@ -763,14 +659,7 @@ ReadFileList(JSContext* aCx,
       RefPtr<BlobImpl> blobImpl = aHolder->BlobImpls()[pos];
       MOZ_ASSERT(blobImpl->IsFile());
 
-      ErrorResult rv;
-      blobImpl = EnsureBlobForBackgroundManager(blobImpl, nullptr, rv);
-      if (NS_WARN_IF(rv.Failed())) {
-        rv.SuppressException();
-        return nullptr;
-      }
-
-      MOZ_ASSERT(blobImpl);
+      MOZ_ALWAYS_SUCCEEDS(blobImpl->SetMutable(false));
 
       RefPtr<File> file = File::Create(aHolder->ParentDuringRead(), blobImpl);
       if (!fileList->Append(file)) {
@@ -808,18 +697,11 @@ WriteFileList(JSStructuredCloneWriter* aWriter,
     return false;
   }
 
-  ErrorResult rv;
   nsTArray<RefPtr<BlobImpl>> blobImpls;
 
   for (uint32_t i = 0; i < aFileList->Length(); ++i) {
-    RefPtr<BlobImpl> blobImpl =
-      EnsureBlobForBackgroundManager(aFileList->Item(i)->Impl(), nullptr, rv);
-    if (NS_WARN_IF(rv.Failed())) {
-      rv.SuppressException();
-      return false;
-    }
-
-    MOZ_ASSERT(blobImpl);
+    RefPtr<BlobImpl> blobImpl = aFileList->Item(i)->Impl();
+    MOZ_ALWAYS_SUCCEEDS(blobImpl->SetMutable(false));
     blobImpls.AppendElement(blobImpl);
   }
 
@@ -861,20 +743,13 @@ ReadFormData(JSContext* aCx,
 
         RefPtr<BlobImpl> blobImpl =
           aHolder->BlobImpls()[indexOrLengthOfString];
-
-        ErrorResult rv;
-        blobImpl = EnsureBlobForBackgroundManager(blobImpl, nullptr, rv);
-        if (NS_WARN_IF(rv.Failed())) {
-          rv.SuppressException();
-          return nullptr;
-        }
-
-        MOZ_ASSERT(blobImpl);
+        MOZ_ALWAYS_SUCCEEDS(blobImpl->SetMutable(false));
 
         RefPtr<Blob> blob =
           Blob::Create(aHolder->ParentDuringRead(), blobImpl);
         MOZ_ASSERT(blob);
 
+        ErrorResult rv;
         formData->Append(name, *blob, thirdArg, rv);
         if (NS_WARN_IF(rv.Failed())) {
           rv.SuppressException();
@@ -967,19 +842,13 @@ WriteFormData(JSStructuredCloneWriter* aWriter,
       }
 
       if (aValue.IsBlob()) {
-        ErrorResult rv;
-        RefPtr<BlobImpl> blobImpl =
-          EnsureBlobForBackgroundManager(aValue.GetAsBlob()->Impl(), nullptr,
-                                         rv);
-        if (NS_WARN_IF(rv.Failed())) {
-          rv.SuppressException();
-          return false;
-        }
-
         if (!JS_WriteUint32Pair(closure->mWriter, SCTAG_DOM_BLOB,
                                 closure->mHolder->BlobImpls().Length())) {
           return false;
         }
+
+        RefPtr<BlobImpl> blobImpl = aValue.GetAsBlob()->Impl();
+        MOZ_ALWAYS_SUCCEEDS(blobImpl->SetMutable(false));
 
         closure->mHolder->BlobImpls().AppendElement(blobImpl);
         return true;
@@ -987,13 +856,6 @@ WriteFormData(JSStructuredCloneWriter* aWriter,
 
       if (aValue.IsDirectory()) {
         Directory* directory = aValue.GetAsDirectory();
-
-        if (closure->mHolder->CloneScope() !=
-              StructuredCloneHolder::StructuredCloneScope::SameProcessSameThread &&
-            !directory->ClonableToDifferentThreadOrProcess()) {
-          return false;
-        }
-
         return WriteDirectory(closure->mWriter, directory);
       }
 
@@ -1047,6 +909,45 @@ WriteWasmModule(JSStructuredCloneWriter* aWriter,
   return false;
 }
 
+JSObject*
+ReadInputStream(JSContext* aCx,
+                uint32_t aIndex,
+                StructuredCloneHolder* aHolder)
+{
+  MOZ_ASSERT(aHolder);
+  MOZ_ASSERT(aIndex < aHolder->InputStreams().Length());
+  nsCOMPtr<nsIInputStream> inputStream = aHolder->InputStreams()[aIndex];
+
+  JS::RootedValue result(aCx);
+  nsresult rv = nsContentUtils::WrapNative(aCx, inputStream,
+                                           &NS_GET_IID(nsIInputStream),
+                                           &result);
+  if (NS_FAILED(rv)) {
+    return nullptr;
+  }
+
+  return &result.toObject();
+}
+
+bool
+WriteInputStream(JSStructuredCloneWriter* aWriter,
+                 nsIInputStream* aInputStream,
+                 StructuredCloneHolder* aHolder)
+{
+  MOZ_ASSERT(aWriter);
+  MOZ_ASSERT(aInputStream);
+  MOZ_ASSERT(aHolder);
+
+  // We store the position of the inputStream in the array as index.
+  if (JS_WriteUint32Pair(aWriter, SCTAG_DOM_INPUTSTREAM,
+                         aHolder->InputStreams().Length())) {
+    aHolder->InputStreams().AppendElement(aInputStream);
+    return true;
+  }
+
+  return false;
+}
+
 } // anonymous namespace
 
 JSObject*
@@ -1089,6 +990,10 @@ StructuredCloneHolder::CustomReadHandler(JSContext* aCx,
     return ReadWasmModule(aCx, aIndex, this);
   }
 
+  if (aTag == SCTAG_DOM_INPUTSTREAM) {
+    return ReadInputStream(aCx, aIndex, this);
+  }
+
   return ReadFullySerializableObjects(aCx, aReader, aTag);
 }
 
@@ -1113,11 +1018,6 @@ StructuredCloneHolder::CustomWriteHandler(JSContext* aCx,
   {
     Directory* directory = nullptr;
     if (NS_SUCCEEDED(UNWRAP_OBJECT(Directory, aObj, directory))) {
-      if (mStructuredCloneScope != StructuredCloneScope::SameProcessSameThread &&
-          !directory->ClonableToDifferentThreadOrProcess()) {
-        return false;
-      }
-
       return WriteDirectory(aWriter, directory);
     }
   }
@@ -1157,6 +1057,14 @@ StructuredCloneHolder::CustomWriteHandler(JSContext* aCx,
     MOZ_ASSERT(module);
 
     return WriteWasmModule(aWriter, module, this);
+  }
+
+  {
+    nsCOMPtr<nsISupports> base = xpc::UnwrapReflectorToISupports(aObj);
+    nsCOMPtr<nsIInputStream> inputStream = do_QueryInterface(base);
+    if (inputStream) {
+      return WriteInputStream(aWriter, inputStream, this);
+    }
   }
 
   return WriteFullySerializableObjects(aCx, aWriter, aObj);

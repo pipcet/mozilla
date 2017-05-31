@@ -7,7 +7,11 @@
 
 #include "gfxPrefs.h"
 #include "LayersLogging.h"
+#include "mozilla/gfx/gfxVars.h"
+#include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/ImageClient.h"
+#include "mozilla/layers/ScrollingLayersHelper.h"
+#include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/TextureClientRecycleAllocator.h"
 #include "mozilla/layers/TextureWrapperImage.h"
 #include "mozilla/layers/WebRenderBridgeChild.h"
@@ -20,7 +24,6 @@ using namespace gfx;
 
 WebRenderImageLayer::WebRenderImageLayer(WebRenderLayerManager* aLayerManager)
   : ImageLayer(aLayerManager, static_cast<WebRenderLayer*>(this))
-  , mExternalImageId(0)
   , mImageClientTypeContainer(CompositableType::UNKNOWN)
 {
   MOZ_COUNT_CTOR(WebRenderImageLayer);
@@ -29,8 +32,16 @@ WebRenderImageLayer::WebRenderImageLayer(WebRenderLayerManager* aLayerManager)
 WebRenderImageLayer::~WebRenderImageLayer()
 {
   MOZ_COUNT_DTOR(WebRenderImageLayer);
-  if (mExternalImageId) {
-    WrBridge()->DeallocExternalImageId(mExternalImageId);
+
+  for (auto key : mVideoKeys) {
+    WrManager()->AddImageKeyForDiscard(key);
+  }
+  if (mKey.isSome()) {
+    WrManager()->AddImageKeyForDiscard(mKey.value());
+  }
+
+  if (mExternalImageId.isSome()) {
+    WrBridge()->DeallocExternalImageId(mExternalImageId.ref());
   }
 }
 
@@ -80,7 +91,19 @@ WebRenderImageLayer::ClearCachedResources()
 }
 
 void
-WebRenderImageLayer::RenderLayer()
+WebRenderImageLayer::AddWRVideoImage(size_t aChannelNumber)
+{
+  for (size_t i = 0; i < aChannelNumber; ++i) {
+    WrImageKey key = GetImageKey();
+    WrManager()->AddImageKeyForDiscard(key);
+    mVideoKeys.AppendElement(key);
+  }
+  WrBridge()->AddWebRenderParentCommand(OpAddExternalVideoImage(mExternalImageId.value(), mVideoKeys));
+}
+
+void
+WebRenderImageLayer::RenderLayer(wr::DisplayListBuilder& aBuilder,
+                                 const StackingContextHelper& aSc)
 {
   if (!mContainer) {
      return;
@@ -103,17 +126,19 @@ WebRenderImageLayer::RenderLayer()
     mImageClient->Connect();
   }
 
-  if (!mExternalImageId) {
+  if (mExternalImageId.isNothing()) {
     if (GetImageClientType() == CompositableType::IMAGE_BRIDGE) {
       MOZ_ASSERT(!mImageClient);
-      mExternalImageId = WrBridge()->AllocExternalImageId(mContainer->GetAsyncContainerHandle());
+      mExternalImageId = Some(WrBridge()->AllocExternalImageId(mContainer->GetAsyncContainerHandle()));
+      // Alloc async image pipeline id.
+      mPipelineId = Some(WrBridge()->GetCompositorBridgeChild()->GetNextPipelineId());
     } else {
       // Handle CompositableType::IMAGE case
       MOZ_ASSERT(mImageClient);
-      mExternalImageId = WrBridge()->AllocExternalImageIdForCompositable(mImageClient);
+      mExternalImageId = Some(WrBridge()->AllocExternalImageIdForCompositable(mImageClient));
     }
   }
-  MOZ_ASSERT(mExternalImageId);
+  MOZ_ASSERT(mExternalImageId.isSome());
 
   // XXX Not good for async ImageContainer case.
   AutoLockImage autoLock(mContainer);
@@ -123,65 +148,152 @@ WebRenderImageLayer::RenderLayer()
   }
   gfx::IntSize size = image->GetSize();
 
-  if (mImageClient && !mImageClient->UpdateImage(mContainer, /* unused */0)) {
-    return;
-  }
-
-  WrScrollFrameStackingContextGenerator scrollFrames(this);
-
-  Matrix4x4 transform = GetTransform();
-  Rect rect(0, 0, size.width, size.height);
-  Rect clip;
-  if (GetClipRect().isSome()) {
-      clip = RelativeToVisible(transform.Inverse().TransformBounds(IntRectToRect(GetClipRect().ref().ToUnknownRect())));
+  if (GetImageClientType() != CompositableType::IMAGE_BRIDGE) {
+    // Handle CompositableType::IMAGE case
+    MOZ_ASSERT(mImageClient->AsImageClientSingle());
+    mKey = UpdateImageKey(mImageClient->AsImageClientSingle(),
+                          mContainer,
+                          mKey,
+                          mExternalImageId.ref());
+    if (mKey.isNothing()) {
+      return;
+    }
   } else {
-      clip = rect;
+    // Always allocate key.
+    mVideoKeys.Clear();
+
+    // XXX (Jerry): Remove the hardcode image format setting.
+#if defined(XP_WIN)
+    // Use libyuv to convert the buffer to rgba format. So, use 1 image key here.
+    AddWRVideoImage(1);
+#elif defined(XP_MACOSX)
+    if (gfx::gfxVars::CanUseHardwareVideoDecoding()) {
+      // Use the hardware MacIOSurface with YCbCr interleaved format. It uses 1
+      // image key.
+      AddWRVideoImage(1);
+    } else {
+      // Use libyuv.
+      AddWRVideoImage(1);
+    }
+#elif defined(MOZ_WIDGET_GTK)
+    // Use libyuv.
+    AddWRVideoImage(1);
+#elif defined(ANDROID)
+    // Use libyuv.
+    AddWRVideoImage(1);
+#endif
   }
 
-  Rect relBounds = VisibleBoundsRelativeToParent();
-  if (!transform.IsIdentity()) {
-    // WR will only apply the 'translate' of the transform, so we need to do the scale/rotation manually.
-    gfx::Matrix4x4 boundTransform = transform;
-    boundTransform._41 = 0.0f;
-    boundTransform._42 = 0.0f;
-    boundTransform._43 = 0.0f;
-    relBounds.MoveTo(boundTransform.TransformPoint(relBounds.TopLeft()));
+  ScrollingLayersHelper scroller(this, aBuilder, aSc);
+  StackingContextHelper sc(aSc, aBuilder, this);
+
+  LayerRect rect(0, 0, size.width, size.height);
+  if (mScaleMode != ScaleMode::SCALE_NONE) {
+    NS_ASSERTION(mScaleMode == ScaleMode::STRETCH,
+                 "No other scalemodes than stretch and none supported yet.");
+    rect = LayerRect(0, 0, mScaleToSize.width, mScaleToSize.height);
   }
 
-  Rect overflow(0, 0, relBounds.width, relBounds.height);
-  Maybe<WrImageMask> mask = buildMaskLayer();
+  LayerRect clipRect = ClipRect().valueOr(rect);
+  Maybe<WrImageMask> mask = BuildWrMaskLayer(&sc);
+  WrClipRegionToken clip = aBuilder.PushClipRegion(
+      sc.ToRelativeWrRect(clipRect),
+      mask.ptrOr(nullptr));
+
   wr::ImageRendering filter = wr::ToImageRendering(mSamplingFilter);
-  WrMixBlendMode mixBlendMode = wr::ToWrMixBlendMode(GetMixBlendMode());
 
+  DumpLayerInfo("Image Layer", rect);
   if (gfxPrefs::LayersDump()) {
-    printf_stderr("ImageLayer %p using bounds=%s, overflow=%s, transform=%s, rect=%s, clip=%s, texture-filter=%s, mix-blend-mode=%s\n",
-                  this->GetLayer(),
-                  Stringify(relBounds).c_str(),
-                  Stringify(overflow).c_str(),
-                  Stringify(transform).c_str(),
-                  Stringify(rect).c_str(),
-                  Stringify(clip).c_str(),
-                  Stringify(filter).c_str(),
-                  Stringify(mixBlendMode).c_str());
+    printf_stderr("ImageLayer %p texture-filter=%s \n",
+                  GetLayer(),
+                  Stringify(filter).c_str());
   }
 
-  WrBridge()->AddWebRenderCommand(
-    OpDPPushStackingContext(wr::ToWrRect(relBounds),
-                            wr::ToWrRect(overflow),
-                            mask,
-                            1.0f,
-                            GetAnimations(),
-                            transform,
-                            mixBlendMode,
-                            FrameMetrics::NULL_SCROLL_ID));
-  WrImageKey key;
-  key.mNamespace = WrBridge()->GetNamespace();
-  key.mHandle = WrBridge()->GetNextResourceId();
-  WrBridge()->AddWebRenderParentCommand(OpAddExternalImage(mExternalImageId, key));
-  WrBridge()->AddWebRenderCommand(OpDPPushImage(wr::ToWrRect(rect), wr::ToWrRect(clip), Nothing(), filter, key));
-  WrBridge()->AddWebRenderCommand(OpDPPopStackingContext());
+  if (GetImageClientType() != CompositableType::IMAGE_BRIDGE) {
+    aBuilder.PushImage(sc.ToRelativeWrRect(rect), clip, filter, mKey.value());
+  } else {
+    // XXX (Jerry): Remove the hardcode image format setting. The format of
+    // textureClient could change from time to time. So, we just set the most
+    // usable format here.
+#if defined(XP_WIN)
+    // Use libyuv to convert the buffer to rgba format.
+    MOZ_ASSERT(mVideoKeys.Length() == 1);
+    aBuilder.PushImage(sc.ToRelativeWrRect(rect), clip, filter, mVideoKeys[0]);
+#elif defined(XP_MACOSX)
+    if (gfx::gfxVars::CanUseHardwareVideoDecoding()) {
+      // Use the hardware MacIOSurface with YCbCr interleaved format.
+      MOZ_ASSERT(mVideoKeys.Length() == 1);
+      aBuilder.PushYCbCrInterleavedImage(sc.ToRelativeWrRect(rect), clip, mVideoKeys[0], WrYuvColorSpace::Rec601);
+    } else {
+      // Use libyuv to convert the buffer to rgba format.
+      MOZ_ASSERT(mVideoKeys.Length() == 1);
+      aBuilder.PushImage(sc.ToRelativeWrRect(rect), clip, filter, mVideoKeys[0]);
+    }
+#elif defined(MOZ_WIDGET_GTK)
+    // Use libyuv to convert the buffer to rgba format.
+    MOZ_ASSERT(mVideoKeys.Length() == 1);
+    aBuilder.PushImage(sc.ToRelativeWrRect(rect), clip, filter, mVideoKeys[0]);
+#elif defined(ANDROID)
+    // Use libyuv to convert the buffer to rgba format.
+    MOZ_ASSERT(mVideoKeys.Length() == 1);
+    aBuilder.PushImage(sc.ToRelativeWrRect(rect), clip, filter, mVideoKeys[0]);
+#endif
+  }
+}
 
-  //mContainer->SetImageFactory(originalIF);
+Maybe<WrImageMask>
+WebRenderImageLayer::RenderMaskLayer(const gfx::Matrix4x4& aTransform)
+{
+  if (!mContainer) {
+     return Nothing();
+  }
+
+  CompositableType type = GetImageClientType();
+  if (type == CompositableType::UNKNOWN) {
+    return Nothing();
+  }
+
+  MOZ_ASSERT(GetImageClientType() == CompositableType::IMAGE);
+  if (GetImageClientType() != CompositableType::IMAGE) {
+    return Nothing();
+  }
+
+  if (!mImageClient) {
+    mImageClient = ImageClient::CreateImageClient(CompositableType::IMAGE,
+                                                  WrBridge(),
+                                                  TextureFlags::DEFAULT);
+    if (!mImageClient) {
+      return Nothing();
+    }
+    mImageClient->Connect();
+  }
+
+  if (mExternalImageId.isNothing()) {
+    mExternalImageId = Some(WrBridge()->AllocExternalImageIdForCompositable(mImageClient));
+  }
+
+  AutoLockImage autoLock(mContainer);
+  Image* image = autoLock.GetImage();
+  if (!image) {
+    return Nothing();
+  }
+
+  MOZ_ASSERT(mImageClient->AsImageClientSingle());
+  mKey = UpdateImageKey(mImageClient->AsImageClientSingle(),
+                        mContainer,
+                        mKey,
+                        mExternalImageId.ref());
+  if (mKey.isNothing()) {
+    return Nothing();
+  }
+
+  gfx::IntSize size = image->GetSize();
+  WrImageMask imageMask;
+  imageMask.image = mKey.value();
+  Rect maskRect = aTransform.TransformBounds(Rect(0, 0, size.width, size.height));
+  imageMask.rect = wr::ToWrRect(maskRect);
+  imageMask.repeat = false;
+  return Some(imageMask);
 }
 
 } // namespace layers

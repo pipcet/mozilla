@@ -670,7 +670,8 @@ JSObject::writeBarrierPost(void* cellp, JSObject* prev, JSObject* next)
         return;
     }
 
-    // Remove the prev entry if the new value does not need it.
+    // Remove the prev entry if the new value does not need it. There will only
+    // be a prev entry if the prev value was in the nursery.
     if (prev && (buffer = prev->storeBuffer()))
         buffer->unputCell(static_cast<js::gc::Cell**>(cellp));
 }
@@ -1319,9 +1320,6 @@ template<XDRMode mode>
 bool
 XDRObjectLiteral(XDRState<mode>* xdr, MutableHandleObject obj);
 
-extern bool
-ReportGetterOnlyAssignment(JSContext* cx, bool strict);
-
 /*
  * Report a TypeError: "so-and-so is not an object".
  * Using NotNullObject is usually less code.
@@ -1335,6 +1333,39 @@ NonNullObject(JSContext* cx, const Value& v)
     if (v.isObject())
         return &v.toObject();
     ReportNotObject(cx, v);
+    return nullptr;
+}
+
+
+/*
+ * Report a TypeError: "N-th argument of FUN must be an object, got VALUE".
+ * Using NotNullObjectArg is usually less code.
+ */
+extern void
+ReportNotObjectArg(JSContext* cx, const char* nth, const char* fun, HandleValue v);
+
+inline JSObject*
+NonNullObjectArg(JSContext* cx, const char* nth, const char* fun, HandleValue v)
+{
+    if (v.isObject())
+        return &v.toObject();
+    ReportNotObjectArg(cx, nth, fun, v);
+    return nullptr;
+}
+
+/*
+ * Report a TypeError: "SOMETHING must be an object, got VALUE".
+ * Using NotNullObjectWithName is usually less code.
+ */
+extern void
+ReportNotObjectWithName(JSContext* cx, const char* name, HandleValue v);
+
+inline JSObject*
+NonNullObjectWithName(JSContext* cx, const char* name, HandleValue v)
+{
+    if (v.isObject())
+        return &v.toObject();
+    ReportNotObjectWithName(cx, name, v);
     return nullptr;
 }
 

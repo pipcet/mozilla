@@ -30,19 +30,21 @@ var mediaPlayerDevice = {
   types: ["video/mp4", "video/webm", "application/x-mpegurl"],
   extensions: ["mp4", "webm", "m3u", "m3u8"],
   init: function() {
-    Services.obs.addObserver(this, "MediaPlayer:Added", false);
-    Services.obs.addObserver(this, "MediaPlayer:Changed", false);
-    Services.obs.addObserver(this, "MediaPlayer:Removed", false);
+    GlobalEventDispatcher.registerListener(this, [
+      "MediaPlayer:Added",
+      "MediaPlayer:Changed",
+      "MediaPlayer:Removed",
+    ]);
   },
-  observe: function(subject, topic, data) {
-    if (topic === "MediaPlayer:Added") {
-      let service = this.toService(JSON.parse(data));
+  onEvent: function(event, data, callback) {
+    if (event === "MediaPlayer:Added") {
+      let service = this.toService(data);
       SimpleServiceDiscovery.addService(service);
-    } else if (topic === "MediaPlayer:Changed") {
-      let service = this.toService(JSON.parse(data));
+    } else if (event === "MediaPlayer:Changed") {
+      let service = this.toService(data);
       SimpleServiceDiscovery.updateService(service);
-    } else if (topic === "MediaPlayer:Removed") {
-      SimpleServiceDiscovery.removeService(data);
+    } else if (event === "MediaPlayer:Removed") {
+      SimpleServiceDiscovery.removeService(data.id);
     }
   },
   toService: function(display) {
@@ -91,10 +93,10 @@ var CastingApps = {
       "Casting:Stop",
     ]);
 
-    Services.obs.addObserver(this, "ssdp-service-found", false);
-    Services.obs.addObserver(this, "ssdp-service-lost", false);
-    Services.obs.addObserver(this, "application-background", false);
-    Services.obs.addObserver(this, "application-foreground", false);
+    Services.obs.addObserver(this, "ssdp-service-found");
+    Services.obs.addObserver(this, "ssdp-service-lost");
+    Services.obs.addObserver(this, "application-background");
+    Services.obs.addObserver(this, "application-foreground");
 
     BrowserApp.deck.addEventListener("TabSelect", this, true);
     BrowserApp.deck.addEventListener("pageshow", this, true);
@@ -618,7 +620,7 @@ var CastingApps = {
       return this.allowableExtension(aVideo.sourceURI, aService.extensions) || this.allowableMimeType(aVideo.type, aService.types);
     }
 
-    this.prompt(function(aService) {
+    this.prompt(aService => {
       if (!aService)
         return;
 
@@ -636,14 +638,14 @@ var CastingApps = {
         }
       }
 
-      app.stop(function() {
-        app.start(function(aStarted) {
+      app.stop(() => {
+        app.start(aStarted => {
           if (!aStarted) {
             dump("CastingApps: Unable to start app");
             return;
           }
 
-          app.remoteMedia(function(aRemoteMedia) {
+          app.remoteMedia(aRemoteMedia => {
             if (!aRemoteMedia) {
               dump("CastingApps: Failed to create remotemedia");
               return;
@@ -660,10 +662,10 @@ var CastingApps = {
               },
               videoRef: Cu.getWeakReference(aVideo.element)
             };
-          }.bind(this), this);
-        }.bind(this));
-      }.bind(this));
-    }.bind(this), filterFunc.bind(this));
+          }, this);
+        });
+      });
+    }, filterFunc.bind(this));
   },
 
   closeExternal: function() {

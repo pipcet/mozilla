@@ -23,7 +23,7 @@
   //[Replaceable] readonly attribute BarProp toolbar;
   attribute DOMString status;
   void close();
-  //readonly attribute boolean closed;
+  readonly attribute boolean closed;
   //void stop();
   //void focus();
   //void blur();
@@ -201,3 +201,4 @@ partial interface Window {
    readonly attribute TestRunner testRunner;
    //readonly attribute EventSender eventSender;
 };
+

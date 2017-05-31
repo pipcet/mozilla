@@ -123,6 +123,7 @@ GetObject(const MDefinition* ins)
       case MDefinition::Op_LoadElementHole:
       case MDefinition::Op_TypedArrayElements:
       case MDefinition::Op_TypedObjectElements:
+      case MDefinition::Op_CopyLexicalEnvironmentObject:
         object = ins->getOperand(0);
         break;
       case MDefinition::Op_GetPropertyCache:
@@ -141,6 +142,7 @@ GetObject(const MDefinition* ins)
       case MDefinition::Op_AtomicTypedArrayElementBinop:
       case MDefinition::Op_AsmJSLoadHeap:
       case MDefinition::Op_AsmJSStoreHeap:
+      case MDefinition::Op_WasmLoadTls:
       case MDefinition::Op_WasmLoad:
       case MDefinition::Op_WasmStore:
       case MDefinition::Op_AsmJSCompareExchangeHeap:

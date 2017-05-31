@@ -14,7 +14,6 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource:///modules/RecentWindow.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/TelemetryController.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
 
@@ -100,7 +99,7 @@ this.UITour = {
     ["accountStatus", {
       query: (aDocument) => {
         // If the user is logged in, use the avatar element.
-        let fxAFooter = aDocument.getElementById("PanelUI-footer-fxa");
+        let fxAFooter = aDocument.getElementById("PanelUI-fxa-container");
         if (fxAFooter.getAttribute("fxastatus")) {
           return aDocument.getElementById("PanelUI-fxa-avatar");
         }
@@ -208,7 +207,6 @@ this.UITour = {
       query: "#urlbar",
       widgetName: "urlbar-container",
     }],
-    ["webide",      {query: "#webide-button"}],
   ]),
 
   init() {
@@ -538,7 +536,21 @@ this.UITour = {
           return false;
         }
 
-        window.openPreferences(data.pane);
+        let paneID = data.pane;
+        let extraArgs = { origin: "UITour" };
+        if (Services.prefs.getBoolPref("browser.preferences.useOldOrganization", true)) {
+          // We are heading to the old Preferences so
+          // let's map the new one to the old one if the `paneID` was for the new Preferences.
+          // Currently only the old advanced pane > dataChoicesTab has the mapping need,
+          // so here only do mapping for it right now.
+          // We could add another mapping when there is need.
+          if (paneID == "privacy-reports") {
+            paneID = "advanced";
+            extraArgs.advancedTab = "dataChoicesTab";
+          }
+        }
+
+        window.openPreferences(paneID, extraArgs);
         break;
       }
 
@@ -583,10 +595,7 @@ this.UITour = {
       case "setTreatmentTag": {
         let name = data.name;
         let value = data.value;
-        let string = Cc["@mozilla.org/supports-string;1"].createInstance(Ci.nsISupportsString);
-        string.data = value;
-        Services.prefs.setComplexValue("browser.uitour.treatment." + name,
-                                       Ci.nsISupportsString, string);
+        Services.prefs.setStringPref("browser.uitour.treatment." + name, value);
         // The notification is only meant to be used in tests.
         UITourHealthReport.recordTreatmentTag(name, value)
                           .then(() => this.notify("TreatmentTag:TelemetrySent"));
@@ -597,8 +606,7 @@ this.UITour = {
         let name = data.name;
         let value;
         try {
-          value = Services.prefs.getComplexValue("browser.uitour.treatment." + name,
-                                                 Ci.nsISupportsString).data;
+          value = Services.prefs.getStringPref("browser.uitour.treatment." + name);
         } catch (ex) {}
         this.sendPageCallback(messageManager, data.callbackID, { value });
         break;
@@ -666,7 +674,12 @@ this.UITour = {
       }
     }
 
-    this.initForBrowser(browser, window);
+    // For performance reasons, only call initForBrowser if we did something
+    // that will require a teardownTourForBrowser call later.
+    // getConfiguration (called from about:home) doesn't require any future
+    // uninitialization.
+    if (action != "getConfiguration")
+      this.initForBrowser(browser, window);
 
     return true;
   },
@@ -683,7 +696,7 @@ this.UITour = {
     }
     this.tourBrowsersByWindow.get(window).add(aBrowser);
 
-    Services.obs.addObserver(this, "message-manager-close", false);
+    Services.obs.addObserver(this, "message-manager-close");
 
     window.addEventListener("SSWindowClosing", this);
   },
@@ -1236,7 +1249,7 @@ this.UITour = {
       // Remove all the children of the notice (rating container
       // and the flex).
       while (notice.firstChild) {
-        notice.removeChild(notice.firstChild);
+        notice.firstChild.remove();
       }
 
       // Make sure that we have a valid URL. If we haven't, do not open the engagement page.
@@ -1667,7 +1680,7 @@ this.UITour = {
       }
       aWindow.document.getElementById("identity-box").click();
     } else if (aMenuName == "pocket") {
-      this.getTarget(aWindow, "pocket").then(Task.async(function* onPocketTarget(target) {
+      this.getTarget(aWindow, "pocket").then(async function onPocketTarget(target) {
         let widgetGroupWrapper = CustomizableUI.getWidget(target.widgetName);
         if (widgetGroupWrapper.type != "view" || !widgetGroupWrapper.viewId) {
           log.error("Can't open the pocket menu without a view");
@@ -1681,7 +1694,7 @@ this.UITour = {
 
         if (placement.area == CustomizableUI.AREA_PANEL) {
           // Open the appMenu and wait for it if it's not already opened or showing a subview.
-          yield new Promise((resolve, reject) => {
+          await new Promise((resolve, reject) => {
             if (aWindow.PanelUI.panel.state != "closed") {
               if (aWindow.PanelUI.multiView.showingSubView) {
                 reject("A subview is already showing");
@@ -1704,7 +1717,7 @@ this.UITour = {
         aWindow.PanelUI.showSubView(widgetGroupWrapper.viewId,
                                     widgetWrapper.anchor,
                                     placement.area);
-      })).catch(log.error);
+      }).catch(log.error);
     }
   },
 
@@ -1795,10 +1808,8 @@ this.UITour = {
         // Identifier of the partner repack, as stored in preference "distribution.id"
         // and included in Firefox and other update pings. Note this is not the same as
         // Services.appinfo.distributionID (value of MOZ_DISTRIBUTION_ID is set at build time).
-        let distribution = "default";
-        try {
-          distribution = Services.prefs.getDefaultBranch("distribution.").getCharPref("id");
-        } catch (e) {}
+        let distribution =
+          Services.prefs.getDefaultBranch("distribution.").getCharPref("id", "default");
         appinfo["distribution"] = distribution;
 
         let isDefaultBrowser = null;
@@ -1884,7 +1895,7 @@ this.UITour = {
   },
 
   getAvailableTargets(aMessageManager, aChromeWindow, aCallbackID) {
-    Task.spawn(function*() {
+    (async () => {
       let window = aChromeWindow;
       let data = this.availableTargetsCache.get(window);
       if (data) {
@@ -1897,7 +1908,7 @@ this.UITour = {
       for (let targetName of this.targets.keys()) {
         promises.push(this.getTarget(window, targetName));
       }
-      let targetObjects = yield Promise.all(promises);
+      let targetObjects = await Promise.all(promises);
 
       let targetNames = [];
       for (let targetObject of targetObjects) {
@@ -1910,7 +1921,7 @@ this.UITour = {
       };
       this.availableTargetsCache.set(window, data);
       this.sendPageCallback(aMessageManager, aCallbackID, data);
-    }.bind(this)).catch(err => {
+    })().catch(err => {
       log.error(err);
       this.sendPageCallback(aMessageManager, aCallbackID, {
         targets: [],

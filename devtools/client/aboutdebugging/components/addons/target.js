@@ -8,7 +8,7 @@
 
 const { createClass, DOM: dom, PropTypes } =
   require("devtools/client/shared/vendor/react");
-const { debugAddon } = require("../../modules/addon");
+const { debugAddon, uninstallAddon } = require("../../modules/addon");
 const Services = require("Services");
 
 loader.lazyImporter(this, "BrowserToolboxProcess",
@@ -19,6 +19,53 @@ loader.lazyRequireGetter(this, "DebuggerClient",
 
 const Strings = Services.strings.createBundle(
   "chrome://devtools/locale/aboutdebugging.properties");
+
+function filePathForTarget(target) {
+  // Only show file system paths, and only for temporarily installed add-ons.
+  if (!target.temporarilyInstalled || !target.url || !target.url.startsWith("file://")) {
+    return [];
+  }
+  let path = target.url.slice("file://".length);
+  return [
+    dom.dt(
+      { className: "addon-target-info-label" },
+      Strings.GetStringFromName("location")),
+    // Wrap the file path in a span so we can do some RTL/LTR swapping to get
+    // the ellipsis on the left.
+    dom.dd(
+      { className: "addon-target-info-content file-path" },
+      dom.span({ className: "file-path-inner", title: path }, path),
+    ),
+  ];
+}
+
+function internalIDForTarget(target) {
+  if (!target.manifestURL) {
+    return [];
+  }
+  // Strip off the protocol and rest, leaving us with just the UUID.
+  let uuid = /moz-extension:\/\/([^/]*)/.exec(target.manifestURL)[1];
+  return [
+    dom.dt(
+      { className: "addon-target-info-label" },
+      Strings.GetStringFromName("internalUUID"),
+    ),
+    dom.dd(
+      { className: "addon-target-info-content internal-uuid" },
+      dom.span(
+        { title: uuid },
+        uuid
+      ),
+      dom.span(
+        { className: "addon-target-info-more" },
+        dom.a(
+          { href: target.manifestURL, target: "_blank", className: "manifest-url" },
+          Strings.GetStringFromName("manifestURL"),
+        ),
+      )
+    ),
+  ];
+}
 
 module.exports = createClass({
   displayName: "AddonTarget",
@@ -31,13 +78,19 @@ module.exports = createClass({
       addonID: PropTypes.string.isRequired,
       icon: PropTypes.string,
       name: PropTypes.string.isRequired,
-      temporarilyInstalled: PropTypes.bool
+      temporarilyInstalled: PropTypes.bool,
+      url: PropTypes.string,
     }).isRequired
   },
 
   debug() {
     let { target } = this.props;
     debugAddon(target.addonID);
+  },
+
+  uninstall() {
+    let { target } = this.props;
+    uninstallAddon(target.addonID);
   },
 
   reload() {
@@ -55,30 +108,41 @@ module.exports = createClass({
 
   render() {
     let { target, debugDisabled } = this.props;
-    // Only temporarily installed add-ons can be reloaded.
-    const canBeReloaded = target.temporarilyInstalled;
 
-    return dom.li({ className: "target-container" },
-      dom.img({
-        className: "target-icon",
-        role: "presentation",
-        src: target.icon
-      }),
+    return dom.li(
+      { className: "addon-target-container", "data-addon-id": target.addonID },
       dom.div({ className: "target" },
-        dom.div({ className: "target-name", title: target.name }, target.name)
+        dom.img({
+          className: "target-icon",
+          role: "presentation",
+          src: target.icon
+        }),
+        dom.span({ className: "target-name", title: target.name }, target.name)
       ),
-      dom.button({
-        className: "debug-button",
-        onClick: this.debug,
-        disabled: debugDisabled,
-      }, Strings.GetStringFromName("debug")),
-      dom.button({
-        className: "reload-button",
-        onClick: this.reload,
-        disabled: !canBeReloaded,
-        title: !canBeReloaded ?
-          Strings.GetStringFromName("reloadDisabledTooltip") : ""
-      }, Strings.GetStringFromName("reload"))
+      dom.dl(
+        { className: "addon-target-info" },
+        ...filePathForTarget(target),
+        ...internalIDForTarget(target),
+      ),
+      dom.div({className: "addon-target-actions"},
+        dom.button({
+          className: "debug-button addon-target-button",
+          onClick: this.debug,
+          disabled: debugDisabled,
+        }, Strings.GetStringFromName("debug")),
+        target.temporarilyInstalled
+          ? dom.button({
+            className: "reload-button addon-target-button",
+            onClick: this.reload,
+          }, Strings.GetStringFromName("reload"))
+          : null,
+        target.temporarilyInstalled
+          ? dom.button({
+            className: "uninstall-button addon-target-button",
+            onClick: this.uninstall,
+          }, Strings.GetStringFromName("remove"))
+          : null,
+      ),
     );
   }
 });

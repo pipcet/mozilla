@@ -108,7 +108,7 @@ TextPropertyEditor.prototype = {
     this.element._textPropertyEditor = this;
 
     this.container = createChild(this.element, "div", {
-      class: "ruleview-propertycontainer"
+      class: "ruleview-propertycontainer inline-tooltip-container"
     });
 
     // The enable checkbox will disable or enable the rule.
@@ -280,7 +280,8 @@ TextPropertyEditor.prototype = {
         if (target.nodeName === "a") {
           event.stopPropagation();
           event.preventDefault();
-          this.browserWindow.openUILinkIn(target.href, "tab");
+          let browserWin = this.ruleView.inspector.target.tab.ownerDocument.defaultView;
+          browserWin.openUILinkIn(target.href, "tab");
         }
       });
 
@@ -374,7 +375,7 @@ TextPropertyEditor.prototype = {
       for (let span of this._colorSwatchSpans) {
         // Adding this swatch to the list of swatches our colorpicker
         // knows about
-        this.ruleView.tooltips.colorPicker.addSwatch(span, {
+        this.ruleView.tooltips.getTooltip("colorPicker").addSwatch(span, {
           onShow: this._onStartEditing,
           onPreview: this._onSwatchPreview,
           onCommit: this._onSwatchCommit,
@@ -383,6 +384,7 @@ TextPropertyEditor.prototype = {
         span.on("unit-change", this._onSwatchCommit);
         let title = l10n("rule.colorSwatch.tooltip");
         span.setAttribute("title", title);
+        span.dataset.propertyName = this.nameSpan.textContent;
       }
     }
 
@@ -393,7 +395,7 @@ TextPropertyEditor.prototype = {
       for (let span of this._bezierSwatchSpans) {
         // Adding this swatch to the list of swatches our colorpicker
         // knows about
-        this.ruleView.tooltips.cubicBezier.addSwatch(span, {
+        this.ruleView.tooltips.getTooltip("cubicBezier").addSwatch(span, {
           onShow: this._onStartEditing,
           onPreview: this._onSwatchPreview,
           onCommit: this._onSwatchCommit,
@@ -410,7 +412,7 @@ TextPropertyEditor.prototype = {
       if (span) {
         parserOptions.filterSwatch = true;
 
-        this.ruleView.tooltips.filterEditor.addSwatch(span, {
+        this.ruleView.tooltips.getTooltip("filterEditor").addSwatch(span, {
           onShow: this._onStartEditing,
           onPreview: this._onSwatchPreview,
           onCommit: this._onSwatchCommit,
@@ -740,7 +742,7 @@ TextPropertyEditor.prototype = {
   remove: function (direction) {
     if (this._colorSwatchSpans && this._colorSwatchSpans.length) {
       for (let span of this._colorSwatchSpans) {
-        this.ruleView.tooltips.colorPicker.removeSwatch(span);
+        this.ruleView.tooltips.getTooltip("colorPicker").removeSwatch(span);
         span.off("unit-change", this._onSwatchCommit);
       }
     }

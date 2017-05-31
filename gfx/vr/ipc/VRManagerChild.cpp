@@ -18,6 +18,7 @@
 #include "mozilla/layers/TextureClient.h"
 #include "nsContentUtils.h"
 #include "mozilla/dom/GamepadManager.h"
+#include "mozilla/dom/VRServiceTest.h"
 
 using layers::TextureClient;
 
@@ -43,6 +44,8 @@ VRManagerChild::VRManagerChild()
   , mMessageLoop(MessageLoop::current())
   , mFrameRequestCallbackCounter(0)
   , mBackend(layers::LayersBackend::LAYERS_NONE)
+  , mPromiseID(0)
+  , mVRMockDisplay(nullptr)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -276,9 +279,8 @@ VRManagerChild::RecvUpdateDisplayInfo(nsTArray<VRDisplayInfo>&& aDisplayUpdates)
     if (!window) {
       continue;
     }
-    ErrorResult result;
-    dom::Navigator* nav = window->GetNavigator(result);
-    if (NS_WARN_IF(result.Failed())) {
+    dom::Navigator* nav = window->Navigator();
+    if (!nav) {
       continue;
     }
     nav->NotifyVRDisplaysUpdated();
@@ -290,16 +292,6 @@ VRManagerChild::RecvUpdateDisplayInfo(nsTArray<VRDisplayInfo>&& aDisplayUpdates)
 bool
 VRManagerChild::GetVRDisplays(nsTArray<RefPtr<VRDisplayClient>>& aDisplays)
 {
-  if (!mDisplaysInitialized) {
-    /**
-     * If we haven't received any asynchronous callback after requesting
-     * display enumeration with RefreshDisplays, get the existing displays
-     * that have already been enumerated by other VRManagerChild instances.
-     */
-    nsTArray<VRDisplayInfo> displays;
-    Unused << SendGetDisplays(&displays);
-    UpdateDisplayInfo(displays);
-  }
   aDisplays = mDisplays;
   return true;
 }
@@ -312,6 +304,22 @@ VRManagerChild::RefreshVRDisplaysWithCallback(uint64_t aWindowId)
     mNavigatorCallbacks.AppendElement(aWindowId);
   }
   return success;
+}
+
+void
+VRManagerChild::CreateVRServiceTestDisplay(const nsCString& aID, dom::Promise* aPromise)
+{
+  SendCreateVRServiceTestDisplay(aID, mPromiseID);
+  mPromiseList.Put(mPromiseID, aPromise);
+  ++mPromiseID;
+}
+
+void
+VRManagerChild::CreateVRServiceTestController(const nsCString& aID, dom::Promise* aPromise)
+{
+  SendCreateVRServiceTestController(aID, mPromiseID);
+  mPromiseList.Put(mPromiseID, aPromise);
+  ++mPromiseID;
 }
 
 int
@@ -344,7 +352,9 @@ PTextureChild*
 VRManagerChild::CreateTexture(const SurfaceDescriptor& aSharedData,
                               LayersBackend aLayersBackend,
                               TextureFlags aFlags,
-                              uint64_t aSerial)
+                              uint64_t aSerial,
+                              wr::MaybeExternalImageId& aExternalImageId,
+                              nsIEventTarget* aTarget)
 {
   return SendPTextureConstructor(aSharedData, aLayersBackend, aFlags, aSerial);
 }
@@ -392,11 +402,26 @@ VRManagerChild::DeallocShmem(ipc::Shmem& aShmem)
 }
 
 PVRLayerChild*
-VRManagerChild::CreateVRLayer(uint32_t aDisplayID, const Rect& aLeftEyeRect, const Rect& aRightEyeRect)
+VRManagerChild::CreateVRLayer(uint32_t aDisplayID,
+                              const Rect& aLeftEyeRect,
+                              const Rect& aRightEyeRect,
+                              nsIEventTarget* aTarget)
 {
-  return SendPVRLayerConstructor(aDisplayID,
-                                 aLeftEyeRect.x, aLeftEyeRect.y, aLeftEyeRect.width, aLeftEyeRect.height,
-                                 aRightEyeRect.x, aRightEyeRect.y, aRightEyeRect.width, aRightEyeRect.height);
+  PVRLayerChild* vrLayerChild = AllocPVRLayerChild(aDisplayID, aLeftEyeRect.x,
+                                                   aLeftEyeRect.y, aLeftEyeRect.width,
+                                                   aLeftEyeRect.height, aRightEyeRect.x,
+                                                   aRightEyeRect.y, aRightEyeRect.width,
+                                                   aRightEyeRect.height);
+  // Do the DOM labeling.
+  if (aTarget) {
+    SetEventTargetForActor(vrLayerChild, aTarget);
+    MOZ_ASSERT(vrLayerChild->GetActorEventTarget());
+  }
+  return SendPVRLayerConstructor(vrLayerChild, aDisplayID, aLeftEyeRect.x,
+                                 aLeftEyeRect.y, aLeftEyeRect.width,
+                                 aLeftEyeRect.height, aRightEyeRect.x,
+                                 aRightEyeRect.y, aRightEyeRect.width,
+                                 aRightEyeRect.height);
 }
 
 
@@ -488,6 +513,40 @@ VRManagerChild::RecvGamepadUpdate(const GamepadChangeEvent& aGamepadEvent)
     gamepadManager->Update(aGamepadEvent);
   }
 
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+VRManagerChild::RecvReplyCreateVRServiceTestDisplay(const nsCString& aID,
+                                                    const uint32_t& aPromiseID,
+                                                    const uint32_t& aDeviceID)
+{
+  RefPtr<dom::Promise> p;
+  if (!mPromiseList.Get(aPromiseID, getter_AddRefs(p))) {
+    MOZ_CRASH("We should always have a promise.");
+  }
+
+  // We only allow one VRMockDisplay in VR tests.
+  if (!mVRMockDisplay) {
+    mVRMockDisplay = new VRMockDisplay(aID, aDeviceID);
+  }
+  p->MaybeResolve(mVRMockDisplay);
+  mPromiseList.Remove(aPromiseID);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+VRManagerChild::RecvReplyCreateVRServiceTestController(const nsCString& aID,
+                                                       const uint32_t& aPromiseID,
+                                                       const uint32_t& aDeviceID)
+{
+  RefPtr<dom::Promise> p;
+  if (!mPromiseList.Get(aPromiseID, getter_AddRefs(p))) {
+    MOZ_CRASH("We should always have a promise.");
+  }
+
+  p->MaybeResolve(new VRMockController(aID, aDeviceID));
+  mPromiseList.Remove(aPromiseID);
   return IPC_OK();
 }
 
@@ -632,6 +691,44 @@ void
 VRManagerChild::HandleFatalError(const char* aName, const char* aMsg) const
 {
   dom::ContentChild::FatalErrorIfNotUsingGPUProcess(aName, aMsg, OtherPid());
+}
+
+void
+VRManagerChild::AddPromise(const uint32_t& aID, dom::Promise* aPromise)
+{
+  MOZ_ASSERT(!mGamepadPromiseList.Get(aID, nullptr));
+  mGamepadPromiseList.Put(aID, aPromise);
+}
+
+mozilla::ipc::IPCResult
+VRManagerChild::RecvReplyGamepadVibrateHaptic(const uint32_t& aPromiseID)
+{
+  // VRManagerChild could be at other processes, but GamepadManager
+  // only exists at the content process or the same process
+  // in non-e10s mode.
+  MOZ_ASSERT(XRE_IsContentProcess() || IsSameProcess());
+
+  RefPtr<dom::Promise> p;
+  if (!mGamepadPromiseList.Get(aPromiseID, getter_AddRefs(p))) {
+    MOZ_CRASH("We should always have a promise.");
+  }
+
+  p->MaybeResolve(true);
+  mGamepadPromiseList.Remove(aPromiseID);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+VRManagerChild::RecvDispatchSubmitFrameResult(const uint32_t& aDisplayID,
+                                              const VRSubmitFrameResultInfo& aResult)
+{
+   for (auto& display : mDisplays) {
+    if (display->GetDisplayInfo().GetDisplayID() == aDisplayID) {
+      display->UpdateSubmitFrameResult(aResult);
+    }
+  }
+
+  return IPC_OK();
 }
 
 } // namespace gfx

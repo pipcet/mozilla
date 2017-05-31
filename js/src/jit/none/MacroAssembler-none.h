@@ -48,6 +48,7 @@ static constexpr Register WasmIonExitRegE1 { Registers::invalid_reg };
 
 static constexpr Register WasmIonExitRegReturnData { Registers::invalid_reg };
 static constexpr Register WasmIonExitRegReturnType { Registers::invalid_reg };
+static constexpr Register WasmIonExitTlsReg = { Registers::invalid_reg };
 static constexpr Register WasmIonExitRegD0 { Registers::invalid_reg };
 static constexpr Register WasmIonExitRegD1 { Registers::invalid_reg };
 static constexpr Register WasmIonExitRegD2 { Registers::invalid_reg };
@@ -195,7 +196,9 @@ class MacroAssemblerNone : public Assembler
     static bool SupportsSimd() { return false; }
     static bool SupportsUnalignedAccesses() { return false; }
 
-    void executableCopy(void*) { MOZ_CRASH(); }
+    static bool HasRoundInstruction(RoundingMode) { return false; }
+
+    void executableCopy(void*, bool) { MOZ_CRASH(); }
     void copyJumpRelocationTable(uint8_t*) { MOZ_CRASH(); }
     void copyDataRelocationTable(uint8_t*) { MOZ_CRASH(); }
     void copyPreBarrierTable(uint8_t*) { MOZ_CRASH(); }
@@ -222,8 +225,6 @@ class MacroAssemblerNone : public Assembler
     CodeOffset toggledJump(Label*) { MOZ_CRASH(); }
     CodeOffset toggledCall(JitCode*, bool) { MOZ_CRASH(); }
     static size_t ToggledCallSize(uint8_t*) { MOZ_CRASH(); }
-
-    void writePrebarrierOffset(CodeOffset) { MOZ_CRASH(); }
 
     void finish() { MOZ_CRASH(); }
 
@@ -412,8 +413,6 @@ class MacroAssemblerNone : public Assembler
     void buildFakeExitFrame(Register, uint32_t*) { MOZ_CRASH(); }
     bool buildOOLFakeExitFrame(void*) { MOZ_CRASH(); }
     void loadWasmGlobalPtr(uint32_t, Register) { MOZ_CRASH(); }
-    void loadWasmActivationFromTls(Register) { MOZ_CRASH(); }
-    void loadWasmActivationFromSymbolicAddress(Register) { MOZ_CRASH(); }
     void loadWasmPinnedRegsFromTls() { MOZ_CRASH(); }
 
     void setPrinter(Sprinter*) { MOZ_CRASH(); }

@@ -29,22 +29,25 @@ class SurfaceFactory;
 namespace gfx {
 
 class VRLayerChild : public PVRLayerChild {
-  NS_INLINE_DECL_REFCOUNTING(VRLayerChild)
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VRLayerChild)
 
 public:
   VRLayerChild(uint32_t aVRDisplayID, VRManagerChild* aVRManagerChild);
   void Initialize(dom::HTMLCanvasElement* aCanvasElement);
   void SubmitFrame();
+  bool IsIPCOpen();
 
 protected:
   virtual ~VRLayerChild();
   void ClearSurfaces();
+  virtual mozilla::ipc::IPCResult Recv__delete__() override;
 
   uint32_t mVRDisplayID;
 
   RefPtr<dom::HTMLCanvasElement> mCanvasElement;
   RefPtr<layers::SharedSurfaceTextureClient> mShSurfClient;
   RefPtr<layers::TextureClient> mFront;
+  bool mIPCOpen;
 };
 
 } // namespace gfx

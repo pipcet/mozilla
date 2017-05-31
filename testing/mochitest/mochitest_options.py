@@ -7,11 +7,12 @@ from argparse import ArgumentParser, SUPPRESS
 from distutils.util import strtobool
 from itertools import chain
 from urlparse import urlparse
+import logging
 import json
 import os
 import tempfile
 
-from mozdevice import DroidADB, DroidSUT
+from mozdevice import DroidADB
 from mozprofile import DEFAULT_PORTS
 import mozinfo
 import mozlog
@@ -583,6 +584,11 @@ class MochitestArguments(ArgumentContainer):
           "help": "Timeout while waiting to receive a message from the marionette server.",
           "suppress": True,
           }],
+        [["--marionette-startup-timeout"],
+         {"default": None,
+          "help": "Timeout while waiting for marionette server startup.",
+          "suppress": True,
+          }],
         [["--cleanup-crashes"],
          {"action": "store_true",
           "dest": "cleanupCrashes",
@@ -729,7 +735,6 @@ class MochitestArguments(ArgumentContainer):
                 "devtools.chrome.enabled=true",
                 "devtools.debugger.prompt-connection=false"
             ]
-            options.autorun = False
 
         if options.debugOnFailure and not options.jsdebugger:
             parser.error(
@@ -874,12 +879,6 @@ class AndroidArguments(ArgumentContainer):
           "help": "ip address of remote device to test",
           "default": None,
           }],
-        [["--dm_trans"],
-         {"choices": ["adb", "sut"],
-          "default": "adb",
-          "help": "The transport to use for communication with the device [default: adb].",
-          "suppress": True,
-          }],
         [["--adbpath"],
          {"dest": "adbPath",
           "default": None,
@@ -958,21 +957,16 @@ class AndroidArguments(ArgumentContainer):
             options.log_mach = '-'
 
         device_args = {'deviceRoot': options.remoteTestRoot}
-        if options.dm_trans == "adb":
-            device_args['adbPath'] = options.adbPath
-            if options.deviceIP:
-                device_args['host'] = options.deviceIP
-                device_args['port'] = options.devicePort
-            elif options.deviceSerial:
-                device_args['deviceSerial'] = options.deviceSerial
-            options.dm = DroidADB(**device_args)
-        elif options.dm_trans == 'sut':
-            if options.deviceIP is None:
-                parser.error(
-                    "If --dm_trans = sut, you must provide a device IP")
+        device_args['adbPath'] = options.adbPath
+        if options.deviceIP:
             device_args['host'] = options.deviceIP
             device_args['port'] = options.devicePort
-            options.dm = DroidSUT(**device_args)
+        elif options.deviceSerial:
+            device_args['deviceSerial'] = options.deviceSerial
+
+        if options.log_tbpl_level == 'debug' or options.log_mach_level == 'debug':
+            device_args['logLevel'] = logging.DEBUG
+        options.dm = DroidADB(**device_args)
 
         if not options.remoteTestRoot:
             options.remoteTestRoot = options.dm.deviceRoot
@@ -1013,6 +1007,9 @@ class AndroidArguments(ArgumentContainer):
         if options.xrePath is None:
             options.xrePath = options.utilityPath
 
+        if build_obj:
+            options.topsrcdir = build_obj.topsrcdir
+
         if options.pidFile != "":
             f = open(options.pidFile, 'w')
             f.write("%s" % os.getpid())
@@ -1027,9 +1024,15 @@ class AndroidArguments(ArgumentContainer):
             options.robocopIni = os.path.abspath(options.robocopIni)
 
             if not options.robocopApk and build_obj:
-                options.robocopApk = os.path.join(build_obj.topobjdir, 'mobile', 'android',
-                                                  'tests', 'browser',
-                                                  'robocop', 'robocop-debug.apk')
+                if build_obj.substs.get('MOZ_BUILD_MOBILE_ANDROID_WITH_GRADLE'):
+                    options.robocopApk = os.path.join(build_obj.topobjdir, 'gradle', 'build',
+                                                      'mobile', 'android', 'app', 'outputs', 'apk',
+                                                      'app-official-australis-debug-androidTest-'
+                                                      'unaligned.apk')
+                else:
+                    options.robocopApk = os.path.join(build_obj.topobjdir, 'mobile', 'android',
+                                                      'tests', 'browser',
+                                                      'robocop', 'robocop-debug.apk')
 
         if options.robocopApk != "":
             if not os.path.exists(options.robocopApk):

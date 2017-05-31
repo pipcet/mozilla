@@ -2,7 +2,7 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-add_task(function* testExecuteScript() {
+add_task(async function testExecuteScript() {
   let {ExtensionManagement} = Cu.import("resource://gre/modules/ExtensionManagement.jsm", {});
   let {MessageChannel} = Cu.import("resource://gre/modules/MessageChannel.jsm", {});
 
@@ -35,7 +35,7 @@ add_task(function* testExecuteScript() {
 
   const BASE = "http://mochi.test:8888/browser/browser/components/extensions/test/browser/";
   const URL = BASE + "file_iframe_document.html";
-  let tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, URL, true);
+  let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, URL, true);
 
   async function background() {
     try {
@@ -116,7 +116,8 @@ add_task(function* testExecuteScript() {
         }).then(result => {
           browser.test.fail("Expected error when returning non-structured-clonable object");
         }, error => {
-          browser.test.assertEq("Script returned non-structured-clonable data",
+          browser.test.assertEq("<anonymous code>", error.fileName, "Got expected fileName");
+          browser.test.assertEq("Script '<anonymous code>' result is non-structured-clonable data",
                                 error.message, "Got expected error");
         }),
 
@@ -125,8 +126,19 @@ add_task(function* testExecuteScript() {
         }).then(result => {
           browser.test.fail("Expected error when returning non-structured-clonable object");
         }, error => {
-          browser.test.assertEq("Script returned non-structured-clonable data",
+          browser.test.assertEq("<anonymous code>", error.fileName, "Got expected fileName");
+          browser.test.assertEq("Script '<anonymous code>' result is non-structured-clonable data",
                                 error.message, "Got expected error");
+        }),
+
+        browser.tabs.executeScript({
+          file: "script3.js",
+        }).then(result => {
+          browser.test.fail("Expected error when returning non-structured-clonable object");
+        }, error => {
+          const expected = /Script '.*script3.js' result is non-structured-clonable data/;
+          browser.test.assertTrue(expected.test(error.message), "Got expected error");
+          browser.test.assertTrue(error.fileName.endsWith("script3.js"), "Got expected fileName");
         }),
 
         browser.tabs.executeScript({
@@ -135,11 +147,7 @@ add_task(function* testExecuteScript() {
         }).then(result => {
           browser.test.fail("Expected error when specifying invalid frame ID");
         }, error => {
-          let details = {
-            frame_id: Number.MAX_SAFE_INTEGER,
-            matchesHost: ["http://mochi.test/", "http://example.com/"],
-          };
-          browser.test.assertEq(`No window matching ${JSON.stringify(details)}`,
+          browser.test.assertEq(`Frame not found, or missing host permission`,
                                 error.message, "Got expected error");
         }),
 
@@ -149,10 +157,7 @@ add_task(function* testExecuteScript() {
           }).then(result => {
             browser.test.fail("Expected error when trying to execute on invalid domain");
           }, error => {
-            let details = {
-              matchesHost: ["http://mochi.test/", "http://example.com/"],
-            };
-            browser.test.assertEq(`No window matching ${JSON.stringify(details)}`,
+            browser.test.assertEq("Missing host permission for the tab",
                                   error.message, "Got expected error");
           });
 
@@ -236,16 +241,18 @@ add_task(function* testExecuteScript() {
       },
 
       "script2.js": "27",
+
+      "script3.js": "window",
     },
   });
 
-  yield extension.startup();
+  await extension.startup();
 
-  yield extension.awaitFinish("executeScript");
+  await extension.awaitFinish("executeScript");
 
-  yield extension.unload();
+  await extension.unload();
 
-  yield BrowserTestUtils.removeTab(tab);
+  await BrowserTestUtils.removeTab(tab);
 
   // Make sure that we're not holding on to references to closed message
   // managers.

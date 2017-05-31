@@ -50,6 +50,7 @@ public class BrowserContract {
     public static final String PARAM_IS_SYNC = "sync";
     public static final String PARAM_SHOW_DELETED = "show_deleted";
     public static final String PARAM_IS_TEST = "test";
+    public static final String PARAM_OLD_BOOKMARK_PARENT = "old_bookmark_parent";
     public static final String PARAM_INSERT_IF_NEEDED = "insert_if_needed";
     public static final String PARAM_INCREMENT_VISITS = "increment_visits";
     public static final String PARAM_INCREMENT_REMOTE_AGGREGATES = "increment_remote_aggregates";
@@ -59,6 +60,7 @@ public class BrowserContract {
     public static final String PARAM_GROUP_BY = "group_by";
 
     public static final String METHOD_INSERT_HISTORY_WITH_VISITS_FROM_SYNC = "insertHistoryWithVisitsSync";
+    public static final String METHOD_REPLACE_REMOTE_CLIENTS = "replaceRemoteClients";
     public static final String METHOD_RESULT = "methodResult";
     public static final String METHOD_PARAM_OBJECT = "object";
     public static final String METHOD_PARAM_DATA = "data";
@@ -460,6 +462,19 @@ public class BrowserContract {
         public static final String DEVICE_TYPE = "device_type";
     }
 
+    public static final class RemoteDevices implements CommonColumns, DateSyncColumns {
+        private RemoteDevices() {}
+        public static final String TABLE_NAME = "remote_devices";
+
+        public static final String GUID = "guid"; // FxA device ID
+        public static final String NAME = "name";
+        public static final String TYPE = "type";
+        public static final String IS_CURRENT_DEVICE = "is_current_device";
+        public static final String LAST_ACCESS_TIME = "last_access_time";
+
+        public static final Uri CONTENT_URI = Uri.withAppendedPath(AUTHORITY_URI, "remote_devices");
+    }
+
     // Data storage for dynamic panels on about:home
     @RobocopTarget
     public static final class HomeItems implements CommonColumns {
@@ -611,11 +626,20 @@ public class BrowserContract {
         public static final Uri CONTENT_URI = Uri.withAppendedPath(AUTHORITY_URI, "topsites");
     }
 
-    public static final class Highlights {
-        public static final Uri CONTENT_URI = Uri.withAppendedPath(AUTHORITY_URI, "highlights");
+    public static class Highlights {
+        public static final String BOOKMARK_ID = "bookmark_id";
+        public static final String HISTORY_ID = "history_id";
 
+        public static final String TITLE = "title";
+        public static final String URL = "url";
+        public static final String POSITION = "position";
+        public static final String PARENT = "parent";
         public static final String DATE = "date";
         public static final String METADATA = "metadata";
+    }
+
+    public static final class HighlightCandidates extends Highlights {
+        public static final Uri CONTENT_URI = Uri.withAppendedPath(AUTHORITY_URI, "highlight_candidates");
     }
 
     @RobocopTarget

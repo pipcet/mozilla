@@ -22,10 +22,6 @@ topic.
 Push Information
 ----------------
 
-``triggered_by``
-   The event that precipitated this decision task; one of ``"nightly"`` or
-   ``"push"``.
-
 ``base_repository``
    The repository from which to do an initial clone, utilizing any available
    caching.
@@ -43,6 +39,9 @@ Push Information
    git repositories, which do not allow pulling explicit revisions, this gives
    the symbolic ref containing ``head_rev`` that should be pulled from
    ``head_repository``.
+
+``include_nightly``
+   Include nightly builds and tests in the graph.
 
 ``owner``
    Email address indicating the person who made the push.  Note that this
@@ -96,7 +95,10 @@ syntax or reading a project-specific configuration file).
 
 ``target_tasks_method``
     The method to use to determine the target task set.  This is the suffix of
-    one of the functions in ``tascluster/taskgraph/target_tasks.py``.
+    one of the functions in ``taskcluster/taskgraph/target_tasks.py``.
 
 ``optimize_target_tasks``
    If true, then target tasks are eligible for optimization.
+
+``include_nightly``
+   If true, then nightly tasks are eligible for optimization.

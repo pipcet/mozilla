@@ -4,6 +4,8 @@
 
 "use strict";
 
+const SOURCE_MAP_WORKER = "resource://devtools/client/shared/source-map/worker.js";
+
 const MAX_ORDINAL = 99;
 const SPLITCONSOLE_ENABLED_PREF = "devtools.toolbox.splitconsoleEnabled";
 const SPLITCONSOLE_HEIGHT_PREF = "devtools.toolbox.splitconsoleHeight";
@@ -58,15 +60,15 @@ loader.lazyRequireGetter(this, "settleAll",
   "devtools/shared/ThreadSafeDevToolsUtils", true);
 loader.lazyRequireGetter(this, "ToolboxButtons",
   "devtools/client/definitions", true);
-loader.lazyRequireGetter(this, "SourceMapService",
-  "devtools/client/framework/source-map-service", true);
+loader.lazyRequireGetter(this, "SourceMapURLService",
+  "devtools/client/framework/source-map-url-service", true);
 loader.lazyRequireGetter(this, "HUDService",
   "devtools/client/webconsole/hudservice");
 loader.lazyRequireGetter(this, "viewSource",
   "devtools/client/shared/view-source");
 
 loader.lazyGetter(this, "registerHarOverlay", () => {
-  return require("devtools/client/netmonitor/har/toolbox-overlay").register;
+  return require("devtools/client/netmonitor/src/har/toolbox-overlay").register;
 });
 
 /**
@@ -93,9 +95,6 @@ function Toolbox(target, selectedTool, hostType, contentWindow, frameId) {
 
   this._toolPanels = new Map();
   this._telemetry = new Telemetry();
-  if (Services.prefs.getBoolPref("devtools.source-map.locations.enabled")) {
-    this._sourceMapService = new SourceMapService(this._target);
-  }
 
   this._initInspector = null;
   this._inspector = null;
@@ -410,6 +409,14 @@ Toolbox.prototype = {
       // Load the toolbox-level actor fronts and utilities now
       yield this._target.makeRemote();
 
+      // Start tracking network activity on toolbox open for targets such as tabs.
+      // (Workers and potentially others don't manage the console client in the target.)
+      if (this._target.activeConsole) {
+        yield this._target.activeConsole.startListeners([
+          "NetworkActivity",
+        ]);
+      }
+
       // Attach the thread
       this._threadClient = yield attachThread(this);
       yield domReady.promise;
@@ -417,10 +424,9 @@ Toolbox.prototype = {
       this.isReady = true;
       let framesPromise = this._listFrames();
 
-      Services.prefs.addObserver("devtools.cache.disabled", this._applyCacheSettings,
-                                false);
+      Services.prefs.addObserver("devtools.cache.disabled", this._applyCacheSettings);
       Services.prefs.addObserver("devtools.serviceWorkers.testing.enabled",
-                                 this._applyServiceWorkersTestingSettings, false);
+                                 this._applyServiceWorkersTestingSettings);
 
       this.textBoxContextMenuPopup =
         this.doc.getElementById("toolbox-textbox-context-popup");
@@ -520,6 +526,44 @@ Toolbox.prototype = {
     return this.browserRequire("devtools/client/framework/components/toolbox-controller");
   },
 
+  /**
+   * A common access point for the client-side mapping service for source maps that
+   * any panel can use.  This is a "low-level" API that connects to
+   * the source map worker.
+   */
+  get sourceMapService() {
+    if (!Services.prefs.getBoolPref("devtools.source-map.client-service.enabled")) {
+      return null;
+    }
+    if (this._sourceMapService) {
+      return this._sourceMapService;
+    }
+    // Uses browser loader to access the `Worker` global.
+    this._sourceMapService =
+      this.browserRequire("devtools/client/shared/source-map/index");
+    this._sourceMapService.startSourceMapWorker(SOURCE_MAP_WORKER);
+    return this._sourceMapService;
+  },
+
+  /**
+   * Clients wishing to use source maps but that want the toolbox to
+   * track the source actor mapping can use this source map service.
+   * This is a higher-level service than the one returned by
+   * |sourceMapService|, in that it automatically tracks source actor
+   * IDs.
+   */
+  get sourceMapURLService() {
+    if (this._sourceMapURLService) {
+      return this._sourceMapURLService;
+    }
+    let sourceMaps = this.sourceMapService;
+    if (!sourceMaps) {
+      return null;
+    }
+    this._sourceMapURLService = new SourceMapURLService(this._target, sourceMaps);
+    return this._sourceMapURLService;
+  },
+
   // Return HostType id for telemetry
   _getTelemetryHostId: function () {
     switch (this.hostType) {
@@ -574,13 +618,11 @@ Toolbox.prototype = {
    * @property {Function} isChecked - Optional function called to known if the button
    *                      is toggled or not. The function should return true when
    *                      the button should be displayed as toggled on.
-   * @property {Boolean}  autoToggle - If true, the checked state is going to be
-   *                      automatically toggled on click.
    */
   _createButtonState: function (options) {
     let isCheckedValue = false;
     const { id, className, description, onClick, isInStartContainer, setup, teardown,
-            isTargetSupported, isChecked, autoToggle } = options;
+            isTargetSupported, isChecked } = options;
     const toolbox = this;
     const button = {
       id,
@@ -589,9 +631,6 @@ Toolbox.prototype = {
       onClick(event) {
         if (typeof onClick == "function") {
           onClick(event, toolbox);
-        }
-        if (autoToggle) {
-          button.isChecked = !button.isChecked;
         }
       },
       isTargetSupported,
@@ -1226,12 +1265,7 @@ Toolbox.prototype = {
       visibilityswitch
     } = button;
 
-    let visible = true;
-    try {
-      visible = Services.prefs.getBoolPref(visibilityswitch);
-    } catch (ex) {
-      // Do nothing.
-    }
+    let visible = Services.prefs.getBoolPref(visibilityswitch, true);
 
     if (isTargetSupported) {
       return visible && isTargetSupported(this.target);
@@ -1779,8 +1813,10 @@ Toolbox.prototype = {
   _refreshHostTitle: function () {
     let title;
     if (this.target.name && this.target.name != this.target.url) {
+      const url = this.target.isWebExtension ?
+                  this.target.getExtensionPathName(this.target.url) : this.target.url;
       title = L10N.getFormatStr("toolbox.titleTemplate2", this.target.name,
-                                                          this.target.url);
+                                                          url);
     } else {
       title = L10N.getFormatStr("toolbox.titleTemplate1", this.target.url);
     }
@@ -1791,35 +1827,36 @@ Toolbox.prototype = {
   },
 
   // Returns an instance of the preference actor
-  get _preferenceFront() {
+  get preferenceFront() {
+    if (this._preferenceFront) {
+      return Promise.resolve(this._preferenceFront);
+    }
     return this.isOpen.then(() => {
       return this.target.root.then(rootForm => {
-        return getPreferenceFront(this.target.client, rootForm);
+        let front = getPreferenceFront(this.target.client, rootForm);
+        this._preferenceFront = front;
+        return front;
       });
     });
   },
 
   _toggleNoAutohide: Task.async(function* () {
-    let front = yield this._preferenceFront;
-    let toggledValue = !(yield this._isDisableAutohideEnabled(front));
+    let front = yield this.preferenceFront;
+    let toggledValue = !(yield this._isDisableAutohideEnabled());
 
     front.setBoolPref(DISABLE_AUTOHIDE_PREF, toggledValue);
 
     this.autohideButton.isChecked = toggledValue;
   }),
 
-  _isDisableAutohideEnabled: Task.async(function* (prefFront) {
+  _isDisableAutohideEnabled: Task.async(function* () {
     // Ensure that the tools are open, and the button is visible.
     yield this.isOpen;
     if (!this.autohideButton.isVisible) {
       return false;
     }
 
-    // If no prefFront was provided, then get one.
-    if (!prefFront) {
-      prefFront = yield this._preferenceFront;
-    }
-
+    let prefFront = yield this.preferenceFront;
     return yield prefFront.getBoolPref(DISABLE_AUTOHIDE_PREF);
   }),
 
@@ -1850,9 +1887,16 @@ Toolbox.prototype = {
       // A frame is checked if it's the selected one.
       let checked = frame.id == this.selectedFrameId;
 
+      let label = frame.url;
+
+      if (this.target.isWebExtension) {
+        // Show a shorter url for extensions page.
+        label = this.target.getExtensionPathName(frame.url);
+      }
+
       // Create menu item.
       menu.append(new MenuItem({
-        label: frame.url,
+        label,
         type: "radio",
         checked,
         click: () => {
@@ -2270,8 +2314,14 @@ Toolbox.prototype = {
                                   this._applyServiceWorkersTestingSettings);
 
     this._lastFocusedElement = null;
+
+    if (this._sourceMapURLService) {
+      this._sourceMapURLService.destroy();
+      this._sourceMapURLService = null;
+    }
+
     if (this._sourceMapService) {
-      this._sourceMapService.destroy();
+      this._sourceMapService.stopSourceMapWorker();
       this._sourceMapService = null;
     }
 
@@ -2352,14 +2402,17 @@ Toolbox.prototype = {
         .then(() => {
           this._removeHostListeners();
 
-          // `location` may already be null if the toolbox document is already
-          // in process of destruction. Otherwise if it is still around, ensure
-          // releasing toolbox document and triggering cleanup thanks to unload
-          // event. We do that precisely here, before nullifying the target as
-          // various cleanup code depends on the target attribute to be still
+          // `location` may already be 'invalid' if the toolbox document is
+          // already in process of destruction. Otherwise if it is still
+          // around, ensure releasing toolbox document and triggering cleanup
+          // thanks to unload event. We do that precisely here, before
+          // nullifying the target as various cleanup code depends on the
+          // target attribute to be still
           // defined.
-          if (win.location) {
+          try {
             win.location.replace("about:blank");
+          } catch (e) {
+            // Do nothing;
           }
 
           // Targets need to be notified that the toolbox is being torn down.
@@ -2399,7 +2452,7 @@ Toolbox.prototype = {
     };
 
     let topic = "shutdown-leaks-before-check";
-    Services.obs.addObserver(leakCheckObserver, topic, false);
+    Services.obs.addObserver(leakCheckObserver, topic);
     this._destroyer.then(() => {
       Services.obs.removeObserver(leakCheckObserver, topic);
     });
@@ -2497,8 +2550,11 @@ Toolbox.prototype = {
    * Destroy the preferences actor when the toolbox is unloaded.
    */
   destroyPreference: Task.async(function* () {
-    let front = yield this._preferenceFront;
-    front.destroy();
+    if (!this._preferenceFront) {
+      return;
+    }
+    this._preferenceFront.destroy();
+    this._preferenceFront = null;
   }),
 
   /**

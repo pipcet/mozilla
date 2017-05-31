@@ -25,12 +25,22 @@
 #include "vm/ArgumentsObject.h"
 #include "vm/SavedFrame.h"
 #include "wasm/WasmFrameIterator.h"
+#include "wasm/WasmTypes.h"
 
 struct JSCompartment;
 
 namespace JS {
 namespace dbg {
-class AutoEntryMonitor;
+#ifdef JS_BROKEN_GCC_ATTRIBUTE_WARNING
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
+#endif // JS_BROKEN_GCC_ATTRIBUTE_WARNING
+
+class JS_PUBLIC_API(AutoEntryMonitor);
+
+#ifdef JS_BROKEN_GCC_ATTRIBUTE_WARNING
+#pragma GCC diagnostic pop
+#endif // JS_BROKEN_GCC_ATTRIBUTE_WARNING
 } // namespace dbg
 } // namespace JS
 
@@ -157,6 +167,7 @@ class AbstractFramePtr
     MOZ_IMPLICIT AbstractFramePtr(wasm::DebugFrame* fp)
       : ptr_(fp ? uintptr_t(fp) | Tag_WasmDebugFrame : 0)
     {
+        static_assert(wasm::DebugFrame::Alignment >= TagMask, "aligned");
         MOZ_ASSERT_IF(fp, asWasmDebugFrame() == fp);
     }
 
@@ -1036,6 +1047,17 @@ class InvokeArgs : public detail::GenericArgsBase<NO_CONSTRUCT>
     explicit InvokeArgs(JSContext* cx) : Base(cx) {}
 };
 
+/** Function call args of statically-unknown count. */
+class InvokeArgsMaybeIgnoresReturnValue : public detail::GenericArgsBase<NO_CONSTRUCT>
+{
+    using Base = detail::GenericArgsBase<NO_CONSTRUCT>;
+
+  public:
+    explicit InvokeArgsMaybeIgnoresReturnValue(JSContext* cx, bool ignoresReturnValue) : Base(cx) {
+        this->ignoresReturnValue_ = ignoresReturnValue;
+    }
+};
+
 /** Function call args of statically-known count. */
 template <size_t N>
 class FixedInvokeArgs : public detail::FixedArgsBase<NO_CONSTRUCT, N>
@@ -1338,6 +1360,9 @@ class Activation
         return hideScriptedCallerCount_ > 0;
     }
 
+    static size_t offsetOfPrev() {
+        return offsetof(Activation, prev_);
+    }
     static size_t offsetOfPrevProfiling() {
         return offsetof(Activation, prevProfiling_);
     }
@@ -1699,55 +1724,44 @@ class InterpreterFrameIterator
     }
 };
 
-// A WasmActivation is part of two activation linked lists:
-//  - the normal Activation list used by FrameIter
-//  - a list of only WasmActivations that is signal-safe since it is accessed
-//    from the profiler at arbitrary points
-//
 // An eventual goal is to remove WasmActivation and to run asm code in a
 // JitActivation interleaved with Ion/Baseline jit code. This would allow
 // efficient calls back and forth but requires that we can walk the stack for
 // all kinds of jit code.
 class WasmActivation : public Activation
 {
-    WasmActivation* prevWasm_;
-    void* entrySP_;
-    void* resumePC_;
-    uint8_t* fp_;
+    wasm::Frame* exitFP_;
     wasm::ExitReason exitReason_;
 
   public:
     explicit WasmActivation(JSContext* cx);
     ~WasmActivation();
 
-    WasmActivation* prevWasm() const { return prevWasm_; }
-
     bool isProfiling() const {
         return true;
     }
 
-    // Returns a pointer to the base of the innermost stack frame of wasm code
-    // in this activation.
-    uint8_t* fp() const { return fp_; }
+    // Returns null or the final wasm::Frame* when wasm exited this
+    // WasmActivation.
+    wasm::Frame* exitFP() const { return exitFP_; }
 
     // Returns the reason why wasm code called out of wasm code.
     wasm::ExitReason exitReason() const { return exitReason_; }
 
-    // Read by JIT code:
-    static unsigned offsetOfContext() { return offsetof(WasmActivation, cx_); }
-    static unsigned offsetOfResumePC() { return offsetof(WasmActivation, resumePC_); }
-
     // Written by JIT code:
-    static unsigned offsetOfEntrySP() { return offsetof(WasmActivation, entrySP_); }
-    static unsigned offsetOfFP() { return offsetof(WasmActivation, fp_); }
+    static unsigned offsetOfExitFP() { return offsetof(WasmActivation, exitFP_); }
     static unsigned offsetOfExitReason() { return offsetof(WasmActivation, exitReason_); }
 
-    // Read/written from SIGSEGV handler:
-    void setResumePC(void* pc) { resumePC_ = pc; }
-    void* resumePC() const { return resumePC_; }
+    // Interrupts are started from the interrupt signal handler (or the ARM
+    // simulator) and cleared by WasmHandleExecutionInterrupt or WasmHandleThrow
+    // when the interrupt is handled.
+    void startInterrupt(void* pc, uint8_t* fp);
+    void finishInterrupt();
+    bool interrupted() const;
+    void* resumePC() const;
 
     // Used by wasm::FrameIterator during stack unwinding.
-    void unwindFP(uint8_t* fp) { fp_ = fp; }
+    void unwindExitFP(wasm::Frame* exitFP);
 };
 
 // A FrameIter walks over a context's stack of JS script activations,

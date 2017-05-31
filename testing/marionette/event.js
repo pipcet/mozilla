@@ -284,77 +284,13 @@ event.synthesizeMouseAtCenter = function (element, event, window) {
       window);
 };
 
-/**
- * Synthesise a mouse scroll event on a target.
- *
- * The actual client point is determined by taking the target's client
- * box and offseting it by |offsetX| and |offsetY|.
- *
- * If the |type| property is specified for the |event| argument, a mouse
- * scroll event of that type is fired.  Otherwise, DOMMouseScroll is used.
- *
- * If the |axis| is specified, it must be one of "horizontal" or
- * "vertical". If not specified, "vertical" is used.
- *
- * |delta| is the amount to scroll by (can be positive or negative).
- * It must be specified.
- *
- * |hasPixels| specifies whether kHasPixels should be set in the
- * |scrollFlags|.
- *
- * |isMomentum| specifies whether kIsMomentum should be set in the
- * |scrollFlags|.
- *
- * @param {Element} target
- * @param {number} offsetY
- * @param {number} offsetY
- * @param {Object.<string, ?>} event
- *     Object which may contain the properties shiftKey, ctrlKey, altKey,
- *     metaKey, accessKey, button, type, axis, delta, and hasPixels.
- * @param {Window=} window
- *     Window object.  Defaults to the current window.
- */
-event.synthesizeMouseScroll = function (
-    target, offsetX, offsetY, ev, window = undefined) {
-
-  let domutils = getDOMWindowUtils(window);
-
-  // see nsMouseScrollFlags in nsGUIEvent.h
-  const kIsVertical = 0x02;
-  const kIsHorizontal = 0x04;
-  const kHasPixels = 0x08;
-  const kIsMomentum = 0x40;
-
-  let button = ev.button || 0;
-  let modifiers = event.parseModifiers_(ev);
-
-  let rect = target.getBoundingClientRect();
-  let left = rect.left;
-  let top = rect.top;
-
-  let type = (("type" in ev) && ev.type) || "DOMMouseScroll";
-  let axis = ev.axis || "vertical";
-  let scrollFlags = (axis == "horizontal") ? kIsHorizontal : kIsVertical;
-  if (ev.hasPixels) {
-    scrollFlags |= kHasPixels;
-  }
-  if (ev.isMomentum) {
-    scrollFlags |= kIsMomentum;
-  }
-
-  domutils.sendMouseScrollEvent(
-      type,
-      left + offsetX,
-      top + offsetY,
-      button,
-      scrollFlags,
-      ev.delta,
-      modifiers);
-};
-
 function computeKeyCodeFromChar_(char) {
   if (char.length != 1) {
     return 0;
+  }
+
+  if (char in VIRTUAL_KEYCODE_LOOKUP) {
+    return Ci.nsIDOMKeyEvent["DOM_" + VIRTUAL_KEYCODE_LOOKUP[char]];
   }
 
   if (char >= "a" && char <= "z") {
@@ -582,7 +518,7 @@ function getKeyboardEvent_(win = window)
 
 function createKeyboardEventDictionary_(key, keyEvent, win = window) {
   var result = { dictionary: null, flags: 0 };
-  var keyCodeIsDefined = "keyCode" in keyEvent;
+  var keyCodeIsDefined = "keyCode" in keyEvent && keyEvent.keyCode != undefined;
   var keyCode =
     (keyCodeIsDefined && keyEvent.keyCode >= 0 && keyEvent.keyCode <= 255) ?
       keyEvent.keyCode : 0;
@@ -596,7 +532,9 @@ function createKeyboardEventDictionary_(key, keyEvent, win = window) {
       throw "Unknown key: " + key;
     }
     keyName = guessKeyNameFromKeyCode_(keyCode, win);
-    result.flags |= Ci.nsITextInputProcessor.KEY_NON_PRINTABLE_KEY;
+    if (!isPrintable(keyCode, win)) {
+     result.flags |= Ci.nsITextInputProcessor.KEY_NON_PRINTABLE_KEY;
+    }
   } else if (key != "") {
     keyName = key;
     if (!keyCodeIsDefined) {
@@ -605,8 +543,8 @@ function createKeyboardEventDictionary_(key, keyEvent, win = window) {
     if (!keyCode) {
       result.flags |= Ci.nsITextInputProcessor.KEY_KEEP_KEYCODE_ZERO;
     }
-    // keyName was already determined in keyEvent so no fall-back needed
-    if (!("key" in keyEvent && keyName == keyEvent.key)) {
+    // only force printable if "raw character" and event key match, like "a"
+    if (!("key" in keyEvent && key != keyEvent.key)) {
       result.flags |= Ci.nsITextInputProcessor.KEY_FORCE_PRINTABLE_KEY;
     }
   }
@@ -615,7 +553,7 @@ function createKeyboardEventDictionary_(key, keyEvent, win = window) {
     result.flags |= Ci.nsITextInputProcessor.KEY_KEEP_KEY_LOCATION_STANDARD;
   }
   result.dictionary = {
-    key: keyName,
+    key: "key" in keyEvent ? keyEvent.key : keyName,
     code: "code" in keyEvent ? keyEvent.code : "",
     location: locationIsDefined ? keyEvent.location : 0,
     repeat: "repeat" in keyEvent ? keyEvent.repeat === true : false,
@@ -1220,6 +1158,82 @@ function getKeyCode(c) {
   return c;
 }
 
+function isPrintable(c, win = window) {
+  let KeyboardEvent = getKeyboardEvent_(win);
+  let NON_PRINT_KEYS = [
+    KeyboardEvent.DOM_VK_CANCEL,
+    KeyboardEvent.DOM_VK_HELP,
+    KeyboardEvent.DOM_VK_BACK_SPACE,
+    KeyboardEvent.DOM_VK_TAB,
+    KeyboardEvent.DOM_VK_CLEAR,
+    KeyboardEvent.DOM_VK_SHIFT,
+    KeyboardEvent.DOM_VK_CONTROL,
+    KeyboardEvent.DOM_VK_ALT,
+    KeyboardEvent.DOM_VK_PAUSE,
+    KeyboardEvent.DOM_VK_EISU,
+    KeyboardEvent.DOM_VK_ESCAPE,
+    KeyboardEvent.DOM_VK_CONVERT,
+    KeyboardEvent.DOM_VK_NONCONVERT,
+    KeyboardEvent.DOM_VK_ACCEPT,
+    KeyboardEvent.DOM_VK_MODECHANGE,
+    KeyboardEvent.DOM_VK_PAGE_UP,
+    KeyboardEvent.DOM_VK_PAGE_DOWN,
+    KeyboardEvent.DOM_VK_END,
+    KeyboardEvent.DOM_VK_HOME,
+    KeyboardEvent.DOM_VK_LEFT,
+    KeyboardEvent.DOM_VK_UP,
+    KeyboardEvent.DOM_VK_RIGHT,
+    KeyboardEvent.DOM_VK_DOWN,
+    KeyboardEvent.DOM_VK_SELECT,
+    KeyboardEvent.DOM_VK_PRINT,
+    KeyboardEvent.DOM_VK_EXECUTE,
+    KeyboardEvent.DOM_VK_PRINTSCREEN,
+    KeyboardEvent.DOM_VK_INSERT,
+    KeyboardEvent.DOM_VK_DELETE,
+    KeyboardEvent.DOM_VK_WIN,
+    KeyboardEvent.DOM_VK_CONTEXT_MENU,
+    KeyboardEvent.DOM_VK_SLEEP,
+    KeyboardEvent.DOM_VK_F1,
+    KeyboardEvent.DOM_VK_F2,
+    KeyboardEvent.DOM_VK_F3,
+    KeyboardEvent.DOM_VK_F4,
+    KeyboardEvent.DOM_VK_F5,
+    KeyboardEvent.DOM_VK_F6,
+    KeyboardEvent.DOM_VK_F7,
+    KeyboardEvent.DOM_VK_F8,
+    KeyboardEvent.DOM_VK_F9,
+    KeyboardEvent.DOM_VK_F10,
+    KeyboardEvent.DOM_VK_F11,
+    KeyboardEvent.DOM_VK_F12,
+    KeyboardEvent.DOM_VK_F13,
+    KeyboardEvent.DOM_VK_F14,
+    KeyboardEvent.DOM_VK_F15,
+    KeyboardEvent.DOM_VK_F16,
+    KeyboardEvent.DOM_VK_F17,
+    KeyboardEvent.DOM_VK_F18,
+    KeyboardEvent.DOM_VK_F19,
+    KeyboardEvent.DOM_VK_F20,
+    KeyboardEvent.DOM_VK_F21,
+    KeyboardEvent.DOM_VK_F22,
+    KeyboardEvent.DOM_VK_F23,
+    KeyboardEvent.DOM_VK_F24,
+    KeyboardEvent.DOM_VK_NUM_LOCK,
+    KeyboardEvent.DOM_VK_SCROLL_LOCK,
+    KeyboardEvent.DOM_VK_VOLUME_MUTE,
+    KeyboardEvent.DOM_VK_VOLUME_DOWN,
+    KeyboardEvent.DOM_VK_VOLUME_UP,
+    KeyboardEvent.DOM_VK_META,
+    KeyboardEvent.DOM_VK_ALTGR,
+    KeyboardEvent.DOM_VK_ATTN,
+    KeyboardEvent.DOM_VK_CRSEL,
+    KeyboardEvent.DOM_VK_EXSEL,
+    KeyboardEvent.DOM_VK_EREOF,
+    KeyboardEvent.DOM_VK_PLAY,
+    KeyboardEvent.DOM_VK_RETURN,
+  ];
+  return !(NON_PRINT_KEYS.includes(c));
+}
+
 event.sendKeyDown = function (keyToSend, modifiers, document) {
   modifiers.type = "keydown";
   event.sendSingleKey(keyToSend, modifiers, document);
@@ -1251,17 +1265,17 @@ event.sendKeyUp = function (keyToSend, modifiers, window = undefined) {
  *     current window.
  */
 event.sendSingleKey = function (keyToSend, modifiers, window = undefined) {
-  let keyCode = getKeyCode(keyToSend);
-  if (keyCode in KEYCODES_LOOKUP) {
+  let keyName = getKeyCode(keyToSend);
+  if (keyName in KEYCODES_LOOKUP) {
     // We assume that if |keyToSend| is a raw code point (like "\uE009") then
     // |modifiers| does not already have correct value for corresponding
     // |modName| attribute (like ctrlKey), so that value needs to be flipped
-    let modName = KEYCODES_LOOKUP[keyCode];
+    let modName = KEYCODES_LOOKUP[keyName];
     modifiers[modName] = !modifiers[modName];
-  } else if (modifiers.shiftKey && keyCode != "Shift") {
-    keyCode = keyCode.toUpperCase();
+  } else if (modifiers.shiftKey && keyName != "Shift") {
+    keyName = keyName.toUpperCase();
   }
-  event.synthesizeKey(keyCode, modifiers, window);
+  event.synthesizeKey(keyName, modifiers, window);
 };
 
 /**
@@ -1283,13 +1297,13 @@ function focusElement(element) {
 }
 
 /**
- * @param {Array.<string>} keySequence
+ * @param {string} keyString
  * @param {Element} element
  * @param {Object.<string, boolean>=} opts
  * @param {Window=} window
  */
 event.sendKeysToElement = function (
-    keySequence, el, opts = {}, window = undefined) {
+    keyString, el, opts = {}, window = undefined) {
 
   if (opts.ignoreVisibility || element.isVisible(el)) {
     focusElement(el);
@@ -1300,14 +1314,13 @@ event.sendKeysToElement = function (
       modifiers[modifier] = false;
     }
 
-    let value = keySequence.join("");
-    for (let i = 0; i < value.length; i++) {
-      let c = value.charAt(i);
+    for (let i = 0; i < keyString.length; i++) {
+      let c = keyString.charAt(i);
       event.sendSingleKey(c, modifiers, window);
     }
 
   } else {
-    throw new ElementNotVisibleError("Element is not visible");
+    throw new ElementNotInteractableError("Element is not visible");
   }
 };
 

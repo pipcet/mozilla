@@ -81,8 +81,9 @@ NS_IMETHODIMP nsWindowMediator::RegisterWindow(nsIXULWindow* inWindow)
   // Create window info struct and add to list of windows
   nsWindowInfo* windowInfo = new nsWindowInfo(inWindow, mTimeStamp);
 
-  for (nsIWindowMediatorListener* listener : mListeners) {
-    listener->OnOpenWindow(inWindow);
+  ListenerArray::ForwardIterator iter(mListeners);
+  while (iter.HasMore()) {
+    iter.GetNext()->OnOpenWindow(inWindow);
   }
 
   if (mOldestWindow)
@@ -113,9 +114,11 @@ nsWindowMediator::UnregisterWindow(nsWindowInfo *inInfo)
     mEnumeratorList[index]->WindowRemoved(inInfo);
     index++;
   }
-  
-  for (nsIWindowMediatorListener* listener : mListeners) {
-    listener->OnCloseWindow(inInfo->mWindow.get());
+
+  nsIXULWindow* window = inInfo->mWindow.get();
+  ListenerArray::ForwardIterator iter(mListeners);
+  while (iter.HasMore()) {
+    iter.GetNext()->OnCloseWindow(window);
   }
 
   // Remove from the lists and free up 
@@ -399,8 +402,9 @@ nsWindowMediator::UpdateWindowTitle(nsIXULWindow* inWindow,
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
   NS_ENSURE_STATE(mReady);
   if (GetInfoFor(inWindow)) {
-    for (nsIWindowMediatorListener* listener : mListeners) {
-      listener->OnWindowTitleChange(inWindow, inTitle);
+    ListenerArray::ForwardIterator iter(mListeners);
+    while (iter.HasMore()) {
+      iter.GetNext()->OnWindowTitleChange(inWindow, inTitle);
     }
   }
 
@@ -609,12 +613,10 @@ nsWindowMediator::GetZLevel(nsIXULWindow *aWindow, uint32_t *_retval)
 {
   NS_ENSURE_ARG_POINTER(_retval);
   *_retval = nsIXULWindow::normalZ;
+  // This can fail during window destruction.
   nsWindowInfo *info = GetInfoFor(aWindow);
   if (info) {
     *_retval = info->mZLevel;
-  } else {
-    NS_WARNING("getting z level of unregistered window");
-    // this goes off during window destruction
   }
   return NS_OK;
 }
@@ -782,7 +784,7 @@ nsWindowMediator::AddListener(nsIWindowMediatorListener* aListener)
 {
   NS_ENSURE_ARG_POINTER(aListener);
   
-  mListeners.AppendObject(aListener);
+  mListeners.AppendElement(aListener);
   
   return NS_OK;
 }
@@ -792,7 +794,7 @@ nsWindowMediator::RemoveListener(nsIWindowMediatorListener* aListener)
 {
   NS_ENSURE_ARG_POINTER(aListener);
 
-  mListeners.RemoveObject(aListener);
+  mListeners.RemoveElement(aListener);
   
   return NS_OK;
 }

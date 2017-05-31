@@ -331,6 +331,7 @@ EventStateManager::EventStateManager()
                                  "dom.w3c_pointer_events.enabled", false);
     sAddedPointerEventEnabled = true;
   }
+  WheelTransaction::InitializeStatics();
 }
 
 nsresult
@@ -339,8 +340,13 @@ EventStateManager::UpdateUserActivityTimer()
   if (!gUserInteractionTimerCallback)
     return NS_OK;
 
-  if (!gUserInteractionTimer)
+  if (!gUserInteractionTimer) {
     CallCreateInstance("@mozilla.org/timer;1", &gUserInteractionTimer);
+    if (gUserInteractionTimer) {
+      gUserInteractionTimer->SetTarget(
+        SystemGroup::EventTargetFor(TaskCategory::Other));
+    }
+  }
 
   if (gUserInteractionTimer) {
     gUserInteractionTimer->InitWithCallback(gUserInteractionTimerCallback,
@@ -742,6 +748,9 @@ EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
     FlushPendingEvents(aPresContext);
     break;
   }
+  case ePointerGotCapture:
+    GenerateMouseEnterExit(mouseEvent);
+    break;
   case eDragStart:
     if (Prefs::ClickHoldContextMenu()) {
       // an external drag gesture event came in, not generated internally
@@ -904,7 +913,8 @@ EventStateManager::HandleQueryContentEvent(WidgetQueryContentEvent* aEvent)
   // If there is an IMEContentObserver, we need to handle QueryContentEvent
   // with it.
   if (mIMEContentObserver) {
-    mIMEContentObserver->HandleQueryContentEvent(aEvent);
+    RefPtr<IMEContentObserver> contentObserver = mIMEContentObserver;
+    contentObserver->HandleQueryContentEvent(aEvent);
     return;
   }
 
@@ -1416,6 +1426,7 @@ EventStateManager::CreateClickHoldTimer(nsPresContext* inPresContext,
   if (mClickHoldTimer) {
     int32_t clickHoldDelay =
       Preferences::GetInt("ui.click_hold_context_menus.delay", 500);
+    mClickHoldTimer->SetTarget(SystemGroup::EventTargetFor(TaskCategory::Other));
     mClickHoldTimer->InitWithFuncCallback(sClickHoldCallback, this,
                                           clickHoldDelay,
                                           nsITimer::TYPE_ONE_SHOT);
@@ -1525,7 +1536,7 @@ EventStateManager::FireContextClick()
 
       if (formCtrl) {
         allowedToDispatch = formCtrl->IsTextOrNumberControl(/*aExcludePassword*/ false) ||
-                            formCtrl->GetType() == NS_FORM_INPUT_FILE;
+                            formCtrl->ControlType() == NS_FORM_INPUT_FILE;
       }
       else if (mGestureDownContent->IsAnyOfHTMLElements(nsGkAtoms::applet,
                                                         nsGkAtoms::embed,
@@ -2729,10 +2740,10 @@ EventStateManager::DecideGestureEvent(WidgetGestureNotifyEvent* aEvent,
       break;
     }
 
-    nsIAtom* currentFrameType = current->GetType();
+    LayoutFrameType currentFrameType = current->Type();
 
     // Scrollbars should always be draggable
-    if (currentFrameType == nsGkAtoms::scrollbarFrame) {
+    if (currentFrameType == LayoutFrameType::Scrollbar) {
       panDirection = WidgetGestureNotifyEvent::ePanNone;
       break;
     }
@@ -2759,7 +2770,7 @@ EventStateManager::DecideGestureEvent(WidgetGestureNotifyEvent* aEvent,
         nsRect scrollRange = scrollableFrame->GetScrollRange();
         bool canScrollHorizontally = scrollRange.width > 0;
 
-        if (targetFrame->GetType() == nsGkAtoms::menuFrame) {
+        if (targetFrame->IsMenuFrame()) {
           // menu frames report horizontal scroll when they have submenus
           // and we don't want that
           canScrollHorizontally = false;
@@ -2828,6 +2839,18 @@ EventStateManager::PostHandleKeyboardEvent(WidgetKeyboardEvent* aKeyboardEvent,
 {
   if (aStatus == nsEventStatus_eConsumeNoDefault) {
     return;
+  }
+
+  if (!dispatchedToContentProcess) {
+    // The widget expects a reply for every keyboard event. If the event wasn't
+    // dispatched to a content process (non-e10s or no content process
+    // running), we need to short-circuit here. Otherwise, we need to wait for
+    // the content process to handle the event.
+    aKeyboardEvent->mWidget->PostHandleKeyEvent(aKeyboardEvent);
+    if (aKeyboardEvent->DefaultPrevented()) {
+      aStatus = nsEventStatus_eConsumeNoDefault;
+      return;
+    }
   }
 
   // XXX Currently, our automated tests don't support mKeyNameIndex.
@@ -3846,13 +3869,7 @@ public:
 /*static*/ bool
 EventStateManager::IsHandlingUserInput()
 {
-  if (sUserInputEventDepth <= 0) {
-    return false;
-  }
-
-  TimeDuration timeout = nsContentUtils::HandlingUserInputTimeout();
-  return timeout <= TimeDuration(0) ||
-         (TimeStamp::Now() - sHandlingInputStart) <= timeout;
+  return sUserInputEventDepth > 0;
 }
 
 static void
@@ -3874,10 +3891,7 @@ CreateMouseOrPointerWidgetEvent(WidgetMouseEvent* aMouseEvent,
     newPointerEvent->mWidth = sourcePointer->mWidth;
     newPointerEvent->mHeight = sourcePointer->mHeight;
     newPointerEvent->inputSource = sourcePointer->inputSource;
-    newPointerEvent->relatedTarget =
-      nsIPresShell::GetPointerCapturingContent(sourcePointer->pointerId)
-        ? nullptr
-        : aRelatedContent;
+    newPointerEvent->relatedTarget = aRelatedContent;
     aNewEvent = newPointerEvent.forget();
   } else {
     aNewEvent =
@@ -4087,14 +4101,8 @@ EventStateManager::NotifyMouseOut(WidgetMouseEvent* aMouseEvent,
     SetContentState(nullptr, NS_EVENT_STATE_HOVER);
   }
 
-  // In case we go out from capturing element (retargetedByPointerCapture is true)
-  // we should dispatch ePointerLeave event and only for capturing element.
-  RefPtr<nsIContent> movingInto = aMouseEvent->retargetedByPointerCapture
-                                    ? wrapper->mLastOverElement->GetParent()
-                                    : aMovingInto;
-
   EnterLeaveDispatcher leaveDispatcher(this, wrapper->mLastOverElement,
-                                       movingInto, aMouseEvent,
+                                       aMovingInto, aMouseEvent,
                                        isPointer ? ePointerLeave : eMouseLeave);
 
   // Fire mouseout
@@ -4115,13 +4123,9 @@ EventStateManager::NotifyMouseOver(WidgetMouseEvent* aMouseEvent,
 {
   NS_ASSERTION(aContent, "Mouse must be over something");
 
-  // If pointer capture is set, we should suppress pointerover/pointerenter events
-  // for all elements except element which have pointer capture.
-  bool dispatch = !aMouseEvent->retargetedByPointerCapture;
-
   OverOutElementsWrapper* wrapper = GetWrapperByEventID(aMouseEvent);
 
-  if (wrapper->mLastOverElement == aContent && dispatch)
+  if (wrapper->mLastOverElement == aContent)
     return;
 
   // Before firing mouseover, check for recursion
@@ -4143,7 +4147,7 @@ EventStateManager::NotifyMouseOver(WidgetMouseEvent* aMouseEvent,
   }
   // Firing the DOM event in the parent document could cause all kinds
   // of havoc.  Reverify and take care.
-  if (wrapper->mLastOverElement == aContent && dispatch)
+  if (wrapper->mLastOverElement == aContent)
     return;
 
   // Remember mLastOverElement as the related content for the
@@ -4152,11 +4156,9 @@ EventStateManager::NotifyMouseOver(WidgetMouseEvent* aMouseEvent,
 
   bool isPointer = aMouseEvent->mClass == ePointerEventClass;
   
-  Maybe<EnterLeaveDispatcher> enterDispatcher;
-  if (dispatch) {
-    enterDispatcher.emplace(this, aContent, lastOverElement, aMouseEvent,
-                            isPointer ? ePointerEnter : eMouseEnter);
-  }
+  EnterLeaveDispatcher enterDispatcher(this, aContent, lastOverElement,
+                                       aMouseEvent,
+                                       isPointer ? ePointerEnter : eMouseEnter);
 
   NotifyMouseOut(aMouseEvent, aContent);
 
@@ -4168,18 +4170,13 @@ EventStateManager::NotifyMouseOver(WidgetMouseEvent* aMouseEvent,
     SetContentState(aContent, NS_EVENT_STATE_HOVER);
   }
 
-  if (dispatch) {
-    // Fire mouseover
-    wrapper->mLastOverFrame = 
-      DispatchMouseOrPointerEvent(aMouseEvent,
-                                  isPointer ? ePointerOver : eMouseOver,
-                                  aContent, lastOverElement);
-    enterDispatcher->Dispatch();
-    wrapper->mLastOverElement = aContent;
-  } else {
-    wrapper->mLastOverFrame = nullptr;
-    wrapper->mLastOverElement = nullptr;
-  }
+  // Fire mouseover
+  wrapper->mLastOverFrame =
+    DispatchMouseOrPointerEvent(aMouseEvent,
+                                isPointer ? ePointerOver : eMouseOver,
+                                aContent, lastOverElement);
+  enterDispatcher.Dispatch();
+  wrapper->mLastOverElement = aContent;
 
   // Turn recursion protection back off
   wrapper->mFirstOverEventElement = nullptr;
@@ -4272,6 +4269,7 @@ EventStateManager::GenerateMouseEnterExit(WidgetMouseEvent* aMouseEvent)
     MOZ_FALLTHROUGH;
   case ePointerMove:
   case ePointerDown:
+  case ePointerGotCapture:
     {
       // Get the target content target (mousemove target == mouseover target)
       nsCOMPtr<nsIContent> targetElement = GetEventTargetContent(aMouseEvent);
@@ -4785,48 +4783,13 @@ GetLabelTarget(nsIContent* aPossibleLabel)
   return label->GetLabeledElement();
 }
 
-static nsIContent* FindCommonAncestor(nsIContent *aNode1, nsIContent *aNode2)
+static nsIContent*
+FindCommonAncestor(nsIContent* aNode1, nsIContent* aNode2)
 {
-  // Find closest common ancestor
-  if (aNode1 && aNode2) {
-    // Find the nearest common ancestor by counting the distance to the
-    // root and then walking up again, in pairs.
-    int32_t offset = 0;
-    nsIContent *anc1 = aNode1;
-    for (;;) {
-      ++offset;
-      nsIContent* parent = anc1->GetFlattenedTreeParent();
-      if (!parent)
-        break;
-      anc1 = parent;
-    }
-    nsIContent *anc2 = aNode2;
-    for (;;) {
-      --offset;
-      nsIContent* parent = anc2->GetFlattenedTreeParent();
-      if (!parent)
-        break;
-      anc2 = parent;
-    }
-    if (anc1 == anc2) {
-      anc1 = aNode1;
-      anc2 = aNode2;
-      while (offset > 0) {
-        anc1 = anc1->GetFlattenedTreeParent();
-        --offset;
-      }
-      while (offset < 0) {
-        anc2 = anc2->GetFlattenedTreeParent();
-        ++offset;
-      }
-      while (anc1 != anc2) {
-        anc1 = anc1->GetFlattenedTreeParent();
-        anc2 = anc2->GetFlattenedTreeParent();
-      }
-      return anc1;
-    }
+  if (!aNode1 || !aNode2) {
+    return nullptr;
   }
-  return nullptr;
+  return nsContentUtils::GetCommonFlattenedTreeAncestor(aNode1, aNode2);
 }
 
 /* static */
@@ -5573,7 +5536,7 @@ EventStateManager::WheelPrefs::OnPrefChanged(const char* aPrefName,
 EventStateManager::WheelPrefs::WheelPrefs()
 {
   Reset();
-  Preferences::RegisterCallback(OnPrefChanged, "mousewheel.", nullptr);
+  Preferences::RegisterPrefixCallback(OnPrefChanged, "mousewheel.");
   Preferences::AddBoolVarCache(&sWheelEventsEnabledOnPlugins,
                                "plugin.mousewheel.enabled",
                                true);
@@ -5581,7 +5544,7 @@ EventStateManager::WheelPrefs::WheelPrefs()
 
 EventStateManager::WheelPrefs::~WheelPrefs()
 {
-  Preferences::UnregisterCallback(OnPrefChanged, "mousewheel.", nullptr);
+  Preferences::UnregisterPrefixCallback(OnPrefChanged, "mousewheel.");
 }
 
 void

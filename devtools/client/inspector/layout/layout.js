@@ -33,17 +33,23 @@ LayoutView.prototype = {
     }
 
     let {
+      setSelectedNode,
+      onShowBoxModelHighlighterForNode,
+    } = this.inspector.getCommonComponentProps();
+
+    let {
       onHideBoxModelHighlighter,
       onShowBoxModelEditor,
       onShowBoxModelHighlighter,
-    } = this.inspector.boxmodel.getComponentProps();
+      onToggleGeometryEditor,
+    } = this.inspector.getPanel("boxmodel").getComponentProps();
 
     let {
       getSwatchColorPickerTooltip,
-      setSelectedNode,
       onSetGridOverlayColor,
-      onShowBoxModelHighlighterForNode,
       onShowGridAreaHighlight,
+      onShowGridCellHighlight,
+      onShowGridLineNamesHighlight,
       onToggleGridHighlighter,
       onToggleShowGridLineNumbers,
       onToggleShowInfiniteLines,
@@ -70,6 +76,9 @@ LayoutView.prototype = {
       onShowBoxModelHighlighter,
       onShowBoxModelHighlighterForNode,
       onShowGridAreaHighlight,
+      onShowGridCellHighlight,
+      onShowGridLineNamesHighlight,
+      onToggleGeometryEditor,
       onToggleGridHighlighter,
       onToggleShowGridLineNumbers,
       onToggleShowInfiniteLines,

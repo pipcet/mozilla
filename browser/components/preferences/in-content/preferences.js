@@ -7,6 +7,7 @@
 /* import-globals-from advanced.js */
 /* import-globals-from main.js */
 /* import-globals-from search.js */
+/* import-globals-from containers.js */
 /* import-globals-from content.js */
 /* import-globals-from privacy.js */
 /* import-globals-from applications.js */
@@ -49,10 +50,7 @@ function register_module(categoryName, categoryObject) {
   });
 }
 
-addEventListener("DOMContentLoaded", function onLoad() {
-  removeEventListener("DOMContentLoaded", onLoad);
-  init_all();
-});
+document.addEventListener("DOMContentLoaded", init_all, {once: true});
 
 function init_all() {
   document.documentElement.instantApply = true;
@@ -101,7 +99,7 @@ function init_all() {
 
   // Wait until initialization of all preferences are complete before
   // notifying observers that the UI is now ready.
-  Services.obs.notifyObservers(window, "advanced-pane-loaded", null);
+  Services.obs.notifyObservers(window, "advanced-pane-loaded");
 }
 
 // Make the space above the categories list shrink on low window heights

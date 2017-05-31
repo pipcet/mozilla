@@ -12,6 +12,8 @@
 
 namespace mozilla {
 
+class DecoderDoctorDiagnostics;
+
 // H264Converter is a MediaDataDecoder wrapper used to ensure that
 // only AVCC or AnnexB is fed to the underlying MediaDataDecoder.
 // The H264Converter allows playback of content where the SPS NAL may not be
@@ -48,12 +50,7 @@ public:
     }
     return false;
   }
-  void ConfigurationChanged(const TrackInfo& aConfig) override
-  {
-    if (mDecoder && mDecoder->SupportDecoderRecycling()) {
-      mDecoder->ConfigurationChanged(aConfig);
-    }
-  }
+
   ConversionRequired NeedsConversion() const override
   {
     if (mDecoder) {
@@ -68,7 +65,8 @@ private:
   // Will create the required MediaDataDecoder if need AVCC and we have a SPS NAL.
   // Returns NS_ERROR_FAILURE if error is permanent and can't be recovered and
   // will set mError accordingly.
-  nsresult CreateDecoder(DecoderDoctorDiagnostics* aDiagnostics);
+  nsresult CreateDecoder(const VideoInfo& aConfig,
+                         DecoderDoctorDiagnostics* aDiagnostics);
   nsresult CreateDecoderAndInit(MediaRawData* aSample);
   nsresult CheckForSPSChange(MediaRawData* aSample);
   void UpdateConfigFromExtraData(MediaByteBuffer* aExtraData);
@@ -76,12 +74,7 @@ private:
   void OnDecoderInitDone(const TrackType aTrackType);
   void OnDecoderInitFailed(const MediaResult& aError);
 
-  bool CanRecycleDecoder() const
-  {
-    MOZ_ASSERT(mDecoder);
-    return MediaPrefs::MediaDecoderCheckRecycling()
-           && mDecoder->SupportDecoderRecycling();
-  }
+  bool CanRecycleDecoder() const;
 
   void DecodeFirstSample(MediaRawData* aSample);
 
@@ -104,8 +97,6 @@ private:
   Maybe<bool> mNeedAVCC;
   nsresult mLastError;
   bool mNeedKeyframe = true;
-  // Set to true once a decoder has been created.
-  bool mUseOriginalConfig = true;
   const TrackInfo::TrackType mType;
   MediaEventProducer<TrackInfo::TrackType>* const mOnWaitingForKeyEvent;
   const CreateDecoderParams::OptionSet mDecoderOptions;

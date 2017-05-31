@@ -29,7 +29,8 @@ namespace mozilla {
 namespace ipc {
 class FileDescriptor;
 class PFileDescriptorSetChild;
-class PSendStreamChild;
+class PChildToParentStreamChild;
+class PParentToChildStreamChild;
 class Shmem;
 } // namespace ipc
 
@@ -41,12 +42,10 @@ class CpowEntry;
 namespace dom {
 
 class Blob;
-class BlobChild;
 class BlobImpl;
 class BlobConstructorParams;
 class ClonedMessageData;
 class IPCTabContext;
-class PBlobChild;
 class PBrowserChild;
 
 class nsIContentChild : public nsISupports
@@ -56,16 +55,10 @@ class nsIContentChild : public nsISupports
 public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_ICONTENTCHILD_IID)
 
-  BlobChild* GetOrCreateActorForBlob(Blob* aBlob);
-  BlobChild* GetOrCreateActorForBlobImpl(BlobImpl* aImpl);
-
-  virtual PBlobChild*
-  SendPBlobConstructor(PBlobChild* aActor,
-                       const BlobConstructorParams& aParams) = 0;
-
   virtual bool
   SendPBrowserConstructor(PBrowserChild* aActor,
                           const TabId& aTabId,
+                          const TabId& aSameTabGroupAs,
                           const IPCTabContext& aContext,
                           const uint32_t& aChromeFlags,
                           const ContentParentId& aCpID,
@@ -74,14 +67,15 @@ public:
   virtual mozilla::ipc::PFileDescriptorSetChild*
   SendPFileDescriptorSetConstructor(const mozilla::ipc::FileDescriptor&) = 0;
 
-  virtual mozilla::ipc::PSendStreamChild*
-  SendPSendStreamConstructor(mozilla::ipc::PSendStreamChild*) = 0;
+  virtual mozilla::ipc::PChildToParentStreamChild*
+  SendPChildToParentStreamConstructor(mozilla::ipc::PChildToParentStreamChild*) = 0;
 
 protected:
   virtual jsipc::PJavaScriptChild* AllocPJavaScriptChild();
   virtual bool DeallocPJavaScriptChild(jsipc::PJavaScriptChild*);
 
   virtual PBrowserChild* AllocPBrowserChild(const TabId& aTabId,
+                                            const TabId& aSameTabGroupAs,
                                             const IPCTabContext& aContext,
                                             const uint32_t& aChromeFlags,
                                             const ContentParentId& aCpId,
@@ -90,18 +84,27 @@ protected:
 
   virtual mozilla::ipc::IPCResult RecvPBrowserConstructor(PBrowserChild* aActor,
                                                           const TabId& aTabId,
+                                                          const TabId& aSameTabGroupAs,
                                                           const IPCTabContext& aContext,
                                                           const uint32_t& aChromeFlags,
                                                           const ContentParentId& aCpID,
                                                           const bool& aIsForBrowse);
 
-  virtual PBlobChild* AllocPBlobChild(const BlobConstructorParams& aParams);
+  virtual mozilla::ipc::PIPCBlobInputStreamChild*
+  AllocPIPCBlobInputStreamChild(const nsID& aID, const uint64_t& aSize);
 
-  virtual bool DeallocPBlobChild(PBlobChild* aActor);
+  virtual bool
+  DeallocPIPCBlobInputStreamChild(mozilla::ipc::PIPCBlobInputStreamChild* aActor);
 
-  virtual mozilla::ipc::PSendStreamChild* AllocPSendStreamChild();
+  virtual mozilla::ipc::PChildToParentStreamChild* AllocPChildToParentStreamChild();
 
-  virtual bool DeallocPSendStreamChild(mozilla::ipc::PSendStreamChild* aActor);
+  virtual bool
+  DeallocPChildToParentStreamChild(mozilla::ipc::PChildToParentStreamChild* aActor);
+
+  virtual mozilla::ipc::PParentToChildStreamChild* AllocPParentToChildStreamChild();
+
+  virtual bool
+  DeallocPParentToChildStreamChild(mozilla::ipc::PParentToChildStreamChild* aActor);
 
   virtual mozilla::ipc::PFileDescriptorSetChild*
   AllocPFileDescriptorSetChild(const mozilla::ipc::FileDescriptor& aFD);

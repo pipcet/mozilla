@@ -41,7 +41,7 @@
             break
         }
         if any {
-            Ok(Longhands {
+            Ok(expanded! {
                 outline_color: unwrap_or_initial!(outline_color, color),
                 outline_style: unwrap_or_initial!(outline_style, style),
                 outline_width: unwrap_or_initial!(outline_width, width),
@@ -67,32 +67,33 @@
     '-moz-outline-radius-%s' % corner
     for corner in ['topleft', 'topright', 'bottomright', 'bottomleft']
 )}" products="gecko" spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-outline-radius)">
-    use properties::shorthands;
+    use values::generics::rect::Rect;
+    use values::specified::border::BorderRadius;
+    use parser::Parse;
 
     pub fn parse_value(context: &ParserContext, input: &mut Parser) -> Result<Longhands, ()> {
-        // Re-use border-radius parsing.
-        shorthands::border_radius::parse_value(context, input).map(|longhands| {
-            Longhands {
-                % for corner in ["top_left", "top_right", "bottom_right", "bottom_left"]:
-                _moz_outline_radius_${corner.replace("_", "")}: longhands.border_${corner}_radius,
-                % endfor
-            }
+        let radii = try!(BorderRadius::parse(context, input));
+        Ok(expanded! {
+            _moz_outline_radius_topleft: radii.top_left,
+            _moz_outline_radius_topright: radii.top_right,
+            _moz_outline_radius_bottomright: radii.bottom_right,
+            _moz_outline_radius_bottomleft: radii.bottom_left,
         })
     }
 
-    // TODO: Border radius for the radius shorthand is not implemented correctly yet
     impl<'a> ToCss for LonghandsToSerialize<'a>  {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            try!(self._moz_outline_radius_topleft.to_css(dest));
-            try!(write!(dest, " "));
+            let LonghandsToSerialize {
+                _moz_outline_radius_topleft: ref tl,
+                _moz_outline_radius_topright: ref tr,
+                _moz_outline_radius_bottomright: ref br,
+                _moz_outline_radius_bottomleft: ref bl,
+            } = *self;
 
-            try!(self._moz_outline_radius_topright.to_css(dest));
-            try!(write!(dest, " "));
+            let widths = Rect::new(&tl.0.width, &tr.0.width, &br.0.width, &bl.0.width);
+            let heights = Rect::new(&tl.0.height, &tr.0.height, &br.0.height, &bl.0.height);
 
-            try!(self._moz_outline_radius_bottomright.to_css(dest));
-            try!(write!(dest, " "));
-
-            self._moz_outline_radius_bottomleft.to_css(dest)
+            BorderRadius::serialize_rects(widths, heights, dest)
         }
     }
 </%helpers:shorthand>

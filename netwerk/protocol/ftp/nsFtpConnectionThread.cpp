@@ -41,7 +41,7 @@
 #include "nsISocketTransportService.h"
 #include "nsIURI.h"
 #include "nsILoadInfo.h"
-#include "nsNullPrincipal.h"
+#include "NullPrincipal.h"
 #include "nsIAuthPrompt2.h"
 #include "nsIFTPChannelParentInternal.h"
 
@@ -946,10 +946,9 @@ nsFtpState::R_syst() {
             
             char16_t* ucs2Response = ToNewUnicode(mResponseMsg);
             const char16_t *formatStrings[1] = { ucs2Response };
-            NS_NAMED_LITERAL_STRING(name, "UnsupportedFTPServer");
 
             nsXPIDLString formattedString;
-            rv = bundle->FormatStringFromName(name.get(), formatStrings, 1,
+            rv = bundle->FormatStringFromName(u"UnsupportedFTPServer", formatStrings, 1,
                                               getter_Copies(formattedString));
             free(ucs2Response);
             if (NS_FAILED(rv))
@@ -2024,6 +2023,8 @@ nsFtpState::OnTransportStatus(nsITransport *transport, nsresult status,
         case NS_NET_STATUS_RESOLVED_HOST:
         case NS_NET_STATUS_CONNECTING_TO:
         case NS_NET_STATUS_CONNECTED_TO:
+        case NS_NET_STATUS_TLS_HANDSHAKE_STARTING:
+        case NS_NET_STATUS_TLS_HANDSHAKE_ENDED:
             break;
         default:
             return NS_OK;

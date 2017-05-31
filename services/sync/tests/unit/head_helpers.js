@@ -3,9 +3,8 @@
 
 /* import-globals-from head_appinfo.js */
 /* import-globals-from ../../../common/tests/unit/head_helpers.js */
-
-// From head_http_server.js (which also imports this file).
-/* global new_timestamp */
+/* import-globals-from head_errorhandler_common.js */
+/* import-globals-from head_http_server.js */
 
 // This file expects Service to be defined in the global scope when EHTestsCommon
 // is used (from service.js).
@@ -16,6 +15,8 @@ Cu.import("resource://testing-common/services/common/utils.js");
 Cu.import("resource://testing-common/PlacesTestUtils.jsm");
 Cu.import("resource://services-sync/util.js");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/PlacesUtils.jsm");
+Cu.import("resource://gre/modules/ObjectUtils.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "SyncPingSchema", function() {
   let ns = {};
@@ -346,26 +347,35 @@ function validate_all_future_pings() {
   telem.submit = assert_valid_ping;
 }
 
-function wait_for_ping(callback, allowErrorPings, getFullPing = false) {
+function wait_for_pings(expectedPings) {
   return new Promise(resolve => {
     let telem = get_sync_test_telemetry();
     let oldSubmit = telem.submit;
+    let pings = [];
     telem.submit = function(record) {
-      telem.submit = oldSubmit;
-      if (allowErrorPings) {
-        assert_valid_ping(record);
-      } else {
-        assert_success_ping(record);
-      }
-      if (getFullPing) {
-        resolve(record);
-      } else {
-        equal(record.syncs.length, 1);
-        resolve(record.syncs[0]);
+      pings.push(record);
+      if (pings.length == expectedPings) {
+        telem.submit = oldSubmit;
+        resolve(pings);
       }
     };
-    callback();
   });
+}
+
+async function wait_for_ping(callback, allowErrorPings, getFullPing = false) {
+  let pingsPromise = wait_for_pings(1);
+  callback();
+  let [record] = await pingsPromise;
+  if (allowErrorPings) {
+    assert_valid_ping(record);
+  } else {
+    assert_success_ping(record);
+  }
+  if (getFullPing) {
+    return record;
+  }
+  equal(record.syncs.length, 1);
+  return record.syncs[0];
 }
 
 // Short helper for wait_for_ping
@@ -485,6 +495,8 @@ Utils.getDefaultDeviceName = function() {
 };
 
 function registerRotaryEngine() {
+  let {RotaryEngine} =
+    Cu.import("resource://testing-common/services/sync/rotaryengine.js", {});
   Service.engineManager.clear();
 
   Service.engineManager.register(RotaryEngine);
@@ -492,4 +504,135 @@ function registerRotaryEngine() {
   engine.enabled = true;
 
   return { engine, tracker: engine._tracker };
+}
+
+// Set the validation prefs to attempt validation every time to avoid non-determinism.
+function enableValidationPrefs() {
+  Svc.Prefs.set("engine.bookmarks.validation.interval", 0);
+  Svc.Prefs.set("engine.bookmarks.validation.percentageChance", 100);
+  Svc.Prefs.set("engine.bookmarks.validation.maxRecords", -1);
+  Svc.Prefs.set("engine.bookmarks.validation.enabled", true);
+}
+
+function serverForEnginesWithKeys(users, engines, callback) {
+  // Generate and store a fake default key bundle to avoid resetting the client
+  // before the first sync.
+  let wbo = Service.collectionKeys.generateNewKeysWBO();
+  let modified = new_timestamp();
+  Service.collectionKeys.setContents(wbo.cleartext, modified);
+
+  let allEngines = [Service.clientsEngine].concat(engines);
+
+  let globalEngines = allEngines.reduce((entries, engine) => {
+    let { name, version, syncID } = engine;
+    entries[name] = { version, syncID };
+    return entries;
+  }, {});
+
+  let contents = allEngines.reduce((collections, engine) => {
+    collections[engine.name] = {};
+    return collections;
+  }, {
+    meta: {
+      global: {
+        syncID: Service.syncID,
+        storageVersion: STORAGE_VERSION,
+        engines: globalEngines,
+      },
+    },
+    crypto: {
+      keys: encryptPayload(wbo.cleartext),
+    },
+  });
+
+  return serverForUsers(users, contents, callback);
+}
+
+function serverForFoo(engine, callback) {
+  // The bookmarks engine *always* tracks changes, meaning we might try
+  // and sync due to the bookmarks we ourselves create! Worse, because we
+  // do an engine sync only, there's no locking - so we end up with multiple
+  // syncs running. Neuter that by making the threshold very large.
+  Service.scheduler.syncThreshold = 10000000;
+  return serverForEnginesWithKeys({"foo": "password"}, engine, callback);
+}
+
+// Places notifies history observers asynchronously, so `addVisits` might return
+// before the tracker receives the notification. This helper registers an
+// observer that resolves once the expected notification fires.
+async function promiseVisit(expectedType, expectedURI) {
+  return new Promise(resolve => {
+    function done(type, uri) {
+      if (uri.equals(expectedURI) && type == expectedType) {
+        PlacesUtils.history.removeObserver(observer);
+        resolve();
+      }
+    }
+    let observer = {
+      onVisit(uri) {
+        done("added", uri);
+      },
+      onBeginUpdateBatch() {},
+      onEndUpdateBatch() {},
+      onTitleChanged() {},
+      onFrecencyChanged() {},
+      onManyFrecenciesChanged() {},
+      onDeleteURI(uri) {
+        done("removed", uri);
+      },
+      onClearHistory() {},
+      onPageChanged() {},
+      onDeleteVisits() {},
+    };
+    PlacesUtils.history.addObserver(observer, false);
+  });
+}
+
+async function addVisit(suffix, referrer = null, transition = PlacesUtils.history.TRANSITION_LINK) {
+  let uriString = "http://getfirefox.com/" + suffix;
+  let uri = Utils.makeURI(uriString);
+  _("Adding visit for URI " + uriString);
+
+  let visitAddedPromise = promiseVisit("added", uri);
+  await PlacesTestUtils.addVisits({
+    uri,
+    visitDate: Date.now() * 1000,
+    transition,
+    referrer,
+  });
+  await visitAddedPromise;
+
+  return uri;
+}
+
+function bookmarkNodesToInfos(nodes) {
+  return nodes.map(node => {
+    let info = {
+      guid: node.guid,
+      index: node.index,
+    };
+    if (node.children) {
+      info.children = bookmarkNodesToInfos(node.children);
+    }
+    if (node.annos) {
+      let orphanAnno = node.annos.find(anno =>
+        anno.name == "sync/parent"
+      );
+      if (orphanAnno) {
+        info.requestedParent = orphanAnno.value;
+      }
+    }
+    return info;
+  });
+}
+
+async function assertBookmarksTreeMatches(rootGuid, expected, message) {
+  let root = await PlacesUtils.promiseBookmarksTree(rootGuid);
+  let actual = bookmarkNodesToInfos(root.children);
+
+  if (!ObjectUtils.deepEqual(actual, expected)) {
+    _(`Expected structure for ${rootGuid}`, JSON.stringify(expected));
+    _(`Actual structure for ${rootGuid}`, JSON.stringify(actual));
+    throw new Assert.constructor.AssertionError({ actual, expected, message });
+  }
 }

@@ -10,13 +10,17 @@
 #include "mozilla/EventForwards.h"
 #include "AnimationCommon.h"
 #include "mozilla/dom/Animation.h"
+#include "mozilla/Keyframe.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/TimeStamp.h"
 
 class nsIGlobalObject;
 class nsStyleContext;
+struct nsStyleDisplay;
+struct ServoComputedValues;
 
 namespace mozilla {
+struct ServoComputedValuesWithParent;
 namespace css {
 class Declaration;
 } /* namespace css */
@@ -26,6 +30,7 @@ class Promise;
 } /* namespace dom */
 
 enum class CSSPseudoElementType : uint8_t;
+struct NonOwningAnimationTarget;
 
 struct AnimationEventInfo {
   RefPtr<dom::Element> mElement;
@@ -321,6 +326,15 @@ public:
                         mozilla::dom::Element* aElement);
 
   /**
+   * This function does the same thing as the above UpdateAnimations()
+   * but with servo's computed values.
+   */
+  void UpdateAnimations(
+    mozilla::dom::Element* aElement,
+    mozilla::CSSPseudoElementType aPseudoType,
+    const mozilla::ServoComputedValuesWithParent& aServoValues);
+
+  /**
    * Add a pending event.
    */
   void QueueEvent(mozilla::AnimationEventInfo&& aEventInfo)
@@ -344,21 +358,48 @@ public:
   void SortEvents()      { mEventDispatcher.SortEvents(); }
   void ClearEventQueue() { mEventDispatcher.ClearEventQueue(); }
 
-  // Stop animations on the element. This method takes the real element
-  // rather than the element for the generated content for animations on
-  // ::before and ::after.
-  void StopAnimationsForElement(mozilla::dom::Element* aElement,
-                                mozilla::CSSPseudoElementType aPseudoType);
+  // Utility function to walk through |aIter| to find the Keyframe with
+  // matching offset and timing function but stopping as soon as the offset
+  // differs from |aOffset| (i.e. it assumes a sorted iterator).
+  //
+  // If a matching Keyframe is found,
+  //   Returns true and sets |aIndex| to the index of the matching Keyframe
+  //   within |aIter|.
+  //
+  // If no matching Keyframe is found,
+  //   Returns false and sets |aIndex| to the index in the iterator of the
+  //   first Keyframe with an offset differing to |aOffset| or, if the end
+  //   of the iterator is reached, sets |aIndex| to the index after the last
+  //   Keyframe.
+  template <class IterType, class TimingFunctionType>
+  static bool FindMatchingKeyframe(
+    IterType&& aIter,
+    double aOffset,
+    const TimingFunctionType& aTimingFunctionToMatch,
+    size_t& aIndex)
+  {
+    aIndex = 0;
+    for (mozilla::Keyframe& keyframe : aIter) {
+      if (keyframe.mOffset.value() != aOffset) {
+        break;
+      }
+      if (keyframe.mTimingFunction == aTimingFunctionToMatch) {
+        return true;
+      }
+      ++aIndex;
+    }
+    return false;
+  }
 
 protected:
   ~nsAnimationManager() override = default;
 
 private:
-
-  void BuildAnimations(nsStyleContext* aStyleContext,
-                       mozilla::dom::Element* aTarget,
-                       CSSAnimationCollection* aCollection,
-                       OwningCSSAnimationPtrArray& aAnimations);
+  template<class BuilderType>
+  void DoUpdateAnimations(
+    const mozilla::NonOwningAnimationTarget& aTarget,
+    const nsStyleDisplay& aStyleDisplay,
+    BuilderType& aBuilder);
 
   mozilla::DelayedEventDispatcher<mozilla::AnimationEventInfo> mEventDispatcher;
 };

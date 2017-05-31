@@ -93,6 +93,13 @@ typedef uint8_t nsHttpVersion;
 // interop problems with critical infrastructure
 #define NS_HTTP_BE_CONSERVATIVE      (1<<11)
 
+// Transactions with this flag should be processed first.
+#define NS_HTTP_URGENT_START         (1<<12)
+
+// A sticky connection of the transaction is explicitly allowed to be restarted
+// on ERROR_NET_RESET.
+#define NS_HTTP_CONNECTION_RESTARTABLE  (1<<13)
+
 //-----------------------------------------------------------------------------
 // some default values
 //-----------------------------------------------------------------------------
@@ -120,7 +127,7 @@ struct nsHttpAtom
 
 struct nsHttp
 {
-    static nsresult CreateAtomTable();
+    static MOZ_MUST_USE nsresult CreateAtomTable();
     static void DestroyAtomTable();
 
     // The mutex is valid any time the Atom Table is valid
@@ -143,6 +150,10 @@ struct nsHttp
         return IsValidToken(s.BeginReading(), s.EndReading());
     }
 
+    // Strip the leading or trailing HTTP whitespace per fetch spec section 2.2.
+    static void TrimHTTPWhitespace(const nsACString& aSource,
+                                   nsACString& aDest);
+
     // Returns true if the specified value is reasonable given the defintion
     // in RFC 2616 section 4.2.  Full strict validation is not performed
     // currently as it would require full parsing of the value.
@@ -164,12 +175,13 @@ struct nsHttp
     //
     // TODO(darin): Replace this with something generic.
     //
-    static bool ParseInt64(const char *input, const char **next,
-                             int64_t *result);
+    static MOZ_MUST_USE bool ParseInt64(const char *input, const char **next,
+                                        int64_t *result);
 
     // Variant on ParseInt64 that expects the input string to contain nothing
     // more than the value being parsed.
-    static inline bool ParseInt64(const char *input, int64_t *result) {
+    static inline MOZ_MUST_USE bool ParseInt64(const char *input,
+                                               int64_t *result) {
         const char *next;
         return ParseInt64(input, &next, result) && *next == '\0';
     }

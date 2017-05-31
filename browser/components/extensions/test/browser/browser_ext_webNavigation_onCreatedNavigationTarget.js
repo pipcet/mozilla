@@ -52,16 +52,8 @@ async function runTestCase({extension, openNavTarget, expectedWebNavProps}) {
   is(completedNavMsg.url, url, "Got the expected webNavigation.onCompleted url property");
 }
 
-async function clickContextMenuItem({pageElementSelector, contextMenuItemLabel}) {
-  const contentAreaContextMenu = await openContextMenu(pageElementSelector);
-  const item = contentAreaContextMenu.getElementsByAttribute("label", contextMenuItemLabel);
-  is(item.length, 1, `found contextMenu item for "${contextMenuItemLabel}"`);
-  item[0].click();
-  await closeContextMenu();
-}
-
-add_task(function* test_on_created_navigation_target_from_mouse_click() {
-  const tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
+add_task(async function test_on_created_navigation_target_from_mouse_click() {
+  const tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
 
   const extension = ExtensionTestUtils.loadExtension({
     background,
@@ -70,13 +62,13 @@ add_task(function* test_on_created_navigation_target_from_mouse_click() {
     },
   });
 
-  yield extension.startup();
+  await extension.startup();
 
-  const expectedSourceTab = yield extension.awaitMessage("expectedSourceTab");
+  const expectedSourceTab = await extension.awaitMessage("expectedSourceTab");
 
   info("Open link in a new tab using Ctrl-click");
 
-  yield runTestCase({
+  await runTestCase({
     extension,
     openNavTarget() {
       BrowserTestUtils.synthesizeMouseAtCenter("#test-create-new-tab-from-mouse-click",
@@ -92,7 +84,7 @@ add_task(function* test_on_created_navigation_target_from_mouse_click() {
 
   info("Open link in a new window using Shift-click");
 
-  yield runTestCase({
+  await runTestCase({
     extension,
     openNavTarget() {
       BrowserTestUtils.synthesizeMouseAtCenter("#test-create-new-window-from-mouse-click",
@@ -106,13 +98,29 @@ add_task(function* test_on_created_navigation_target_from_mouse_click() {
     },
   });
 
-  yield BrowserTestUtils.removeTab(tab);
+  info("Open link with target=\"_blank\" in a new tab using click");
 
-  yield extension.unload();
+  await runTestCase({
+    extension,
+    openNavTarget() {
+      BrowserTestUtils.synthesizeMouseAtCenter("#test-create-new-tab-from-targetblank-click",
+                                               {},
+                                               tab.linkedBrowser);
+    },
+    expectedWebNavProps: {
+      sourceTabId: expectedSourceTab.sourceTabId,
+      sourceFrameId: 0,
+      url: `${OPENED_PAGE}#new-tab-from-targetblank-click`,
+    },
+  });
+
+  await BrowserTestUtils.removeTab(tab);
+
+  await extension.unload();
 });
 
-add_task(function* test_on_created_navigation_target_from_context_menu() {
-  const tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
+add_task(async function test_on_created_navigation_target_from_mouse_click_subframe() {
+  const tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
 
   const extension = ExtensionTestUtils.loadExtension({
     background,
@@ -121,66 +129,13 @@ add_task(function* test_on_created_navigation_target_from_context_menu() {
     },
   });
 
-  yield extension.startup();
+  await extension.startup();
 
-  const expectedSourceTab = yield extension.awaitMessage("expectedSourceTab");
-
-  info("Open link in a new tab from the context menu");
-
-  yield runTestCase({
-    extension,
-    async openNavTarget() {
-      await clickContextMenuItem({
-        pageElementSelector: "#test-create-new-tab-from-context-menu",
-        contextMenuItemLabel: "Open Link in New Tab",
-      });
-    },
-    expectedWebNavProps: {
-      sourceTabId: expectedSourceTab.sourceTabId,
-      sourceFrameId: 0,
-      url: `${OPENED_PAGE}#new-tab-from-context-menu`,
-    },
-  });
-
-  info("Open link in a new window from the context menu");
-
-  yield runTestCase({
-    extension,
-    async openNavTarget() {
-      await clickContextMenuItem({
-        pageElementSelector: "#test-create-new-window-from-context-menu",
-        contextMenuItemLabel: "Open Link in New Window",
-      });
-    },
-    expectedWebNavProps: {
-      sourceTabId: expectedSourceTab.sourceTabId,
-      sourceFrameId: 0,
-      url: `${OPENED_PAGE}#new-window-from-context-menu`,
-    },
-  });
-
-  yield BrowserTestUtils.removeTab(tab);
-
-  yield extension.unload();
-});
-
-add_task(function* test_on_created_navigation_target_from_mouse_click_subframe() {
-  const tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
-
-  const extension = ExtensionTestUtils.loadExtension({
-    background,
-    manifest: {
-      permissions: ["webNavigation"],
-    },
-  });
-
-  yield extension.startup();
-
-  const expectedSourceTab = yield extension.awaitMessage("expectedSourceTab");
+  const expectedSourceTab = await extension.awaitMessage("expectedSourceTab");
 
   info("Open a subframe link in a new tab using Ctrl-click");
 
-  yield runTestCase({
+  await runTestCase({
     extension,
     openNavTarget() {
       BrowserTestUtils.synthesizeMouseAtCenter(function() {
@@ -199,7 +154,7 @@ add_task(function* test_on_created_navigation_target_from_mouse_click_subframe()
 
   info("Open a subframe link in a new window using Shift-click");
 
-  yield runTestCase({
+  await runTestCase({
     extension,
     openNavTarget() {
       BrowserTestUtils.synthesizeMouseAtCenter(function() {
@@ -216,70 +171,27 @@ add_task(function* test_on_created_navigation_target_from_mouse_click_subframe()
     },
   });
 
-  yield BrowserTestUtils.removeTab(tab);
+  info("Open a subframe link with target=\"_blank\" in a new tab using click");
 
-  yield extension.unload();
-});
-
-add_task(function* test_on_created_navigation_target_from_context_menu_subframe() {
-  const tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
-
-  const extension = ExtensionTestUtils.loadExtension({
-    background,
-    manifest: {
-      permissions: ["webNavigation"],
-    },
-  });
-
-  yield extension.startup();
-
-  const expectedSourceTab = yield extension.awaitMessage("expectedSourceTab");
-
-  info("Open a subframe link in a new tab from the context menu");
-
-  yield runTestCase({
+  await runTestCase({
     extension,
-    async openNavTarget() {
-      await clickContextMenuItem({
-        pageElementSelector: function() {
-          // This code runs as a framescript in the child process and it returns the
-          // target link in the subframe.
-          return this.content.frames[0] // eslint-disable-line mozilla/no-cpows-in-tests
-            .document.querySelector("#test-create-new-tab-from-context-menu-subframe");
-        },
-        contextMenuItemLabel: "Open Link in New Tab",
-      });
+    openNavTarget() {
+      BrowserTestUtils.synthesizeMouseAtCenter(function() {
+        // This code runs as a framescript in the child process and it returns the
+        // target link in the subframe.
+        return this.content.frames[0].document // eslint-disable-line mozilla/no-cpows-in-tests
+          .querySelector("#test-create-new-tab-from-targetblank-click-subframe");
+      }, {}, tab.linkedBrowser);
     },
     expectedWebNavProps: {
       sourceTabId: expectedSourceTab.sourceTabId,
       sourceFrameId: expectedSourceTab.sourceTabFrames[1].frameId,
-      url: `${OPENED_PAGE}#new-tab-from-context-menu-subframe`,
+      url: `${OPENED_PAGE}#new-tab-from-targetblank-click-subframe`,
     },
   });
 
-  info("Open a subframe link in a new window from the context menu");
+  await BrowserTestUtils.removeTab(tab);
 
-  yield runTestCase({
-    extension,
-    async openNavTarget() {
-      await clickContextMenuItem({
-        pageElementSelector: function() {
-          // This code runs as a framescript in the child process and it returns the
-          // target link in the subframe.
-          return this.content.frames[0] // eslint-disable-line mozilla/no-cpows-in-tests
-            .document.querySelector("#test-create-new-window-from-context-menu-subframe");
-        },
-        contextMenuItemLabel: "Open Link in New Window",
-      });
-    },
-    expectedWebNavProps: {
-      sourceTabId: expectedSourceTab.sourceTabId,
-      sourceFrameId: expectedSourceTab.sourceTabFrames[1].frameId,
-      url: `${OPENED_PAGE}#new-window-from-context-menu-subframe`,
-    },
-  });
-
-  yield BrowserTestUtils.removeTab(tab);
-
-  yield extension.unload();
+  await extension.unload();
 });
+

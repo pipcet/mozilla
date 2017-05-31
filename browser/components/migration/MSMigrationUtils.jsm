@@ -11,7 +11,6 @@ const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource:///modules/MigrationUtils.jsm");
 
 Cu.importGlobalProperties(["FileReader"]);
@@ -79,7 +78,7 @@ function CtypesKernelHelpers() {
 
     this._functions.FileTimeToSystemTime =
       this._libs.kernel32.declare("FileTimeToSystemTime",
-                                  ctypes.default_abi,
+                                  ctypes.winapi_abi,
                                   wintypes.BOOL,
                                   this._structs.FILETIME.ptr,
                                   this._structs.SYSTEMTIME.ptr);
@@ -364,25 +363,32 @@ Bookmarks.prototype = {
   },
 
   migrate: function B_migrate(aCallback) {
-    return Task.spawn(function* () {
+    return (async () => {
       // Import to the bookmarks menu.
       let folderGuid = PlacesUtils.bookmarks.menuGuid;
       if (!MigrationUtils.isStartupMigration) {
         folderGuid =
-          yield MigrationUtils.createImportedBookmarksFolder(this.importedAppLabel, folderGuid);
+          await MigrationUtils.createImportedBookmarksFolder(this.importedAppLabel, folderGuid);
       }
-      yield this._migrateFolder(this._favoritesFolder, folderGuid);
-    }.bind(this)).then(() => aCallback(true),
+      await this._migrateFolder(this._favoritesFolder, folderGuid);
+    })().then(() => aCallback(true),
                        e => { Cu.reportError(e); aCallback(false) });
   },
 
-  _migrateFolder: Task.async(function* (aSourceFolder, aDestFolderGuid) {
+  async _migrateFolder(aSourceFolder, aDestFolderGuid) {
+    let bookmarks = await this._getBookmarksInFolder(aSourceFolder);
+    if (bookmarks.length) {
+      await MigrationUtils.insertManyBookmarksWrapper(bookmarks, aDestFolderGuid);
+    }
+  },
+
+  async _getBookmarksInFolder(aSourceFolder) {
     // TODO (bug 741993): the favorites order is stored in the Registry, at
     // HCU\Software\Microsoft\Windows\CurrentVersion\Explorer\MenuOrder\Favorites
     // for IE, and in a similar location for Edge.
     // Until we support it, bookmarks are imported in alphabetical order.
     let entries = aSourceFolder.directoryEntries;
-    let succeeded = true;
+    let rv = [];
     while (entries.hasMoreElements()) {
       let entry = entries.getNext().QueryInterface(Ci.nsIFile);
       try {
@@ -391,27 +397,23 @@ Bookmarks.prototype = {
         // Don't use isSymlink(), since it would throw for invalid
         // lnk files pointing to URLs or to unresolvable paths.
         if (entry.path == entry.target && entry.isDirectory()) {
-          let folderGuid;
-          if (entry.leafName == this._toolbarFolderName &&
-              entry.parent.equals(this._favoritesFolder)) {
+          let isBookmarksFolder = entry.leafName == this._toolbarFolderName &&
+                                  entry.parent.equals(this._favoritesFolder);
+          if (isBookmarksFolder && entry.isReadable()) {
             // Import to the bookmarks toolbar.
-            folderGuid = PlacesUtils.bookmarks.toolbarGuid;
+            let folderGuid = PlacesUtils.bookmarks.toolbarGuid;
             if (!MigrationUtils.isStartupMigration) {
               folderGuid =
-                yield MigrationUtils.createImportedBookmarksFolder(this.importedAppLabel, folderGuid);
+                await MigrationUtils.createImportedBookmarksFolder(this.importedAppLabel, folderGuid);
             }
-          } else {
-            // Import to a new folder.
-            folderGuid = (yield MigrationUtils.insertBookmarkWrapper({
+            await this._migrateFolder(entry, folderGuid);
+          } else if (entry.isReadable()) {
+            let childBookmarks = await this._getBookmarksInFolder(entry);
+            rv.push({
               type: PlacesUtils.bookmarks.TYPE_FOLDER,
-              parentGuid: aDestFolderGuid,
-              title: entry.leafName
-            })).guid;
-          }
-
-          if (entry.isReadable()) {
-            // Recursively import the folder.
-            yield this._migrateFolder(entry, folderGuid);
+              title: entry.leafName,
+              children: childBookmarks,
+            });
           }
         } else {
           // Strip the .url extension, to both check this is a valid link file,
@@ -421,22 +423,15 @@ Bookmarks.prototype = {
             let fileHandler = Cc["@mozilla.org/network/protocol;1?name=file"].
                               getService(Ci.nsIFileProtocolHandler);
             let uri = fileHandler.readURLFile(entry);
-            let title = matches[1];
-
-            yield MigrationUtils.insertBookmarkWrapper({
-              parentGuid: aDestFolderGuid, url: uri, title
-            });
+            rv.push({url: uri, title: matches[1]});
           }
         }
       } catch (ex) {
         Components.utils.reportError("Unable to import " + this.importedAppLabel + " favorite (" + entry.leafName + "): " + ex);
-        succeeded = false;
       }
     }
-    if (!succeeded) {
-      throw new Error("Failed to import all bookmarks correctly.");
-    }
-  }),
+    return rv;
+  },
 
 };
 
@@ -472,8 +467,9 @@ Cookies.prototype = {
     if (!this.__cookiesFolder) {
       let cookiesFolder = Services.dirsvc.get("CookD", Ci.nsIFile);
       if (cookiesFolder.exists() && cookiesFolder.isReadable()) {
-        // Check if UAC is enabled.
-        if (Services.appinfo.QueryInterface(Ci.nsIWinAppHelper).userCanElevate) {
+        // In versions up to Windows 7, check if UAC is enabled.
+        if (AppConstants.isPlatformAndVersionAtMost("win", "6.1") &&
+            Services.appinfo.QueryInterface(Ci.nsIWinAppHelper).userCanElevate) {
           cookiesFolder.append("Low");
         }
         this.__cookiesFolder = cookiesFolder;
@@ -517,7 +513,7 @@ Cookies.prototype = {
         while (entries.hasMoreElements()) {
           let entry = entries.getNext().QueryInterface(Ci.nsIFile);
           // Skip eventual bogus entries.
-          if (!entry.isFile() || !/\.txt$/.test(entry.leafName))
+          if (!entry.isFile() || !/\.(cookie|txt)$/.test(entry.leafName))
             continue;
 
           this._readCookieFile(entry, function(aSuccess) {
@@ -541,7 +537,7 @@ Cookies.prototype = {
   },
 
   _readCookieFile(aFile, aCallback) {
-    File.createFromNsIFile(aFile).then(aFile => {
+    File.createFromNsIFile(aFile).then(file => {
       let fileReader = new FileReader();
       let onLoadEnd = () => {
         fileReader.removeEventListener("loadend", onLoadEnd);
@@ -563,7 +559,7 @@ Cookies.prototype = {
         }
       };
       fileReader.addEventListener("loadend", onLoadEnd);
-      fileReader.readAsText(aFile);
+      fileReader.readAsText(file);
     }, () => {
       aCallback(false);
     });

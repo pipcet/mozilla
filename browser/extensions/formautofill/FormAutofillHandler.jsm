@@ -53,52 +53,17 @@ FormAutofillHandler.prototype = {
   fieldDetails: null,
 
   /**
-   * Returns information from the form about fields that can be autofilled, and
-   * populates the fieldDetails array on this object accordingly.
-   *
-   * @returns {Array<Object>} Serializable data structure that can be sent to the user
-   *          interface, or null if the operation failed because the constraints
-   *          on the allowed fields were not honored.
+   * String of the filled profile's guid.
+   */
+  filledProfileGUID: null,
+
+  /**
+   * Set fieldDetails from the form about fields that can be autofilled.
    */
   collectFormFields() {
-    let autofillData = [];
-
-    for (let element of this.form.elements) {
-      // Exclude elements to which no autocomplete field has been assigned.
-      let info = FormAutofillHeuristics.getInfo(element);
-      if (!info) {
-        continue;
-      }
-
-      // Store the association between the field metadata and the element.
-      if (this.fieldDetails.some(f => f.section == info.section &&
-                                      f.addressType == info.addressType &&
-                                      f.contactType == info.contactType &&
-                                      f.fieldName == info.fieldName)) {
-        // A field with the same identifier already exists.
-        log.debug("Not collecting a field matching another with the same info:", info);
-        return null;
-      }
-
-      let inputFormat = {
-        section: info.section,
-        addressType: info.addressType,
-        contactType: info.contactType,
-        fieldName: info.fieldName,
-      };
-      // Clone the inputFormat for caching the fields and elements together
-      let formatWithElement = Object.assign({}, inputFormat);
-
-      inputFormat.index = autofillData.length;
-      autofillData.push(inputFormat);
-
-      formatWithElement.element = element;
-      this.fieldDetails.push(formatWithElement);
-    }
-
-    log.debug("Collected details on", autofillData.length, "fields");
-
-    return autofillData;
+    let fieldDetails = FormAutofillHeuristics.getFormInfo(this.form);
+    this.fieldDetails = fieldDetails ? fieldDetails : [];
+    log.debug("Collected details on", this.fieldDetails.length, "fields");
   },
 
   /**
@@ -112,21 +77,84 @@ FormAutofillHandler.prototype = {
    */
   autofillFormFields(profile, focusedInput) {
     log.debug("profile in autofillFormFields:", profile);
+
+    this.filledProfileGUID = profile.guid;
     for (let fieldDetail of this.fieldDetails) {
       // Avoid filling field value in the following cases:
       // 1. the focused input which is filled in FormFillController.
       // 2. a non-empty input field
       // 3. the invalid value set
 
-      if (fieldDetail.element === focusedInput ||
-          fieldDetail.element.value) {
+      let element = fieldDetail.elementWeakRef.get();
+      if (!element || element === focusedInput || element.value) {
         continue;
       }
 
       let value = profile[fieldDetail.fieldName];
-      if (value) {
-        fieldDetail.element.setUserInput(value);
+      // TODO: Bug 1364823 is implemeting the value filling of select element.
+      if (element instanceof Ci.nsIDOMHTMLInputElement && value) {
+        element.setUserInput(value);
       }
     }
+  },
+
+  /**
+   * Populates result to the preview layers with given profile.
+   *
+   * @param {Object} profile
+   *        A profile to be previewed with
+   */
+  previewFormFields(profile) {
+    log.debug("preview profile in autofillFormFields:", profile);
+    /*
+    for (let fieldDetail of this.fieldDetails) {
+      let value = profile[fieldDetail.fieldName] || "";
+
+      // Skip the fields that already has text entered
+      if (fieldDetail.element.value) {
+        continue;
+      }
+
+      // TODO: Set highlight style and preview text.
+    }
+    */
+  },
+
+  clearPreviewedFormFields() {
+    log.debug("clear previewed fields in:", this.form);
+    /*
+    for (let fieldDetail of this.fieldDetails) {
+      // TODO: Clear preview text
+
+      // We keep the highlight of all fields if this form has
+      // already been auto-filled with a profile.
+      if (this.filledProfileGUID == null) {
+        // TODO: Remove highlight style
+      }
+    }
+    */
+  },
+
+  /**
+   * Return the profile that is converted from fieldDetails and only non-empty fields
+   * are included.
+   *
+   * @returns {Object} The new profile that convert from details with trimmed result.
+   */
+  createProfile() {
+    let profile = {};
+
+    this.fieldDetails.forEach(detail => {
+      let element = detail.elementWeakRef.get();
+      // Remove the unnecessary spaces
+      let value = element && element.value.trim();
+      if (!value) {
+        return;
+      }
+
+      profile[detail.fieldName] = value;
+    });
+
+    return profile;
   },
 };

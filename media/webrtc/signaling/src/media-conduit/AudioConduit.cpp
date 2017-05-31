@@ -165,6 +165,24 @@ bool WebrtcAudioConduit::SetLocalCNAME(const char* cname)
   return !mPtrRTP->SetRTCP_CNAME(mChannel, temp);
 }
 
+bool WebrtcAudioConduit::GetSendPacketTypeStats(
+  webrtc::RtcpPacketTypeCounter* aPacketCounts)
+{
+  if (!mEngineTransmitting) {
+    return false;
+  }
+  return !mPtrVoERTP_RTCP->GetRTCPPacketTypeCounters(mChannel, *aPacketCounts);
+}
+
+bool WebrtcAudioConduit::GetRecvPacketTypeStats(
+  webrtc::RtcpPacketTypeCounter* aPacketCounts)
+{
+  if (!mEngineReceiving) {
+    return false;
+  }
+  return !mPtrRTP->GetRTCPPacketTypeCounters(mChannel, *aPacketCounts);
+}
+
 bool WebrtcAudioConduit::GetAVStats(int32_t* jitterBufferDelayMs,
                                     int32_t* playoutBufferDelayMs,
                                     int32_t* avSyncOffsetMs) {
@@ -205,10 +223,16 @@ bool WebrtcAudioConduit::GetRTCPReceiverReport(DOMHighResTimeStamp* timestamp,
                                                     fractionLost,
                                                     *cumulativeLost,
                                                     *rttMs);
-  if (result) {
-    *timestamp = NTPtoDOMHighResTimeStamp(ntpHigh, ntpLow);
+  // Note: rrtMs is 0 when unavailable before the VoE rework. It is likely
+  // that after the audio moves to the new Call API that rttMs will be -1
+  // when unavailable.
+  if (!result) {
+    return false;
   }
-  return result;
+  // Note: timestamp is not correct per the spec... should be time the rtcp
+  // was received (remote) or sent (local)
+  *timestamp = webrtc::Clock::GetRealTimeClock()->TimeInMilliseconds();
+  return true;
 }
 
 bool WebrtcAudioConduit::GetRTCPSenderReport(DOMHighResTimeStamp* timestamp,

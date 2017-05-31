@@ -24,9 +24,9 @@ class nsXBLBinding;
 
 namespace mozilla {
 class EventChainPreVisitor;
+struct URLExtraData;
 namespace dom {
 class ShadowRoot;
-struct CustomElementData;
 } // namespace dom
 namespace widget {
 struct IMEState;
@@ -560,6 +560,11 @@ public:
   virtual bool TextIsOnlyWhitespace() = 0;
 
   /**
+   * Thread-safe version of TextIsOnlyWhitespace.
+   */
+  virtual bool ThreadSafeTextIsOnlyWhitespace() const = 0;
+
+  /**
    * Method to see if the text node contains data that is useful
    * for a translation: i.e., it consists of more than just whitespace,
    * digits and punctuation.
@@ -734,22 +739,6 @@ public:
   // Helper method, which we leave public so that it's accessible from nsINode.
   enum FlattenedParentType { eNotForStyle, eForStyle };
   nsINode* GetFlattenedTreeParentNodeInternal(FlattenedParentType aType) const;
-
-  /**
-   * Gets the custom element data used by web components custom element.
-   * Custom element data is created at the first attempt to enqueue a callback.
-   *
-   * @return The custom element data or null if none.
-   */
-  virtual mozilla::dom::CustomElementData *GetCustomElementData() const = 0;
-
-  /**
-   * Sets the custom element data, ownership of the
-   * callback data is taken by this content.
-   *
-   * @param aCallbackData The custom element data.
-   */
-  virtual void SetCustomElementData(mozilla::dom::CustomElementData* aData) = 0;
 
   /**
    * API to check if this is a link that's traversed in response to user input
@@ -959,8 +948,22 @@ public:
     return false;
   }
 
+  // Returns true if this element is native-anonymous scrollbar content.
+  bool IsNativeScrollbarContent() const {
+    return IsNativeAnonymous() &&
+           IsAnyOfXULElements(nsGkAtoms::scrollbar,
+                              nsGkAtoms::resizer,
+                              nsGkAtoms::scrollcorner);
+  }
+
   // Overloaded from nsINode
   virtual already_AddRefed<nsIURI> GetBaseURI(bool aTryUseXHRDocBaseURI = false) const override;
+
+  // Returns base URI for style attribute.
+  already_AddRefed<nsIURI> GetBaseURIForStyleAttr() const;
+
+  // Returns the URL data for style attribute.
+  mozilla::URLExtraData* GetURLDataForStyleAttr() const;
 
   virtual nsresult GetEventTargetParent(
                      mozilla::EventChainPreVisitor& aVisitor) override;
@@ -975,6 +978,9 @@ protected:
    * called if HasID() is true.
    */
   nsIAtom* DoGetID() const;
+
+  // Returns base URI without considering xml:base.
+  inline nsIURI* GetBaseURIWithoutXMLBase() const;
 
 public:
 #ifdef DEBUG
@@ -1029,7 +1035,15 @@ inline nsIContent* nsINode::AsContent()
   {                                                                            \
     return aContent->_check ? static_cast<_class*>(aContent) : nullptr;        \
   }                                                                            \
+  static const _class* FromContent(const nsIContent* aContent)                 \
+  {                                                                            \
+    return aContent->_check ? static_cast<const _class*>(aContent) : nullptr;  \
+  }                                                                            \
   static _class* FromContentOrNull(nsIContent* aContent)                       \
+  {                                                                            \
+    return aContent ? FromContent(aContent) : nullptr;                         \
+  }                                                                            \
+  static const _class* FromContentOrNull(const nsIContent* aContent)           \
   {                                                                            \
     return aContent ? FromContent(aContent) : nullptr;                         \
   }

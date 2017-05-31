@@ -144,6 +144,10 @@ class ReftestArgumentsParser(argparse.ArgumentParser):
                           default=None,
                           help=argparse.SUPPRESS)
 
+        self.add_argument("--marionette-startup-timeout",
+                          default=None,
+                          help=argparse.SUPPRESS)
+
         self.add_argument("--setenv",
                           action="append",
                           type=str,
@@ -448,14 +452,6 @@ class RemoteArgumentsParser(ReftestArgumentsParser):
                           dest="pidFile",
                           default="",
                           help="name of the pidfile to generate")
-
-        self.add_argument("--dm_trans",
-                          action="store",
-                          type=str,
-                          dest="dm_trans",
-                          default="sut",
-                          help="the transport to use to communicate with device: "
-                               "[adb|sut]; default=sut")
 
         self.add_argument("--remoteTestRoot",
                           action="store",

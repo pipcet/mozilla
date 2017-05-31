@@ -24,7 +24,9 @@
 
 #ifdef XP_WIN
 #include <process.h>
+#include <shobjidl.h>
 #include "mozilla/ipc/WindowsMessageLoop.h"
+#include "mozilla/TlsAllocationTracker.h"
 #endif
 
 #include "nsAppDirectoryServiceDefs.h"
@@ -37,6 +39,7 @@
 #include "nsJSUtils.h"
 #include "nsWidgetsCID.h"
 #include "nsXREDirProvider.h"
+#include "ThreadAnnotation.h"
 
 #include "mozilla/Omnijar.h"
 #if defined(XP_MACOSX)
@@ -52,7 +55,10 @@
 #include "chrome/common/child_process.h"
 #if defined(MOZ_WIDGET_ANDROID)
 #include "chrome/common/ipc_channel.h"
+#include "mozilla/jni/Utils.h"
 #endif //  defined(MOZ_WIDGET_ANDROID)
+
+#include "mozilla/AbstractThread.h"
 
 #include "mozilla/ipc/BrowserProcessSubThread.h"
 #include "mozilla/ipc/GeckoChildProcessHost.h"
@@ -133,10 +139,6 @@ using mozilla::ipc::XPCShellEnvironment;
 using mozilla::startup::sChildProcessType;
 
 static NS_DEFINE_CID(kAppShellCID, NS_APPSHELL_CID);
-
-#ifdef XP_WIN
-static const wchar_t kShellLibraryName[] =  L"shell32.dll";
-#endif
 
 nsresult
 XRE_LockProfileDirectory(nsIFile* aDirectory,
@@ -239,8 +241,9 @@ GeckoProcessType sChildProcessType = GeckoProcessType_Default;
 
 #if defined(MOZ_WIDGET_ANDROID)
 void
-XRE_SetAndroidChildFds (int crashFd, int ipcFd)
+XRE_SetAndroidChildFds (JNIEnv* env, int crashFd, int ipcFd)
 {
+  mozilla::jni::SetGeckoThreadEnv(env);
 #if defined(MOZ_CRASHREPORTER)
   CrashReporter::SetNotificationPipeForChild(crashFd);
 #endif // defined(MOZ_CRASHREPORTER)
@@ -296,26 +299,9 @@ XRE_SetRemoteExceptionHandler(const char* aPipe/*= 0*/)
 void
 SetTaskbarGroupId(const nsString& aId)
 {
-    typedef HRESULT (WINAPI * SetCurrentProcessExplicitAppUserModelIDPtr)(PCWSTR AppID);
-
-    SetCurrentProcessExplicitAppUserModelIDPtr funcAppUserModelID = nullptr;
-
-    HMODULE hDLL = ::LoadLibraryW(kShellLibraryName);
-
-    funcAppUserModelID = (SetCurrentProcessExplicitAppUserModelIDPtr)
-                          GetProcAddress(hDLL, "SetCurrentProcessExplicitAppUserModelID");
-
-    if (!funcAppUserModelID) {
-        ::FreeLibrary(hDLL);
-        return;
-    }
-
-    if (FAILED(funcAppUserModelID(aId.get()))) {
+    if (FAILED(SetCurrentProcessExplicitAppUserModelID(aId.get()))) {
         NS_WARNING("SetCurrentProcessExplicitAppUserModelID failed for child process.");
     }
-
-    if (hDLL)
-        ::FreeLibrary(hDLL);
 }
 #endif
 
@@ -334,6 +320,30 @@ AddContentSandboxLevelAnnotation()
 }
 #endif /* MOZ_CONTENT_SANDBOX && !MOZ_WIDGET_GONK */
 #endif /* MOZ_CRASHREPORTER */
+
+namespace {
+
+int GetDebugChildPauseTime() {
+  auto pauseStr = PR_GetEnv("MOZ_DEBUG_CHILD_PAUSE");
+  if (pauseStr && *pauseStr) {
+    int pause = atoi(pauseStr);
+    if (pause != 1) { // must be !=1 since =1 enables the default pause time
+#if defined(OS_WIN)
+      pause *= 1000; // convert to ms
+#endif
+      return pause;
+    }
+  }
+#ifdef OS_POSIX
+  return 30; // seconds
+#elif defined(OS_WIN)
+  return 10000; // milliseconds
+#else
+  return 0;
+#endif
+}
+
+} // namespace
 
 nsresult
 XRE_InitChildProcess(int aArgc,
@@ -356,6 +366,14 @@ XRE_InitChildProcess(int aArgc,
 #endif
 
 #if defined(XP_WIN)
+#ifndef DEBUG
+  // XXX Bug 1320134: added for diagnosing the crashes because we're running out
+  // of TLS indices on Windows. Remove after the root cause is found.
+  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+    mozilla::InitTlsAllocationTracker();
+  }
+#endif
+
   // From the --attach-console support in nsNativeAppSupportWin.cpp, but
   // here we are a content child process, so we always attempt to attach
   // to the parent's (ie, the browser's) console.
@@ -403,6 +421,10 @@ XRE_InitChildProcess(int aArgc,
 
   PROFILER_LABEL("Startup", "XRE_InitChildProcess",
     js::ProfileEntry::Category::OTHER);
+
+  // Ensure AbstractThread is minimally setup, so async IPC messages
+  // work properly.
+  AbstractThread::InitTLS();
 
   // Complete 'task_t' exchange for Mac OS X. This structure has the same size
   // regardless of architecture so we don't have any cross-arch issues here.
@@ -506,6 +528,9 @@ XRE_InitChildProcess(int aArgc,
 #  else
 #    error "OOP crash reporting unsupported on this platform"
 #  endif
+
+  // For Init/Shutdown thread name annotations in the crash reporter.
+  CrashReporter::InitThreadAnnotationRAII annotation;
 #endif // if defined(MOZ_CRASHREPORTER)
 
   gArgv = aArgv;
@@ -532,7 +557,7 @@ XRE_InitChildProcess(int aArgc,
 #endif
     printf_stderr("\n\nCHILDCHILDCHILDCHILD\n  debug me @ %d\n\n",
                   base::GetCurrentProcId());
-    sleep(30);
+    sleep(GetDebugChildPauseTime());
   }
 #elif defined(OS_WIN)
   if (PR_GetEnv("MOZ_DEBUG_CHILD_PROCESS")) {
@@ -542,7 +567,7 @@ XRE_InitChildProcess(int aArgc,
   } else if (PR_GetEnv("MOZ_DEBUG_CHILD_PAUSE")) {
     printf_stderr("\n\nCHILDCHILDCHILDCHILD\n  debug me @ %d\n\n",
                   base::GetCurrentProcId());
-    ::Sleep(10000);
+    ::Sleep(GetDebugChildPauseTime());
   }
 #endif
 
@@ -572,7 +597,7 @@ XRE_InitChildProcess(int aArgc,
       nsString appId;
       appId.AssignWithConversion(nsDependentCString(appModelUserId));
       // The version string is encased in quotes
-      appId.Trim(NS_LITERAL_CSTRING("\"").get());
+      appId.Trim("\"");
       // Set the id
       SetTaskbarGroupId(appId);
     }
@@ -695,6 +720,14 @@ XRE_InitChildProcess(int aArgc,
     }
   }
 
+#if defined(XP_WIN) && !defined(DEBUG)
+  // XXX Bug 1320134: added for diagnosing the crashes because we're running out
+  // of TLS indices on Windows. Remove after the root cause is found.
+  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+    mozilla::ShutdownTlsAllocationTracker();
+  }
+#endif
+
   Telemetry::DestroyStatisticsRecorder();
   return XRE_DeinitCommandLine();
 }
@@ -746,6 +779,14 @@ XRE_InitParentProcess(int aArgc,
   NS_ENSURE_ARG_MIN(aArgc, 1);
   NS_ENSURE_ARG_POINTER(aArgv);
   NS_ENSURE_ARG_POINTER(aArgv[0]);
+
+  // Set main thread before we initialize the profiler
+  NS_SetMainThread();
+
+  mozilla::LogModule::Init();
+
+  char aLocal;
+  GeckoProfilerInitRAII profiler(&aLocal);
 
   ScopedXREEmbed embed;
 

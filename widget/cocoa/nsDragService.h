@@ -11,11 +11,12 @@
 
 #include <Cocoa/Cocoa.h>
 
-extern NSString* const kWildcardPboardType;
-extern NSString* const kCorePboardType_url;
-extern NSString* const kCorePboardType_urld;
-extern NSString* const kCorePboardType_urln;
-extern NSString* const kCustomTypesPboardType;
+extern NSString* const kPublicUrlPboardType;
+extern NSString* const kPublicUrlNamePboardType;
+extern NSString* const kUrlsWithTitlesPboardType;
+extern NSString* const kMozWildcardPboardType;
+extern NSString* const kMozCustomTypesPboardType;
+extern NSString* const kMozFileUrlsPboardType;
 
 class nsDragService : public nsBaseDragService
 {
@@ -27,7 +28,7 @@ public:
                                          nsIScriptableRegion* aRegion,
                                          uint32_t aActionType);
   // nsIDragService
-  NS_IMETHOD EndDragSession(bool aDoneDrag);
+  NS_IMETHOD EndDragSession(bool aDoneDrag, uint32_t aKeyModifiers);
   NS_IMETHOD UpdateDragImage(nsIDOMNode* aImage, int32_t aImageX, int32_t aImageY);
 
   // nsIDragSession

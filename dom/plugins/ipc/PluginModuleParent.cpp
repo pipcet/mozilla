@@ -30,8 +30,11 @@
 #include "nsNPAPIPlugin.h"
 #include "nsPrintfCString.h"
 #include "prsystem.h"
+#include "prclist.h"
 #include "PluginQuirks.h"
+#include "gfxPlatform.h"
 #include "GeckoProfiler.h"
+#include "ProfilerParent.h"
 #include "nsPluginTags.h"
 #include "nsUnicharUtils.h"
 #include "mozilla/layers/TextureClientRecycleAllocator.h"
@@ -41,11 +44,6 @@
 #include "mozilla/widget/AudioSession.h"
 #include "PluginHangUIParent.h"
 #include "PluginUtilsWin.h"
-#endif
-
-#ifdef MOZ_GECKO_PROFILER
-#include "nsIProfiler.h"
-#include "nsIProfileSaveEvent.h"
 #endif
 
 #ifdef MOZ_WIDGET_GTK
@@ -153,7 +151,8 @@ class mozilla::plugins::FinishInjectorInitTask : public mozilla::CancelableRunna
 {
 public:
     FinishInjectorInitTask()
-        : mMutex("FlashInjectorInitTask::mMutex")
+        : CancelableRunnable("FinishInjectorInitTask")
+        , mMutex("FlashInjectorInitTask::mMutex")
         , mParent(nullptr)
         , mMainThreadMsgLoop(MessageLoop::current())
     {
@@ -634,19 +633,7 @@ PluginModuleChromeParent::OnProcessLaunched(const bool aSucceeded)
     }
 
 #ifdef MOZ_GECKO_PROFILER
-    nsCOMPtr<nsIProfiler> profiler(do_GetService("@mozilla.org/tools/profiler;1"));
-    bool profilerActive = false;
-    DebugOnly<nsresult> rv = profiler->IsActive(&profilerActive);
-    MOZ_ASSERT(NS_SUCCEEDED(rv));
-    if (profilerActive) {
-        nsCOMPtr<nsIProfilerStartParams> currentProfilerParams;
-        rv = profiler->GetStartParams(getter_AddRefs(currentProfilerParams));
-        MOZ_ASSERT(NS_SUCCEEDED(rv));
-
-        mIsProfilerActive = true;
-
-        StartProfiler(currentProfilerParams);
-    }
+    Unused << SendInitProfiler(ProfilerParent::CreateForProcess(OtherPid()));
 #endif
 }
 
@@ -772,18 +759,11 @@ PluginModuleChromeParent::PluginModuleChromeParent(const char* aFilePath,
     , mAsyncInitRv(NS_ERROR_NOT_INITIALIZED)
     , mAsyncInitError(NPERR_NO_ERROR)
     , mContentParent(nullptr)
-#ifdef MOZ_GECKO_PROFILER
-    , mIsProfilerActive(false)
-#endif
 {
     NS_ASSERTION(mSubprocess, "Out of memory!");
     sInstantiated = true;
     mSandboxLevel = aSandboxLevel;
     mRunID = GeckoChildProcessHost::GetUniqueID();
-
-#ifdef MOZ_GECKO_PROFILER
-    InitPluginProfiling();
-#endif
 
     mozilla::HangMonitor::RegisterAnnotator(*this);
 }
@@ -793,10 +773,6 @@ PluginModuleChromeParent::~PluginModuleChromeParent()
     if (!OkToCleanup()) {
         MOZ_CRASH("unsafe destruction");
     }
-
-#ifdef MOZ_GECKO_PROFILER
-    ShutdownPluginProfiling();
-#endif
 
 #ifdef XP_WIN
     // If we registered for audio notifications, stop.
@@ -1226,13 +1202,9 @@ PluginModuleChromeParent::TakeFullMinidump(base::ProcessId aContentPid,
     // hangs we take this earlier (see ProcessHangMonitor) from a background
     // thread. We do this before we message the main thread about the hang
     // since the posted message will trash our browser stack state.
-    bool exists;
     nsCOMPtr<nsIFile> browserDumpFile;
-    if (!aBrowserDumpId.IsEmpty() &&
-        CrashReporter::GetMinidumpForID(aBrowserDumpId, getter_AddRefs(browserDumpFile)) &&
-        browserDumpFile &&
-        NS_SUCCEEDED(browserDumpFile->Exists(&exists)) && exists)
-    {
+    if (CrashReporter::GetMinidumpForID(aBrowserDumpId,
+                                        getter_AddRefs(browserDumpFile))) {
         // We have a single browser report, generate a new plugin process parent
         // report and pair it up with the browser report handed in.
         reportsReady = mCrashReporter->GenerateMinidumpAndPair(
@@ -1264,8 +1236,7 @@ PluginModuleChromeParent::TakeFullMinidump(base::ProcessId aContentPid,
                  NS_ConvertUTF16toUTF8(aDumpId).get()));
         nsAutoCString additionalDumps("browser");
         nsCOMPtr<nsIFile> pluginDumpFile;
-        if (GetMinidumpForID(aDumpId, getter_AddRefs(pluginDumpFile)) &&
-            pluginDumpFile) {
+        if (GetMinidumpForID(aDumpId, getter_AddRefs(pluginDumpFile))) {
 #ifdef MOZ_CRASHREPORTER_INJECTOR
             // If we have handles to the flash sandbox processes on Windows,
             // include those minidumps as well.
@@ -2800,7 +2771,8 @@ PluginModuleParent::NPP_NewInternal(NPMIMEType pluginType, NPP instance,
         // For all builds that use async rendering force use of the accelerated
         // direct path for flash objects that have wmode=window or no wmode
         // specified.
-        if (supportsAsyncRender && supportsForceDirect) {
+        if (supportsAsyncRender && supportsForceDirect &&
+            gfxWindowsPlatform::GetPlatform()->SupportsPluginDirectDXGIDrawing()) {
             ForceDirect(names, values);
         }
 #endif
@@ -3282,134 +3254,6 @@ PluginModuleChromeParent::OnCrash(DWORD processID)
 
 #endif // MOZ_CRASHREPORTER_INJECTOR
 
-#ifdef MOZ_GECKO_PROFILER
-class PluginProfilerObserver final : public nsIObserver,
-                                     public nsSupportsWeakReference
-{
-public:
-    NS_DECL_ISUPPORTS
-    NS_DECL_NSIOBSERVER
-
-    explicit PluginProfilerObserver(PluginModuleChromeParent* pmp)
-      : mPmp(pmp)
-    {}
-
-private:
-    ~PluginProfilerObserver() {}
-    PluginModuleChromeParent* mPmp;
-};
-
-NS_IMPL_ISUPPORTS(PluginProfilerObserver, nsIObserver, nsISupportsWeakReference)
-
-NS_IMETHODIMP
-PluginProfilerObserver::Observe(nsISupports *aSubject,
-                                const char *aTopic,
-                                const char16_t *aData)
-{
-    if (!strcmp(aTopic, "profiler-started")) {
-        nsCOMPtr<nsIProfilerStartParams> params(do_QueryInterface(aSubject));
-        mPmp->StartProfiler(params);
-    } else if (!strcmp(aTopic, "profiler-stopped")) {
-        mPmp->StopProfiler();
-    } else if (!strcmp(aTopic, "profiler-subprocess-gather")) {
-        mPmp->GatherAsyncProfile();
-    } else if (!strcmp(aTopic, "profiler-subprocess")) {
-        nsCOMPtr<nsIProfileSaveEvent> pse = do_QueryInterface(aSubject);
-        mPmp->GatheredAsyncProfile(pse);
-    }
-    return NS_OK;
-}
-
-void
-PluginModuleChromeParent::InitPluginProfiling()
-{
-    nsCOMPtr<nsIObserverService> observerService = mozilla::services::GetObserverService();
-    if (observerService) {
-        mProfilerObserver = new PluginProfilerObserver(this);
-        observerService->AddObserver(mProfilerObserver, "profiler-started", false);
-        observerService->AddObserver(mProfilerObserver, "profiler-stopped", false);
-        observerService->AddObserver(mProfilerObserver, "profiler-subprocess-gather", false);
-        observerService->AddObserver(mProfilerObserver, "profiler-subprocess", false);
-    }
-}
-
-void
-PluginModuleChromeParent::ShutdownPluginProfiling()
-{
-    nsCOMPtr<nsIObserverService> observerService = mozilla::services::GetObserverService();
-    if (observerService) {
-        observerService->RemoveObserver(mProfilerObserver, "profiler-started");
-        observerService->RemoveObserver(mProfilerObserver, "profiler-stopped");
-        observerService->RemoveObserver(mProfilerObserver, "profiler-subprocess-gather");
-        observerService->RemoveObserver(mProfilerObserver, "profiler-subprocess");
-    }
-}
-
-void
-PluginModuleChromeParent::StartProfiler(nsIProfilerStartParams* aParams)
-{
-    if (NS_WARN_IF(!aParams)) {
-        return;
-    }
-
-    ProfilerInitParams ipcParams;
-
-    ipcParams.enabled() = true;
-    aParams->GetEntries(&ipcParams.entries());
-    aParams->GetInterval(&ipcParams.interval());
-    ipcParams.features() = aParams->GetFeatures();
-    ipcParams.threadFilters() = aParams->GetThreadFilterNames();
-
-    Unused << SendStartProfiler(ipcParams);
-
-    nsCOMPtr<nsIProfiler> profiler(do_GetService("@mozilla.org/tools/profiler;1"));
-    if (NS_WARN_IF(!profiler)) {
-        return;
-    }
-    mIsProfilerActive = true;
-}
-
-void
-PluginModuleChromeParent::StopProfiler()
-{
-    mIsProfilerActive = false;
-    Unused << SendStopProfiler();
-}
-
-void
-PluginModuleChromeParent::GatherAsyncProfile()
-{
-    if (NS_WARN_IF(!mIsProfilerActive)) {
-        return;
-    }
-    profiler_will_gather_OOP_profile();
-    Unused << SendGatherProfile();
-}
-
-void
-PluginModuleChromeParent::GatheredAsyncProfile(nsIProfileSaveEvent* aSaveEvent)
-{
-    if (aSaveEvent && !mProfile.IsEmpty()) {
-        aSaveEvent->AddSubProfile(mProfile.get());
-        mProfile.Truncate();
-    }
-}
-#endif // MOZ_GECKO_PROFILER
-
-mozilla::ipc::IPCResult
-PluginModuleChromeParent::RecvProfile(const nsCString& aProfile)
-{
-#ifdef MOZ_GECKO_PROFILER
-    if (NS_WARN_IF(!mIsProfilerActive)) {
-        return IPC_OK();
-    }
-
-    mProfile = aProfile;
-    profiler_gathered_OOP_profile();
-#endif
-    return IPC_OK();
-}
-
 mozilla::ipc::IPCResult
 PluginModuleParent::AnswerGetKeyState(const int32_t& aVirtKey, int16_t* aRet)
 {
@@ -3491,5 +3335,17 @@ PluginModuleChromeParent::AnswerGetFileName(const GetFileNameFunc& aFunc,
     MOZ_ASSERT_UNREACHABLE("GetFileName IPC message is only available on "
                            "Windows builds with sandbox.");
     return IPC_FAIL_NO_REASON(this);
+#endif
+}
+
+mozilla::ipc::IPCResult
+PluginModuleChromeParent::AnswerSetCursorPos(const int &x, const int &y,
+                                             bool* aResult)
+{
+#if defined(XP_WIN)
+    *aResult = ::SetCursorPos(x, y);
+    return IPC_OK();
+#else
+    return PluginModuleParent::AnswerSetCursorPos(x, y, aResult);
 #endif
 }

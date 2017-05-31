@@ -14,8 +14,8 @@ use std::ascii::AsciiExt;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::Arc;
-use style_traits::ToCss;
+use style_traits::{HasViewportPercentage, ToCss};
+use stylearc::Arc;
 
 /// A custom property name is just an `Atom`.
 ///
@@ -49,7 +49,7 @@ pub struct SpecifiedValue {
     references: HashSet<Name>,
 }
 
-impl ::values::HasViewportPercentage for SpecifiedValue {
+impl HasViewportPercentage for SpecifiedValue {
     fn has_viewport_percentage(&self) -> bool {
         panic!("has_viewport_percentage called before resolving!");
     }
@@ -329,7 +329,7 @@ pub fn cascade<'a>(custom_properties: &mut Option<HashMap<&'a Name, BorrowedSpec
                    inherited: &'a Option<Arc<HashMap<Name, ComputedValue>>>,
                    seen: &mut HashSet<&'a Name>,
                    name: &'a Name,
-                   specified_value: &'a DeclaredValue<Box<SpecifiedValue>>) {
+                   specified_value: DeclaredValue<'a, Box<SpecifiedValue>>) {
     let was_already_present = !seen.insert(name);
     if was_already_present {
         return;
@@ -352,7 +352,7 @@ pub fn cascade<'a>(custom_properties: &mut Option<HashMap<&'a Name, BorrowedSpec
             custom_properties.as_mut().unwrap()
         }
     };
-    match *specified_value {
+    match specified_value {
         DeclaredValue::Value(ref specified_value) => {
             map.insert(name, BorrowedSpecifiedValue {
                 css: &specified_value.css,

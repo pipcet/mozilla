@@ -32,14 +32,11 @@ public:
                                                    const IPC::Principal& aPrincipal,
                                                    const ClonedMessageData& aData) override;
 
-  virtual PBlobChild*
-  SendPBlobConstructor(PBlobChild* actor,
-                       const BlobConstructorParams& aParams) override;
-
   jsipc::CPOWManager* GetCPOWManager() override;
 
   virtual bool SendPBrowserConstructor(PBrowserChild* aActor,
                                        const TabId& aTabId,
+                                       const TabId& aSameTabGroupAs,
                                        const IPCTabContext& aContext,
                                        const uint32_t& aChromeFlags,
                                        const ContentParentId& aCpID,
@@ -48,8 +45,15 @@ public:
   virtual mozilla::ipc::PFileDescriptorSetChild*
   SendPFileDescriptorSetConstructor(const mozilla::ipc::FileDescriptor&) override;
 
-  virtual mozilla::ipc::PSendStreamChild*
-  SendPSendStreamConstructor(mozilla::ipc::PSendStreamChild*) override;
+  virtual mozilla::ipc::PChildToParentStreamChild*
+  SendPChildToParentStreamConstructor(mozilla::ipc::PChildToParentStreamChild*) override;
+
+  virtual mozilla::ipc::IPCResult RecvActivate(PBrowserChild* aTab) override;
+
+  virtual mozilla::ipc::IPCResult RecvDeactivate(PBrowserChild* aTab) override;
+
+  virtual mozilla::ipc::IPCResult RecvParentActivated(PBrowserChild* aTab,
+                                                      const bool& aActivated) override;
 
   FORWARD_SHMEM_ALLOCATOR_TO(PContentBridgeChild)
 
@@ -57,6 +61,7 @@ protected:
   virtual ~ContentBridgeChild();
 
   virtual PBrowserChild* AllocPBrowserChild(const TabId& aTabId,
+                                            const TabId& aSameTabGroupAs,
                                             const IPCTabContext& aContext,
                                             const uint32_t& aChromeFlags,
                                             const ContentParentId& aCpID,
@@ -64,6 +69,7 @@ protected:
   virtual bool DeallocPBrowserChild(PBrowserChild*) override;
   virtual mozilla::ipc::IPCResult RecvPBrowserConstructor(PBrowserChild* aCctor,
                                                           const TabId& aTabId,
+                                                          const TabId& aSameTabGroupAs,
                                                           const IPCTabContext& aContext,
                                                           const uint32_t& aChromeFlags,
                                                           const ContentParentId& aCpID,
@@ -72,13 +78,23 @@ protected:
   virtual mozilla::jsipc::PJavaScriptChild* AllocPJavaScriptChild() override;
   virtual bool DeallocPJavaScriptChild(mozilla::jsipc::PJavaScriptChild*) override;
 
-  virtual PBlobChild* AllocPBlobChild(const BlobConstructorParams& aParams) override;
-  virtual bool DeallocPBlobChild(PBlobChild*) override;
-
-  virtual mozilla::ipc::PSendStreamChild* AllocPSendStreamChild() override;
+  virtual PIPCBlobInputStreamChild*
+  AllocPIPCBlobInputStreamChild(const nsID& aID,
+                                const uint64_t& aSize) override;
 
   virtual bool
-  DeallocPSendStreamChild(mozilla::ipc::PSendStreamChild* aActor) override;
+  DeallocPIPCBlobInputStreamChild(PIPCBlobInputStreamChild*) override;
+
+  virtual mozilla::ipc::PChildToParentStreamChild*
+  AllocPChildToParentStreamChild() override;
+
+  virtual bool
+  DeallocPChildToParentStreamChild(mozilla::ipc::PChildToParentStreamChild* aActor) override;
+
+  virtual PParentToChildStreamChild* AllocPParentToChildStreamChild() override;
+
+  virtual bool
+  DeallocPParentToChildStreamChild(PParentToChildStreamChild* aActor) override;
 
   virtual PFileDescriptorSetChild*
   AllocPFileDescriptorSetChild(const mozilla::ipc::FileDescriptor& aFD) override;

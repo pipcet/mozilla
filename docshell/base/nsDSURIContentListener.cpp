@@ -22,6 +22,7 @@
 #include "nsIScriptError.h"
 #include "nsDocShellLoadTypes.h"
 #include "nsIMultiPartChannel.h"
+#include "nsContentUtils.h"
 
 using namespace mozilla;
 
@@ -428,8 +429,8 @@ nsDSURIContentListener::CheckFrameOptions(nsIRequest* aRequest)
   }
 
   nsAutoCString xfoHeaderCValue;
-  httpChannel->GetResponseHeader(NS_LITERAL_CSTRING("X-Frame-Options"),
-                                 xfoHeaderCValue);
+  Unused << httpChannel->GetResponseHeader(NS_LITERAL_CSTRING("X-Frame-Options"),
+                                           xfoHeaderCValue);
   NS_ConvertUTF8toUTF16 xfoHeaderValue(xfoHeaderCValue);
 
   // if no header value, there's nothing to do.
@@ -448,8 +449,13 @@ nsDSURIContentListener::CheckFrameOptions(nsIRequest* aRequest)
       if (mDocShell) {
         nsCOMPtr<nsIWebNavigation> webNav(do_QueryObject(mDocShell));
         if (webNav) {
+          nsCOMPtr<nsILoadInfo> loadInfo = httpChannel->GetLoadInfo();
+          nsCOMPtr<nsIPrincipal> triggeringPrincipal = loadInfo
+            ? loadInfo->TriggeringPrincipal()
+            : nsContentUtils::GetSystemPrincipal();
           webNav->LoadURI(u"about:blank",
-                          0, nullptr, nullptr, nullptr);
+                          0, nullptr, nullptr, nullptr,
+                          triggeringPrincipal);
         }
       }
       return false;

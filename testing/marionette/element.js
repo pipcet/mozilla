@@ -4,10 +4,11 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/Log.jsm");
 
+Cu.import("chrome://marionette/content/assert.js");
 Cu.import("chrome://marionette/content/atom.js");
 Cu.import("chrome://marionette/content/error.js");
 Cu.import("chrome://marionette/content/wait.js");
@@ -174,14 +175,18 @@ element.Store = class {
     if (container.shadowRoot) {
       wrappedShadowRoot = new XPCNativeWrapper(container.shadowRoot);
     }
-
     let wrappedEl = new XPCNativeWrapper(el);
+    let wrappedContainer = {
+      frame: wrappedFrame,
+      shadowRoot: wrappedShadowRoot,
+    };
     if (!el ||
         !(wrappedEl.ownerDocument == wrappedFrame.document) ||
-        element.isDisconnected(wrappedEl, wrappedFrame, wrappedShadowRoot)) {
+        element.isDisconnected(wrappedEl, wrappedContainer)) {
       throw new StaleElementReferenceError(
-          "The element reference is stale. Either the element " +
-          "is no longer attached to the DOM or the page has been refreshed.");
+          error.pprint`The element reference of ${el} stale: ` +
+              "either the element is no longer attached to the DOM " +
+              "or the page has been refreshed");
     }
 
     return el;
@@ -335,7 +340,7 @@ function find_(container, strategy, selector, searchFn, opts) {
  */
 element.findByXPath = function (root, startNode, expr) {
   let iter = root.evaluate(expr, startNode, null,
-      Ci.nsIDOMXPathResult.FIRST_ORDERED_NODE_TYPE, null)
+      Ci.nsIDOMXPathResult.FIRST_ORDERED_NODE_TYPE, null);
   return iter.singleNodeValue;
 };
 
@@ -483,6 +488,7 @@ function findElement(using, value, rootNode, startNode) {
       } catch (e) {
         throw new InvalidSelectorError(`${e.message}: "${value}"`);
       }
+      break;
 
     case element.Strategy.Anon:
       return rootNode.getAnonymousNodes(startNode);
@@ -494,7 +500,7 @@ function findElement(using, value, rootNode, startNode) {
     default:
       throw new InvalidSelectorError(`No such strategy: ${using}`);
   }
-};
+}
 
 /**
  * Find multiple elements.
@@ -606,134 +612,24 @@ element.generateUUID = function() {
 };
 
 /**
- * Convert any web elements in arbitrary objects to DOM elements by
- * looking them up in the seen element store.
- *
- * @param {?} obj
- *     Arbitrary object containing web elements.
- * @param {element.Store} seenEls
- *     Element store to use for lookup of web element references.
- * @param {Window} win
- *     Window.
- * @param {ShadowRoot} shadowRoot
- *     Shadow root.
- *
- * @return {?}
- *     Same object as provided by |obj| with the web elements replaced
- *     by DOM elements.
- */
-element.fromJson = function (
-    obj, seenEls, win, shadowRoot = undefined) {
-  switch (typeof obj) {
-    case "boolean":
-    case "number":
-    case "string":
-      return obj;
-
-    case "object":
-      if (obj === null) {
-        return obj;
-      }
-
-      // arrays
-      else if (Array.isArray(obj)) {
-        return obj.map(e => element.fromJson(e, seenEls, win, shadowRoot));
-      }
-
-      // web elements
-      else if (Object.keys(obj).includes(element.Key) ||
-          Object.keys(obj).includes(element.LegacyKey)) {
-        let uuid = obj[element.Key] || obj[element.LegacyKey];
-        let el = seenEls.get(uuid, {frame: win, shadowRoot: shadowRoot});
-        if (!el) {
-          throw new WebDriverError(`Unknown element: ${uuid}`);
-        }
-        return el;
-      }
-
-      // arbitrary objects
-      else {
-        let rv = {};
-        for (let prop in obj) {
-          rv[prop] = element.fromJson(obj[prop], seenEls, win, shadowRoot);
-        }
-        return rv;
-      }
-  }
-};
-
-/**
- * Convert arbitrary objects to JSON-safe primitives that can be
- * transported over the Marionette protocol.
- *
- * Any DOM elements are converted to web elements by looking them up
- * and/or adding them to the element store provided.
- *
- * @param {?} obj
- *     Object to be marshaled.
- * @param {element.Store} seenEls
- *     Element store to use for lookup of web element references.
- *
- * @return {?}
- *     Same object as provided by |obj| with the elements replaced by
- *     web elements.
- */
-element.toJson = function (obj, seenEls) {
-  let t = Object.prototype.toString.call(obj);
-
-  // null
-  if (t == "[object Undefined]" || t == "[object Null]") {
-    return null;
-  }
-
-  // literals
-  else if (t == "[object Boolean]" || t == "[object Number]" || t == "[object String]") {
-    return obj;
-  }
-
-  // Array, NodeList, HTMLCollection, et al.
-  else if (element.isCollection(obj)) {
-    return [...obj].map(el => element.toJson(el, seenEls));
-  }
-
-  // HTMLElement
-  else if ("nodeType" in obj && obj.nodeType == 1) {
-    let uuid = seenEls.add(obj);
-    return element.makeWebElement(uuid);
-  }
-
-  // arbitrary objects + files
-  else {
-    let rv = {};
-    for (let prop in obj) {
-      try {
-        rv[prop] = element.toJson(obj[prop], seenEls);
-      } catch (e if (e.result == Cr.NS_ERROR_NOT_IMPLEMENTED)) {
-        logger.debug(`Skipping ${prop}: ${e.message}`);
-      }
-    }
-    return rv;
-  }
-};
-
-/**
  * Check if the element is detached from the current frame as well as
  * the optional shadow root (when inside a Shadow DOM context).
  *
  * @param {nsIDOMElement} el
  *     Element to be checked.
- * @param {nsIDOMWindow} frame
- *     Window object that contains the element or the current host
- *     of the shadow root.
- * @param {ShadowRoot=} shadowRoot
- *     An optional shadow root containing an element.
+ * @param {Container} container
+ *     Container with |frame|, which is the window object that contains
+ *     the element, and an optional |shadowRoot|.
  *
  * @return {boolean}
  *     Flag indicating that the element is disconnected.
  */
-element.isDisconnected = function (el, frame, shadowRoot = undefined) {
+element.isDisconnected = function (el, container = {}) {
+  const {frame, shadowRoot} = container;
+  assert.defined(frame);
+
   // shadow dom
-  if (shadowRoot && frame.ShadowRoot) {
+  if (frame.ShadowRoot && shadowRoot) {
     if (el.compareDocumentPosition(shadowRoot) &
         DOCUMENT_POSITION_DISCONNECTED) {
       return true;
@@ -744,7 +640,9 @@ element.isDisconnected = function (el, frame, shadowRoot = undefined) {
     while (parent && !(parent instanceof frame.ShadowRoot)) {
       parent = parent.parentNode;
     }
-    return element.isDisconnected(shadowRoot.host, frame, parent);
+    return element.isDisconnected(
+        shadowRoot.host,
+        {frame: frame, shadowRoot: parent});
 
   // outside shadow dom
   } else {
@@ -828,13 +726,81 @@ element.inViewport = function (el, x = undefined, y = undefined) {
 };
 
 /**
+ * Gets the element's container element.
+ *
+ * An element container is defined by the WebDriver
+ * specification to be an <option> element in a valid element context
+ * (https://html.spec.whatwg.org/#concept-element-contexts), meaning
+ * that it has an ancestral element that is either <datalist> or <select>.
+ *
+ * If the element does not have a valid context, its container element
+ * is itself.
+ *
+ * @param {Element} el
+ *     Element to get the container of.
+ *
+ * @return {Element}
+ *     Container element of |el|.
+ */
+element.getContainer = function (el) {
+  if (el.localName != "option") {
+    return el;
+  }
+
+  function validContext(ctx) {
+    return ctx.localName == "datalist" || ctx.localName == "select";
+  }
+
+  // does <option> have a valid context,
+  // meaning is it a child of <datalist> or <select>?
+  let parent = el;
+  while (parent.parentNode && !validContext(parent)) {
+    parent = parent.parentNode;
+  }
+
+  if (!validContext(parent)) {
+    return el;
+  }
+  return parent;
+};
+
+/**
+ * An element is in view if it is a member of its own pointer-interactable
+ * paint tree.
+ *
+ * This means an element is considered to be in view, but not necessarily
+ * pointer-interactable, if it is found somewhere in the
+ * |elementsFromPoint| list at |el|'s in-view centre coordinates.
+ *
+ * Before running the check, we change |el|'s pointerEvents style property
+ * to "auto", since elements without pointer events enabled do not turn
+ * up in the paint tree we get from document.elementsFromPoint.  This is
+ * a specialisation that is only relevant when checking if the element is
+ * in view.
+ *
+ * @param {Element} el
+ *     Element to check if is in view.
+ *
+ * @return {boolean}
+ *     True if |el| is inside the viewport, or false otherwise.
+ */
+element.isInView = function (el) {
+  let originalPointerEvents = el.style.pointerEvents;
+  try {
+    el.style.pointerEvents = "auto";
+    const tree = element.getPointerInteractablePaintTree(el);
+    return tree.includes(el);
+  } finally {
+    el.style.pointerEvents = originalPointerEvents;
+  }
+};
+
+/**
  * This function throws the visibility of the element error if the element is
  * not displayed or the given coordinates are not within the viewport.
  *
- * @param {Element} element
+ * @param {Element} el
  *     Element to check if visible.
- * @param {Window} window
- *     Window object.
  * @param {number=} x
  *     Horizontal offset relative to target.  Defaults to the centre of
  *     the target's bounding box.
@@ -866,26 +832,25 @@ element.isVisible = function (el, x = undefined, y = undefined) {
   return true;
 };
 
-element.isInteractable = function (el) {
-  return element.isPointerInteractable(el) ||
-      element.isKeyboardInteractable(el);
-};
-
 /**
  * A pointer-interactable element is defined to be the first
  * non-transparent element, defined by the paint order found at the centre
  * point of its rectangle that is inside the viewport, excluding the size
  * of any rendered scrollbars.
  *
+ * An element is obscured if the pointer-interactable paint tree at its
+ * centre point is empty, or the first element in this tree is not an
+ * inclusive descendant of itself.
+ *
  * @param {DOMElement} el
  *     Element determine if is pointer-interactable.
  *
  * @return {boolean}
- *     True if interactable, false otherwise.
+ *     True if element is obscured, false otherwise.
  */
-element.isPointerInteractable = function (el) {
-  let tree = element.getInteractableElementTree(el, el.ownerDocument);
-  return tree[0] === el;
+element.isObscured = function (el) {
+  let tree = element.getPointerInteractablePaintTree(el);
+  return !el.contains(tree[0]);
 };
 
 /**
@@ -928,17 +893,24 @@ element.getInViewCentrePoint = function (rect, win) {
  *
  * @param {DOMElement} el
  *     Element to determine if is pointer-interactable.
- * @param {DOMDocument} doc
- *     Current browsing context's active document.
  *
  * @return {Array.<DOMElement>}
- *     Sequence of non-opaque elements in paint order.
+ *     Sequence of elements in paint order.
  */
-element.getInteractableElementTree = function (el, doc) {
-  let win = doc.defaultView;
+element.getPointerInteractablePaintTree = function (el) {
+  const doc = el.ownerDocument;
+  const win = doc.defaultView;
+  const container = {frame: win};
+  const rootNode = el.getRootNode();
+
+  // Include shadow DOM host only if the element's root node is not the
+  // owner document.
+  if (rootNode !== doc) {
+    container.shadowRoot = rootNode;
+  }
 
   // pointer-interactable elements tree, step 1
-  if (element.isDisconnected(el, win)) {
+  if (element.isDisconnected(el, container)) {
     return [];
   }
 
@@ -952,10 +924,7 @@ element.getInteractableElementTree = function (el, doc) {
   let centre = element.getInViewCentrePoint(rects[0], win);
 
   // step 5
-  let tree = doc.elementsFromPoint(centre.x, centre.y);
-
-  // only visible elements are considered interactable
-  return tree.filter(el => win.getComputedStyle(el).opacity === "1");
+  return doc.elementsFromPoint(centre.x, centre.y);
 };
 
 // TODO(ato): Not implemented.

@@ -108,6 +108,7 @@ class TsBase(Test):
         'filters',
         'setup',
         'cleanup',
+        'webextensions',
         'reinstall',     # A list of files from the profile directory that
                          # should be copied to the temporary profile prior to
                          # running each cycle, to avoid one cycle overwriting
@@ -139,6 +140,12 @@ class ts_paint(TsBase):
     mainthread = False
     responsiveness = False
     unit = 'ms'
+
+
+@register_test()
+class ts_paint_webext(ts_paint):
+    webextensions = '${talos}/webextensions/dummy/dummy.xpi'
+    preferences = {'xpinstall.signatures.required': False}
 
 
 @register_test()
@@ -235,7 +242,7 @@ class PageloaderTest(Test):
             'timeout', 'shutdown', 'responsiveness', 'profile_path',
             'xperf_providers', 'xperf_user_providers', 'xperf_stackwalk',
             'filters', 'preferences', 'extensions', 'setup', 'cleanup',
-            'lower_is_better', 'alert_threshold', 'unit']
+            'lower_is_better', 'alert_threshold', 'unit', 'webextensions']
 
 
 @register_test()
@@ -412,6 +419,25 @@ class glterrain(PageloaderTest):
 
 
 @register_test()
+class glvideo(PageloaderTest):
+    """
+    WebGL video texture update with 1080p video.
+    Measures mean tick time across 100 ticks.
+    (each tick is texImage2D(<video>)+setTimeout(0))
+    """
+    tpmanifest = '${talos}/tests/webgl/glvideo.manifest'
+    tpcycles = 1
+    tppagecycles = 5
+    tploadnocache = True
+    tpmozafterpaint = False
+    gecko_profile_interval = 2
+    gecko_profile_entries = 2000000
+    win_counters = w7_counters = linux_counters = mac_counters = None
+    filters = filter.ignore_first.prepare(1) + filter.median.prepare()
+    unit = 'ms'
+
+
+@register_test()
 class tp5n(PageloaderTest):
     """
     Tests the time it takes Firefox to load the tp5 web page test set.
@@ -480,6 +506,12 @@ class tp5o(PageloaderTest):
     filters = filter.ignore_first.prepare(5) + filter.median.prepare()
     timeout = 1800
     unit = 'ms'
+
+
+@register_test()
+class tp5o_webext(tp5o):
+    webextensions = '${talos}/webextensions/dummy/dummy.xpi'
+    preferences = {'xpinstall.signatures.required': False}
 
 
 @register_test()
@@ -728,3 +760,50 @@ class a11yr(PageloaderTest):
     preferences = {'dom.send_after_paint_to_content': False}
     unit = 'ms'
     alert_threshold = 5.0
+
+
+@register_test()
+class bloom_basic(PageloaderTest):
+    """
+    Stylo bloom_basic test
+    """
+    tpmanifest = '${talos}/tests/perf-reftest/bloom_basic.manifest'
+    tpcycles = 1
+    tppagecycles = 25
+    gecko_profile_interval = 1
+    gecko_profile_entries = 2000000
+    filters = filter.ignore_first.prepare(5) + filter.median.prepare()
+    unit = 'ms'
+    lower_is_better = True
+    alert_threshold = 5.0
+
+
+@register_test()
+class bloom_basic_ref(PageloaderTest):
+    """
+    Stylo bloom_basic_ref test
+    """
+    tpmanifest = '${talos}/tests/perf-reftest/bloom_basic_ref.manifest'
+    tpcycles = 1
+    tppagecycles = 25
+    gecko_profile_interval = 1
+    gecko_profile_entries = 2000000
+    filters = filter.ignore_first.prepare(5) + filter.median.prepare()
+    unit = 'ms'
+    lower_is_better = True
+    alert_threshold = 5.0
+
+
+@register_test()
+class Quantum_1(PageloaderTest):
+    """
+    Quantum Pageload Test 1
+    """
+    tpmanifest = '${talos}/tests/quantum_pageload/quantum_1.manifest'
+    tpcycles = 1
+    tppagecycles = 25
+    gecko_profile_interval = 1
+    gecko_profile_entries = 2000000
+    filters = filter.ignore_first.prepare(5) + filter.median.prepare()
+    unit = 'ms'
+    lower_is_better = True

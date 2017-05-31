@@ -5,11 +5,12 @@
 
 #include "RenderThread.h"
 #include "nsThreadUtils.h"
-#include "mozilla/webrender/RendererOGL.h"
-#include "mozilla/widget/CompositorWidget.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
 #include "mozilla/StaticPtr.h"
+#include "mozilla/webrender/RendererOGL.h"
+#include "mozilla/webrender/RenderTextureHost.h"
+#include "mozilla/widget/CompositorWidget.h"
 #include "base/task.h"
 
 namespace mozilla {
@@ -19,6 +20,8 @@ static StaticRefPtr<RenderThread> sRenderThread;
 
 RenderThread::RenderThread(base::Thread* aThread)
   : mThread(aThread)
+  , mPendingFrameCountMapLock("RenderThread.mPendingFrameCountMapLock")
+  , mRenderTextureMapLock("RenderThread.mRenderTextureMapLock")
 {
 
 }
@@ -86,6 +89,9 @@ RenderThread::AddRenderer(wr::WindowId aWindowId, UniquePtr<RendererOGL> aRender
 {
   MOZ_ASSERT(IsInRenderThread());
   mRenderers[aWindowId] = Move(aRenderer);
+
+  MutexAutoLock lock(mPendingFrameCountMapLock);
+  mPendingFrameCounts.Put(AsUint64(aWindowId), 0);
 }
 
 void
@@ -93,6 +99,9 @@ RenderThread::RemoveRenderer(wr::WindowId aWindowId)
 {
   MOZ_ASSERT(IsInRenderThread());
   mRenderers.erase(aWindowId);
+
+  MutexAutoLock lock(mPendingFrameCountMapLock);
+  mPendingFrameCounts.Remove(AsUint64(aWindowId));
 }
 
 RendererOGL*
@@ -121,6 +130,7 @@ RenderThread::NewFrameReady(wr::WindowId aWindowId)
   }
 
   UpdateAndRender(aWindowId);
+  DecPendingFrameCount(aWindowId);
 }
 
 void
@@ -194,6 +204,100 @@ RenderThread::UpdateAndRender(wr::WindowId aWindowId)
   ));
 }
 
+void
+RenderThread::Pause(wr::WindowId aWindowId)
+{
+  MOZ_ASSERT(IsInRenderThread());
+
+  auto it = mRenderers.find(aWindowId);
+  MOZ_ASSERT(it != mRenderers.end());
+  if (it == mRenderers.end()) {
+    return;
+  }
+  auto& renderer = it->second;
+  renderer->Pause();
+}
+
+bool
+RenderThread::Resume(wr::WindowId aWindowId)
+{
+  MOZ_ASSERT(IsInRenderThread());
+
+  auto it = mRenderers.find(aWindowId);
+  MOZ_ASSERT(it != mRenderers.end());
+  if (it == mRenderers.end()) {
+    return false;
+  }
+  auto& renderer = it->second;
+  return renderer->Resume();
+}
+
+uint32_t
+RenderThread::GetPendingFrameCount(wr::WindowId aWindowId)
+{
+  MutexAutoLock lock(mPendingFrameCountMapLock);
+  uint32_t count = 0;
+  MOZ_ASSERT(mPendingFrameCounts.Get(AsUint64(aWindowId), &count));
+  mPendingFrameCounts.Get(AsUint64(aWindowId), &count);
+  return count;
+}
+
+void
+RenderThread::IncPendingFrameCount(wr::WindowId aWindowId)
+{
+  MutexAutoLock lock(mPendingFrameCountMapLock);
+  // Get the old count.
+  uint32_t oldCount = 0;
+  if (!mPendingFrameCounts.Get(AsUint64(aWindowId), &oldCount)) {
+    MOZ_ASSERT(false);
+    return;
+  }
+  // Update pending frame count.
+  mPendingFrameCounts.Put(AsUint64(aWindowId), oldCount + 1);
+}
+
+void
+RenderThread::DecPendingFrameCount(wr::WindowId aWindowId)
+{
+  MutexAutoLock lock(mPendingFrameCountMapLock);
+  // Get the old count.
+  uint32_t oldCount = 0;
+  if (!mPendingFrameCounts.Get(AsUint64(aWindowId), &oldCount)) {
+    MOZ_ASSERT(false);
+    return;
+  }
+  MOZ_ASSERT(oldCount > 0);
+  if (oldCount <= 0) {
+    return;
+  }
+  // Update pending frame count.
+  mPendingFrameCounts.Put(AsUint64(aWindowId), oldCount - 1);
+}
+
+void
+RenderThread::RegisterExternalImage(uint64_t aExternalImageId, RenderTextureHost* aTexture)
+{
+  MutexAutoLock lock(mRenderTextureMapLock);
+  MOZ_ASSERT(!mRenderTextures.Get(aExternalImageId));
+  mRenderTextures.Put(aExternalImageId, aTexture);
+}
+
+void
+RenderThread::UnregisterExternalImage(uint64_t aExternalImageId)
+{
+  MutexAutoLock lock(mRenderTextureMapLock);
+  MOZ_ASSERT(mRenderTextures.Get(aExternalImageId).get());
+  mRenderTextures.Remove(aExternalImageId);
+}
+
+RenderTextureHost*
+RenderThread::GetRenderTexture(WrExternalImageId aExternalImageId)
+{
+  MutexAutoLock lock(mRenderTextureMapLock);
+  MOZ_ASSERT(mRenderTextures.Get(aExternalImageId.mHandle).get());
+  return mRenderTextures.Get(aExternalImageId.mHandle).get();
+}
+
 } // namespace wr
 } // namespace mozilla
 
@@ -201,6 +305,7 @@ extern "C" {
 
 void wr_notifier_new_frame_ready(WrWindowId aWindowId)
 {
+  mozilla::wr::RenderThread::Get()->IncPendingFrameCount(aWindowId);
   mozilla::wr::RenderThread::Get()->NewFrameReady(mozilla::wr::WindowId(aWindowId));
 }
 

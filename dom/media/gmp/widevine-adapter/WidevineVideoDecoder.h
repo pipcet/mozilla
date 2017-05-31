@@ -59,8 +59,6 @@ private:
 
   GMPVideoHost* mVideoHost;
   RefPtr<CDMWrapper> mCDMWrapper;
-  RefPtr<MediaByteBuffer> mExtraData;
-  RefPtr<MediaByteBuffer> mAnnexB;
   GMPVideoDecoderCallback* mCallback = nullptr;
   std::map<uint64_t, uint64_t> mFrameDurations;
   bool mSentInput;
@@ -75,6 +73,7 @@ private:
   // If a reset is being performed. Used to track if ReturnOutput should
   // dump current frame.
   bool mResetInProgress;
+  cdm::Size mCodedSize;
 };
 
 } // namespace mozilla

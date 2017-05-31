@@ -33,7 +33,6 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Telemetry.h"
 #include "BatteryManager.h"
-#include "mozilla/dom/DeviceStorageAreaListener.h"
 #include "mozilla/dom/GamepadServiceTest.h"
 #include "mozilla/dom/PowerManager.h"
 #include "mozilla/dom/WakeLock.h"
@@ -47,10 +46,10 @@
 #include "mozilla/dom/TCPSocket.h"
 #include "mozilla/dom/URLSearchParams.h"
 #include "mozilla/dom/VRDisplay.h"
+#include "mozilla/dom/VRServiceTest.h"
 #include "mozilla/dom/WebAuthentication.h"
 #include "mozilla/dom/workers/RuntimeService.h"
 #include "mozilla/Hal.h"
-#include "nsISiteSpecificUserAgent.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/SSE.h"
 #include "mozilla/StaticPtr.h"
@@ -67,17 +66,13 @@
 #include "nsIHttpChannel.h"
 #include "nsIHttpChannelInternal.h"
 #include "TimeManager.h"
-#include "DeviceStorage.h"
 #include "nsStreamUtils.h"
 #include "WidgetUtils.h"
 #include "nsIPresentationService.h"
+#include "nsIScriptError.h"
 
 #include "mozilla/dom/MediaDevices.h"
 #include "MediaManager.h"
-
-#ifdef MOZ_AUDIO_CHANNEL_MANAGER
-#include "AudioChannelManager.h"
-#endif
 
 #include "nsIDOMGlobalPropertyInitializer.h"
 #include "nsJSUtils.h"
@@ -101,6 +96,7 @@
 
 #include "mozilla/EMEUtils.h"
 #include "mozilla/DetailedPromise.h"
+#include "mozilla/Unused.h"
 
 namespace mozilla {
 namespace dom {
@@ -209,19 +205,16 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mConnection)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mStorageManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAuthentication)
-#ifdef MOZ_AUDIO_CHANNEL_MANAGER
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAudioChannelManager)
-#endif
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMediaDevices)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTimeManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mServiceWorkerContainer)
 
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mWindow)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMediaKeySystemAccessManager)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDeviceStorageAreaListener)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPresentation)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGamepadServiceTest)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mVRGetDisplaysPromises)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mVRServiceTest)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(Navigator)
@@ -273,21 +266,6 @@ Navigator::Invalidate()
 
   mMediaDevices = nullptr;
 
-#ifdef MOZ_AUDIO_CHANNEL_MANAGER
-  if (mAudioChannelManager) {
-    mAudioChannelManager = nullptr;
-  }
-#endif
-
-  uint32_t len = mDeviceStorageStores.Length();
-  for (uint32_t i = 0; i < len; ++i) {
-    RefPtr<nsDOMDeviceStorage> ds = do_QueryReferent(mDeviceStorageStores[i]);
-    if (ds) {
-      ds->Shutdown();
-    }
-  }
-  mDeviceStorageStores.Clear();
-
   if (mTimeManager) {
     mTimeManager = nullptr;
   }
@@ -303,16 +281,17 @@ Navigator::Invalidate()
     mMediaKeySystemAccessManager = nullptr;
   }
 
-  if (mDeviceStorageAreaListener) {
-    mDeviceStorageAreaListener = nullptr;
-  }
-
   if (mGamepadServiceTest) {
     mGamepadServiceTest->Shutdown();
     mGamepadServiceTest = nullptr;
   }
 
   mVRGetDisplaysPromises.Clear();
+
+  if (mVRServiceTest) {
+    mVRServiceTest->Shutdown();
+    mVRServiceTest = nullptr;
+  }
 }
 
 //*****************************************************************************
@@ -323,7 +302,6 @@ void
 Navigator::GetUserAgent(nsAString& aUserAgent, CallerType aCallerType,
                         ErrorResult& aRv) const
 {
-  nsCOMPtr<nsIURI> codebaseURI;
   nsCOMPtr<nsPIDOMWindowInner> window;
 
   if (mWindow) {
@@ -337,15 +315,10 @@ Navigator::GetUserAgent(nsAString& aUserAgent, CallerType aCallerType,
         aUserAgent = customUserAgent;
         return;
       }
-
-      nsIDocument* doc = mWindow->GetExtantDoc();
-      if (doc) {
-        doc->NodePrincipal()->GetURI(getter_AddRefs(codebaseURI));
-      }
     }
   }
 
-  nsresult rv = GetUserAgent(window, codebaseURI,
+  nsresult rv = GetUserAgent(window,
                              aCallerType == CallerType::System,
                              aUserAgent);
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -1031,126 +1004,6 @@ Navigator::RegisterProtocolHandler(const nsAString& aProtocol,
                                            mWindow->GetOuterWindow());
 }
 
-DeviceStorageAreaListener*
-Navigator::GetDeviceStorageAreaListener(ErrorResult& aRv)
-{
-  if (!mDeviceStorageAreaListener) {
-    if (!mWindow || !mWindow->GetOuterWindow() || !mWindow->GetDocShell()) {
-      aRv.Throw(NS_ERROR_FAILURE);
-      return nullptr;
-    }
-    mDeviceStorageAreaListener = new DeviceStorageAreaListener(mWindow);
-  }
-
-  return mDeviceStorageAreaListener;
-}
-
-already_AddRefed<nsDOMDeviceStorage>
-Navigator::FindDeviceStorage(const nsAString& aName, const nsAString& aType)
-{
-  auto i = mDeviceStorageStores.Length();
-  while (i > 0) {
-    --i;
-    RefPtr<nsDOMDeviceStorage> storage =
-      do_QueryReferent(mDeviceStorageStores[i]);
-    if (storage) {
-      if (storage->Equals(mWindow, aName, aType)) {
-        return storage.forget();
-      }
-    } else {
-      mDeviceStorageStores.RemoveElementAt(i);
-    }
-  }
-  return nullptr;
-}
-
-already_AddRefed<nsDOMDeviceStorage>
-Navigator::GetDeviceStorage(const nsAString& aType, ErrorResult& aRv)
-{
-  if (!mWindow || !mWindow->GetOuterWindow() || !mWindow->GetDocShell()) {
-    aRv.Throw(NS_ERROR_FAILURE);
-    return nullptr;
-  }
-
-  nsString name;
-  nsDOMDeviceStorage::GetDefaultStorageName(aType, name);
-  RefPtr<nsDOMDeviceStorage> storage = FindDeviceStorage(name, aType);
-  if (storage) {
-    return storage.forget();
-  }
-
-  nsDOMDeviceStorage::CreateDeviceStorageFor(mWindow, aType,
-                                             getter_AddRefs(storage));
-
-  if (!storage) {
-    return nullptr;
-  }
-
-  mDeviceStorageStores.AppendElement(
-    do_GetWeakReference(static_cast<DOMEventTargetHelper*>(storage)));
-  return storage.forget();
-}
-
-void
-Navigator::GetDeviceStorages(const nsAString& aType,
-                             nsTArray<RefPtr<nsDOMDeviceStorage> >& aStores,
-                             ErrorResult& aRv)
-{
-  if (!mWindow || !mWindow->GetOuterWindow() || !mWindow->GetDocShell()) {
-    aRv.Throw(NS_ERROR_FAILURE);
-    return;
-  }
-
-  nsDOMDeviceStorage::VolumeNameArray volumes;
-  nsDOMDeviceStorage::GetOrderedVolumeNames(aType, volumes);
-  if (volumes.IsEmpty()) {
-    RefPtr<nsDOMDeviceStorage> storage = GetDeviceStorage(aType, aRv);
-    if (storage) {
-      aStores.AppendElement(storage.forget());
-    }
-  } else {
-    uint32_t len = volumes.Length();
-    aStores.SetCapacity(len);
-    for (uint32_t i = 0; i < len; ++i) {
-      RefPtr<nsDOMDeviceStorage> storage =
-        GetDeviceStorageByNameAndType(volumes[i], aType, aRv);
-      if (aRv.Failed()) {
-        break;
-      }
-
-      if (storage) {
-        aStores.AppendElement(storage.forget());
-      }
-    }
-  }
-}
-
-already_AddRefed<nsDOMDeviceStorage>
-Navigator::GetDeviceStorageByNameAndType(const nsAString& aName,
-                                         const nsAString& aType,
-                                         ErrorResult& aRv)
-{
-  if (!mWindow || !mWindow->GetOuterWindow() || !mWindow->GetDocShell()) {
-    aRv.Throw(NS_ERROR_FAILURE);
-    return nullptr;
-  }
-
-  RefPtr<nsDOMDeviceStorage> storage = FindDeviceStorage(aName, aType);
-  if (storage) {
-    return storage.forget();
-  }
-  nsDOMDeviceStorage::CreateDeviceStorageByNameAndType(mWindow, aName, aType,
-                                                       getter_AddRefs(storage));
-
-  if (!storage) {
-    return nullptr;
-  }
-
-  mDeviceStorageStores.AppendElement(
-    do_GetWeakReference(static_cast<DOMEventTargetHelper*>(storage)));
-  return storage.forget();
-}
-
 Geolocation*
 Navigator::GetGeolocation(ErrorResult& aRv)
 {
@@ -1342,7 +1195,9 @@ Navigator::SendBeaconInternal(const nsAString& aUrl,
     aRv.Throw(NS_ERROR_DOM_BAD_URI);
     return false;
   }
-  httpChannel->SetReferrer(documentURI);
+  mozilla::net::ReferrerPolicy referrerPolicy = doc->GetReferrerPolicy();
+  rv = httpChannel->SetReferrerWithPolicy(documentURI, referrerPolicy);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
 
   nsCOMPtr<nsIInputStream> in;
   nsAutoCString contentTypeWithCharset;
@@ -1356,12 +1211,6 @@ Navigator::SendBeaconInternal(const nsAString& aUrl,
       return false;
     }
 
-    if (aType == eBeaconTypeArrayBuffer) {
-      MOZ_ASSERT(contentTypeWithCharset.IsEmpty());
-      MOZ_ASSERT(charset.IsEmpty());
-      contentTypeWithCharset.Assign("application/octet-stream");
-    }
-
     nsCOMPtr<nsIUploadChannel2> uploadChannel = do_QueryInterface(channel);
     if (!uploadChannel) {
       aRv.Throw(NS_ERROR_FAILURE);
@@ -1372,7 +1221,8 @@ Navigator::SendBeaconInternal(const nsAString& aUrl,
                                            NS_LITERAL_CSTRING("POST"),
                                            false);
   } else {
-    httpChannel->SetRequestMethod(NS_LITERAL_CSTRING("POST"));
+    rv = httpChannel->SetRequestMethod(NS_LITERAL_CSTRING("POST"));
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
   }
 
   nsCOMPtr<nsISupportsPriority> p = do_QueryInterface(channel);
@@ -1704,6 +1554,19 @@ Navigator::NotifyActiveVRDisplaysChanged()
   NavigatorBinding::ClearCachedActiveVRDisplaysValue(this);
 }
 
+VRServiceTest*
+Navigator::RequestVRServiceTest()
+{
+  // Ensure that the Mock VR devices are not released prematurely
+  nsGlobalWindow* win = nsGlobalWindow::Cast(mWindow);
+  win->NotifyVREventListenerAdded();
+
+  if (!mVRServiceTest) {
+    mVRServiceTest = VRServiceTest::CreateTestService(mWindow);
+  }
+  return mVRServiceTest;
+}
+
 //*****************************************************************************
 //    Navigator::nsIMozNavigatorNetwork
 //*****************************************************************************
@@ -1812,23 +1675,6 @@ Navigator::CheckPermission(nsPIDOMWindowInner* aWindow, const char* aType)
   uint32_t permission = GetPermission(aWindow, aType);
   return permission == nsIPermissionManager::ALLOW_ACTION;
 }
-
-#ifdef MOZ_AUDIO_CHANNEL_MANAGER
-system::AudioChannelManager*
-Navigator::GetMozAudioChannelManager(ErrorResult& aRv)
-{
-  if (!mAudioChannelManager) {
-    if (!mWindow) {
-      aRv.Throw(NS_ERROR_UNEXPECTED);
-      return nullptr;
-    }
-    mAudioChannelManager = new system::AudioChannelManager();
-    mAudioChannelManager->Init(mWindow);
-  }
-
-  return mAudioChannelManager;
-}
-#endif
 
 JSObject*
 Navigator::WrapObject(JSContext* cx, JS::Handle<JSObject*> aGivenProto)
@@ -2002,7 +1848,7 @@ Navigator::ClearUserAgentCache()
 }
 
 nsresult
-Navigator::GetUserAgent(nsPIDOMWindowInner* aWindow, nsIURI* aURI,
+Navigator::GetUserAgent(nsPIDOMWindowInner* aWindow,
                         bool aIsCallerChrome,
                         nsAString& aUserAgent)
 {
@@ -2033,119 +1879,42 @@ Navigator::GetUserAgent(nsPIDOMWindowInner* aWindow, nsIURI* aURI,
 
   CopyASCIItoUTF16(ua, aUserAgent);
 
-  if (!aWindow || !aURI) {
+  if (!aWindow) {
     return NS_OK;
   }
 
-  MOZ_ASSERT(aWindow->GetDocShell());
-
-  nsCOMPtr<nsISiteSpecificUserAgent> siteSpecificUA =
-    do_GetService("@mozilla.org/dom/site-specific-user-agent;1");
-  if (!siteSpecificUA) {
+  // Copy the User-Agent header from the document channel which has already been
+  // subject to UA overrides.
+  nsCOMPtr<nsIDocument> doc = aWindow->GetExtantDoc();
+  if (!doc) {
     return NS_OK;
   }
-
-  return siteSpecificUA->GetUserAgentForURIAndWindow(aURI, aWindow, aUserAgent);
-}
-
-static nsCString
-ToCString(const nsString& aString)
-{
-  nsCString str("'");
-  str.Append(NS_ConvertUTF16toUTF8(aString));
-  str.AppendLiteral("'");
-  return str;
-}
-
-static nsCString
-ToCString(const MediaKeysRequirement aValue)
-{
-  nsCString str("'");
-  str.Append(nsDependentCString(MediaKeysRequirementValues::strings[static_cast<uint32_t>(aValue)].value));
-  str.AppendLiteral("'");
-  return str;
-}
-
-static nsCString
-ToCString(const MediaKeySystemMediaCapability& aValue)
-{
-  nsCString str;
-  str.AppendLiteral("{contentType=");
-  str.Append(ToCString(aValue.mContentType));
-  str.AppendLiteral(", robustness=");
-  str.Append(ToCString(aValue.mRobustness));
-  str.AppendLiteral("}");
-  return str;
-}
-
-template<class Type>
-static nsCString
-ToCString(const Sequence<Type>& aSequence)
-{
-  nsCString str;
-  str.AppendLiteral("[");
-  for (size_t i = 0; i < aSequence.Length(); i++) {
-    if (i != 0) {
-      str.AppendLiteral(",");
+  nsCOMPtr<nsIHttpChannel> httpChannel =
+    do_QueryInterface(doc->GetChannel());
+  if (httpChannel) {
+    nsAutoCString userAgent;
+    rv = httpChannel->GetRequestHeader(NS_LITERAL_CSTRING("User-Agent"),
+                                       userAgent);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
     }
-    str.Append(ToCString(aSequence[i]));
+    CopyASCIItoUTF16(userAgent, aUserAgent);
   }
-  str.AppendLiteral("]");
-  return str;
-}
-
-template<class Type>
-static nsCString
-ToCString(const Optional<Sequence<Type>>& aOptional)
-{
-  nsCString str;
-  if (aOptional.WasPassed()) {
-    str.Append(ToCString(aOptional.Value()));
-  } else {
-    str.AppendLiteral("[]");
-  }
-  return str;
+  return NS_OK;
 }
 
 static nsCString
-ToCString(const MediaKeySystemConfiguration& aConfig)
-{
-  nsCString str;
-  str.AppendLiteral("{label=");
-  str.Append(ToCString(aConfig.mLabel));
-
-  str.AppendLiteral(", initDataTypes=");
-  str.Append(ToCString(aConfig.mInitDataTypes));
-
-  str.AppendLiteral(", audioCapabilities=");
-  str.Append(ToCString(aConfig.mAudioCapabilities));
-
-  str.AppendLiteral(", videoCapabilities=");
-  str.Append(ToCString(aConfig.mVideoCapabilities));
-
-  str.AppendLiteral(", distinctiveIdentifier=");
-  str.Append(ToCString(aConfig.mDistinctiveIdentifier));
-
-  str.AppendLiteral(", persistentState=");
-  str.Append(ToCString(aConfig.mPersistentState));
-
-  str.AppendLiteral(", sessionTypes=");
-  str.Append(ToCString(aConfig.mSessionTypes));
-
-  str.AppendLiteral("}");
-
-  return str;
-}
-
-static nsCString
-RequestKeySystemAccessLogString(const nsAString& aKeySystem,
-                                const Sequence<MediaKeySystemConfiguration>& aConfigs)
+RequestKeySystemAccessLogString(
+  const nsAString& aKeySystem,
+  const Sequence<MediaKeySystemConfiguration>& aConfigs,
+  bool aIsSecureContext)
 {
   nsCString str;
   str.AppendPrintf("Navigator::RequestMediaKeySystemAccess(keySystem='%s' options=",
                    NS_ConvertUTF16toUTF8(aKeySystem).get());
-  str.Append(ToCString(aConfigs));
-  str.AppendLiteral(")");
+  str.Append(MediaKeySystemAccess::ToCString(aConfigs));
+  str.AppendLiteral(") secureContext=");
+  str.AppendInt(aIsSecureContext);
   return str;
 }
 
@@ -2154,7 +1923,29 @@ Navigator::RequestMediaKeySystemAccess(const nsAString& aKeySystem,
                                        const Sequence<MediaKeySystemConfiguration>& aConfigs,
                                        ErrorResult& aRv)
 {
-  EME_LOG("%s", RequestKeySystemAccessLogString(aKeySystem, aConfigs).get());
+  EME_LOG("%s",
+          RequestKeySystemAccessLogString(
+            aKeySystem, aConfigs, mWindow->IsSecureContext())
+            .get());
+
+  Telemetry::Accumulate(Telemetry::MEDIA_EME_SECURE_CONTEXT,
+                        mWindow->IsSecureContext());
+
+  if (!mWindow->IsSecureContext()) {
+    nsIDocument* doc = mWindow->GetExtantDoc();
+    nsString uri;
+    if (doc) {
+      Unused << doc->GetDocumentURI(uri);
+    }
+    const char16_t* params[] = { uri.get() };
+    nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
+                                    NS_LITERAL_CSTRING("Media"),
+                                    doc,
+                                    nsContentUtils::eDOM_PROPERTIES,
+                                    "MediaEMEInsecureContextDeprecatedWarning",
+                                    params,
+                                    ArrayLength(params));
+  }
 
   nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(mWindow);
   RefPtr<DetailedPromise> promise =

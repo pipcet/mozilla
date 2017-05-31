@@ -9,7 +9,9 @@
 #include "mozilla/StaticPtr.h"
 #include "nsString.h"
 #include "nsTArray.h"
+#ifdef ENABLE_INTL_API
 #include "unicode/uloc.h"
+#endif
 
 #include "mozIOSPreferences.h"
 
@@ -99,6 +101,9 @@ public:
    */
   bool GetSystemLocales(nsTArray<nsCString>& aRetVal);
 
+  static bool GetDateTimeConnectorPattern(const nsACString& aLocale,
+                                          nsAString& aRetVal);
+
 protected:
   nsTArray<nsCString> mSystemLocales;
 
@@ -126,9 +131,6 @@ private:
   bool GetPatternForSkeleton(const nsAString& aSkeleton,
                              const nsACString& aLocale,
                              nsAString& aRetVal);
-
-  bool GetDateTimeConnectorPattern(const nsACString& aLocale,
-                                   nsAString& aRetVal);
 
   /**
    * This is a host environment specific method that will be implemented

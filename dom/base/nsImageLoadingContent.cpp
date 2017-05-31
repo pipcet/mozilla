@@ -26,6 +26,7 @@
 #include "nsThreadUtils.h"
 #include "nsNetUtil.h"
 #include "nsImageFrame.h"
+#include "nsSVGImageFrame.h"
 
 #include "nsIPresShell.h"
 
@@ -44,6 +45,7 @@
 
 #include "mozAutoDocUpdate.h"
 #include "mozilla/AsyncEventDispatcher.h"
+#include "mozilla/EventStateManager.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ImageTracker.h"
@@ -92,17 +94,16 @@ nsImageLoadingContent::nsImageLoadingContent()
     mUserDisabled(false),
     mSuppressed(false),
     mNewRequestsWillNeedAnimationReset(false),
+    mUseUrgentStartForChannel(false),
     mStateChangerDepth(0),
     mCurrentRequestRegistered(false),
-    mPendingRequestRegistered(false),
-    mFrameCreateCalled(false)
+    mPendingRequestRegistered(false)
 {
   if (!nsContentUtils::GetImgLoaderForChannel(nullptr, nullptr)) {
     mLoadingEnabled = false;
   }
 
-  bool isInconsistent;
-  mMostRecentRequestChange = TimeStamp::ProcessCreation(isInconsistent);
+  mMostRecentRequestChange = TimeStamp::ProcessCreation();
 }
 
 void
@@ -482,10 +483,8 @@ nsImageLoadingContent::FrameCreated(nsIFrame* aFrame)
 {
   NS_ASSERTION(aFrame, "aFrame is null");
 
-  mFrameCreateCalled = true;
-
-  TrackImage(mCurrentRequest);
-  TrackImage(mPendingRequest);
+  TrackImage(mCurrentRequest, aFrame);
+  TrackImage(mPendingRequest, aFrame);
 
   // We need to make sure that our image request is registered, if it should
   // be registered.
@@ -505,8 +504,6 @@ NS_IMETHODIMP_(void)
 nsImageLoadingContent::FrameDestroyed(nsIFrame* aFrame)
 {
   NS_ASSERTION(aFrame, "aFrame is null");
-
-  mFrameCreateCalled = false;
 
   // We need to make sure that our image request is deregistered.
   nsPresContext* presContext = GetFramePresContext();
@@ -836,9 +833,8 @@ nsImageLoadingContent::LoadImage(nsIURI* aNewURI,
   // We use the principal of aDocument to avoid having to QI |this| an extra
   // time. It should always be the same as the principal of this node.
 #ifdef DEBUG
-  nsCOMPtr<nsIContent> thisContent = do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
-  MOZ_ASSERT(thisContent &&
-             thisContent->NodePrincipal() == aDocument->NodePrincipal(),
+  nsIContent* thisContent = AsContent();
+  MOZ_ASSERT(thisContent->NodePrincipal() == aDocument->NodePrincipal(),
              "Principal mismatch?");
 #endif
 
@@ -891,7 +887,12 @@ nsImageLoadingContent::LoadImage(nsIURI* aNewURI,
                                           this, loadFlags,
                                           content->LocalName(),
                                           getter_AddRefs(req),
-                                          policyType);
+                                          policyType,
+                                          mUseUrgentStartForChannel);
+
+  // Reset the flag to avoid loading from XPCOM or somewhere again else without
+  // initiated by user interaction.
+  mUseUrgentStartForChannel = false;
 
   // Tell the document to forget about the image preload, if any, for
   // this URI, now that we might have another imgRequestProxy for it.
@@ -1023,10 +1024,7 @@ nsImageLoadingContent::UpdateImageState(bool aNotify)
     return;
   }
 
-  nsCOMPtr<nsIContent> thisContent = do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
-  if (!thisContent) {
-    return;
-  }
+  nsIContent* thisContent = AsContent();
 
   mLoading = mBroken = mUserDisabled = mSuppressed = false;
 
@@ -1090,29 +1088,19 @@ nsImageLoadingContent::UseAsPrimaryRequest(imgRequestProxy* aRequest,
 nsIDocument*
 nsImageLoadingContent::GetOurOwnerDoc()
 {
-  nsCOMPtr<nsIContent> thisContent =
-    do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
-  NS_ENSURE_TRUE(thisContent, nullptr);
-
-  return thisContent->OwnerDoc();
+  return AsContent()->OwnerDoc();
 }
 
 nsIDocument*
 nsImageLoadingContent::GetOurCurrentDoc()
 {
-  nsCOMPtr<nsIContent> thisContent =
-    do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
-  NS_ENSURE_TRUE(thisContent, nullptr);
-
-  return thisContent->GetComposedDoc();
+  return AsContent()->GetComposedDoc();
 }
 
 nsIFrame*
 nsImageLoadingContent::GetOurPrimaryFrame()
 {
-  nsCOMPtr<nsIContent> thisContent =
-    do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
-  return thisContent->GetPrimaryFrame();
+  return AsContent()->GetPrimaryFrame();
 }
 
 nsPresContext* nsImageLoadingContent::GetFramePresContext()
@@ -1134,8 +1122,7 @@ nsImageLoadingContent::StringToURI(const nsAString& aSpec,
   NS_PRECONDITION(aURI, "Null out param");
 
   // (1) Get the base URI
-  nsCOMPtr<nsIContent> thisContent = do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
-  NS_ASSERTION(thisContent, "An image loading content must be an nsIContent");
+  nsIContent* thisContent = AsContent();
   nsCOMPtr<nsIURI> baseURL = thisContent->GetBaseURI();
 
   // (2) Get the charset
@@ -1194,8 +1181,9 @@ nsImageLoadingContent::CancelPendingEvent()
 RefPtr<imgRequestProxy>&
 nsImageLoadingContent::PrepareNextRequest(ImageLoadType aImageLoadType)
 {
-  nsImageFrame* frame = do_QueryFrame(GetOurPrimaryFrame());
-  if (frame) {
+  nsImageFrame* imageFrame = do_QueryFrame(GetOurPrimaryFrame());
+  nsSVGImageFrame* svgImageFrame = do_QueryFrame(GetOurPrimaryFrame());
+  if (imageFrame || svgImageFrame) {
     // Detect JavaScript-based animations created by changing the |src|
     // attribute on a timer.
     TimeStamp now = TimeStamp::Now();
@@ -1205,7 +1193,12 @@ nsImageLoadingContent::PrepareNextRequest(ImageLoadType aImageLoadType)
 
     // If the length of time between request changes is less than the threshold,
     // then force sync decoding to eliminate flicker from the animation.
-    frame->SetForceSyncDecoding(now - mMostRecentRequestChange < threshold);
+    bool forceSync = (now - mMostRecentRequestChange < threshold);
+    if (imageFrame) {
+      imageFrame->SetForceSyncDecoding(forceSync);
+    } else {
+      svgImageFrame->SetForceSyncDecoding(forceSync);
+    }
 
     mMostRecentRequestChange = now;
   }
@@ -1340,6 +1333,8 @@ nsImageLoadingContent::MakePendingRequestCurrent()
   mPendingRequest = nullptr;
   mCurrentRequestFlags = mPendingRequestFlags;
   mPendingRequestFlags = 0;
+  mCurrentRequestRegistered = mPendingRequestRegistered;
+  mPendingRequestRegistered = false;
   ResetAnimationIfNeeded();
 }
 
@@ -1479,7 +1474,8 @@ nsImageLoadingContent::OnVisibilityChange(Visibility aNewVisibility,
 }
 
 void
-nsImageLoadingContent::TrackImage(imgIRequest* aImage)
+nsImageLoadingContent::TrackImage(imgIRequest* aImage,
+                                  nsIFrame* aFrame /*= nullptr */)
 {
   if (!aImage)
     return;
@@ -1492,13 +1488,21 @@ nsImageLoadingContent::TrackImage(imgIRequest* aImage)
     return;
   }
 
-  // We only want to track this request if we're visible. Ordinarily we check
-  // the visible count, but that requires a frame; in cases where
-  // GetOurPrimaryFrame() cannot obtain a frame (e.g. <feImage>), we assume
-  // we're visible if FrameCreated() was called.
-  nsIFrame* frame = GetOurPrimaryFrame();
-  if ((frame && frame->GetVisibility() == Visibility::APPROXIMATELY_NONVISIBLE) ||
-      (!frame && !mFrameCreateCalled)) {
+  if (!aFrame) {
+    aFrame = GetOurPrimaryFrame();
+  }
+
+  /* This line is deceptively simple. It hides a lot of subtlety. Before we
+   * create an nsImageFrame we call nsImageFrame::ShouldCreateImageFrameFor
+   * to determine if we should create an nsImageFrame or create a frame based
+   * on the display of the element (ie inline, block, etc). Inline, block, etc
+   * frames don't register for visibility tracking so they will return UNTRACKED
+   * from GetVisibility(). So this line is choosing to mark such images as
+   * visible. Once the image loads we will get an nsImageFrame and the proper
+   * visibility. This is a pitfall of tracking the visibility on the frames
+   * instead of the content node.
+   */
+  if (!aFrame || aFrame->GetVisibility() == Visibility::APPROXIMATELY_NONVISIBLE) {
     return;
   }
 

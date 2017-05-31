@@ -28,6 +28,8 @@ this.EXPORTED_SYMBOLS = ["WebVTT"];
 
 var Cu = Components.utils;
 Cu.import('resource://gre/modules/Services.jsm');
+const { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
+const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
 
 (function(global) {
 
@@ -303,7 +305,7 @@ Cu.import('resource://gre/modules/Services.jsm');
   };
 
   // Parse content into a document fragment.
-  function parseContent(window, input) {
+  function parseContent(window, input, bReturnFrag) {
     function nextToken() {
       // Check for end-of-string.
       if (!input) {
@@ -317,6 +319,10 @@ Cu.import('resource://gre/modules/Services.jsm');
       }
 
       var m = input.match(/^([^<]*)(<[^>]+>?)?/);
+      // The input doesn't contain a complete tag.
+      if (!m[0]) {
+        return null;
+      }
       // If there is some text before the next tag, return it, otherwise return
       // the tag.
       return consume(m[1] ? m[1] : m[2]);
@@ -347,14 +353,48 @@ Cu.import('resource://gre/modules/Services.jsm');
       var element = window.document.createElement(tagName);
       element.localName = tagName;
       var name = TAG_ANNOTATION[type];
-      if (name && annotation) {
-        element[name] = annotation.trim();
+      if (name) {
+        element[name] = annotation ? annotation.trim() : "";
       }
       return element;
     }
 
-    var rootDiv = window.document.createElement("div"),
-        current = rootDiv,
+    // https://w3c.github.io/webvtt/#webvtt-timestamp-object
+    // Return hhhhh:mm:ss.fff
+    function normalizedTimeStamp(secondsWithFrag) {
+      var totalsec = parseInt(secondsWithFrag, 10);
+      var hours = Math.floor(totalsec / 3600);
+      var minutes = Math.floor(totalsec % 3600 / 60);
+      var seconds = Math.floor(totalsec % 60);
+      if (hours < 10) {
+        hours = "0" + hours;
+      }
+      if (minutes < 10) {
+        minutes = "0" + minutes;
+      }
+      if (seconds < 10) {
+        seconds = "0" + seconds;
+      }
+      var f = secondsWithFrag.toString().split(".");
+      if (f[1]) {
+        f = f[1].slice(0, 3).padEnd(3, "0");
+      } else {
+        f = "000";
+      }
+      return hours + ':' + minutes + ':' + seconds + '.' + f;
+    }
+
+    var isFirefoxSupportPseudo = (/firefox/i.test(window.navigator.userAgent))
+          && Services.prefs.getBoolPref("media.webvtt.pseudo.enabled");
+    var root;
+    if (bReturnFrag) {
+      root = window.document.createDocumentFragment();
+    } else if (isFirefoxSupportPseudo) {
+      root = window.document.createElement("div", {pseudo: "::cue"});
+    } else {
+      root = window.document.createElement("div");
+    }
+    var current = root,
         t,
         tagStack = [];
 
@@ -370,11 +410,11 @@ Cu.import('resource://gre/modules/Services.jsm');
           // Otherwise just ignore the end tag.
           continue;
         }
-        var ts = collectTimeStamp(t.substr(1, t.length - 2));
+        var ts = collectTimeStamp(t.substr(1, t.length - 1));
         var node;
         if (ts) {
           // Timestamps are lead nodes as well.
-          node = window.document.createProcessingInstruction("timestamp", ts);
+          node = window.document.createProcessingInstruction("timestamp", normalizedTimeStamp(ts));
           current.appendChild(node);
           continue;
         }
@@ -409,7 +449,7 @@ Cu.import('resource://gre/modules/Services.jsm');
       current.appendChild(window.document.createTextNode(unescape(t)));
     }
 
-    return rootDiv;
+    return root;
   }
 
   function StyleBox() {
@@ -430,11 +470,17 @@ Cu.import('resource://gre/modules/Services.jsm');
     return val === 0 ? 0 : val + unit;
   };
 
+  XPCOMUtils.defineLazyPreferenceGetter(StyleBox.prototype, "supportPseudo",
+                                        "media.webvtt.pseudo.enabled", false);
+
   // Constructs the computed display state of the cue (a div). Places the div
   // into the overlay which should be a block level element (usually a div).
   function CueStyleBox(window, cue, styleOptions) {
     var isIE8 = (typeof navigator !== "undefined") &&
       (/MSIE\s8\.0/).test(navigator.userAgent);
+
+    var isFirefoxSupportPseudo = (/firefox/i.test(window.navigator.userAgent))
+          && this.supportPseudo;
     var color = "rgba(255, 255, 255, 1)";
     var backgroundColor = "rgba(0, 0, 0, 0.8)";
 
@@ -448,17 +494,20 @@ Cu.import('resource://gre/modules/Services.jsm');
 
     // Parse our cue's text into a DOM tree rooted at 'cueDiv'. This div will
     // have inline positioning and will function as the cue background box.
-    this.cueDiv = parseContent(window, cue.text);
+    this.cueDiv = parseContent(window, cue.text, false);
     var styles = {
       color: color,
       backgroundColor: backgroundColor,
-      position: "relative",
-      left: 0,
-      right: 0,
-      top: 0,
-      bottom: 0,
-      display: "inline"
+      display: "inline",
+      font: styleOptions.font,
+      whiteSpace: "pre-line",
     };
+    if (isFirefoxSupportPseudo) {
+      delete styles.color;
+      delete styles.backgroundColor;
+      delete styles.font;
+      delete styles.whiteSpace;
+    }
 
     if (!isIE8) {
       styles.writingMode = cue.vertical === "" ? "horizontal-tb"
@@ -470,13 +519,13 @@ Cu.import('resource://gre/modules/Services.jsm');
 
     // Create an absolutely positioned div that will be used to position the cue
     // div.
-    this.div = window.document.createElement("div");
     styles = {
+      position: "absolute",
       textAlign: cue.align,
       font: styleOptions.font,
-      whiteSpace: "pre-line",
-      position: "absolute"
     };
+
+    this.div = window.document.createElement("div");
     this.applyStyles(styles);
 
     this.div.appendChild(this.cueDiv);
@@ -484,17 +533,24 @@ Cu.import('resource://gre/modules/Services.jsm');
     // Calculate the distance from the reference edge of the viewport to the text
     // position of the cue box. The reference edge will be resolved later when
     // the box orientation styles are applied.
+    function convertCuePostionToPercentage(cuePosition) {
+      if (cuePosition === "auto") {
+        return 50;
+      }
+      return cuePosition;
+    }
     var textPos = 0;
+    let postionPercentage = convertCuePostionToPercentage(cue.position);
     switch (cue.computedPositionAlign) {
       // TODO : modify these fomula to follow the spec, see bug 1277437.
       case "line-left":
-        textPos = cue.position;
+        textPos = postionPercentage;
         break;
       case "center":
-        textPos = cue.position - (cue.size / 2);
+        textPos = postionPercentage - (cue.size / 2);
         break;
       case "line-right":
-        textPos = cue.position - cue.size;
+        textPos = postionPercentage - cue.size;
         break;
     }
 
@@ -837,15 +893,14 @@ Cu.import('resource://gre/modules/Services.jsm');
   };
 
   WebVTT.convertCueToDOMTree = function(window, cuetext) {
-    if (!window || !cuetext) {
+    if (!window) {
       return null;
     }
-    return parseContent(window, cuetext);
+    return parseContent(window, cuetext, true);
   };
 
   var FONT_SIZE_PERCENT = 0.05;
   var FONT_STYLE = "sans-serif";
-  var CUE_BACKGROUND_PADDING = "1.5%";
 
   // Runs the processing model over the cues and regions passed to it.
   // @param overlay A block level element (usually a div) that the computed cues
@@ -859,7 +914,7 @@ Cu.import('resource://gre/modules/Services.jsm');
 
     // Remove all previous children.
     while (overlay.firstChild) {
-      overlay.removeChild(overlay.firstChild);
+      overlay.firstChild.remove();
     }
 
     var controlBar;
@@ -871,20 +926,19 @@ Cu.import('resource://gre/modules/Services.jsm');
       controlBarShown = controlBar ? !!controlBar.clientHeight : false;
     }
 
-    var paddedOverlay = window.document.createElement("div");
-    paddedOverlay.style.position = "absolute";
-    paddedOverlay.style.left = "0";
-    paddedOverlay.style.right = "0";
-    paddedOverlay.style.top = "0";
-    paddedOverlay.style.bottom = "0";
-    paddedOverlay.style.margin = CUE_BACKGROUND_PADDING;
-    overlay.appendChild(paddedOverlay);
+    var rootOfCues = window.document.createElement("div");
+    rootOfCues.style.position = "absolute";
+    rootOfCues.style.left = "0";
+    rootOfCues.style.right = "0";
+    rootOfCues.style.top = "0";
+    rootOfCues.style.bottom = "0";
+    overlay.appendChild(rootOfCues);
 
     // Determine if we need to compute the display states of the cues. This could
     // be the case if a cue's state has been changed since the last computation or
     // if it has not been computed yet.
     function shouldCompute(cues) {
-      if (controlBarShown) {
+      if (overlay.lastControlBarShownStatus != controlBarShown) {
         return true;
       }
 
@@ -899,13 +953,15 @@ Cu.import('resource://gre/modules/Services.jsm');
     // We don't need to recompute the cues' display states. Just reuse them.
     if (!shouldCompute(cues)) {
       for (var i = 0; i < cues.length; i++) {
-        paddedOverlay.appendChild(cues[i].displayState);
+        rootOfCues.appendChild(cues[i].displayState);
       }
+      overlay.lastControlBarShownStatus = controlBarShown;
       return;
     }
+    overlay.lastControlBarShownStatus = controlBarShown;
 
     var boxPositions = [],
-        containerBox = BoxPosition.getSimpleBoxPosition(paddedOverlay),
+        containerBox = BoxPosition.getSimpleBoxPosition(rootOfCues),
         fontSize = Math.round(containerBox.height * FONT_SIZE_PERCENT * 100) / 100;
     var styleOptions = {
       font: fontSize + "px " + FONT_STYLE
@@ -924,7 +980,8 @@ Cu.import('resource://gre/modules/Services.jsm');
 
         // Compute the intial position and styles of the cue div.
         styleBox = new CueStyleBox(window, cue, styleOptions);
-        paddedOverlay.appendChild(styleBox.div);
+        styleBox.cueDiv.style.setProperty("--cue-font-size", fontSize + "px");
+        rootOfCues.appendChild(styleBox.div);
 
         // Move the cue div to it's correct line position.
         moveBoxToLinePosition(window, styleBox, containerBox, boxPositions);

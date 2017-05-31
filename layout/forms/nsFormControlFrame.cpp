@@ -17,19 +17,14 @@ using namespace mozilla;
 
 //#define FCF_NOISY
 
-nsFormControlFrame::nsFormControlFrame(nsStyleContext* aContext)
-  : nsAtomicContainerFrame(aContext)
+nsFormControlFrame::nsFormControlFrame(nsStyleContext* aContext,
+                                       nsIFrame::ClassID aID)
+  : nsAtomicContainerFrame(aContext, aID)
 {
 }
 
 nsFormControlFrame::~nsFormControlFrame()
 {
-}
-
-nsIAtom*
-nsFormControlFrame::GetType() const
-{
-  return nsGkAtoms::formControlFrame;
 }
 
 void
@@ -49,7 +44,11 @@ nsFormControlFrame::GetMinISize(nsRenderingContext *aRenderingContext)
 {
   nscoord result;
   DISPLAY_MIN_WIDTH(this, result);
+#if !defined(MOZ_WIDGET_ANDROID)
   result = StyleDisplay()->mAppearance == NS_THEME_NONE ? 0 : DefaultSize();
+#else
+  result = DefaultSize();
+#endif
   return result;
 }
 
@@ -58,7 +57,11 @@ nsFormControlFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
 {
   nscoord result;
   DISPLAY_PREF_WIDTH(this, result);
+#if !defined(MOZ_WIDGET_ANDROID)
   result = StyleDisplay()->mAppearance == NS_THEME_NONE ? 0 : DefaultSize();
+#else
+  result = DefaultSize();
+#endif
   return result;
 }
 
@@ -74,9 +77,11 @@ nsFormControlFrame::ComputeAutoSize(nsRenderingContext* aRC,
                                     ComputeSizeFlags    aFlags)
 {
   LogicalSize size(aWM, 0, 0);
+#if !defined(MOZ_WIDGET_ANDROID)
   if (StyleDisplay()->mAppearance == NS_THEME_NONE) {
     return size;
   }
+#endif
   // Note: this call always set the BSize to NS_UNCONSTRAINEDSIZE.
   size = nsAtomicContainerFrame::ComputeAutoSize(aRC, aWM, aCBSize,
                                                  aAvailableISize, aMargin,

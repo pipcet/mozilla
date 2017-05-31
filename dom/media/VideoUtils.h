@@ -26,6 +26,7 @@
 #include "TimeUnits.h"
 #include "nsITimer.h"
 #include "nsCOMPtr.h"
+#include "VideoLimits.h"
 
 using mozilla::CheckedInt64;
 using mozilla::CheckedUint64;
@@ -101,27 +102,6 @@ private:
   nsCOMPtr<nsIThread> mThread;
 };
 
-template<class T>
-class DeleteObjectTask: public Runnable {
-public:
-  explicit DeleteObjectTask(nsAutoPtr<T>& aObject)
-    : mObject(aObject)
-  {
-  }
-  NS_IMETHOD Run() override {
-    NS_ASSERTION(NS_IsMainThread(), "Must be on main thread.");
-    mObject = nullptr;
-    return NS_OK;
-  }
-private:
-  nsAutoPtr<T> mObject;
-};
-
-template<class T>
-void DeleteOnMainThread(nsAutoPtr<T>& aObject) {
-  NS_DispatchToMainThread(new DeleteObjectTask<T>(aObject));
-}
-
 class MediaResource;
 
 // Estimates the buffered ranges of a MediaResource using a simple
@@ -161,13 +141,6 @@ CheckedInt64 TimeUnitToFrames(const media::TimeUnit& aTime, uint32_t aRate);
 // Converts from seconds to microseconds. Returns failure if the resulting
 // integer is too big to fit in an int64_t.
 nsresult SecondsToUsecs(double aSeconds, int64_t& aOutUsecs);
-
-// The maximum height and width of the video. Used for
-// sanitizing the memory allocation of the RGB buffer.
-// The maximum resolution we anticipate encountering in the
-// wild is 2160p (UHD "4K") or 4320p - 7680x4320 pixels for VR.
-static const int32_t MAX_VIDEO_WIDTH = 8192;
-static const int32_t MAX_VIDEO_HEIGHT = 4608;
 
 // Scales the display rect aDisplay by aspect ratio aAspectRatio.
 // Note that aDisplay must be validated by IsValidVideoRegion()
@@ -274,7 +247,7 @@ nsresult
 GenerateRandomPathName(nsCString& aOutSalt, uint32_t aLength);
 
 already_AddRefed<TaskQueue>
-CreateMediaDecodeTaskQueue();
+CreateMediaDecodeTaskQueue(const char* aName);
 
 // Iteratively invokes aWork until aCondition returns true, or aWork returns false.
 // Use this rather than a while loop to avoid bogarting the task queue.

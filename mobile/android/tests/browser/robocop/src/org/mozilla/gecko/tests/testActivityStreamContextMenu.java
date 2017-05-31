@@ -20,10 +20,10 @@ import org.mozilla.gecko.activitystream.ActivityStreamTelemetry;
 import org.mozilla.gecko.db.BrowserContract;
 import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.db.DBUtils;
-import org.mozilla.gecko.home.activitystream.menu.ActivityStreamContextMenu;
-import org.mozilla.gecko.home.activitystream.model.Highlight;
-import org.mozilla.gecko.home.activitystream.model.Item;
-import org.mozilla.gecko.home.activitystream.model.TopSite;
+import org.mozilla.gecko.activitystream.homepanel.menu.ActivityStreamContextMenu;
+import org.mozilla.gecko.activitystream.homepanel.model.Highlight;
+import org.mozilla.gecko.activitystream.homepanel.model.Item;
+import org.mozilla.gecko.activitystream.homepanel.model.TopSite;
 
 /**
  * This test is unfortunately closely coupled to the current implementation, however it is still
@@ -65,8 +65,8 @@ public class testActivityStreamContextMenu extends BaseTest {
     /**
      * Test the activity stream context menu for highlights.
      *
-     * Not all combinations are possible with a highlight -> A highlight is either a bookmark or
-     * a history entry.
+     * Not all combinations are possible with a highlight -> A highlight is always sourced from
+     * visited links.
      *
      *    B
      *    O
@@ -81,11 +81,11 @@ public class testActivityStreamContextMenu extends BaseTest {
      *  -----
      *  0 0 0 - Impossible
      *  0 0 1 - Tested
-     *  0 1 0 - Tested
+     *  0 1 0 - Impossible
      *  0 1 1 - Tested
      *  1 0 0 - Impossible
      *  1 0 1 - Tested
-     *  1 1 0 - Tested
+     *  1 1 0 - Impossible
      *  1 1 1 - Tested
      */
     private void testActivityStreamContextMenuForHighlights() {
@@ -116,28 +116,8 @@ public class testActivityStreamContextMenu extends BaseTest {
                 /* pinned */ true,
                 /* visited */ true);
 
-        // (110) Now let's get rid of the visit again
-        db.removeHistoryEntry(contentResolver, TEST_URL);
-
-        mAsserter.info("ContextMenu", "Highlight (Bookmarked, Pinned)");
-        testMenuForHighlight(TEST_URL,
-                /* bookmarked */ true,
-                /* pinned */ true,
-                /* visited */ false);
-
-        // (010) Unpin the site again
-        db.unpinSiteForAS(contentResolver, TEST_URL);
-
-        mAsserter.info("ContextMenu", "Highlight (Bookmarked)");
-        testMenuForHighlight(TEST_URL,
-                /* bookmarked */ true,
-                /* pinned */ false,
-                /* visited */ false);
-
-        // (101) Remove the bookmark, but visit and pin the site
+        // (101) Remove the bookmark
         db.removeBookmarksWithURL(contentResolver, TEST_URL);
-        db.pinSiteForAS(contentResolver, TEST_URL, "barfoo");
-        insertVisit(TEST_URL, System.currentTimeMillis() - 60 * 1000 * 1000);
 
         mAsserter.info("ContextMenu", "Highlight (Pinned, Visited)");
         testMenuForHighlight(TEST_URL,
@@ -303,7 +283,7 @@ public class testActivityStreamContextMenu extends BaseTest {
 
 
     private Highlight findHighlightByUrl(String url) {
-        final Cursor cursor = db.getHighlights(getActivity(), 20).loadInBackground();
+        final Cursor cursor = db.getHighlightCandidates(getActivity().getContentResolver(), 20);
         mAsserter.isnot(cursor, null, "Highlights cursor is not null");
 
         try {

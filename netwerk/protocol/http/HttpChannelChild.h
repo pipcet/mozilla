@@ -8,6 +8,7 @@
 #ifndef mozilla_net_HttpChannelChild_h
 #define mozilla_net_HttpChannelChild_h
 
+#include "mozilla/Mutex.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/net/HttpBaseChannel.h"
 #include "mozilla/net/PHttpChannelChild.h"
@@ -29,8 +30,10 @@
 #include "nsIChildChannel.h"
 #include "nsIHttpChannelChild.h"
 #include "nsIDivertableChannel.h"
+#include "nsIThreadRetargetableRequest.h"
 #include "mozilla/net/DNS.h"
 
+class nsIEventTarget;
 class nsInputStreamPump;
 
 namespace mozilla {
@@ -50,6 +53,7 @@ class HttpChannelChild final : public PHttpChannelChild
                              , public nsIChildChannel
                              , public nsIHttpChannelChild
                              , public nsIDivertableChannel
+                             , public nsIThreadRetargetableRequest
 {
   virtual ~HttpChannelChild();
 public:
@@ -63,6 +67,7 @@ public:
   NS_DECL_NSICHILDCHANNEL
   NS_DECL_NSIHTTPCHANNELCHILD
   NS_DECL_NSIDIVERTABLECHANNEL
+  NS_DECL_NSITHREADRETARGETABLEREQUEST
 
   HttpChannelChild();
 
@@ -103,12 +108,14 @@ public:
   void AddIPDLReference();
   void ReleaseIPDLReference();
 
-  bool IsSuspended();
+  MOZ_MUST_USE bool IsSuspended();
 
   mozilla::ipc::IPCResult RecvNotifyTrackingProtectionDisabled() override;
   mozilla::ipc::IPCResult RecvNotifyTrackingResource() override;
   void FlushedForDiversion();
   mozilla::ipc::IPCResult RecvSetClassifierMatchedInfo(const ClassifierInfo& aInfo) override;
+
+  void OnCopyComplete(nsresult aStatus) override;
 
 protected:
   mozilla::ipc::IPCResult RecvOnStartRequest(const nsresult& channelStatus,
@@ -124,7 +131,8 @@ protected:
                                              const NetAddr& peerAddr,
                                              const int16_t& redirectCount,
                                              const uint32_t& cacheKey,
-                                             const nsCString& altDataType) override;
+                                             const nsCString& altDataType,
+                                             const int64_t& altDataLen) override;
   mozilla::ipc::IPCResult RecvOnTransportAndData(const nsresult& channelStatus,
                                                  const nsresult& status,
                                                  const uint64_t& offset,
@@ -139,7 +147,8 @@ protected:
                                              const uint32_t& redirectFlags,
                                              const nsHttpResponseHead& responseHead,
                                              const nsCString& securityInfoSerialization,
-                                             const nsCString& channelId) override;
+                                             const uint64_t& channelId,
+                                             const NetAddr& oldPeerAddr) override;
   mozilla::ipc::IPCResult RecvRedirect3Complete() override;
   mozilla::ipc::IPCResult RecvAssociateApplicationCache(const nsCString& groupID,
                                                         const nsCString& clientID) override;
@@ -156,10 +165,23 @@ protected:
 
   mozilla::ipc::IPCResult RecvSetPriority(const int16_t& aPriority) override;
 
-  bool GetAssociatedContentSecurity(nsIAssociatedContentSecurity** res = nullptr);
+  MOZ_MUST_USE bool
+  GetAssociatedContentSecurity(nsIAssociatedContentSecurity** res = nullptr);
   virtual void DoNotifyListenerCleanup() override;
 
   NS_IMETHOD GetResponseSynthesized(bool* aSynthesized) override;
+
+  nsresult
+  AsyncCall(void (HttpChannelChild::*funcPtr)(),
+            nsRunnableMethod<HttpChannelChild> **retval = nullptr) override;
+
+private:
+  // this section is for main-thread-only object
+  // all the references need to be proxy released on main thread.
+  nsCOMPtr<nsISupports> mCacheKey;
+
+  // Proxy release all members above on main thread.
+  void ReleaseMainThreadOnlyReferences();
 
 private:
 
@@ -187,7 +209,13 @@ private:
   // before the constructor message is sent to the parent.
   void SetEventTarget();
 
-  nsresult ContinueAsyncOpen();
+  // Get event target for processing network events.
+  already_AddRefed<nsIEventTarget> GetNeckoTarget();
+
+  // Get event target for ODA.
+  already_AddRefed<nsIEventTarget> GetODATarget();
+
+  MOZ_MUST_USE nsresult ContinueAsyncOpen();
 
   void DoOnStartRequest(nsIRequest* aRequest, nsISupports* aContext);
   void DoOnStatus(nsIRequest* aRequest, nsresult status);
@@ -210,6 +238,14 @@ private:
 
   void ForceIntercepted(nsIInputStream* aSynthesizedInput);
 
+  // Try send DeletingChannel message to parent side. Dispatch an async task to
+  // main thread if invoking on non-main thread.
+  void TrySendDeletingChannel();
+
+  // Try invoke Cancel if on main thread, or prepend a CancelEvent in mEventQ to
+  // ensure Cacnel is processed before any other channel events.
+  void CancelOnMainThread(nsresult aRv);
+
   RequestHeaderTuples mClientSetRequestHeaders;
   nsCOMPtr<nsIChildChannel> mRedirectChannelChild;
   RefPtr<InterceptStreamListener> mInterceptListener;
@@ -221,14 +257,16 @@ private:
   bool mCacheEntryAvailable;
   uint32_t     mCacheExpirationTime;
   nsCString    mCachedCharset;
-  nsCOMPtr<nsISupports> mCacheKey;
 
   nsCString mProtocolVersion;
 
   // If ResumeAt is called before AsyncOpen, we need to send extra data upstream
   bool mSendResumeAt;
 
-  bool mIPCOpen;
+  // To ensure only one SendDeletingChannel is triggered.
+  Atomic<bool> mDeletingChannelSent;
+
+  Atomic<bool> mIPCOpen;
   bool mKeptAlive;            // IPC kept open, but only for security info
   RefPtr<ChannelEventQueue> mEventQ;
 
@@ -282,6 +320,13 @@ private:
   // Used to call OverrideWithSynthesizedResponse in FinishInterceptedRedirect
   RefPtr<OverrideRunnable> mOverrideRunnable;
 
+  // EventTarget for labeling networking events.
+  nsCOMPtr<nsIEventTarget> mNeckoTarget;
+  // Target thread for delivering ODA.
+  nsCOMPtr<nsIEventTarget> mODATarget;
+  // Used to ensure atomicity of mNeckoTarget / mODATarget;
+  Mutex mEventTargetMutex;
+
   void FinishInterceptedRedirect();
   void CleanupRedirectingChannel(nsresult rv);
 
@@ -302,7 +347,8 @@ private:
                       const NetAddr& selfAddr,
                       const NetAddr& peerAddr,
                       const uint32_t& cacheKey,
-                      const nsCString& altDataType);
+                      const nsCString& altDataType,
+                      const int64_t& altDataLen);
   void MaybeDivertOnData(const nsCString& data,
                          const uint64_t& offset,
                          const uint32_t& count);
@@ -322,16 +368,16 @@ private:
                       const uint32_t& redirectFlags,
                       const nsHttpResponseHead& responseHead,
                       const nsACString& securityInfoSerialization,
-                      const nsACString& channelId);
+                      const uint64_t& channelId);
   bool Redirect3Complete(OverrideRunnable* aRunnable);
   void DeleteSelf();
 
   // Create a a new channel to be used in a redirection, based on the provided
   // response headers.
-  nsresult SetupRedirect(nsIURI* uri,
-                         const nsHttpResponseHead* responseHead,
-                         const uint32_t& redirectFlags,
-                         nsIChannel** outChannel);
+  MOZ_MUST_USE nsresult SetupRedirect(nsIURI* uri,
+                                      const nsHttpResponseHead* responseHead,
+                                      const uint32_t& redirectFlags,
+                                      nsIChannel** outChannel);
 
   // Perform a redirection without communicating with the parent process at all.
   void BeginNonIPCRedirect(nsIURI* responseURI,
@@ -352,6 +398,8 @@ private:
   friend class Redirect1Event;
   friend class Redirect3Event;
   friend class DeleteSelfEvent;
+  friend class HttpFlushedForDiversionEvent;
+  friend class CancelEvent;
   friend class HttpAsyncAborter<HttpChannelChild>;
   friend class InterceptStreamListener;
   friend class InterceptedChannelContent;

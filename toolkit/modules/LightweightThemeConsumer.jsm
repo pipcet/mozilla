@@ -17,13 +17,12 @@ this.LightweightThemeConsumer =
  function LightweightThemeConsumer(aDocument) {
   this._doc = aDocument;
   this._win = aDocument.defaultView;
-  this._footerId = aDocument.documentElement.getAttribute("lightweightthemesfooter");
 
   let screen = this._win.screen;
   this._lastScreenWidth = screen.width;
   this._lastScreenHeight = screen.height;
 
-  Services.obs.addObserver(this, "lightweight-theme-styling-update", false);
+  Services.obs.addObserver(this, "lightweight-theme-styling-update");
 
   var temp = {};
   Cu.import("resource://gre/modules/LightweightThemeManager.jsm", temp);
@@ -106,10 +105,10 @@ LightweightThemeConsumer.prototype = {
     // so if we don't reset first, it'll keep the old value.
     root.style.removeProperty("--lwt-text-color");
     root.style.removeProperty("--lwt-accent-color");
+    let textcolor = aData.textcolor || "black";
+    _setProperty(root, active, "--lwt-text-color", textcolor);
+    _setProperty(root, active, "--lwt-accent-color", aData.accentcolor || "white");
     if (active) {
-      let textcolor = aData.textcolor || "black";
-      root.style.setProperty("--lwt-text-color", textcolor);
-      root.style.setProperty("--lwt-accent-color", aData.accentcolor || "white");
       let dummy = this._doc.createElement("dummy");
       dummy.style.color = textcolor;
       let [r, g, b] = _parseRGB(this._doc.defaultView.getComputedStyle(dummy).color);
@@ -123,15 +122,26 @@ LightweightThemeConsumer.prototype = {
 
     this._active = active;
 
-    _setImage(root, active, aData.headerURL, "--lwt-header-image");
-    if (this._footerId) {
-      let footer = this._doc.getElementById(this._footerId);
-      _setImage(footer, active, aData.footerURL, "--lwt-footer-image");
-      if (active && aData.footerURL)
-        footer.setAttribute("lwthemefooter", "true");
-      else
-        footer.removeAttribute("lwthemefooter");
+    if (aData.icons) {
+      let activeIcons = active ? Object.keys(aData.icons).join(" ") : "";
+      root.setAttribute("lwthemeicons", activeIcons);
+      for (let [name, value] of Object.entries(aData.icons)) {
+        _setImage(root, active, name, value);
+      }
+    } else {
+      root.removeAttribute("lwthemeicons");
     }
+
+    _setImage(root, active, "--lwt-header-image", aData.headerURL);
+    _setImage(root, active, "--lwt-footer-image", aData.footerURL);
+    _setImage(root, active, "--lwt-additional-images", aData.additionalBackgrounds);
+    _setProperty(root, active, "--lwt-background-alignment", aData.backgroundsAlignment);
+    _setProperty(root, active, "--lwt-background-tiling", aData.backgroundsTiling);
+
+    if (active && aData.footerURL)
+      root.setAttribute("lwthemefooter", "true");
+    else
+      root.removeAttribute("lwthemefooter");
 
     // On OS X, we extend the lightweight theme into the titlebar, which means setting
     // the chromemargin attribute. Some XUL applications already draw in the titlebar,
@@ -159,11 +169,18 @@ LightweightThemeConsumer.prototype = {
   }
 }
 
-function _setImage(aElement, aActive, aURL, aVariableName) {
-  if (aActive && aURL) {
-    aElement.style.setProperty(aVariableName, `url("${aURL.replace(/"/g, '\\"')}")`);
+function _setImage(aRoot, aActive, aVariableName, aURLs) {
+  if (aURLs && !Array.isArray(aURLs)) {
+    aURLs = [aURLs];
+  }
+  _setProperty(aRoot, aActive, aVariableName, aURLs && aURLs.map(v => `url("${v.replace(/"/g, '\\"')}")`).join(","));
+}
+
+function _setProperty(root, active, variableName, value) {
+  if (active && value) {
+    root.style.setProperty(variableName, value);
   } else {
-    aElement.style.removeProperty(aVariableName);
+    root.style.removeProperty(variableName);
   }
 }
 

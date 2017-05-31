@@ -10,6 +10,11 @@
 
 #include <prio.h>
 #include <prproces.h>
+#ifdef XP_LINUX
+#include <time.h>
+#else
+#include <chrono>
+#endif
 
 #include "mozilla/dom/ToJSValue.h"
 #include "mozilla/dom/Promise.h"
@@ -18,7 +23,6 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MathAlgorithms.h"
-#include "mozilla/Scoped.h"
 #include "mozilla/Unused.h"
 
 #include "base/pickle.h"
@@ -88,13 +92,6 @@
 #include "nsPrintfCString.h"
 #endif // MOZ_GECKO_PROFILER
 
-namespace mozilla {
-  // Scoped auto-close for PRFileDesc file descriptors
-  MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedPRFileDesc,
-                                            PRFileDesc,
-                                            PR_Close);
-}
-
 namespace {
 
 using namespace mozilla;
@@ -112,7 +109,11 @@ const size_t kMaxChromeStackDepth = 50;
 // more efficiently by keeping a single global list of modules.
 class CombinedStacks {
 public:
-  CombinedStacks() : mNextIndex(0) {}
+  explicit CombinedStacks(size_t aMaxStacksCount = kMaxChromeStacksKept)
+    : mNextIndex(0)
+    , mMaxStacksCount(aMaxStacksCount)
+  {}
+
   typedef std::vector<Telemetry::ProcessedStack::Frame> Stack;
   const Telemetry::ProcessedStack::Module& GetModule(unsigned aIndex) const;
   size_t GetModuleCount() const;
@@ -121,14 +122,18 @@ public:
   size_t GetStackCount() const;
   size_t SizeOfExcludingThis() const;
 
+#if defined(ENABLE_STACK_CAPTURE)
   /** Clears the contents of vectors and resets the index. */
   void Clear();
+#endif
 private:
   std::vector<Telemetry::ProcessedStack::Module> mModules;
   // A circular buffer to hold the stacks.
   std::vector<Stack> mStacks;
   // The index of the next buffer element to write to in mStacks.
   size_t mNextIndex;
+  // The maximum number of stacks to keep in the CombinedStacks object.
+  size_t mMaxStacksCount;
 };
 
 static JSObject *
@@ -147,9 +152,9 @@ CombinedStacks::GetModule(unsigned aIndex) const {
 size_t
 CombinedStacks::AddStack(const Telemetry::ProcessedStack& aStack) {
   // Advance the indices of the circular queue holding the stacks.
-  size_t index = mNextIndex++ % kMaxChromeStacksKept;
+  size_t index = mNextIndex++ % mMaxStacksCount;
   // Grow the vector up to the maximum size, if needed.
-  if (mStacks.size() < kMaxChromeStacksKept) {
+  if (mStacks.size() < mMaxStacksCount) {
     mStacks.resize(mStacks.size() + 1);
   }
   // Get a reference to the location holding the new stack.
@@ -229,12 +234,14 @@ ComputeAnnotationsKey(const HangAnnotationsPtr& aAnnotations, nsAString& aKeyOut
   return NS_OK;
 }
 
+#if defined(ENABLE_STACK_CAPTURE)
 void
 CombinedStacks::Clear() {
   mNextIndex = 0;
   mStacks.clear();
   mModules.clear();
 }
+#endif
 
 class HangReports {
 public:
@@ -271,10 +278,12 @@ public:
     void operator=(const AnnotationInfo& aOther) = delete;
   };
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
+#if defined(MOZ_GECKO_PROFILER)
   void AddHang(const Telemetry::ProcessedStack& aStack, uint32_t aDuration,
                int32_t aSystemUptime, int32_t aFirefoxUptime,
                HangAnnotationsPtr aAnnotations);
   void PruneStackReferences(const size_t aRemovedStackIndex);
+#endif
   uint32_t GetDuration(unsigned aIndex) const;
   int32_t GetSystemUptime(unsigned aIndex) const;
   int32_t GetFirefoxUptime(unsigned aIndex) const;
@@ -298,6 +307,7 @@ private:
   CombinedStacks mStacks;
 };
 
+#if defined(MOZ_GECKO_PROFILER)
 void
 HangReports::AddHang(const Telemetry::ProcessedStack& aStack,
                      uint32_t aDuration,
@@ -371,6 +381,7 @@ HangReports::PruneStackReferences(const size_t aRemovedStackIndex) {
     }
   }
 }
+#endif
 
 size_t
 HangReports::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const {
@@ -920,6 +931,8 @@ public:
 
   static void RecordIceCandidates(const uint32_t iceCandidateBitmask,
                                   const bool success);
+  static bool CanRecordBase();
+  static bool CanRecordExtended();
 private:
   TelemetryImpl();
   ~TelemetryImpl();
@@ -951,6 +964,8 @@ private:
   Mutex mHashMutex;
   HangReports mHangReports;
   Mutex mHangReportsMutex;
+  Atomic<bool> mCanRecordBase;
+  Atomic<bool> mCanRecordExtended;
 
 #if defined(ENABLE_STACK_CAPTURE)
   // Stores data about stacks captured on demand.
@@ -1234,6 +1249,8 @@ TelemetryImpl::AsyncFetchTelemetryData(nsIFetchTelemetryDataCallback *aCallback)
 TelemetryImpl::TelemetryImpl()
   : mHashMutex("Telemetry::mHashMutex")
   , mHangReportsMutex("Telemetry::mHangReportsMutex")
+  , mCanRecordBase(false)
+  , mCanRecordExtended(false)
   , mThreadHangStatsMutex("Telemetry::mThreadHangStatsMutex")
   , mCachedTelemetryData(false)
   , mLastShutdownTime(0)
@@ -1246,6 +1263,12 @@ TelemetryImpl::TelemetryImpl()
 
 TelemetryImpl::~TelemetryImpl() {
   UnregisterWeakMemoryReporter(this);
+
+  // This is still racey as access to these collections is guarded using sTelemetry.
+  // We will fix this in bug 1367344.
+  MutexAutoLock hashLock(mHashMutex);
+  MutexAutoLock hangReportsLock(mHangReportsMutex);
+  MutexAutoLock threadHangsLock(mThreadHangStatsMutex);
 }
 
 void
@@ -1309,31 +1332,6 @@ TelemetryImpl::AddSQLInfo(JSContext *cx, JS::Handle<JSObject*> rootObj, bool mai
 }
 
 NS_IMETHODIMP
-TelemetryImpl::RegisterAddonHistogram(const nsACString &id,
-                                      const nsACString &name,
-                                      uint32_t histogramType,
-                                      uint32_t min, uint32_t max,
-                                      uint32_t bucketCount,
-                                      uint8_t optArgCount)
-{
-  return TelemetryHistogram::RegisterAddonHistogram
-            (id, name, histogramType, min, max, bucketCount, optArgCount);
-}
-
-NS_IMETHODIMP
-TelemetryImpl::GetAddonHistogram(const nsACString &id, const nsACString &name,
-                                 JSContext *cx, JS::MutableHandle<JS::Value> ret)
-{
-  return TelemetryHistogram::GetAddonHistogram(id, name, cx, ret);
-}
-
-NS_IMETHODIMP
-TelemetryImpl::UnregisterAddonHistograms(const nsACString &id)
-{
-  return TelemetryHistogram::UnregisterAddonHistograms(id);
-}
-
-NS_IMETHODIMP
 TelemetryImpl::SetHistogramRecordingEnabled(const nsACString &id, bool aEnabled)
 {
   return TelemetryHistogram::SetHistogramRecordingEnabled(id, aEnabled);
@@ -1350,18 +1348,12 @@ TelemetryImpl::SnapshotSubsessionHistograms(bool clearSubsession,
                                             JSContext *cx,
                                             JS::MutableHandle<JS::Value> ret)
 {
-#if !defined(MOZ_WIDGET_GONK) && !defined(MOZ_WIDGET_ANDROID)
+#if !defined(MOZ_WIDGET_ANDROID)
   return TelemetryHistogram::CreateHistogramSnapshots(cx, ret, true,
                                                       clearSubsession);
 #else
   return NS_OK;
 #endif
-}
-
-NS_IMETHODIMP
-TelemetryImpl::GetAddonHistogramSnapshots(JSContext *cx, JS::MutableHandle<JS::Value> ret)
-{
-  return TelemetryHistogram::GetAddonHistogramSnapshots(cx, ret);
 }
 
 NS_IMETHODIMP
@@ -1694,22 +1686,6 @@ public:
     for (unsigned int i = 0, n = mRawModules.GetSize(); i != n; i++) {
       const SharedLibrary &info = mRawModules.GetEntry(i);
 
-      nsString basename = info.GetName();
-#if defined(XP_MACOSX) || defined(XP_LINUX)
-      int32_t pos = basename.RFindChar('/');
-      if (pos != kNotFound) {
-        basename.Cut(0, pos + 1);
-      }
-#endif
-
-      nsString debug_basename = info.GetDebugName();
-#if defined(XP_MACOSX) || defined(XP_LINUX)
-      pos = debug_basename.RFindChar('/');
-      if (pos != kNotFound) {
-        debug_basename.Cut(0, pos + 1);
-      }
-#endif
-
       JS::RootedObject moduleObj(cx, JS_NewPlainObject(cx));
       if (!moduleObj) {
         mPromise->MaybeReject(NS_ERROR_FAILURE);
@@ -1717,7 +1693,7 @@ public:
       }
 
       // Module name.
-      JS::RootedString moduleName(cx, JS_NewUCStringCopyZ(cx, basename.get()));
+      JS::RootedString moduleName(cx, JS_NewUCStringCopyZ(cx, info.GetModuleName().get()));
       if (!moduleName || !JS_DefineProperty(cx, moduleObj, "name", moduleName, JSPROP_ENUMERATE)) {
         mPromise->MaybeReject(NS_ERROR_FAILURE);
         return NS_OK;
@@ -1726,8 +1702,8 @@ public:
       // Module debug name.
       JS::RootedValue moduleDebugName(cx);
 
-      if (!debug_basename.IsEmpty()) {
-        JS::RootedString str_moduleDebugName(cx, JS_NewUCStringCopyZ(cx, debug_basename.get()));
+      if (!info.GetDebugName().IsEmpty()) {
+        JS::RootedString str_moduleDebugName(cx, JS_NewUCStringCopyZ(cx, info.GetDebugName().get()));
         if (!str_moduleDebugName) {
           mPromise->MaybeReject(NS_ERROR_FAILURE);
           return NS_OK;
@@ -1813,6 +1789,7 @@ public:
 NS_IMETHODIMP
 TelemetryImpl::GetLoadedModules(JSContext *cx, nsISupports** aPromise)
 {
+#if defined(MOZ_GECKO_PROFILER)
   nsIGlobalObject* global = xpc::NativeGlobal(JS::CurrentGlobalOrNull(cx));
   if (NS_WARN_IF(!global)) {
     return NS_ERROR_FAILURE;
@@ -1824,12 +1801,12 @@ TelemetryImpl::GetLoadedModules(JSContext *cx, nsISupports** aPromise)
     return result.StealNSResult();
   }
 
-#if defined(MOZ_GECKO_PROFILER)
   nsCOMPtr<nsIThreadManager> tm = do_GetService(NS_THREADMANAGER_CONTRACTID);
   nsCOMPtr<nsIThread> getModulesThread;
   nsresult rv = tm->NewThread(0, 0, getter_AddRefs(getModulesThread));
   if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
+    promise->MaybeReject(NS_ERROR_FAILURE);
+    return NS_OK;
   }
 
   nsMainThreadPtrHandle<Promise> mainThreadPromise(new nsMainThreadPtrHolder<Promise>(promise));
@@ -2078,22 +2055,6 @@ CreateJSHangHistogram(JSContext* cx, const Telemetry::HangHistogram& hang)
     return nullptr;
   }
 
-  if (!hang.GetNativeStack().empty()) {
-    const Telemetry::HangStack& stack = hang.GetNativeStack();
-    const std::vector<uintptr_t>& frames = stack.GetNativeFrames();
-    Telemetry::ProcessedStack processed = Telemetry::GetStackAndModules(frames);
-
-    CombinedStacks singleStack;
-    singleStack.AddStack(processed);
-    JS::RootedObject fullReportObj(cx, CreateJSStackObject(cx, singleStack));
-    if (!fullReportObj) {
-      return nullptr;
-    }
-
-    if (!JS_DefineProperty(cx, ret, "nativeStack", fullReportObj, JSPROP_ENUMERATE)) {
-      return nullptr;
-    }
-  }
   return ret;
 }
 
@@ -2116,17 +2077,48 @@ CreateJSThreadHangStats(JSContext* cx, const Telemetry::ThreadHangStats& thread)
     return nullptr;
   }
 
+  // Create a CombinedStacks instance which will contain all of the stacks
+  // collected by the BHR. Specify a custom maxStacksCount to ensure that all of
+  // our native hang stacks fit.
+  CombinedStacks combinedStacks(Telemetry::kMaximumNativeHangStacks);
+
+  // Process the hangs into a hangs object.
   JS::RootedObject hangs(cx, JS_NewArrayObject(cx, 0));
   if (!hangs) {
     return nullptr;
   }
   for (size_t i = 0; i < thread.mHangs.length(); i++) {
     JS::RootedObject obj(cx, CreateJSHangHistogram(cx, thread.mHangs[i]));
+    if (!ret) {
+      return nullptr;
+    }
+
+    // Check if we have a native stack, and if we do, add it to combinedStacks,
+    // and store its index in the 'nativeStack' member of the hang object.
+    const Telemetry::NativeHangStack& stack = thread.mHangs[i].GetNativeStack();
+    if (!stack.empty() &&
+        combinedStacks.GetStackCount() < Telemetry::kMaximumNativeHangStacks) {
+      Telemetry::ProcessedStack processed = Telemetry::GetStackAndModules(stack);
+      uint32_t index = combinedStacks.AddStack(processed);
+      if (!JS_DefineProperty(cx, obj, "nativeStack", index, JSPROP_ENUMERATE)) {
+        return nullptr;
+      }
+    }
+
     if (!JS_DefineElement(cx, hangs, i, obj, JSPROP_ENUMERATE)) {
       return nullptr;
     }
   }
   if (!JS_DefineProperty(cx, ret, "hangs", hangs, JSPROP_ENUMERATE)) {
+    return nullptr;
+  }
+
+  JS::RootedObject fullReportObj(cx, CreateJSStackObject(cx, combinedStacks));
+  if (!fullReportObj) {
+    return nullptr;
+  }
+
+  if (!JS_DefineProperty(cx, ret, "nativeStacks", fullReportObj, JSPROP_ENUMERATE)) {
     return nullptr;
   }
 
@@ -2281,15 +2273,18 @@ TelemetryImpl::GetKeyedHistogramById(const nsACString &name, JSContext *cx,
  */
 NS_IMETHODIMP
 TelemetryImpl::GetCanRecordBase(bool *ret) {
-  *ret = TelemetryHistogram::CanRecordBase();
+  *ret = mCanRecordBase;
   return NS_OK;
 }
 
 NS_IMETHODIMP
 TelemetryImpl::SetCanRecordBase(bool canRecord) {
-  TelemetryHistogram::SetCanRecordBase(canRecord);
-  TelemetryScalar::SetCanRecordBase(canRecord);
-  TelemetryEvent::SetCanRecordBase(canRecord);
+  if (canRecord != mCanRecordBase) {
+    TelemetryHistogram::SetCanRecordBase(canRecord);
+    TelemetryScalar::SetCanRecordBase(canRecord);
+    TelemetryEvent::SetCanRecordBase(canRecord);
+    mCanRecordBase = canRecord;
+  }
   return NS_OK;
 }
 
@@ -2302,15 +2297,18 @@ TelemetryImpl::SetCanRecordBase(bool canRecord) {
  */
 NS_IMETHODIMP
 TelemetryImpl::GetCanRecordExtended(bool *ret) {
-  *ret = TelemetryHistogram::CanRecordExtended();
+  *ret = mCanRecordExtended;
   return NS_OK;
 }
 
 NS_IMETHODIMP
 TelemetryImpl::SetCanRecordExtended(bool canRecord) {
-  TelemetryHistogram::SetCanRecordExtended(canRecord);
-  TelemetryScalar::SetCanRecordExtended(canRecord);
-  TelemetryEvent::SetCanRecordExtended(canRecord);
+  if (canRecord != mCanRecordExtended) {
+    TelemetryHistogram::SetCanRecordExtended(canRecord);
+    TelemetryScalar::SetCanRecordExtended(canRecord);
+    TelemetryEvent::SetCanRecordExtended(canRecord);
+    mCanRecordExtended = canRecord;
+  }
   return NS_OK;
 }
 
@@ -2352,6 +2350,9 @@ TelemetryImpl::CreateTelemetryInstance()
   NS_ADDREF(sTelemetry);
   // AddRef for the caller
   nsCOMPtr<nsITelemetry> ret = sTelemetry;
+
+  sTelemetry->mCanRecordBase = useTelemetry;
+  sTelemetry->mCanRecordExtended = useTelemetry;
 
   sTelemetry->InitMemoryReporter();
   InitHistogramRecordingEnabled(); // requires sTelemetry to exist
@@ -2554,8 +2555,8 @@ static constexpr TrackedDBEntry kTrackedDBs[] = {
   TRACKEDDB_ENTRY("addons.sqlite"),
   TRACKEDDB_ENTRY("content-prefs.sqlite"),
   TRACKEDDB_ENTRY("cookies.sqlite"),
-  TRACKEDDB_ENTRY("downloads.sqlite"),
   TRACKEDDB_ENTRY("extensions.sqlite"),
+  TRACKEDDB_ENTRY("favicons.sqlite"),
   TRACKEDDB_ENTRY("formhistory.sqlite"),
   TRACKEDDB_ENTRY("index.sqlite"),
   TRACKEDDB_ENTRY("netpredictions.sqlite"),
@@ -2703,6 +2704,28 @@ TelemetryImpl::RecordThreadHangStats(Telemetry::ThreadHangStats& aStats)
   mozilla::Unused << sTelemetry->mThreadHangStats.append(Move(aStats));
 }
 
+bool
+TelemetryImpl::CanRecordBase()
+{
+  if (!sTelemetry) {
+    return false;
+  }
+  bool canRecordBase;
+  nsresult rv = sTelemetry->GetCanRecordBase(&canRecordBase);
+  return NS_SUCCEEDED(rv) && canRecordBase;
+}
+
+bool
+TelemetryImpl::CanRecordExtended()
+{
+  if (!sTelemetry) {
+    return false;
+  }
+  bool canRecordExtended;
+  nsresult rv = sTelemetry->GetCanRecordExtended(&canRecordExtended);
+  return NS_SUCCEEDED(rv) && canRecordExtended;
+}
+
 NS_IMPL_ISUPPORTS(TelemetryImpl, nsITelemetry, nsIMemoryReporter)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsITelemetry, TelemetryImpl::CreateTelemetryInstance)
 
@@ -2754,6 +2777,22 @@ NS_IMETHODIMP
 TelemetryImpl::MsSinceProcessStart(double* aResult)
 {
   return Telemetry::Common::MsSinceProcessStart(aResult);
+}
+
+NS_IMETHODIMP
+TelemetryImpl::MsSystemNow(double* aResult)
+{
+#ifdef XP_LINUX
+  timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  *aResult = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#else
+  using namespace std::chrono;
+  milliseconds ms = duration_cast<milliseconds>(system_clock::now().time_since_epoch());
+  *aResult = static_cast<double>(ms.count());
+#endif // XP_LINUX
+
+  return NS_OK;
 }
 
 // Telemetry Scalars IDL Implementation
@@ -2857,100 +2896,11 @@ TelemetryImpl::FlushBatchedChildTelemetry()
   return NS_OK;
 }
 
-#ifndef MOZ_WIDGET_ANDROID
-
-static nsresult
-LocatePingSender(nsAString& aPath)
-{
-  nsCOMPtr<nsIFile> xreAppDistDir;
-  nsresult rv = NS_GetSpecialDirectory(XRE_APP_DISTRIBUTION_DIR,
-                                       getter_AddRefs(xreAppDistDir));
-
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return NS_ERROR_FAILURE;
-  }
-
-  xreAppDistDir->AppendNative(NS_LITERAL_CSTRING("pingsender" BIN_SUFFIX));
-  xreAppDistDir->GetPath(aPath);
-  return NS_OK;
-}
-
-#endif // MOZ_WIDGET_ANDROID
-
-NS_IMETHODIMP
-TelemetryImpl::RunPingSender(const nsACString& aUrl, const nsACString& aPing)
-{
-#ifdef MOZ_WIDGET_ANDROID
-  Unused << aUrl;
-  Unused << aPing;
-
-  return NS_ERROR_NOT_IMPLEMENTED;
-#else // Windows, Mac, Linux, etc...
-  // Obtain the path of the pingsender executable
-  nsAutoString path;
-  nsresult rv = LocatePingSender(path);
-
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return NS_ERROR_FAILURE;
-  }
-
-  // Create a pipe to send the ping contents to the ping sender
-  ScopedPRFileDesc pipeRead;
-  ScopedPRFileDesc pipeWrite;
-
-  if (PR_CreatePipe(&pipeRead.rwget(), &pipeWrite.rwget()) != PR_SUCCESS) {
-    return NS_ERROR_FAILURE;
-  }
-
-  if ((PR_SetFDInheritable(pipeRead, PR_TRUE) != PR_SUCCESS) ||
-      (PR_SetFDInheritable(pipeWrite, PR_FALSE) != PR_SUCCESS)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  PRProcessAttr* attr = PR_NewProcessAttr();
-  if (!attr) {
-    return NS_ERROR_FAILURE;
-  }
-
-  // Connect the pingsender standard input to the pipe and launch it
-  PR_ProcessAttrSetStdioRedirect(attr, PR_StandardInput, pipeRead);
-
-  UniquePtr<char[]> arg0(ToNewCString(path));
-  UniquePtr<char[]> arg1(ToNewCString(aUrl));
-
-  char* args[] = {
-    arg0.get(),
-    arg1.get(),
-    nullptr,
-  };
-  Unused << NS_WARN_IF(PR_CreateProcessDetached(args[0], args, nullptr, attr));
-  PR_DestroyProcessAttr(attr);
-
-  // Send the ping contents to the ping sender
-  size_t length = aPing.Length();
-  const char* s = aPing.BeginReading();
-
-  while (length > 0) {
-    int result = PR_Write(pipeWrite, s, length);
-
-    if (result <= 0) {
-      return NS_ERROR_FAILURE;
-    }
-
-    s += result;
-    length -= result;
-  }
-
-  return NS_OK;
-#endif
-}
-
 size_t
 TelemetryImpl::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
 {
   size_t n = aMallocSizeOf(this);
 
-  // Ignore the hashtables in mAddonMap; they are not significant.
   n += TelemetryHistogram::GetMapShallowSizesOfExcludingThis(aMallocSizeOf);
   n += TelemetryScalar::GetMapShallowSizesOfExcludingThis(aMallocSizeOf);
   n += mWebrtcTelemetry.SizeOfExcludingThis(aMallocSizeOf);
@@ -3227,18 +3177,8 @@ GetStackAndModules(const std::vector<uintptr_t>& aPCs)
 #ifdef MOZ_GECKO_PROFILER
   for (unsigned i = 0, n = rawModules.GetSize(); i != n; ++i) {
     const SharedLibrary &info = rawModules.GetEntry(i);
-    nsString basename = info.GetDebugName();
-#if defined(XP_MACOSX) || defined(XP_LINUX)
-    // We want to use just the basename as the libname, but the
-    // current profiler addon needs the full path name, so we compute the
-    // basename in here.
-    int32_t pos = basename.RFindChar('/');
-    if (pos != kNotFound) {
-      basename.Cut(0, pos + 1);
-    }
-#endif
     mozilla::Telemetry::ProcessedStack::Module module = {
-      basename,
+      info.GetDebugName(),
       info.GetBreakpadId()
     };
     Ret.AddModule(module);
@@ -3395,13 +3335,13 @@ GetHistogramName(HistogramID id)
 bool
 CanRecordBase()
 {
-  return TelemetryHistogram::CanRecordBase();
+  return TelemetryImpl::CanRecordBase();
 }
 
 bool
 CanRecordExtended()
 {
-  return TelemetryHistogram::CanRecordExtended();
+  return TelemetryImpl::CanRecordExtended();
 }
 
 void

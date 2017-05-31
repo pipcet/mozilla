@@ -103,6 +103,8 @@ private:
   std::ofstream mOutputFile;
 };
 
+// WARNING: This should not be used in its existing state because
+// it is likely to OOM because of large continguous allocations.
 class DrawEventRecorderMemory final : public DrawEventRecorderPrivate
 {
 public:
@@ -133,6 +135,14 @@ public:
    * and processed in chunks, releasing memory as it goes.
    */
   void WipeRecording();
+
+  /**
+   * Gets a readable reference of the underlying stream, reset to the beginning.
+   */
+  std::istream& GetInputStream() {
+    mMemoryStream.seekg(0);
+    return mMemoryStream;
+  }
 
 private:
   ~DrawEventRecorderMemory() {};

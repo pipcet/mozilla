@@ -149,6 +149,14 @@ interface VRFrameData {
   [Pure] readonly attribute VRPose pose;
 };
 
+[Constructor,
+ Pref="dom.vr.test.enabled",
+ HeaderFile="mozilla/dom/VRDisplay.h"]
+interface VRSubmitFrameResult {
+  readonly attribute unsigned long frameNum;
+  readonly attribute DOMString? base64Image;
+};
+
 [Pref="dom.vr.enabled",
  HeaderFile="mozilla/dom/VRDisplay.h"]
 interface VREyeParameters {
@@ -220,6 +228,9 @@ interface VRDisplay : EventTarget {
    */
   [NewObject] VRPose getPose();
 
+  [Pref="dom.vr.test.enabled"]
+  boolean getSubmitFrameResult(VRSubmitFrameResult result);
+
   /**
    * Reset the pose for this display, treating its current position and
    * orientation as the "origin/zero" values. VRPose.position,
@@ -264,7 +275,7 @@ interface VRDisplay : EventTarget {
    * Begin presenting to the VRDisplay. Must be called in response to a user gesture.
    * Repeat calls while already presenting will update the VRLayers being displayed.
    */
-  [Throws] Promise<void> requestPresent(sequence<VRLayer> layers);
+  [Throws, NeedsCallerType] Promise<void> requestPresent(sequence<VRLayer> layers);
 
   /**
    * Stops presenting to the VRDisplay.

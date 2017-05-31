@@ -19,7 +19,6 @@
 #include "mozilla/dom/FileSystemRequestParent.h"
 #include "mozilla/dom/GamepadEventChannelParent.h"
 #include "mozilla/dom/GamepadTestChannelParent.h"
-#include "mozilla/dom/PBlobParent.h"
 #include "mozilla/dom/PGamepadEventChannelParent.h"
 #include "mozilla/dom/PGamepadTestChannelParent.h"
 #include "mozilla/dom/MessagePortParent.h"
@@ -27,16 +26,19 @@
 #include "mozilla/dom/asmjscache/AsmJSCache.h"
 #include "mozilla/dom/cache/ActorUtils.h"
 #include "mozilla/dom/indexedDB/ActorsParent.h"
-#include "mozilla/dom/ipc/BlobParent.h"
+#include "mozilla/dom/ipc/IPCBlobInputStreamParent.h"
+#include "mozilla/dom/ipc/PendingIPCBlobParent.h"
 #include "mozilla/dom/quota/ActorsParent.h"
 #include "mozilla/ipc/BackgroundParent.h"
 #include "mozilla/ipc/BackgroundUtils.h"
+#include "mozilla/ipc/IPCStreamAlloc.h"
 #include "mozilla/ipc/PBackgroundSharedTypes.h"
 #include "mozilla/ipc/PBackgroundTestParent.h"
-#include "mozilla/ipc/PSendStreamParent.h"
-#include "mozilla/ipc/SendStreamAlloc.h"
+#include "mozilla/ipc/PChildToParentStreamParent.h"
+#include "mozilla/ipc/PParentToChildStreamParent.h"
 #include "mozilla/layout/VsyncParent.h"
 #include "mozilla/dom/network/UDPSocketParent.h"
+#include "mozilla/dom/WebAuthnTransactionParent.h"
 #include "mozilla/Preferences.h"
 #include "nsNetUtil.h"
 #include "nsIScriptSecurityManager.h"
@@ -63,6 +65,7 @@ using mozilla::dom::FileSystemRequestParent;
 using mozilla::dom::MessagePortParent;
 using mozilla::dom::PMessagePortParent;
 using mozilla::dom::UDPSocketParent;
+using mozilla::dom::WebAuthnTransactionParent;
 
 namespace {
 
@@ -238,46 +241,54 @@ BackgroundParentImpl::RecvFlushPendingFileDeletions()
   return IPC_OK();
 }
 
-auto
-BackgroundParentImpl::AllocPBlobParent(const BlobConstructorParams& aParams)
-  -> PBlobParent*
+PPendingIPCBlobParent*
+BackgroundParentImpl::AllocPPendingIPCBlobParent(const IPCBlob& aBlob)
 {
-  AssertIsInMainProcess();
-  AssertIsOnBackgroundThread();
-
-  if (NS_WARN_IF(aParams.type() !=
-                   BlobConstructorParams::TParentBlobConstructorParams)) {
-    ASSERT_UNLESS_FUZZING();
-    return nullptr;
-  }
-
-  return mozilla::dom::BlobParent::Create(this, aParams);
+  MOZ_CRASH("PPendingIPCBlobParent actors should be manually constructed!");
 }
 
 bool
-BackgroundParentImpl::DeallocPBlobParent(PBlobParent* aActor)
+BackgroundParentImpl::DeallocPPendingIPCBlobParent(PPendingIPCBlobParent* aActor)
 {
   AssertIsInMainProcess();
   AssertIsOnBackgroundThread();
   MOZ_ASSERT(aActor);
 
-  mozilla::dom::BlobParent::Destroy(aActor);
+  delete aActor;
   return true;
 }
 
-mozilla::ipc::IPCResult
-BackgroundParentImpl::RecvPBlobConstructor(PBlobParent* aActor,
-                                           const BlobConstructorParams& aParams)
+PIPCBlobInputStreamParent*
+BackgroundParentImpl::AllocPIPCBlobInputStreamParent(const nsID& aID,
+                                                     const uint64_t& aSize)
 {
-  const ParentBlobConstructorParams& params = aParams;
-  if (params.blobParams().type() == AnyBlobConstructorParams::TKnownBlobConstructorParams) {
-    if (!aActor->SendCreatedFromKnownBlob()) {
-      return IPC_FAIL_NO_REASON(this);
-    }
-    return IPC_OK();
+  AssertIsInMainProcess();
+  AssertIsOnBackgroundThread();
+
+  return mozilla::dom::IPCBlobInputStreamParent::Create(aID, aSize, this);
+}
+
+mozilla::ipc::IPCResult
+BackgroundParentImpl::RecvPIPCBlobInputStreamConstructor(PIPCBlobInputStreamParent* aActor,
+                                                         const nsID& aID,
+                                                         const uint64_t& aSize)
+{
+  if (!static_cast<mozilla::dom::IPCBlobInputStreamParent*>(aActor)->HasValidStream()) {
+    return IPC_FAIL_NO_REASON(this);
   }
 
   return IPC_OK();
+}
+
+bool
+BackgroundParentImpl::DeallocPIPCBlobInputStreamParent(PIPCBlobInputStreamParent* aActor)
+{
+  AssertIsInMainProcess();
+  AssertIsOnBackgroundThread();
+  MOZ_ASSERT(aActor);
+
+  delete aActor;
+  return true;
 }
 
 PFileDescriptorSetParent*
@@ -302,14 +313,29 @@ BackgroundParentImpl::DeallocPFileDescriptorSetParent(
   return true;
 }
 
-PSendStreamParent*
-BackgroundParentImpl::AllocPSendStreamParent()
+PChildToParentStreamParent*
+BackgroundParentImpl::AllocPChildToParentStreamParent()
 {
-  return mozilla::ipc::AllocPSendStreamParent();
+  return mozilla::ipc::AllocPChildToParentStreamParent();
 }
 
 bool
-BackgroundParentImpl::DeallocPSendStreamParent(PSendStreamParent* aActor)
+BackgroundParentImpl::DeallocPChildToParentStreamParent(
+                                             PChildToParentStreamParent* aActor)
+{
+  delete aActor;
+  return true;
+}
+
+PParentToChildStreamParent*
+BackgroundParentImpl::AllocPParentToChildStreamParent()
+{
+  MOZ_CRASH("PParentToChildStreamParent actors should be manually constructed!");
+}
+
+bool
+BackgroundParentImpl::DeallocPParentToChildStreamParent(
+                                             PParentToChildStreamParent* aActor)
 {
   delete aActor;
   return true;
@@ -538,81 +564,6 @@ private:
   RefPtr<ContentParent> mContentParent;
   PrincipalInfo mPrincipalInfo;
   nsCString mOrigin;
-};
-
-class CheckPermissionRunnable final : public Runnable
-{
-public:
-  CheckPermissionRunnable(already_AddRefed<ContentParent> aParent,
-                          FileSystemRequestParent* aActor,
-                          FileSystemBase::ePermissionCheckType aPermissionCheckType,
-                          const nsCString& aPermissionName)
-    : mContentParent(aParent)
-    , mActor(aActor)
-    , mPermissionCheckType(aPermissionCheckType)
-    , mPermissionName(aPermissionName)
-    , mBackgroundEventTarget(NS_GetCurrentThread())
-  {
-    AssertIsInMainProcess();
-    AssertIsOnBackgroundThread();
-
-    MOZ_ASSERT(mContentParent);
-    MOZ_ASSERT(mBackgroundEventTarget);
-    MOZ_ASSERT(mPermissionCheckType == FileSystemBase::ePermissionCheckRequired ||
-               mPermissionCheckType == FileSystemBase::ePermissionCheckByTestingPref);
-  }
-
-  NS_IMETHOD
-  Run() override
-  {
-    if (NS_IsMainThread()) {
-      NullifyContentParentRAII raii(mContentParent);
-
-      // If the permission is granted, we go back to the background thread to
-      // dispatch this task.
-      if (CheckPermission()) {
-        return mBackgroundEventTarget->Dispatch(this, NS_DISPATCH_NORMAL);
-      }
-
-      return NS_OK;
-    }
-
-    AssertIsOnBackgroundThread();
-
-    // It can happen that this actor has been destroyed in the meantime we were
-    // on the main-thread.
-    if (!mActor->Destroyed()) {
-      mActor->Start();
-    }
-
-    return NS_OK;
-  }
-
-private:
-  ~CheckPermissionRunnable() override
-  {
-     NS_ProxyRelease(mBackgroundEventTarget, mActor.forget());
-  }
-
-  bool
-  CheckPermission()
-  {
-    if (mPermissionCheckType == FileSystemBase::ePermissionCheckByTestingPref &&
-        mozilla::Preferences::GetBool("device.storage.prompt.testing", false)) {
-      return true;
-    }
-
-    return true;
-  }
-
-  RefPtr<ContentParent> mContentParent;
-
-  RefPtr<FileSystemRequestParent> mActor;
-
-  FileSystemBase::ePermissionCheckType mPermissionCheckType;
-  nsCString mPermissionName;
-
-  nsCOMPtr<nsIEventTarget> mBackgroundEventTarget;
 };
 
 } // namespace
@@ -852,39 +803,9 @@ BackgroundParentImpl::AllocPFileSystemRequestParent(
 mozilla::ipc::IPCResult
 BackgroundParentImpl::RecvPFileSystemRequestConstructor(
                                                PFileSystemRequestParent* aActor,
-                                               const FileSystemParams& aParams)
+                                               const FileSystemParams& params)
 {
-  AssertIsInMainProcess();
-  AssertIsOnBackgroundThread();
-
-  RefPtr<FileSystemRequestParent> actor = static_cast<FileSystemRequestParent*>(aActor);
-
-  if (actor->PermissionCheckType() == FileSystemBase::ePermissionCheckNotRequired) {
-    actor->Start();
-    return IPC_OK();
-  }
-
-  RefPtr<ContentParent> parent = BackgroundParent::GetContentParent(this);
-
-  // If the ContentParent is null we are dealing with a same-process actor.
-  if (!parent) {
-    actor->Start();
-    return IPC_OK();
-  }
-
-  const nsCString& permissionName = actor->PermissionName();
-  MOZ_ASSERT(!permissionName.IsEmpty());
-
-  // At this point we should have the right permission but we do the last check
-  // with this runnable. If the app doesn't have the permission, we kill the
-  // child process.
-  RefPtr<CheckPermissionRunnable> runnable =
-    new CheckPermissionRunnable(parent.forget(), actor,
-                                actor->PermissionCheckType(), permissionName);
-
-  nsresult rv = NS_DispatchToMainThread(runnable);
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(rv));
-
+  static_cast<FileSystemRequestParent*>(aActor)->Start();
   return IPC_OK();
 }
 
@@ -934,6 +855,20 @@ BackgroundParentImpl::DeallocPGamepadTestChannelParent(dom::PGamepadTestChannelP
   MOZ_ASSERT(aActor);
   RefPtr<dom::GamepadTestChannelParent> parent =
     dont_AddRef(static_cast<dom::GamepadTestChannelParent*>(aActor));
+  return true;
+}
+
+dom::PWebAuthnTransactionParent*
+BackgroundParentImpl::AllocPWebAuthnTransactionParent()
+{
+  return new dom::WebAuthnTransactionParent();
+}
+
+bool
+BackgroundParentImpl::DeallocPWebAuthnTransactionParent(dom::PWebAuthnTransactionParent *aActor)
+{
+  MOZ_ASSERT(aActor);
+  delete aActor;
   return true;
 }
 

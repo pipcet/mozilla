@@ -42,7 +42,7 @@ class RobocopTestRunner(MochitestDesktop):
         """
            Simple one-time initialization.
         """
-        MochitestDesktop.__init__(self, options)
+        MochitestDesktop.__init__(self, options.flavor, options)
 
         self.auto = automation
         self.dm = devmgr
@@ -89,7 +89,10 @@ class RobocopTestRunner(MochitestDesktop):
         self.killNamedOrphans('xpcshell')
         self.auto.deleteANRs()
         self.auto.deleteTombstones()
-        self.dm.killProcess(self.options.app.split('/')[-1])
+        procName = self.options.app.split('/')[-1]
+        self.dm.killProcess(procName)
+        if self.dm.processExist(procName):
+            self.log.warning("unable to kill %s before running tests!" % procName)
         self.dm.removeDir(self.remoteScreenshots)
         self.dm.removeDir(self.remoteMozLog)
         self.dm.mkDir(self.remoteMozLog)
@@ -102,7 +105,7 @@ class RobocopTestRunner(MochitestDesktop):
             "Android sdk version '%s'; will use this to filter manifests" %
             str(androidVersion))
         mozinfo.info['android_version'] = androidVersion
-        if (self.options.dm_trans == 'adb' and self.options.robocopApk):
+        if self.options.robocopApk:
             self.dm._checkCmd(["install", "-r", self.options.robocopApk])
             self.log.debug("Robocop APK %s installed" %
                            self.options.robocopApk)
@@ -456,7 +459,7 @@ class RobocopTestRunner(MochitestDesktop):
             timeout = self.options.timeout
             if not timeout:
                 timeout = self.NO_OUTPUT_TIMEOUT
-            result = self.auto.runApp(
+            result, _ = self.auto.runApp(
                 None, browserEnv, "am", self.localProfile, browserArgs,
                 timeout=timeout, symbolsPath=self.options.symbolsPath)
             self.log.debug("runApp completes with status %d" % result)

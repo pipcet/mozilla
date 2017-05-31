@@ -9,6 +9,11 @@
 #include "nsIProfiler.h"
 #include "nsIObserver.h"
 #include "mozilla/Attributes.h"
+#include "nsServiceManagerUtils.h"
+
+namespace mozilla {
+class ProfileGatherer;
+}
 
 class nsProfiler final : public nsIProfiler, public nsIObserver
 {
@@ -20,8 +25,20 @@ public:
     NS_DECL_NSIPROFILER
 
     nsresult Init();
+
+    static nsProfiler* GetOrCreate()
+    {
+	nsCOMPtr<nsIProfiler> iprofiler =
+	    do_GetService("@mozilla.org/tools/profiler;1");
+	return static_cast<nsProfiler*>(iprofiler.get());
+    }
+
+    void GatheredOOPProfile(const nsACString& aProfile);
+
 private:
     ~nsProfiler();
+
+    RefPtr<mozilla::ProfileGatherer> mGatherer;
     bool mLockedForPrivateBrowsing;
 };
 

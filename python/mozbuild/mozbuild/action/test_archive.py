@@ -103,6 +103,7 @@ ARCHIVE_FILES = {
                 'mochitest/**',
                 'reftest/**',
                 'talos/**',
+                'awsy/**',
                 'web-platform/**',
                 'xpcshell/**',
             ],
@@ -374,6 +375,13 @@ ARCHIVE_FILES = {
             'pattern': 'talos/**',
         },
     ],
+    'awsy': [
+        {
+            'source': buildconfig.topsrcdir,
+            'base': 'testing',
+            'pattern': 'awsy/**',
+        },
+    ],
     'web-platform': [
         {
             'source': buildconfig.topsrcdir,
@@ -415,7 +423,6 @@ ARCHIVE_FILES = {
                 'node-http2/**',
                 'node-spdy/**',
                 'remotexpcshelltests.py',
-                'runtestsb2g.py',
                 'runxpcshelltests.py',
                 'xpcshellcommandline.py',
             ],
@@ -440,6 +447,16 @@ ARCHIVE_FILES = {
         },
     ],
 }
+
+
+if buildconfig.substs.get('MOZ_ASAN') and buildconfig.substs.get('CLANG_CL'):
+    asan_dll = {
+        'source': buildconfig.topobjdir,
+        'base': 'dist/bin',
+        'pattern': os.path.basename(buildconfig.substs['MOZ_CLANG_RT_ASAN_LIB_PATH']),
+        'dest': 'bin'
+    }
+    ARCHIVE_FILES['common'].append(asan_dll)
 
 
 # "common" is our catch all archive and it ignores things from other archives.

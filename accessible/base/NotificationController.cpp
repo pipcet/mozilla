@@ -329,20 +329,27 @@ NotificationController::CoalesceMutationEvents()
           // queue, so we want to use the spot of the event with the higher
           // generation number, and keep that generation number.
           if (reorder && reorder->EventGeneration() < event->EventGeneration()) {
-            // There really should be a show or hide event before the first
-            // reorder event.
-            if (reorder->PrevEvent()) {
-              reorder->PrevEvent()->SetNextEvent(reorder->NextEvent());
-            } else {
-              mFirstMutationEvent = reorder->NextEvent();
-            }
-
-            reorder->NextEvent()->SetPrevEvent(reorder->PrevEvent());
-            event->PrevEvent()->SetNextEvent(reorder);
-            reorder->SetPrevEvent(event->PrevEvent());
-            event->SetPrevEvent(reorder);
-            reorder->SetNextEvent(event);
             reorder->SetEventGeneration(event->EventGeneration());
+
+            // It may be true that reorder was before event, and we coalesced
+            // away all the show / hide events between them.  In that case
+            // event is already immediately after reorder in the queue and we
+            // do not need to rearrange the list of events.
+            if (event != reorder->NextEvent()) {
+              // There really should be a show or hide event before the first
+              // reorder event.
+              if (reorder->PrevEvent()) {
+                reorder->PrevEvent()->SetNextEvent(reorder->NextEvent());
+              } else {
+                mFirstMutationEvent = reorder->NextEvent();
+              }
+
+              reorder->NextEvent()->SetPrevEvent(reorder->PrevEvent());
+              event->PrevEvent()->SetNextEvent(reorder);
+              reorder->SetPrevEvent(event->PrevEvent());
+              event->SetPrevEvent(reorder);
+              reorder->SetNextEvent(event);
+            }
           }
           DropMutationEvent(event);
           break;
@@ -584,7 +591,6 @@ void
 NotificationController::WillRefresh(mozilla::TimeStamp aTime)
 {
   PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
-  Telemetry::AutoTimer<Telemetry::A11Y_UPDATE_TIME> updateTimer;
 
   // If the document accessible that notification collector was created for is
   // now shut down, don't process notifications anymore.
@@ -669,7 +675,7 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
         }
   #endif
 
-        mDocument->ContentRemoved(containerElm, textNode);
+        mDocument->ContentRemoved(textAcc);
         continue;
       }
 
@@ -723,13 +729,20 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
   }
   mContentInsertions.Clear();
 
-  // Bind hanging child documents.
+  // Bind hanging child documents unless we are using IPC and the
+  // document has no IPC actor.  If we fail to bind the child doc then
+  // shut it down.
   uint32_t hangingDocCnt = mHangingChildDocuments.Length();
   nsTArray<RefPtr<DocAccessible>> newChildDocs;
   for (uint32_t idx = 0; idx < hangingDocCnt; idx++) {
     DocAccessible* childDoc = mHangingChildDocuments[idx];
     if (childDoc->IsDefunct())
       continue;
+
+    if (IPCAccessibilityActive() && !mDocument->IPCDoc()) {
+      childDoc->Shutdown();
+      continue;
+    }
 
     nsIContent* ownerContent = mDocument->DocumentNode()->
       FindContentForSubDocument(childDoc->DocumentNode());
@@ -749,7 +762,12 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
     }
   }
 
+  // Clear the hanging documents list, even if we didn't bind them.
   mHangingChildDocuments.Clear();
+  MOZ_ASSERT(mDocument, "Illicit document shutdown");
+  if (!mDocument) {
+    return;
+  }
 
   // If the document is ready and all its subdocuments are completely loaded
   // then process the document load.
@@ -784,10 +802,6 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
   // Process invalidation list of the document after all accessible tree
   // modification are done.
   mDocument->ProcessInvalidationList();
-
-  // We cannot rely on DOM tree to keep aria-owns relations updated. Make
-  // a validation to remove dead links.
-  mDocument->ValidateARIAOwned();
 
   // Process relocation list.
   for (uint32_t idx = 0; idx < mRelocations.Length(); idx++) {
@@ -857,7 +871,7 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
         continue;
       }
 
-      ipcDoc = new DocAccessibleChild(childDoc);
+      ipcDoc = new DocAccessibleChild(childDoc, parentIPCDoc->Manager());
       childDoc->SetIPCDoc(ipcDoc);
 
 #if defined(XP_WIN)

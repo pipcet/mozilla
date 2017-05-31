@@ -11,8 +11,10 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(SIMPLE_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
-  let { getSortedRequests } = windowRequire("devtools/client/netmonitor/selectors/index");
+  let { document, store, windowRequire } = monitor.panelWin;
+  let {
+    getSortedRequests,
+  } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
   let wait = waitForNetworkEvents(monitor, 1);
   tab.linkedBrowser.reload();
@@ -21,7 +23,7 @@ add_task(function* () {
   EventUtils.sendMouseEvent({ type: "mousedown" },
     document.querySelectorAll(".request-list-item")[0]);
 
-  let requestItem = getSortedRequests(gStore.getState()).get(0);
+  let requestItem = getSortedRequests(store.getState()).get(0);
   let { method, httpVersion, status, statusText } = requestItem;
 
   EventUtils.sendMouseEvent({ type: "contextmenu" },
@@ -41,9 +43,7 @@ add_task(function* () {
   ].join("\n");
 
   yield waitForClipboardPromise(function setup() {
-    // Context menu is appending in XUL document, we must select it from
-    // toolbox.doc
-    monitor.toolbox.doc
+    monitor.panelWin.parent.document
       .querySelector("#request-list-context-copy-request-headers").click();
   }, function validate(result) {
     // Sometimes, a "Cookie" header is left over from other tests. Remove it:
@@ -54,27 +54,25 @@ add_task(function* () {
 
   const EXPECTED_RESPONSE_HEADERS = [
     `${httpVersion} ${status} ${statusText}`,
-    "Last-Modified: Sun, 3 May 2015 11:11:11 GMT",
-    "Content-Type: text/html",
-    "Content-Length: 465",
-    "Connection: close",
-    "Server: httpd.js",
-    "Date: Sun, 3 May 2015 11:11:11 GMT"
+    "last-modified: Sun, 3 May 2015 11:11:11 GMT",
+    "content-type: text/html",
+    "content-length: 465",
+    "connection: close",
+    "server: httpd.js",
+    "date: Sun, 3 May 2015 11:11:11 GMT"
   ].join("\n");
 
   EventUtils.sendMouseEvent({ type: "contextmenu" },
     document.querySelectorAll(".request-list-item")[0]);
 
   yield waitForClipboardPromise(function setup() {
-    // Context menu is appending in XUL document, we must select it from
-    // _oolbox.doc
-    monitor.toolbox.doc
+    monitor.panelWin.parent.document
       .querySelector("#response-list-context-copy-response-headers").click();
   }, function validate(result) {
     // Fake the "Last-Modified" and "Date" headers because they will vary:
     result = String(result)
-      .replace(/Last-Modified: [^\n]+ GMT/, "Last-Modified: Sun, 3 May 2015 11:11:11 GMT")
-      .replace(/Date: [^\n]+ GMT/, "Date: Sun, 3 May 2015 11:11:11 GMT");
+      .replace(/last-modified: [^\n]+ GMT/, "last-modified: Sun, 3 May 2015 11:11:11 GMT")
+      .replace(/date: [^\n]+ GMT/, "date: Sun, 3 May 2015 11:11:11 GMT");
     return result === EXPECTED_RESPONSE_HEADERS;
   });
   info("Clipboard contains the currently selected item's response headers.");

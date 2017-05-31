@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* import-globals-from preferences.js */
+
 Components.utils.import("resource://gre/modules/AppConstants.jsm");
 Components.utils.import("resource://gre/modules/PluralForm.jsm");
 
@@ -329,9 +331,7 @@ var gPrivacyPane = {
         pref.value = false;
 
       // select the remember history option if needed
-      let rememberHistoryCheckbox = document.getElementById("rememberHistory");
-      if (!rememberHistoryCheckbox.checked)
-        rememberHistoryCheckbox.checked = true;
+      document.getElementById("places.history.enabled").value = true;
 
       // select the remember forms history option
       document.getElementById("browser.formfill.enable").value = true;
@@ -605,13 +605,13 @@ var gPrivacyPane = {
    */
   showCookieExceptions() {
     var bundlePreferences = document.getElementById("bundlePreferences");
-    var params = { blockVisible   : true,
-                   sessionVisible : true,
-                   allowVisible   : true,
-                   prefilledHost  : "",
-                   permissionType : "cookie",
-                   windowTitle    : bundlePreferences.getString("cookiepermissionstitle"),
-                   introText      : bundlePreferences.getString("cookiepermissionstext") };
+    var params = { blockVisible: true,
+                   sessionVisible: true,
+                   allowVisible: true,
+                   prefilledHost: "",
+                   permissionType: "cookie",
+                   windowTitle: bundlePreferences.getString("cookiepermissionstitle"),
+                   introText: bundlePreferences.getString("cookiepermissionstext") };
     gSubDialog.open("chrome://browser/content/preferences/permissions.xul",
                     null, params);
   },
@@ -659,7 +659,7 @@ var gPrivacyPane = {
         ts.value = timeSpanOrig;
       }
 
-      Services.obs.notifyObservers(null, "clear-private-data", null);
+      Services.obs.notifyObservers(null, "clear-private-data");
     });
   },
 

@@ -4,8 +4,8 @@ MAINTAINER    Joel Maher <joel.maher@gmail.com>
 RUN useradd -d /home/worker -s /bin/bash -m worker
 WORKDIR /home/worker
 
-# %include taskcluster/docker/recipes/tooltool.py
-ADD topsrcdir/taskcluster/docker/recipes/tooltool.py /setup/tooltool.py
+# %include python/mozbuild/mozbuild/action/tooltool.py
+ADD topsrcdir/python/mozbuild/mozbuild/action/tooltool.py /setup/tooltool.py
 
 # %include testing/mozharness/external_tools/robustcheckout.py
 ADD topsrcdir/testing/mozharness/external_tools/robustcheckout.py /usr/local/mercurial/robustcheckout.py
@@ -34,8 +34,8 @@ ADD topsrcdir/taskcluster/docker/recipes/xvfb.sh /home/worker/scripts/xvfb.sh
 # %include taskcluster/docker/recipes/run-task
 ADD topsrcdir/taskcluster/docker/recipes/run-task /home/worker/bin/run-task
 
-# %include taskcluster/scripts/tester/test-ubuntu.sh
-ADD topsrcdir/taskcluster/scripts/tester/test-ubuntu.sh /home/worker/bin/test-linux.sh
+# %include taskcluster/scripts/tester/test-linux.sh
+ADD topsrcdir/taskcluster/scripts/tester/test-linux.sh /home/worker/bin/test-linux.sh
 
 # This will create a host mounted filesystem when the cache is stripped
 # on Try. This cancels out some of the performance losses of aufs. See
@@ -87,7 +87,10 @@ RUN rm -Rf .cache && mkdir -p .cache
 ADD release-upgrades /etc/update-manager/release-upgrades
 
 # Disable tools with on-login popups that interfere with tests; see bug 1240084 and bug 984944.
-ADD jockey-gtk.desktop deja-dup-monitor.desktop /etc/xdg/autostart/
+ADD autostart/jockey-gtk.desktop autostart/deja-dup-monitor.desktop /etc/xdg/autostart/
+
+# Bug 1345105 - Do not run periodical update checks and downloads
+ADD autostart/gnome-software-service.desktop /etc/xdg/autostart/
 
 # In test.sh we accept START_VNC to start a vnc daemon.
 # Exposing this port allows it to work.

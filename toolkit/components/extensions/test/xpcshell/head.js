@@ -4,13 +4,13 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 /* exported createHttpServer, promiseConsoleOutput, cleanupDir */
 
-Components.utils.import("resource://gre/modules/Task.jsm");
+Components.utils.import("resource://gre/modules/AppConstants.jsm");
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/Timer.jsm");
 Components.utils.import("resource://testing-common/AddonTestUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
-                                  "resource://gre/modules/AppConstants.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "ContentTask",
+                                  "resource://testing-common/ContentTask.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Extension",
                                   "resource://gre/modules/Extension.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ExtensionData",
@@ -56,7 +56,11 @@ function createHttpServer(port = -1) {
   return server;
 }
 
-var promiseConsoleOutput = Task.async(function* (task) {
+if (AppConstants.platform === "android") {
+  Services.io.offline = true;
+}
+
+var promiseConsoleOutput = async function(task) {
   const DONE = `=== console listener ${Math.random()} done ===`;
 
   let listener;
@@ -74,16 +78,16 @@ var promiseConsoleOutput = Task.async(function* (task) {
 
   Services.console.registerListener(listener);
   try {
-    let result = yield task();
+    let result = await task();
 
     Services.console.logStringMessage(DONE);
-    yield awaitListener;
+    await awaitListener;
 
     return {messages, result};
   } finally {
     Services.console.unregisterListener(listener);
   }
-});
+};
 
 // Attempt to remove a directory.  If the Windows OS is still using the
 // file sometimes remove() will fail.  So try repeatedly until we can

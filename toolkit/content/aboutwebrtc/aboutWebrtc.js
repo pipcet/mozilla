@@ -3,8 +3,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-/* global WebrtcGlobalInformation, document */
-
 var Cu = Components.utils;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
@@ -612,8 +610,8 @@ RTPStats.prototype = {
 
       statsString += ` ${getString("lost_label")}: ${stats.packetsLost} ${getString("jitter_label")}: ${stats.jitter}`;
 
-      if (stats.mozRtt) {
-        statsString += ` RTT: ${stats.mozRtt} ms`;
+      if (stats.roundTripTime) {
+        statsString += ` RTT: ${stats.roundTripTime} ms`;
       }
     } else if (stats.packetsSent) {
       statsString += ` ${getString("sent_label")}: ${stats.packetsSent} ${getString("packets")}`;

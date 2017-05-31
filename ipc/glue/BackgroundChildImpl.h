@@ -70,11 +70,18 @@ protected:
   DeallocPBackgroundIndexedDBUtilsChild(PBackgroundIndexedDBUtilsChild* aActor)
                                         override;
 
-  virtual PBlobChild*
-  AllocPBlobChild(const BlobConstructorParams& aParams) override;
+  virtual PPendingIPCBlobChild*
+  AllocPPendingIPCBlobChild(const IPCBlob& aBlob) override;
 
   virtual bool
-  DeallocPBlobChild(PBlobChild* aActor) override;
+  DeallocPPendingIPCBlobChild(PPendingIPCBlobChild* aActor) override;
+
+  virtual PIPCBlobInputStreamChild*
+  AllocPIPCBlobInputStreamChild(const nsID& aID,
+                                const uint64_t& aSize) override;
+
+  virtual bool
+  DeallocPIPCBlobInputStreamChild(PIPCBlobInputStreamChild* aActor) override;
 
   virtual PFileDescriptorSetChild*
   AllocPFileDescriptorSetChild(const FileDescriptor& aFileDescriptor)
@@ -140,11 +147,17 @@ protected:
   virtual bool
   DeallocPMessagePortChild(PMessagePortChild* aActor) override;
 
-  virtual PSendStreamChild*
-  AllocPSendStreamChild() override;
+  virtual PChildToParentStreamChild*
+  AllocPChildToParentStreamChild() override;
 
   virtual bool
-  DeallocPSendStreamChild(PSendStreamChild* aActor) override;
+  DeallocPChildToParentStreamChild(PChildToParentStreamChild* aActor) override;
+
+  virtual PParentToChildStreamChild*
+  AllocPParentToChildStreamChild() override;
+
+  virtual bool
+  DeallocPParentToChildStreamChild(PParentToChildStreamChild* aActor) override;
 
   virtual PAsmJSCacheEntryChild*
   AllocPAsmJSCacheEntryChild(const dom::asmjscache::OpenMode& aOpenMode,
@@ -178,6 +191,17 @@ protected:
 
   virtual bool
   DeallocPGamepadTestChannelChild(PGamepadTestChannelChild* aActor) override;
+
+#ifdef EARLY_BETA_OR_EARLIER
+  virtual void
+  OnChannelReceivedMessage(const Message& aMsg) override;
+#endif
+
+  virtual PWebAuthnTransactionChild*
+  AllocPWebAuthnTransactionChild() override;
+
+  virtual bool
+  DeallocPWebAuthnTransactionChild(PWebAuthnTransactionChild* aActor) override;
 };
 
 class BackgroundChildImpl::ThreadLocal final

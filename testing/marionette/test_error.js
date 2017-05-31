@@ -56,16 +56,16 @@ add_test(function test_wrap() {
   ok(error.wrap(new InvalidArgumentError()) instanceof WebDriverError);
   ok(error.wrap(new InvalidArgumentError()) instanceof InvalidArgumentError);
 
-  // JS errors should be wrapped in WebDriverError
-  equal(error.wrap(new Error()).name, "WebDriverError");
-  ok(error.wrap(new Error()) instanceof WebDriverError);
-  equal(error.wrap(new EvalError()).name, "WebDriverError");
-  equal(error.wrap(new InternalError()).name, "WebDriverError");
-  equal(error.wrap(new RangeError()).name, "WebDriverError");
-  equal(error.wrap(new ReferenceError()).name, "WebDriverError");
-  equal(error.wrap(new SyntaxError()).name, "WebDriverError");
-  equal(error.wrap(new TypeError()).name, "WebDriverError");
-  equal(error.wrap(new URIError()).name, "WebDriverError");
+  // JS errors should be wrapped in UnknownError
+  equal(error.wrap(new Error()).name, "UnknownError");
+  ok(error.wrap(new Error()) instanceof UnknownError);
+  equal(error.wrap(new EvalError()).name, "UnknownError");
+  equal(error.wrap(new InternalError()).name, "UnknownError");
+  equal(error.wrap(new RangeError()).name, "UnknownError");
+  equal(error.wrap(new ReferenceError()).name, "UnknownError");
+  equal(error.wrap(new SyntaxError()).name, "UnknownError");
+  equal(error.wrap(new TypeError()).name, "UnknownError");
+  equal(error.wrap(new URIError()).name, "UnknownError");
 
   // wrapped JS errors should retain their type
   // as part of the message field
@@ -85,6 +85,33 @@ add_test(function test_stringify() {
       error.stringify(new WebDriverError("foo")).split("\n")[0]);
   equal("InvalidArgumentError: foo",
       error.stringify(new InvalidArgumentError("foo")).split("\n")[0]);
+
+  run_next_test();
+});
+
+add_test(function test_pprint() {
+  equal('[object Object] {"foo":"bar"}', error.pprint`${{foo: "bar"}}`);
+
+  equal("[object Number] 42", error.pprint`${42}`);
+  equal("[object Boolean] true", error.pprint`${true}`);
+  equal("[object Undefined] undefined", error.pprint`${undefined}`);
+  equal("[object Null] null", error.pprint`${null}`);
+
+  let complexObj = {toJSON: () => "foo"};
+  equal('[object Object] "foo"', error.pprint`${complexObj}`);
+
+  let cyclic = {};
+  cyclic.me = cyclic;
+  equal("[object Object] <cyclic object value>", error.pprint`${cyclic}`);
+
+  let el = {
+    nodeType: 1,
+    localName: "input",
+    id: "foo",
+    classList: {length: 1},
+    className: "bar baz",
+  };
+  equal('<input id="foo" class="bar baz">', error.pprint`${el}`);
 
   run_next_test();
 });
@@ -167,6 +194,44 @@ add_test(function test_WebDriverError() {
   run_next_test();
 });
 
+add_test(function test_ElementClickInterceptedError() {
+  let otherEl = {
+    nodeType: 1,
+    localName: "a",
+    classList: [],
+  };
+  let obscuredEl = {
+    nodeType: 1,
+    localName: "b",
+    classList: [],
+    ownerDocument: {
+      elementFromPoint: function (x, y) {
+        return otherEl;
+      },
+    },
+    style: {
+      pointerEvents: "auto",
+    }
+  };
+
+  let err1 = new ElementClickInterceptedError(obscuredEl, {x: 1, y: 2});
+  equal("ElementClickInterceptedError", err1.name);
+  equal("Element <b> is not clickable at point (1,2) " +
+      "because another element <a> obscures it",
+      err1.message);
+  equal("element click intercepted", err1.status);
+  ok(err1 instanceof WebDriverError);
+
+  obscuredEl.style.pointerEvents = "none";
+  let err2 = new ElementClickInterceptedError(obscuredEl, {x: 1, y: 2});
+  equal("Element <b> is not clickable at point (1,2) " +
+      "because it does not have pointer events enabled, " +
+      "and element <a> would receive the click instead",
+      err2.message);
+
+  run_next_test();
+});
+
 add_test(function test_ElementNotAccessibleError() {
   let err = new ElementNotAccessibleError("foo");
   equal("ElementNotAccessibleError", err.name);
@@ -177,11 +242,11 @@ add_test(function test_ElementNotAccessibleError() {
   run_next_test();
 });
 
-add_test(function test_ElementNotVisibleError() {
-  let err = new ElementNotVisibleError("foo");
-  equal("ElementNotVisibleError", err.name);
+add_test(function test_ElementNotInteractableError() {
+  let err = new ElementNotInteractableError("foo");
+  equal("ElementNotInteractableError", err.name);
   equal("foo", err.message);
-  equal("element not visible", err.status);
+  equal("element not interactable", err.status);
   ok(err instanceof WebDriverError);
 
   run_next_test();
@@ -192,6 +257,16 @@ add_test(function test_InvalidArgumentError() {
   equal("InvalidArgumentError", err.name);
   equal("foo", err.message);
   equal("invalid argument", err.status);
+  ok(err instanceof WebDriverError);
+
+  run_next_test();
+});
+
+add_test(function test_InvalidCookieDomainError() {
+  let err = new InvalidCookieDomainError("foo");
+  equal("InvalidCookieDomainError", err.name);
+  equal("foo", err.message);
+  equal("invalid cookie domain", err.status);
   ok(err instanceof WebDriverError);
 
   run_next_test();

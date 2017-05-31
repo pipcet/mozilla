@@ -12,7 +12,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/* globals Components, Services, XPCOMUtils */
 
 "use strict";
 
@@ -40,6 +39,7 @@ var DEFAULT_PREFERENCES =
   "defaultZoomValue": "",
   "sidebarViewOnLoad": 0,
   "enableHandToolOnLoad": false,
+  "cursorToolOnLoad": 0,
   "enableWebGL": false,
   "pdfBugEnabled": false,
   "disableRange": false,
@@ -90,8 +90,8 @@ var PdfjsChromeUtils = {
       this._mmg.addMessageListener("PDFJS:Parent:removeEventListener", this);
       this._mmg.addMessageListener("PDFJS:Parent:updateControlState", this);
 
-      // observer to handle shutdown
-      Services.obs.addObserver(this, "quit-application", false);
+      // Observer to handle shutdown.
+      Services.obs.addObserver(this, "quit-application");
     }
   },
 
@@ -290,10 +290,7 @@ var PdfjsChromeUtils = {
 
   _setStringPref(aPrefName, aPrefValue) {
     this._ensurePreferenceAllowed(aPrefName);
-    let str = Cc["@mozilla.org/supports-string;1"]
-                .createInstance(Ci.nsISupportsString);
-    str.data = aPrefValue;
-    Services.prefs.setComplexValue(aPrefName, Ci.nsISupportsString, str);
+    Services.prefs.setStringPref(aPrefName, aPrefValue);
   },
 
   /*

@@ -85,6 +85,8 @@ CertificateTransparencyInfo::Reset()
 CertVerifier::CertVerifier(OcspDownloadConfig odc,
                            OcspStrictConfig osc,
                            OcspGetConfig ogc,
+                           mozilla::TimeDuration ocspTimeoutSoft,
+                           mozilla::TimeDuration ocspTimeoutHard,
                            uint32_t certShortLifetimeInDays,
                            PinningMode pinningMode,
                            SHA1Mode sha1Mode,
@@ -94,6 +96,8 @@ CertVerifier::CertVerifier(OcspDownloadConfig odc,
   : mOCSPDownloadConfig(odc)
   , mOCSPStrict(osc == ocspStrict)
   , mOCSPGETEnabled(ogc == ocspGetEnabled)
+  , mOCSPTimeoutSoft(ocspTimeoutSoft)
+  , mOCSPTimeoutHard(ocspTimeoutHard)
   , mCertShortLifetimeInDays(certShortLifetimeInDays)
   , mPinningMode(pinningMode)
   , mSHA1Mode(sha1Mode)
@@ -440,6 +444,7 @@ Result
 CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
                          Time time, void* pinArg, const char* hostname,
                  /*out*/ UniqueCERTCertList& builtChain,
+            /*optional*/ UniqueCERTCertList* peerCertChain,
             /*optional*/ const Flags flags,
             /*optional*/ const SECItem* stapledOCSPResponseSECItem,
             /*optional*/ const SECItem* sctsFromTLSSECItem,
@@ -532,13 +537,15 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
       // just use trustEmail as it is the closest alternative.
       NSSCertDBTrustDomain trustDomain(trustEmail, defaultOCSPFetching,
                                        mOCSPCache, pinArg, ocspGETConfig,
+                                       mOCSPTimeoutSoft, mOCSPTimeoutHard,
                                        mCertShortLifetimeInDays,
                                        pinningDisabled, MIN_RSA_BITS_WEAK,
                                        ValidityCheckingMode::CheckingOff,
                                        SHA1Mode::Allowed,
                                        NetscapeStepUpPolicy::NeverMatch,
                                        originAttributes,
-                                       builtChain, nullptr, nullptr);
+                                       builtChain, peerCertChain, nullptr,
+                                       nullptr);
       rv = BuildCertChain(trustDomain, certDER, time,
                           EndEntityOrCA::MustBeEndEntity,
                           KeyUsage::digitalSignature,
@@ -608,11 +615,12 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
         NSSCertDBTrustDomain
           trustDomain(trustSSL, evOCSPFetching,
                       mOCSPCache, pinArg, ocspGETConfig,
+                      mOCSPTimeoutSoft, mOCSPTimeoutHard,
                       mCertShortLifetimeInDays, mPinningMode, MIN_RSA_BITS,
                       ValidityCheckingMode::CheckForEV,
                       sha1ModeConfigurations[i], mNetscapeStepUpPolicy,
-                      originAttributes, builtChain, pinningTelemetryInfo,
-                      hostname);
+                      originAttributes, builtChain, peerCertChain,
+                      pinningTelemetryInfo, hostname);
         rv = BuildCertChainForOneKeyUsage(trustDomain, certDER, time,
                                           KeyUsage::digitalSignature,// (EC)DHE
                                           KeyUsage::keyEncipherment, // RSA
@@ -694,13 +702,15 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
 
           NSSCertDBTrustDomain trustDomain(trustSSL, defaultOCSPFetching,
                                            mOCSPCache, pinArg, ocspGETConfig,
+                                           mOCSPTimeoutSoft, mOCSPTimeoutHard,
                                            mCertShortLifetimeInDays,
                                            mPinningMode, keySizeOptions[i],
                                            ValidityCheckingMode::CheckingOff,
                                            sha1ModeConfigurations[j],
                                            mNetscapeStepUpPolicy,
                                            originAttributes, builtChain,
-                                           pinningTelemetryInfo, hostname);
+                                           peerCertChain, pinningTelemetryInfo,
+                                           hostname);
           rv = BuildCertChainForOneKeyUsage(trustDomain, certDER, time,
                                             KeyUsage::digitalSignature,//(EC)DHE
                                             KeyUsage::keyEncipherment,//RSA
@@ -758,12 +768,13 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
     case certificateUsageSSLCA: {
       NSSCertDBTrustDomain trustDomain(trustSSL, defaultOCSPFetching,
                                        mOCSPCache, pinArg, ocspGETConfig,
+                                       mOCSPTimeoutSoft, mOCSPTimeoutHard,
                                        mCertShortLifetimeInDays,
                                        pinningDisabled, MIN_RSA_BITS_WEAK,
                                        ValidityCheckingMode::CheckingOff,
                                        SHA1Mode::Allowed, mNetscapeStepUpPolicy,
-                                       originAttributes, builtChain, nullptr,
-                                       nullptr);
+                                       originAttributes, builtChain,
+                                       peerCertChain, nullptr, nullptr);
       rv = BuildCertChain(trustDomain, certDER, time,
                           EndEntityOrCA::MustBeCA, KeyUsage::keyCertSign,
                           KeyPurposeId::id_kp_serverAuth,
@@ -774,13 +785,14 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
     case certificateUsageEmailSigner: {
       NSSCertDBTrustDomain trustDomain(trustEmail, defaultOCSPFetching,
                                        mOCSPCache, pinArg, ocspGETConfig,
+                                       mOCSPTimeoutSoft, mOCSPTimeoutHard,
                                        mCertShortLifetimeInDays,
                                        pinningDisabled, MIN_RSA_BITS_WEAK,
                                        ValidityCheckingMode::CheckingOff,
                                        SHA1Mode::Allowed,
                                        NetscapeStepUpPolicy::NeverMatch,
-                                       originAttributes, builtChain, nullptr,
-                                       nullptr);
+                                       originAttributes, builtChain,
+                                       peerCertChain, nullptr, nullptr);
       rv = BuildCertChain(trustDomain, certDER, time,
                           EndEntityOrCA::MustBeEndEntity,
                           KeyUsage::digitalSignature,
@@ -802,13 +814,14 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
       // based on the result of the verification(s).
       NSSCertDBTrustDomain trustDomain(trustEmail, defaultOCSPFetching,
                                        mOCSPCache, pinArg, ocspGETConfig,
+                                       mOCSPTimeoutSoft, mOCSPTimeoutHard,
                                        mCertShortLifetimeInDays,
                                        pinningDisabled, MIN_RSA_BITS_WEAK,
                                        ValidityCheckingMode::CheckingOff,
                                        SHA1Mode::Allowed,
                                        NetscapeStepUpPolicy::NeverMatch,
-                                       originAttributes, builtChain, nullptr,
-                                       nullptr);
+                                       originAttributes, builtChain,
+                                       peerCertChain, nullptr, nullptr);
       rv = BuildCertChain(trustDomain, certDER, time,
                           EndEntityOrCA::MustBeEndEntity,
                           KeyUsage::keyEncipherment, // RSA
@@ -827,13 +840,14 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
     case certificateUsageObjectSigner: {
       NSSCertDBTrustDomain trustDomain(trustObjectSigning, defaultOCSPFetching,
                                        mOCSPCache, pinArg, ocspGETConfig,
+                                       mOCSPTimeoutSoft, mOCSPTimeoutHard,
                                        mCertShortLifetimeInDays,
                                        pinningDisabled, MIN_RSA_BITS_WEAK,
                                        ValidityCheckingMode::CheckingOff,
                                        SHA1Mode::Allowed,
                                        NetscapeStepUpPolicy::NeverMatch,
-                                       originAttributes, builtChain, nullptr,
-                                       nullptr);
+                                       originAttributes, builtChain,
+                                       peerCertChain, nullptr, nullptr);
       rv = BuildCertChain(trustDomain, certDER, time,
                           EndEntityOrCA::MustBeEndEntity,
                           KeyUsage::digitalSignature,
@@ -861,33 +875,38 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
       }
 
       NSSCertDBTrustDomain sslTrust(trustSSL, defaultOCSPFetching, mOCSPCache,
-                                    pinArg, ocspGETConfig, mCertShortLifetimeInDays,
+                                    pinArg, ocspGETConfig, mOCSPTimeoutSoft,
+                                    mOCSPTimeoutHard, mCertShortLifetimeInDays,
                                     pinningDisabled, MIN_RSA_BITS_WEAK,
                                     ValidityCheckingMode::CheckingOff,
                                     SHA1Mode::Allowed,
                                     NetscapeStepUpPolicy::NeverMatch,
-                                    originAttributes, builtChain, nullptr,
-                                    nullptr);
+                                    originAttributes, builtChain, peerCertChain,
+                                    nullptr, nullptr);
       rv = BuildCertChain(sslTrust, certDER, time, endEntityOrCA,
                           keyUsage, eku, CertPolicyId::anyPolicy,
                           stapledOCSPResponse);
       if (rv == Result::ERROR_UNKNOWN_ISSUER) {
         NSSCertDBTrustDomain emailTrust(trustEmail, defaultOCSPFetching,
                                         mOCSPCache, pinArg, ocspGETConfig,
+                                        mOCSPTimeoutSoft, mOCSPTimeoutHard,
                                         mCertShortLifetimeInDays,
                                         pinningDisabled, MIN_RSA_BITS_WEAK,
                                         ValidityCheckingMode::CheckingOff,
                                         SHA1Mode::Allowed,
                                         NetscapeStepUpPolicy::NeverMatch,
-                                        originAttributes, builtChain, nullptr,
-                                        nullptr);
+                                        originAttributes, builtChain,
+                                        peerCertChain, nullptr, nullptr);
         rv = BuildCertChain(emailTrust, certDER, time, endEntityOrCA,
                             keyUsage, eku, CertPolicyId::anyPolicy,
                             stapledOCSPResponse);
         if (rv == Result::ERROR_UNKNOWN_ISSUER) {
           NSSCertDBTrustDomain objectSigningTrust(trustObjectSigning,
-                                                  defaultOCSPFetching, mOCSPCache,
-                                                  pinArg, ocspGETConfig,
+                                                  defaultOCSPFetching,
+                                                  mOCSPCache, pinArg,
+                                                  ocspGETConfig,
+                                                  mOCSPTimeoutSoft,
+                                                  mOCSPTimeoutHard,
                                                   mCertShortLifetimeInDays,
                                                   pinningDisabled,
                                                   MIN_RSA_BITS_WEAK,
@@ -895,7 +914,8 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
                                                   SHA1Mode::Allowed,
                                                   NetscapeStepUpPolicy::NeverMatch,
                                                   originAttributes, builtChain,
-                                                  nullptr, nullptr);
+                                                  peerCertChain, nullptr,
+                                                  nullptr);
           rv = BuildCertChain(objectSigningTrust, certDER, time,
                               endEntityOrCA, keyUsage, eku,
                               CertPolicyId::anyPolicy, stapledOCSPResponse);
@@ -924,6 +944,7 @@ CertVerifier::VerifySSLServerCert(const UniqueCERTCertificate& peerCert,
                      /*optional*/ void* pinarg,
                                   const char* hostname,
                           /*out*/ UniqueCERTCertList& builtChain,
+                     /*optional*/ UniqueCERTCertList* peerCertChain,
                      /*optional*/ bool saveIntermediatesInPermanentDatabase,
                      /*optional*/ Flags flags,
                      /*optional*/ const OriginAttributes& originAttributes,
@@ -950,7 +971,7 @@ CertVerifier::VerifySSLServerCert(const UniqueCERTCertificate& peerCert,
   // CreateCertErrorRunnable assumes that CheckCertHostname is only called
   // if VerifyCert succeeded.
   Result rv = VerifyCert(peerCert.get(), certificateUsageSSLServer, time,
-                         pinarg, hostname, builtChain, flags,
+                         pinarg, hostname, builtChain, peerCertChain, flags,
                          stapledOCSPResponse, sctsFromTLS, originAttributes,
                          evOidPolicy, ocspStaplingStatus, keySizeStatus,
                          sha1ModeResult, pinningTelemetryInfo, ctInfo);

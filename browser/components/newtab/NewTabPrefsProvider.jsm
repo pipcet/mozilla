@@ -1,6 +1,3 @@
-/* global Services, Preferences, EventEmitter, XPCOMUtils */
-/* exported NewTabPrefsProvider */
-
 "use strict";
 
 this.EXPORTED_SYMBOLS = ["NewTabPrefsProvider"];
@@ -11,23 +8,19 @@ Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "EventEmitter", function() {
-  const {EventEmitter} = Cu.import("resource://devtools/shared/event-emitter.js", {});
+  const {EventEmitter} = Cu.import("resource://gre/modules/EventEmitter.jsm", {});
   return EventEmitter;
 });
 
 // Supported prefs and data type
 const gPrefsMap = new Map([
-  ["browser.newtabpage.remote", "bool"],
-  ["browser.newtabpage.remote.mode", "str"],
-  ["browser.newtabpage.remote.version", "str"],
+  ["browser.newtabpage.activity-stream.enabled", "bool"],
   ["browser.newtabpage.enabled", "bool"],
   ["browser.newtabpage.enhanced", "bool"],
   ["browser.newtabpage.introShown", "bool"],
   ["browser.newtabpage.updateIntroShown", "bool"],
   ["browser.newtabpage.pinned", "str"],
   ["browser.newtabpage.blocked", "str"],
-  ["intl.locale.matchOS", "bool"],
-  ["general.useragent.locale", "localized"],
   ["browser.search.hiddenOneOffs", "str"],
 ]);
 
@@ -92,7 +85,7 @@ PrefsProvider.prototype = {
 
   init() {
     for (let pref of gPrefsMap.keys()) {
-      Services.prefs.addObserver(pref, this, false);
+      Services.prefs.addObserver(pref, this);
     }
   },
 

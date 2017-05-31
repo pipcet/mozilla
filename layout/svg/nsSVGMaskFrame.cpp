@@ -7,6 +7,7 @@
 #include "nsSVGMaskFrame.h"
 
 // Keep others in (case-insensitive) order:
+#include "AutoReferenceChainGuard.h"
 #include "gfx2DGlue.h"
 #include "gfxContext.h"
 #include "mozilla/gfx/2D.h"
@@ -21,6 +22,7 @@
 using namespace mozilla;
 using namespace mozilla::dom;
 using namespace mozilla::gfx;
+using namespace mozilla::image;
 
 // c = n / 255
 // c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)) * 255 + 0.5
@@ -165,30 +167,6 @@ ComputeLinearRGBLuminanceMask(const uint8_t *aSourceData,
   }
 }
 
-static void
-ComputeAlphaMask(const uint8_t *aSourceData,
-                 int32_t aSourceStride,
-                 uint8_t *aDestData,
-                 int32_t aDestStride,
-                 const IntSize &aSize,
-                 float aOpacity)
-{
-  int32_t sourceOffset = aSourceStride - 4 * aSize.width;
-  const uint8_t *sourcePixel = aSourceData;
-  int32_t destOffset = aDestStride - aSize.width;
-  uint8_t *destPixel = aDestData;
-
-  for (int32_t y = 0; y < aSize.height; y++) {
-    for (int32_t x = 0; x < aSize.width; x++) {
-      *destPixel = sourcePixel[GFX_ARGB32_OFFSET_A] * aOpacity;
-      sourcePixel += 4;
-      destPixel++;
-    }
-    sourcePixel += sourceOffset;
-    destPixel += destOffset;
-  }
-}
-
 //----------------------------------------------------------------------
 // Implementation
 
@@ -200,17 +178,17 @@ NS_NewSVGMaskFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsSVGMaskFrame)
 
-mozilla::Pair<DrawResult, RefPtr<SourceSurface>>
+already_AddRefed<SourceSurface>
 nsSVGMaskFrame::GetMaskForMaskedFrame(MaskParams& aParams)
 {
-  // If the flag is set when we get here, it means this mask frame
-  // has already been used painting the current mask, and the document
-  // has a mask reference loop.
-  if (mInUse) {
-    NS_WARNING("Mask loop detected!");
-    return MakePair(DrawResult::SUCCESS, RefPtr<SourceSurface>());
+  // Make sure we break reference loops and over long reference chains:
+  static int16_t sRefChainLengthCounter = AutoReferenceChainGuard::noChain;
+  AutoReferenceChainGuard refChainGuard(this, &mInUse,
+                                        &sRefChainLengthCounter);
+  if (MOZ_UNLIKELY(!refChainGuard.Reference())) {
+    // Break reference chain
+    return nullptr;
   }
-  AutoMaskReferencer maskRef(this);
 
   gfxRect maskArea = GetMaskArea(aParams.maskedFrame);
   gfxContext* context = aParams.ctx;
@@ -231,15 +209,28 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(MaskParams& aParams)
   if (resultOverflows || maskSurfaceSize.IsEmpty()) {
     // Return value other then DrawResult::SUCCESS, so the caller can skip
     // painting the masked frame(aParams.maskedFrame).
-    return MakePair(DrawResult::TEMPORARY_ERROR, RefPtr<SourceSurface>());
+    return nullptr;
   }
 
-  RefPtr<DrawTarget> maskDT =
-    gfxPlatform::GetPlatform()->CreateOffscreenContentDrawTarget(
-      maskSurfaceSize, SurfaceFormat::B8G8R8A8);
+  uint8_t maskType;
+  if (aParams.maskMode == NS_STYLE_MASK_MODE_MATCH_SOURCE) {
+    maskType = StyleSVGReset()->mMaskType;
+  } else {
+    maskType = aParams.maskMode == NS_STYLE_MASK_MODE_LUMINANCE
+               ? NS_STYLE_MASK_TYPE_LUMINANCE : NS_STYLE_MASK_TYPE_ALPHA;
+  }
+
+  RefPtr<DrawTarget> maskDT;
+  if (maskType == NS_STYLE_MASK_TYPE_LUMINANCE) {
+    maskDT = gfxPlatform::GetPlatform()->CreateOffscreenContentDrawTarget(
+               maskSurfaceSize, SurfaceFormat::B8G8R8A8);
+  } else {
+    maskDT = gfxPlatform::GetPlatform()->CreateOffscreenContentDrawTarget(
+               maskSurfaceSize, SurfaceFormat::A8);
+  }
 
   if (!maskDT || !maskDT->IsValid()) {
-    return MakePair(DrawResult::TEMPORARY_ERROR, RefPtr<SourceSurface>());
+    return nullptr;
   }
 
   gfxMatrix maskSurfaceMatrix =
@@ -251,56 +242,46 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(MaskParams& aParams)
 
   mMatrixForChildren = GetMaskTransform(aParams.maskedFrame) *
                        aParams.toUserSpace;
-  DrawResult result;
 
   for (nsIFrame* kid = mFrames.FirstChild(); kid;
        kid = kid->GetNextSibling()) {
     // The CTM of each frame referencing us can be different
-    nsISVGChildFrame* SVGFrame = do_QueryFrame(kid);
+    nsSVGDisplayableFrame* SVGFrame = do_QueryFrame(kid);
     if (SVGFrame) {
-      SVGFrame->NotifySVGChanged(nsISVGChildFrame::TRANSFORM_CHANGED);
+      SVGFrame->NotifySVGChanged(nsSVGDisplayableFrame::TRANSFORM_CHANGED);
     }
     gfxMatrix m = mMatrixForChildren;
     if (kid->GetContent()->IsSVGElement()) {
       m = static_cast<nsSVGElement*>(kid->GetContent())->
             PrependLocalTransformsTo(m, eUserSpaceToParent);
     }
-    result = nsSVGUtils::PaintFrameWithEffects(kid, *tmpCtx, m);
-    if (result != DrawResult::SUCCESS) {
-      return MakePair(result, RefPtr<SourceSurface>());
-    }
+    nsSVGUtils::PaintFrameWithEffects(kid, *tmpCtx, m, aParams.imgParams);
   }
 
-  RefPtr<SourceSurface> maskSnapshot = maskDT->Snapshot();
-  if (!maskSnapshot) {
-    return MakePair(DrawResult::TEMPORARY_ERROR, RefPtr<SourceSurface>());
-  }
-  RefPtr<DataSourceSurface> maskSurface = maskSnapshot->GetDataSurface();
-  DataSourceSurface::MappedSurface map;
-  if (!maskSurface->Map(DataSourceSurface::MapType::READ, &map)) {
-    return MakePair(DrawResult::TEMPORARY_ERROR, RefPtr<SourceSurface>());
-  }
-
-  // Create alpha channel mask for output
-  RefPtr<DataSourceSurface> destMaskSurface =
-    Factory::CreateDataSourceSurface(maskSurfaceSize, SurfaceFormat::A8);
-  if (!destMaskSurface) {
-    return MakePair(DrawResult::TEMPORARY_ERROR, RefPtr<SourceSurface>());
-  }
-  DataSourceSurface::MappedSurface destMap;
-  if (!destMaskSurface->Map(DataSourceSurface::MapType::WRITE, &destMap)) {
-    return MakePair(DrawResult::TEMPORARY_ERROR, RefPtr<SourceSurface>());
-  }
-
-  uint8_t maskType;
-  if (aParams.maskMode == NS_STYLE_MASK_MODE_MATCH_SOURCE) {
-    maskType = StyleSVGReset()->mMaskType;
-  } else {
-    maskType = aParams.maskMode == NS_STYLE_MASK_MODE_LUMINANCE
-               ? NS_STYLE_MASK_TYPE_LUMINANCE : NS_STYLE_MASK_TYPE_ALPHA;
-  }
-
+  RefPtr<SourceSurface> surface;
   if (maskType == NS_STYLE_MASK_TYPE_LUMINANCE) {
+    RefPtr<SourceSurface> maskSnapshot = maskDT->Snapshot();
+    if (!maskSnapshot) {
+      return nullptr;
+    }
+
+    RefPtr<DataSourceSurface> maskSurface = maskSnapshot->GetDataSurface();
+    DataSourceSurface::MappedSurface map;
+    if (!maskSurface->Map(DataSourceSurface::MapType::READ, &map)) {
+      return nullptr;
+    }
+
+    // Create alpha channel mask for output
+    RefPtr<DataSourceSurface> destMaskSurface =
+      Factory::CreateDataSourceSurface(maskSurfaceSize, SurfaceFormat::A8);
+    if (!destMaskSurface) {
+      return nullptr;
+    }
+    DataSourceSurface::MappedSurface destMap;
+    if (!destMaskSurface->Map(DataSourceSurface::MapType::WRITE, &destMap)) {
+      return nullptr;
+    }
+
     if (StyleSVG()->mColorInterpolation ==
         NS_STYLE_COLOR_INTERPOLATION_LINEARRGB) {
       ComputeLinearRGBLuminanceMask(map.mData, map.mStride,
@@ -311,23 +292,27 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(MaskParams& aParams)
                                destMap.mData, destMap.mStride,
                                maskSurfaceSize, aParams.opacity);
     }
-  } else {
-    ComputeAlphaMask(map.mData, map.mStride,
-                     destMap.mData, destMap.mStride,
-                     maskSurfaceSize, aParams.opacity);
-  }
 
-  maskSurface->Unmap();
-  destMaskSurface->Unmap();
+    maskSurface->Unmap();
+    destMaskSurface->Unmap();
+    surface = destMaskSurface.forget();
+  } else {
+    maskDT->SetTransform(Matrix());
+    maskDT->FillRect(Rect(0, 0, maskSurfaceSize.width, maskSurfaceSize.height), ColorPattern(Color(1.0f, 1.0f, 1.0f, aParams.opacity)), DrawOptions(1, CompositionOp::OP_IN));
+    RefPtr<SourceSurface> maskSnapshot = maskDT->Snapshot();
+    if (!maskSnapshot) {
+      return nullptr;
+    }
+    surface = maskSnapshot.forget();
+  }
 
   // Moz2D transforms in the opposite direction to Thebes
   if (!maskSurfaceMatrix.Invert()) {
-    return MakePair(DrawResult::TEMPORARY_ERROR, RefPtr<SourceSurface>());
+    return nullptr;
   }
 
   *aParams.maskTransform = ToMatrix(maskSurfaceMatrix);
-  RefPtr<SourceSurface> surface = destMaskSurface.forget();
-  return MakePair(DrawResult::SUCCESS, Move(surface));
+  return surface.forget();
 }
 
 gfxRect
@@ -339,7 +324,10 @@ nsSVGMaskFrame::GetMaskArea(nsIFrame* aMaskedFrame)
     maskElem->mEnumAttributes[SVGMaskElement::MASKUNITS].GetAnimValue();
   gfxRect bbox;
   if (units == SVG_UNIT_TYPE_OBJECTBOUNDINGBOX) {
-    bbox = nsSVGUtils::GetBBox(aMaskedFrame);
+    bbox =
+      nsSVGUtils::GetBBox(aMaskedFrame,
+                          nsSVGUtils::eUseFrameBoundsForOuterSVG |
+                          nsSVGUtils::eBBoxIncludeFillGeometry);
   }
 
   // Bounds in the user space of aMaskedFrame
@@ -381,12 +369,6 @@ nsSVGMaskFrame::Init(nsIContent*       aContent,
   nsSVGContainerFrame::Init(aContent, aParent, aPrevInFlow);
 }
 #endif /* DEBUG */
-
-nsIAtom *
-nsSVGMaskFrame::GetType() const
-{
-  return nsGkAtoms::svgMaskFrame;
-}
 
 gfxMatrix
 nsSVGMaskFrame::GetCanvasTM()

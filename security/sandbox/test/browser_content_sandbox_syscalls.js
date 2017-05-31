@@ -1,5 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
+ /* import-globals-from browser_content_sandbox_utils.js */
+"use strict";
 
 var prefs = Cc["@mozilla.org/preferences-service;1"]
             .getService(Ci.nsIPrefBranch);
@@ -60,12 +62,11 @@ function openWriteCreateFlags() {
     let O_WRONLY = 0x001;
     let O_CREAT  = 0x200;
     return (O_WRONLY | O_CREAT);
-  } else {
-    // Linux
-    let O_WRONLY = 0x01;
-    let O_CREAT  = 0x40;
-    return (O_WRONLY | O_CREAT);
   }
+  // Linux
+  let O_WRONLY = 0x01;
+  let O_CREAT  = 0x40;
+  return (O_WRONLY | O_CREAT);
 }
 
 // Returns the name of the native library needed for native syscalls
@@ -79,6 +80,7 @@ function getOSLib() {
       return "libc.so.6";
     default:
       Assert.ok(false, "Unknown OS");
+      return 0;
   }
 }
 
@@ -104,7 +106,7 @@ function areContentSyscallsSandboxed(level) {
       syscallsSandboxMinLevel = 1;
       break;
     case "Linux":
-      syscallsSandboxMinLevel = 2;
+      syscallsSandboxMinLevel = 1;
       break;
     default:
       Assert.ok(false, "Unknown OS");
@@ -119,7 +121,7 @@ function areContentSyscallsSandboxed(level) {
 // Tests executing OS API calls in the content process. Limited to Mac
 // and Linux calls for now.
 //
-add_task(function*() {
+add_task(function* () {
   // This test is only relevant in e10s
   if (!gMultiProcessBrowser) {
     ok(false, "e10s is enabled");
@@ -134,28 +136,15 @@ add_task(function*() {
   // If the pref isn't set and we're running on Linux on !isNightly(),
   // exit without failing. The Linux content sandbox is only enabled
   // on Nightly at this time.
+  // eslint-disable-next-line mozilla/use-default-preference-values
   try {
     level = prefs.getIntPref("security.sandbox.content.level");
   } catch (e) {
     prefExists = false;
   }
 
-  // Special case Linux on !isNightly
-  if (isLinux() && !isNightly()) {
-    todo(prefExists, "pref security.sandbox.content.level exists");
-    if (!prefExists) {
-      return;
-    }
-  }
-
   ok(prefExists, "pref security.sandbox.content.level exists");
   if (!prefExists) {
-    return;
-  }
-
-  // Special case Linux on !isNightly
-  if (isLinux() && !isNightly()) {
-    todo(level > 0, "content sandbox enabled for !nightly.");
     return;
   }
 
@@ -167,12 +156,6 @@ add_task(function*() {
   }
 
   let areSyscallsSandboxed = areContentSyscallsSandboxed(level);
-
-  // Special case Linux on !isNightly
-  if (isLinux() && !isNightly()) {
-    todo(areSyscallsSandboxed, "content syscall sandbox enabled for !nightly.");
-    return;
-  }
 
   // Content sandbox enabled, but level doesn't include syscall sandboxing.
   ok(areSyscallsSandboxed, "content syscall sandboxing is enabled.");
@@ -194,8 +177,7 @@ add_task(function*() {
   }
 
   // use open syscall
-  if (isLinux() || isMac())
-  {
+  if (isLinux() || isMac()) {
     // open a file for writing in $HOME, this should fail
     let path = fileInHomeDir().path;
     let flags = openWriteCreateFlags();
@@ -204,8 +186,7 @@ add_task(function*() {
   }
 
   // use open syscall
-  if (isLinux() || isMac())
-  {
+  if (isLinux() || isMac()) {
     // open a file for writing in the content temp dir, this should work
     // and the open handler in the content process closes the file for us
     let path = fileInTempDir().path;
@@ -215,8 +196,7 @@ add_task(function*() {
   }
 
   // use fork syscall
-  if (isLinux() || isMac())
-  {
+  if (isLinux() || isMac()) {
     let rv = yield ContentTask.spawn(browser, {lib}, callFork);
     ok(rv == -1, "calling fork is not permitted");
   }

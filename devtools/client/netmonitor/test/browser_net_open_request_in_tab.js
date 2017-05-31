@@ -11,10 +11,10 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(CUSTOM_GET_URL);
   info("Starting test...");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/actions/index");
+  let { document, store, windowRequire } = monitor.panelWin;
+  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, 1);
   yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
@@ -28,9 +28,7 @@ add_task(function* () {
     document.querySelectorAll(".request-list-item")[0]);
 
   let onTabOpen = once(gBrowser.tabContainer, "TabOpen", false);
-  // Context menu is appending in XUL document, we must select it from
-  // toolbox.doc
-  monitor.toolbox.doc
+  monitor.panelWin.parent.document
     .querySelector("#request-list-context-newtab").click();
   yield onTabOpen;
 

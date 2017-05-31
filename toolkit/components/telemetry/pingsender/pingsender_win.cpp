@@ -74,6 +74,16 @@ Post(const string& url, const string& payload)
     return false;
   }
 
+  DWORD timeout = static_cast<DWORD>(kConnectionTimeoutMs);
+  bool rv = InternetSetOption(internet.get(),
+                              INTERNET_OPTION_CONNECT_TIMEOUT,
+                              &timeout,
+                              sizeof(timeout));
+  if (!rv) {
+    PINGSENDER_LOG("ERROR: Could not set the connection timeout\n");
+    return false;
+  }
+
   ScopedHInternet connection(InternetConnect(internet.get(),
                                              host, components.nPort,
                                              /* lpszUsername */ NULL,
@@ -101,13 +111,40 @@ Post(const string& url, const string& payload)
     return false;
   }
 
-  bool rv = HttpSendRequest(request.get(),
-                            /* lpszHeaders */ nullptr,
-                            /* dwHeadersLength */ 0,
-                            (LPVOID)payload.c_str(),
-                            payload.size());
+  // Build a string containing all the headers.
+  std::string headers = GenerateDateHeader() + "\r\n";
+  headers += kCustomVersionHeader;
+  headers += "\r\n";
+  headers += kContentEncodingHeader;
+
+  rv = HttpSendRequest(request.get(),
+                       headers.c_str(),
+                       -1L,
+                       (LPVOID)payload.c_str(),
+                       payload.size());
   if (!rv) {
     PINGSENDER_LOG("ERROR: Could not execute HTTP POST request\n");
+    return false;
+  }
+
+  // HttpSendRequest doesn't fail if we hit an HTTP error, so manually check
+  // for errors. Please note that this is not needed on the Linux/MacOS version
+  // of the pingsender, as libcurl already automatically fails on HTTP errors.
+  DWORD statusCode = 0;
+  DWORD bufferLength = sizeof(DWORD);
+  rv = HttpQueryInfo(request.get(),
+                     /* dwInfoLevel */ HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
+                     /* lpvBuffer */ &statusCode,
+                     /* lpdwBufferLength */ &bufferLength,
+                     /* lpdwIndex */ NULL);
+  if (!rv) {
+    PINGSENDER_LOG("ERROR: Could not get the HTTP status code\n");
+    return false;
+  }
+
+  if (statusCode != 200) {
+    PINGSENDER_LOG("ERROR: Error submitting the HTTP request: code %u\n", statusCode);
+    return false;
   }
 
   return rv;

@@ -9,6 +9,7 @@ DIRS += [
     'e10srollout',
     'pdfjs',
     'pocket',
+    'screenshots',
     'webcompat',
 ]
 
@@ -19,6 +20,7 @@ if not CONFIG['RELEASE_OR_BETA']:
         'formautofill',
         'presentation',
         'shield-recipe-client',
+        'webcompat-reporter',
     ]
 
 # Only include mortar system add-ons if we locally enable it
@@ -30,5 +32,5 @@ if CONFIG['MOZ_MORTAR']:
 # Nightly-only system add-ons
 if CONFIG['NIGHTLY_BUILD']:
     DIRS += [
-        'webcompat-reporter',
+        'activity-stream',
     ]

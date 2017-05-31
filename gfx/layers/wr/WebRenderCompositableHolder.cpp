@@ -6,7 +6,9 @@
 #include "WebRenderCompositableHolder.h"
 
 #include "CompositableHost.h"
-//#include "mozilla/layers/CompositorBridgeParent.h"
+#include "mozilla/layers/WebRenderImageHost.h"
+#include "mozilla/layers/WebRenderTextureHost.h"
+#include "mozilla/webrender/WebRenderAPI.h"
 
 namespace mozilla {
 
@@ -14,7 +16,9 @@ using namespace gfx;
 
 namespace layers {
 
-WebRenderCompositableHolder::WebRenderCompositableHolder()
+WebRenderCompositableHolder::WebRenderCompositableHolder(uint32_t aIdNamespace)
+ : mIdNamespace(aIdNamespace)
+ , mResourceId(0)
 {
   MOZ_COUNT_CTOR(WebRenderCompositableHolder);
 }
@@ -22,36 +26,64 @@ WebRenderCompositableHolder::WebRenderCompositableHolder()
 WebRenderCompositableHolder::~WebRenderCompositableHolder()
 {
   MOZ_COUNT_DTOR(WebRenderCompositableHolder);
-  Destroy();
 }
 
 void
-WebRenderCompositableHolder::Destroy()
+WebRenderCompositableHolder::AddPipeline(const wr::PipelineId& aPipelineId)
 {
-  mCompositableHosts.Clear();
+  uint64_t id = wr::AsUint64(aPipelineId);
+
+  MOZ_ASSERT(!mPipelineTexturesHolders.Get(id));
+  PipelineTexturesHolder* holder = new PipelineTexturesHolder();
+  mPipelineTexturesHolders.Put(id, holder);
 }
 
 void
-WebRenderCompositableHolder::AddExternalImageId(uint64_t aExternalImageId, CompositableHost* aHost)
+WebRenderCompositableHolder::RemovePipeline(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch)
 {
-  MOZ_ASSERT(!mCompositableHosts.Get(aExternalImageId));
-  mCompositableHosts.Put(aExternalImageId, aHost);
+  PipelineTexturesHolder* holder = mPipelineTexturesHolders.Get(wr::AsUint64(aPipelineId));
+  MOZ_ASSERT(holder);
+  if (!holder) {
+    return;
+  }
+  MOZ_ASSERT(holder->mDestroyedEpoch.isNothing());
+  holder->mDestroyedEpoch = Some(aEpoch);
 }
 
 void
-WebRenderCompositableHolder::RemoveExternalImageId(uint64_t aExternalImageId)
+WebRenderCompositableHolder::HoldExternalImage(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch, WebRenderTextureHost* aTexture)
 {
-  MOZ_ASSERT(mCompositableHosts.Get(aExternalImageId));
-  mCompositableHosts.Remove(aExternalImageId);
+  MOZ_ASSERT(aTexture);
+
+  PipelineTexturesHolder* holder = mPipelineTexturesHolders.Get(wr::AsUint64(aPipelineId));
+  MOZ_ASSERT(holder);
+  if (!holder) {
+    return;
+  }
+  // Hold WebRenderTextureHost until end of its usage on RenderThread
+  holder->mTextureHosts.push(ForwardingTextureHost(aEpoch, aTexture));
 }
 
 void
-WebRenderCompositableHolder::UpdateExternalImages()
+WebRenderCompositableHolder::Update(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch)
 {
-  for (auto iter = mCompositableHosts.Iter(); !iter.Done(); iter.Next()) {
-    RefPtr<CompositableHost>& host = iter.Data();
-    // XXX Change to correct TextrueSource handling here.
-    host->BindTextureSource();
+  PipelineTexturesHolder* holder = mPipelineTexturesHolders.Get(wr::AsUint64(aPipelineId));
+  if (!holder) {
+    return;
+  }
+
+  // Remove Pipeline
+  if (holder->mDestroyedEpoch.isSome() && holder->mDestroyedEpoch.ref() <= aEpoch) {
+    mPipelineTexturesHolders.Remove(wr::AsUint64(aPipelineId));
+    return;
+  }
+
+  // Release TextureHosts based on Epoch
+  while (!holder->mTextureHosts.empty()) {
+    if (aEpoch <= holder->mTextureHosts.front().mEpoch) {
+      break;
+    }
+    holder->mTextureHosts.pop();
   }
 }
 

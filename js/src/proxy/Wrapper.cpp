@@ -12,6 +12,7 @@
 #include "js/Proxy.h"
 #include "vm/ErrorObject.h"
 #include "vm/ProxyObject.h"
+#include "vm/RegExpObject.h"
 #include "vm/WrapperObject.h"
 
 #include "jsobjinlines.h"
@@ -268,10 +269,10 @@ Wrapper::fun_toString(JSContext* cx, HandleObject proxy, unsigned indent) const
 }
 
 bool
-Wrapper::regexp_toShared(JSContext* cx, HandleObject proxy, RegExpGuard* g) const
+Wrapper::regexp_toShared(JSContext* cx, HandleObject proxy, MutableHandleRegExpShared shared) const
 {
     RootedObject target(cx, proxy->as<ProxyObject>().target());
-    return RegExpToShared(cx, target, g);
+    return RegExpToShared(cx, target, shared);
 }
 
 bool
@@ -373,7 +374,7 @@ JS_FRIEND_API(JSObject*)
 js::UnwrapOneChecked(JSObject* obj, bool stopAtWindowProxy)
 {
     if (!obj->is<WrapperObject>() ||
-        MOZ_UNLIKELY(IsWindowProxy(obj) && stopAtWindowProxy))
+        MOZ_UNLIKELY(stopAtWindowProxy && IsWindowProxy(obj)))
     {
         return obj;
     }

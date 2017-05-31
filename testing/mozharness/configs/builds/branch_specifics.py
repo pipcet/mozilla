@@ -35,6 +35,14 @@ config = {
         "update_channel": "nightly",
         "graph_server_branch_name": "Firefox",
         'stage_server': 'upload.ffxbld.productdelivery.prod.mozaws.net',
+        'platform_overrides': {
+            'android-api-15-old-id': {
+                "update_channel": "nightly-old-id",
+            },
+            'android-x86-old-id': {
+                "update_channel": "nightly-old-id",
+            },
+        }
     },
     'mozilla-release': {
         'enable_release_promotion': True,
@@ -137,6 +145,21 @@ config = {
                 'src_mozconfig': 'browser/config/mozconfigs/win64/beta',
                 'force_clobber': True,
             },
+            'linux-devedition': {
+                "update_channel": "aurora",
+            },
+            'linux64-devedition': {
+                "update_channel": "aurora",
+            },
+            'macosx64-devedition': {
+                "update_channel": "aurora",
+            },
+            'win32-devedition': {
+                "update_channel": "aurora",
+            },
+            'win64-devedition': {
+                "update_channel": "aurora",
+            },
             'linux-debug': {
                 'update_channel': 'default',
             },
@@ -184,69 +207,6 @@ config = {
             },
         },
     },
-    'mozilla-esr52': {
-        'enable_release_promotion': True,
-        'repo_path': 'releases/mozilla-esr52',
-        'update_channel': 'esr',
-        'branch_uses_per_checkin_strategy': True,
-        'use_branch_in_symbols_extra_buildid': False,
-        'stage_server': 'upload.ffxbld.productdelivery.prod.mozaws.net',
-        'platform_overrides': {
-            'linux': {
-                'src_mozconfig': 'browser/config/mozconfigs/linux32/release',
-                'force_clobber': True,
-            },
-            'linux64': {
-                'src_mozconfig': 'browser/config/mozconfigs/linux64/release',
-                'force_clobber': True,
-            },
-            'macosx64': {
-                'src_mozconfig': 'browser/config/mozconfigs/macosx-universal/release',
-                'force_clobber': True,
-            },
-            'win32': {
-                'src_mozconfig': 'browser/config/mozconfigs/win32/release',
-                'force_clobber': True,
-            },
-            'win64': {
-                'src_mozconfig': 'browser/config/mozconfigs/win64/release',
-                'force_clobber': True,
-            },
-            'linux-debug': {
-                'update_channel': 'default',
-            },
-            'linux64-debug': {
-                'update_channel': 'default',
-            },
-            'linux64-asan-debug': {
-                'update_channel': 'default',
-            },
-            'linux64-asan': {
-                'update_channel': 'default',
-            },
-            'linux64-st-an-debug': {
-                'update_channel': 'default',
-            },
-            'linux64-st-an': {
-                'update_channel': 'default',
-            },
-            'macosx64-debug': {
-                'update_channel': 'default',
-            },
-            'macosx64-st-an': {
-                'update_channel': 'default',
-            },
-            'macosx64-st-an-debug': {
-                'update_channel': 'default',
-            },
-            'win32-debug': {
-                'update_channel': 'default',
-            },
-            'win64-debug': {
-                'update_channel': 'default',
-            },
-        },
-    },
     'mozilla-aurora': {
         'repo_path': 'releases/mozilla-aurora',
         'update_channel': 'aurora',
@@ -257,9 +217,6 @@ config = {
         'repo_path': 'try',
         'clone_by_revision': True,
         'clone_with_purge': True,
-        # FUTURE this should be a unified repo because Try pushes may e.g.
-        # be on Aurora or Beta revisions.
-        'clone_upstream_url': 'https://hg.mozilla.org/mozilla-central',
         'tinderbox_build_dir': '%(who)s-%(got_revision)s',
         'to_tinderbox_dated': False,
         'include_post_upload_builddir': True,
@@ -292,6 +249,14 @@ config = {
     'date': {
         'update_channel': 'nightly-date',
         'stage_server': 'upload.ffxbld.productdelivery.prod.mozaws.net',
+        'platform_overrides': {
+            'android-api-15-old-id': {
+                "update_channel": "nightly-old-id",
+            },
+            'android-x86-old-id': {
+                "update_channel": "nightly-old-id",
+            },
+        }
     },
     'cypress': {
         # bug 1164935
@@ -372,6 +337,21 @@ config = {
             },
             'win64-debug': {
                 'update_channel': 'default',
+            },
+            'linux-devedition': {
+                "update_channel": "aurora-dev",
+            },
+            'linux64-devedition': {
+                "update_channel": "aurora-dev",
+            },
+            'macosx64-devedition': {
+                "update_channel": "aurora-dev",
+            },
+            'win32-devedition': {
+                "update_channel": "aurora-dev",
+            },
+            'win64-devedition': {
+                "update_channel": "aurora-dev",
             },
         },
         'stage_server': 'upload.ffxbld.productdelivery.prod.mozaws.net',

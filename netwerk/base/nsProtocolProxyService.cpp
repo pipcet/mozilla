@@ -36,6 +36,7 @@
 #include "nsINetworkLinkService.h"
 #include "nsIHttpChannelInternal.h"
 #include "mozilla/Logging.h"
+#include "mozilla/Tokenizer.h"
 
 //----------------------------------------------------------------------------
 
@@ -427,6 +428,7 @@ nsProtocolProxyService::nsProtocolProxyService()
     , mPACMan(nullptr)
     , mSessionStart(PR_Now())
     , mFailedProxyTimeout(30 * 60) // 30 minute default
+    , mIsShutdown(false)
 {
 }
 
@@ -517,6 +519,7 @@ nsProtocolProxyService::Observe(nsISupports     *aSubject,
                                 const char16_t *aData)
 {
     if (strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID) == 0) {
+        mIsShutdown = true;
         // cleanup
         if (mHostFiltersArray.Length() > 0) {
             mHostFiltersArray.Clear();
@@ -643,9 +646,10 @@ nsProtocolProxyService::PrefsChanged(nsIPrefBranch *prefBranch,
                          mFailedProxyTimeout);
 
     if (!pref || !strcmp(pref, PROXY_PREF("no_proxies_on"))) {
-        nsCString no_proxies;
-        proxy_GetStringPref(prefBranch, PROXY_PREF("no_proxies_on"), no_proxies);
-        LoadHostFilters(no_proxies.get());
+        rv = prefBranch->GetCharPref(PROXY_PREF("no_proxies_on"),
+                                     getter_Copies(tempString));
+        if (NS_SUCCEEDED(rv))
+            LoadHostFilters(tempString);
     }
 
     // We're done if not using something that could give us a PAC URL
@@ -1015,6 +1019,10 @@ nsProtocolProxyService::IsProxyDisabled(nsProxyInfo *pi)
 nsresult
 nsProtocolProxyService::SetupPACThread()
 {
+    if (mIsShutdown) {
+        return NS_ERROR_FAILURE;
+    }
+
     if (mPACMan)
         return NS_OK;
 
@@ -1051,7 +1059,8 @@ nsresult
 nsProtocolProxyService::ConfigureFromPAC(const nsCString &spec,
                                          bool forceReload)
 {
-    SetupPACThread();
+    nsresult rv = SetupPACThread();
+    NS_ENSURE_SUCCESS(rv, rv);
 
     if (mPACMan->IsPACURI(spec) && !forceReload)
         return NS_OK;
@@ -1112,6 +1121,11 @@ nsProtocolProxyService::ReloadPAC()
         prefs->GetCharPref(PROXY_PREF("autoconfig_url"), getter_Copies(pacSpec));
     else if (type == PROXYCONFIG_WPAD)
         pacSpec.AssignLiteral(WPAD_URL);
+    else if (type == PROXYCONFIG_SYSTEM) {
+        if (mSystemProxySettings)
+            mSystemProxySettings->GetPACURI(pacSpec);
+        ResetPACThread();
+    }
 
     if (!pacSpec.IsEmpty())
         ConfigureFromPAC(pacSpec, true);
@@ -1193,6 +1207,16 @@ nsProtocolProxyService::AsyncResolveInternal(nsIChannel *channel, uint32_t flags
 
     nsCOMPtr<nsIProxyInfo> pi;
     bool usePACThread;
+
+    // adapt to realtime changes in the system proxy service
+    if (mProxyConfig == PROXYCONFIG_SYSTEM) {
+        nsCOMPtr<nsISystemProxySettings> sp2 =
+            do_GetService(NS_SYSTEMPROXYSETTINGS_CONTRACTID);
+        if (sp2 != mSystemProxySettings) {
+            mSystemProxySettings = sp2;
+            ResetPACThread();
+        }
+    }
 
     // SystemProxySettings and PAC files can block the main thread
     // but if neither of them are in use, we can just do the work
@@ -1367,6 +1391,10 @@ nsProtocolProxyService::GetFailoverForProxy(nsIProxyInfo  *aProxy,
 nsresult
 nsProtocolProxyService::InsertFilterLink(FilterLink *link, uint32_t position)
 {
+    if (mIsShutdown) {
+        return NS_ERROR_FAILURE;
+    }
+
     if (!mFilters) {
         mFilters = link;
         return NS_OK;
@@ -1403,7 +1431,11 @@ nsProtocolProxyService::RegisterFilter(nsIProtocolProxyFilter *filter,
     if (!link) {
         return NS_ERROR_OUT_OF_MEMORY;
     }
-    return InsertFilterLink(link, position);
+    nsresult rv = InsertFilterLink(link, position);
+    if (NS_FAILED(rv)) {
+        delete link;
+    }
+    return rv;
 }
 
 NS_IMETHODIMP
@@ -1416,7 +1448,11 @@ nsProtocolProxyService::RegisterChannelFilter(nsIProtocolProxyChannelFilter *cha
     if (!link) {
         return NS_ERROR_OUT_OF_MEMORY;
     }
-    return InsertFilterLink(link, position);
+    nsresult rv = InsertFilterLink(link, position);
+    if (NS_FAILED(rv)) {
+        delete link;
+    }
+    return rv;
 }
 
 nsresult
@@ -1464,15 +1500,20 @@ nsProtocolProxyService::GetProxyConfigType(uint32_t* aProxyConfigType)
 }
 
 void
-nsProtocolProxyService::LoadHostFilters(const char *filters)
+nsProtocolProxyService::LoadHostFilters(const nsACString& aFilters)
 {
+    if (mIsShutdown) {
+        return;
+    }
+
     // check to see the owners flag? /!?/ TODO
     if (mHostFiltersArray.Length() > 0) {
         mHostFiltersArray.Clear();
     }
 
-    if (!filters)
-        return; // fail silently...
+    if (aFilters.IsEmpty()) {
+        return;
+    }
 
     //
     // filter  = ( host | domain | ipaddr ["/" mask] ) [":" port]
@@ -1480,38 +1521,79 @@ nsProtocolProxyService::LoadHostFilters(const char *filters)
     //
     // Reset mFilterLocalHosts - will be set to true if "<local>" is in pref string
     mFilterLocalHosts = false;
-    while (*filters) {
+
+    mozilla::Tokenizer t(aFilters);
+    mozilla::Tokenizer::Token token;
+    bool eof = false;
+    // while (*filters) {
+    while (!eof) {
         // skip over spaces and ,
-        while (*filters && (*filters == ',' || IS_ASCII_SPACE(*filters)))
-            filters++;
-
-        const char *starthost = filters;
-        const char *endhost = filters + 1; // at least that...
-        const char *portLocation = 0;
-        const char *maskLocation = 0;
-
-        while (*endhost && (*endhost != ',' && !IS_ASCII_SPACE(*endhost))) {
-            if (*endhost == ':')
-                portLocation = endhost;
-            else if (*endhost == '/')
-                maskLocation = endhost;
-            else if (*endhost == ']') // IPv6 address literals
-                portLocation = 0;
-            endhost++;
+        t.SkipWhites();
+        while (t.CheckChar(',')) {
+            t.SkipWhites();
         }
 
-        filters = endhost; // advance iterator up front
+        nsAutoCString portStr;
+        nsAutoCString hostStr;
+        nsAutoCString maskStr;
+        t.Record();
 
-        // locate end of host
-        const char *end = maskLocation ? maskLocation :
-                          portLocation ? portLocation :
-                          endhost;
+        bool parsingIPv6 = false;
+        bool parsingPort = false;
+        bool parsingMask = false;
+        while (t.Next(token)) {
+            if (token.Equals(mozilla::Tokenizer::Token::EndOfFile()))  {
+                eof = true;
+                break;
+            }
+            if (token.Equals(mozilla::Tokenizer::Token::Char(',')) ||
+                token.Type() == mozilla::Tokenizer::TOKEN_WS) {
+                break;
+            }
 
-        nsAutoCString str(starthost, end - starthost);
+            if (token.Equals(mozilla::Tokenizer::Token::Char('['))) {
+                parsingIPv6 = true;
+                continue;
+            }
+
+            if (!parsingIPv6 && token.Equals(mozilla::Tokenizer::Token::Char(':'))) {
+                // Port is starting. Claim the previous as host.
+                if (parsingMask) {
+                    t.Claim(maskStr);
+                } else {
+                    t.Claim(hostStr);
+                }
+                t.Record();
+                parsingPort = true;
+                continue;
+            } else if (token.Equals(mozilla::Tokenizer::Token::Char('/'))) {
+                t.Claim(hostStr);
+                t.Record();
+                parsingMask = true;
+                continue;
+            } else if (token.Equals(mozilla::Tokenizer::Token::Char(']'))) {
+                parsingIPv6 = false;
+                continue;
+            }
+        }
+        if (!parsingPort && !parsingMask) {
+            t.Claim(hostStr);
+        } else if (parsingPort) {
+            t.Claim(portStr);
+        } else if (parsingMask) {
+            t.Claim(maskStr);
+        } else {
+            NS_WARNING("Could not parse this rule");
+            continue;
+        }
+
+        if (hostStr.IsEmpty()) {
+            continue;
+        }
 
         // If the current host filter is "<local>", then all local (i.e.
         // no dots in the hostname) hosts should bypass the proxy
-        if (str.EqualsIgnoreCase("<local>")) {
+        if (hostStr.EqualsIgnoreCase("<local>")) {
             mFilterLocalHosts = true;
             LOG(("loaded filter for local hosts "
                  "(plain host names, no dots)\n"));
@@ -1521,13 +1603,30 @@ nsProtocolProxyService::LoadHostFilters(const char *filters)
 
         // For all other host filters, create HostInfo object and add to list
         HostInfo *hinfo = new HostInfo();
-        hinfo->port = portLocation ? atoi(portLocation + 1) : 0;
+        nsresult rv = NS_OK;
+
+        int32_t port = portStr.ToInteger(&rv);
+        if (NS_FAILED(rv)) {
+            port = 0;
+        }
+        hinfo->port = port;
+
+        int32_t maskLen = maskStr.ToInteger(&rv);
+        if (NS_FAILED(rv)) {
+            maskLen = 128;
+        }
+
+        // PR_StringToNetAddr can't parse brackets enclosed IPv6
+        nsAutoCString addrString = hostStr;
+        if (hostStr.First() == '[' && hostStr.Last() == ']') {
+            addrString = Substring(hostStr, 1, hostStr.Length() - 2);
+        }
 
         PRNetAddr addr;
-        if (PR_StringToNetAddr(str.get(), &addr) == PR_SUCCESS) {
+        if (PR_StringToNetAddr(addrString.get(), &addr) == PR_SUCCESS) {
             hinfo->is_ipaddr   = true;
             hinfo->ip.family   = PR_AF_INET6; // we always store address as IPv6
-            hinfo->ip.mask_len = maskLocation ? atoi(maskLocation + 1) : 128;
+            hinfo->ip.mask_len = maskLen;
 
             if (hinfo->ip.mask_len == 0) {
                 NS_WARNING("invalid mask");
@@ -1554,27 +1653,33 @@ nsProtocolProxyService::LoadHostFilters(const char *filters)
             proxy_MaskIPv6Addr(hinfo->ip.addr, hinfo->ip.mask_len);
         }
         else {
-            uint32_t startIndex, endIndex;
-            if (str.First() == '*')
-                startIndex = 1; // *.domain -> .domain
-            else
-                startIndex = 0;
-            endIndex = (portLocation ? portLocation : endhost) - starthost;
+            nsAutoCString host;
+            if (hostStr.First() == '*') {
+                host = Substring(hostStr, 1);
+            } else {
+                host = hostStr;
+            }
+
+            if (host.IsEmpty()) {
+                hinfo->name.host = nullptr;
+                goto loser;
+            }
+
+            hinfo->name.host_len = host.Length();
 
             hinfo->is_ipaddr = false;
-            hinfo->name.host = ToNewCString(Substring(str, startIndex, endIndex));
+            hinfo->name.host = ToNewCString(host);
 
             if (!hinfo->name.host)
                 goto loser;
-
-            hinfo->name.host_len = endIndex - startIndex;
         }
 
 //#define DEBUG_DUMP_FILTERS
 #ifdef DEBUG_DUMP_FILTERS
-        printf("loaded filter[%u]:\n", mHostFiltersArray.Length());
+        printf("loaded filter[%zu]:\n", mHostFiltersArray.Length());
         printf("  is_ipaddr = %u\n", hinfo->is_ipaddr);
         printf("  port = %u\n", hinfo->port);
+        printf("  host = %s\n", hostStr.get());
         if (hinfo->is_ipaddr) {
             printf("  ip.family = %x\n", hinfo->ip.family);
             printf("  ip.mask_len = %u\n", hinfo->ip.mask_len);

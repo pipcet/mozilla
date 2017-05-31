@@ -12,12 +12,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 
 // Log only if browser.safebrowsing.debug is true
 function log(...stuff) {
-  let logging = null;
-  try {
-    logging = Services.prefs.getBoolPref("browser.safebrowsing.debug");
-  } catch(e) {
-    return;
-  }
+  let logging = Services.prefs.getBoolPref("browser.safebrowsing.debug", false);
   if (!logging) {
     return;
   }
@@ -29,18 +24,14 @@ function log(...stuff) {
 
 function getLists(prefName) {
   log("getLists: " + prefName);
-  let pref = null;
-  try {
-    pref = Services.prefs.getCharPref(prefName);
-  } catch(e) {
-    return null;
-  }
+  let pref = Services.prefs.getCharPref(prefName, "");
+
   // Splitting an empty string returns [''], we really want an empty array.
   if (!pref) {
     return [];
   }
-  return pref.split(",")
-    .map(function(value) { return value.trim(); });
+
+  return pref.split(",").map(value => value.trim());
 }
 
 const tablePreferences = [
@@ -67,10 +58,10 @@ this.SafeBrowsing = {
       return;
     }
 
-    Services.prefs.addObserver("browser.safebrowsing", this, false);
-    Services.prefs.addObserver("privacy.trackingprotection", this, false);
-    Services.prefs.addObserver("urlclassifier", this, false);
-    Services.prefs.addObserver("plugins.flashBlock.enabled", this, false);
+    Services.prefs.addObserver("browser.safebrowsing", this);
+    Services.prefs.addObserver("privacy.trackingprotection", this);
+    Services.prefs.addObserver("urlclassifier", this);
+    Services.prefs.addObserver("plugins.flashBlock.enabled", this);
 
     this.readPrefs();
     this.addMozEntries();
@@ -91,6 +82,11 @@ this.SafeBrowsing = {
     if (!providerName || !provider) {
       log("No provider info found for " + listname);
       log("Check browser.safebrowsing.provider.[google/mozilla].lists");
+      return;
+    }
+
+    if (!provider.updateURL) {
+      log("Invalid update url " + listname);
       return;
     }
 
@@ -164,7 +160,9 @@ this.SafeBrowsing = {
         throw err;
     }
 
-    if (!info.list || !info.uri) {
+    // The "Phish" reports are about submitting new phishing URLs to Google so
+    // they don't have an associated list URL
+    if (kind != "Phish" && (!info.list || !info.uri)) {
       return null;
     }
 
@@ -276,6 +274,14 @@ this.SafeBrowsing = {
         "browser.safebrowsing.provider." + provider + ".gethashURL");
       updateURL = updateURL.replace("SAFEBROWSING_ID", clientID);
       gethashURL = gethashURL.replace("SAFEBROWSING_ID", clientID);
+
+      // Disable updates and gethash if the Google API key is missing.
+      let googleKey = Services.urlFormatter.formatURL("%GOOGLE_API_KEY%").trim();
+      if ((provider == "google" || provider == "google4") &&
+          (!googleKey || googleKey == "no-google-api-key")) {
+        updateURL= "";
+        gethashURL= "";
+      }
 
       log("Provider: " + provider + " updateURL=" + updateURL);
       log("Provider: " + provider + " gethashURL=" + gethashURL);
@@ -465,6 +471,6 @@ this.SafeBrowsing = {
       }
       resolve();
     };
-    Services.obs.addObserver(finished, "mozentries-update-finished", false);
+    Services.obs.addObserver(finished, "mozentries-update-finished");
   }),
 };

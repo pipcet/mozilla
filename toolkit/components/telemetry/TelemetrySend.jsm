@@ -15,10 +15,11 @@ this.EXPORTED_SYMBOLS = [
   "TelemetrySend",
 ];
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 
+Cu.import("resource://gre/modules/AppConstants.jsm", this);
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/Task.jsm", this);
+Cu.import("resource://gre/modules/ClientID.jsm");
 Cu.import("resource://gre/modules/Log.jsm", this);
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/PromiseUtils.jsm");
@@ -33,6 +34,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "TelemetryStorage",
                                   "resource://gre/modules/TelemetryStorage.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetryReportingPolicy",
                                   "resource://gre/modules/TelemetryReportingPolicy.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "OS",
+                                  "resource://gre/modules/osfile.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "Telemetry",
                                    "@mozilla.org/base/telemetry;1",
                                    "nsITelemetry");
@@ -45,11 +48,15 @@ const LOGGER_PREFIX = "TelemetrySend::";
 const PREF_BRANCH = "toolkit.telemetry.";
 const PREF_SERVER = PREF_BRANCH + "server";
 const PREF_UNIFIED = PREF_BRANCH + "unified";
+const PREF_ENABLED = PREF_BRANCH + "enabled";
 const PREF_FHR_UPLOAD_ENABLED = "datareporting.healthreport.uploadEnabled";
 const PREF_OVERRIDE_OFFICIAL_CHECK = PREF_BRANCH + "send.overrideOfficialCheck";
 
 const TOPIC_IDLE_DAILY = "idle-daily";
-const TOPIC_QUIT_APPLICATION = "quit-application";
+// The following topics are notified when Firefox is closing
+// because the OS is shutting down.
+const TOPIC_QUIT_APPLICATION_GRANTED = "quit-application-granted";
+const TOPIC_QUIT_APPLICATION_FORCED = "quit-application-forced";
 
 // Whether the FHR/Telemetry unification features are enabled.
 // Changing this pref requires a restart.
@@ -177,6 +184,14 @@ this.TelemetrySend = {
   },
 
   /**
+   * Partial setup that runs immediately at startup. This currently triggers
+   * the crash report annotations.
+   */
+  earlyInit() {
+    TelemetrySendImpl.earlyInit();
+  },
+
+  /**
    * Initializes this module.
    *
    * @param {Boolean} testing Whether this is run in a test. This changes some behavior
@@ -203,10 +218,13 @@ this.TelemetrySend = {
    * - save the ping to disk and send it at the next opportunity
    *
    * @param {Object} ping The ping data to send, must be serializable to JSON.
+   * @param {Object} [aOptions] Options object.
+   * @param {Boolean} [options.usePingSender=false] if true, send the ping using the PingSender.
    * @return {Promise} Test-only - a promise that is resolved when the ping is sent or saved.
    */
-  submitPing(ping) {
-    return TelemetrySendImpl.submitPing(ping);
+  submitPing(ping, options = {}) {
+    options.usePingSender = options.usePingSender || false;
+    return TelemetrySendImpl.submitPing(ping, options);
   },
 
   /**
@@ -263,6 +281,27 @@ this.TelemetrySend = {
    */
   getShutdownState() {
     return TelemetrySendImpl.getShutdownState();
+  },
+
+  /**
+   * Send a ping using the ping sender.
+   * This method will not wait for the ping to be sent, instead it will return
+   * as soon as the pingsender program has been launched.
+   *
+   * This method is currently exposed here only for testing purposes as it's
+   * only used internally.
+   *
+   * @param {String} aUrl The telemetry server URL
+   * @param {String} aPingFilePath The path to the file holding the ping
+   *        contents, if if sent successfully the pingsender will delete it.
+   *
+   * @throws NS_ERROR_FAILURE if we couldn't find or run the pingsender
+   *         executable.
+   * @throws NS_ERROR_NOT_IMPLEMENTED on Android as the pingsender is not
+   *         available.
+   */
+  testRunPingSender(url, pingPath) {
+    TelemetrySendImpl.runPingSender(url, pingPath);
   },
 };
 
@@ -392,7 +431,7 @@ var SendScheduler = {
     return this._sendTask;
   },
 
-  _doSendTask: Task.async(function*() {
+  async _doSendTask() {
     this._sendTaskState = "send task started";
     this._backoffDelay = SEND_TICK_DELAY;
     this._sendsFailed = false;
@@ -440,7 +479,7 @@ var SendScheduler = {
         this._sendTaskState = "wait for throttling to pass";
 
         const delay = nextPingSendTime - now.getTime();
-        const cancelled = yield CancellableTimeout.promiseWaitOnTimeout(delay);
+        const cancelled = await CancellableTimeout.promiseWaitOnTimeout(delay);
         if (cancelled) {
           this._log.trace("_doSendTask - throttling wait was cancelled, resetting backoff timer");
           resetBackoffTimer();
@@ -457,7 +496,7 @@ var SendScheduler = {
       this._sendsFailed = false;
       const sendStartTime = Policy.now();
       this._sendTaskState = "wait on ping sends";
-      yield TelemetrySendImpl.sendPings(current, sending.map(p => p.id));
+      await TelemetrySendImpl.sendPings(current, sending.map(p => p.id));
       if (this._shutdown || (TelemetrySend.pendingPingCount == 0)) {
         this._log.trace("_doSendTask - bailing out after sending, shutdown: " + this._shutdown +
                         ", pendingPingCount: " + TelemetrySend.pendingPingCount);
@@ -487,13 +526,13 @@ var SendScheduler = {
 
       this._log.trace("_doSendTask - waiting for next send opportunity, timeout is " + nextSendDelay)
       this._sendTaskState = "wait on next send opportunity";
-      const cancelled = yield CancellableTimeout.promiseWaitOnTimeout(nextSendDelay);
+      const cancelled = await CancellableTimeout.promiseWaitOnTimeout(nextSendDelay);
       if (cancelled) {
         this._log.trace("_doSendTask - batch send wait was cancelled, resetting backoff timer");
         resetBackoffTimer();
       }
     }
-  }),
+  },
 
   /**
    * This helper calculates the next time that we can send pings at.
@@ -545,17 +584,26 @@ var TelemetrySendImpl = {
   _testMode: false,
   // This holds pings that we currently try and haven't persisted yet.
   _currentPings: new Map(),
-
+  // Used to skip spawning the pingsender if OS is shutting down.
+  _isOSShutdown: false,
   // Count of pending pings that were overdue.
   _overduePingCount: 0,
 
-  // Whether sending pings has been overridden. We have it here instead
-  // of the top of the file to ease testing.
-  _overrideOfficialCheck: false,
-
   OBSERVER_TOPICS: [
     TOPIC_IDLE_DAILY,
+    TOPIC_QUIT_APPLICATION_GRANTED,
+    TOPIC_QUIT_APPLICATION_FORCED,
   ],
+
+  OBSERVED_PREFERENCES: [
+    PREF_ENABLED,
+    PREF_FHR_UPLOAD_ENABLED,
+  ],
+
+  // Whether sending pings has been overridden.
+  get _overrideOfficialCheck() {
+    return Preferences.get(PREF_OVERRIDE_OFFICIAL_CHECK, false);
+  },
 
   get _log() {
     if (!this._logger) {
@@ -581,20 +629,35 @@ var TelemetrySendImpl = {
     this._testMode = testing;
   },
 
-  setup: Task.async(function*(testing) {
+  earlyInit() {
+    this._annotateCrashReport();
+
+    // Install the observer to detect OS shutdown early enough, so
+    // that we catch this before the delayed setup happens.
+    Services.obs.addObserver(this, TOPIC_QUIT_APPLICATION_FORCED);
+    Services.obs.addObserver(this, TOPIC_QUIT_APPLICATION_GRANTED);
+  },
+
+  async setup(testing) {
     this._log.trace("setup");
 
     this._testMode = testing;
     this._sendingEnabled = true;
-    this._overrideOfficialCheck = Preferences.get(PREF_OVERRIDE_OFFICIAL_CHECK, false);
 
-    Services.obs.addObserver(this, TOPIC_IDLE_DAILY, false);
+    Services.obs.addObserver(this, TOPIC_IDLE_DAILY);
 
     this._server = Preferences.get(PREF_SERVER, undefined);
 
+    // Annotate crash reports so that crash pings are sent correctly and listen
+    // to pref changes to adjust the annotations accordingly.
+    for (let pref of this.OBSERVED_PREFERENCES) {
+      Preferences.observe(pref, this._annotateCrashReport, this);
+    }
+    this._annotateCrashReport();
+
     // Check the pending pings on disk now.
     try {
-      yield this._checkPendingPings();
+      await this._checkPendingPings();
     } catch (ex) {
       this._log.error("setup - _checkPendingPings rejected", ex);
     }
@@ -605,15 +668,44 @@ var TelemetrySendImpl = {
 
     // Start sending pings, but don't block on this.
     SendScheduler.triggerSendingPings(true);
-  }),
+  },
+
+  /**
+   * Triggers the crash report annotations depending on the current
+   * configuration. This communicates to the crash reporter if it can send a
+   * crash ping or not. This method can be called safely before setup() has
+   * been called.
+   */
+  _annotateCrashReport() {
+    try {
+      const cr = Cc["@mozilla.org/toolkit/crash-reporter;1"];
+      if (cr) {
+        const crs = cr.getService(Ci.nsICrashReporter);
+
+        let clientId = ClientID.getCachedClientID();
+        let server = this._server || Preferences.get(PREF_SERVER, undefined);
+
+        if (!this.sendingEnabled() || !TelemetryReportingPolicy.canUpload()) {
+          // If we cannot send pings then clear the crash annotations
+          crs.annotateCrashReport("TelemetryClientId", "");
+          crs.annotateCrashReport("TelemetryServerURL", "");
+        } else {
+          crs.annotateCrashReport("TelemetryClientId", clientId);
+          crs.annotateCrashReport("TelemetryServerURL", server);
+        }
+      }
+    } catch (e) {
+      // Ignore errors when crash reporting is disabled
+    }
+  },
 
   /**
    * Discard old pings from the pending pings and detect overdue ones.
    * @return {Boolean} True if we have overdue pings, false otherwise.
    */
-  _checkPendingPings: Task.async(function*() {
+  async _checkPendingPings() {
     // Scan the pending pings - that gives us a list sorted by last modified, descending.
-    let infos = yield TelemetryStorage.loadPendingPingList();
+    let infos = await TelemetryStorage.loadPendingPingList();
     this._log.info("_checkPendingPings - pending ping count: " + infos.length);
     if (infos.length == 0) {
       this._log.trace("_checkPendingPings - no pending pings");
@@ -633,10 +725,17 @@ var TelemetrySendImpl = {
         Utils.millisecondsToDays(Math.abs(now.getTime() - pingInfo.lastModificationDate));
       Telemetry.getHistogramById("TELEMETRY_PENDING_PINGS_AGE").add(ageInDays);
     }
-   }),
+   },
 
-  shutdown: Task.async(function*() {
+  async shutdown() {
     this._shutdown = true;
+
+    for (let pref of this.OBSERVED_PREFERENCES) {
+      // FIXME: When running tests this causes errors to be printed out if
+      // TelemetrySend.shutdown() is called twice in a row without calling
+      // TelemetrySend.setup() in-between.
+      Preferences.ignore(pref, this._annotateCrashReport, this);
+    }
 
     for (let topic of this.OBSERVER_TOPICS) {
       try {
@@ -650,17 +749,17 @@ var TelemetrySendImpl = {
     this._sendingEnabled = false;
 
     // Cancel any outgoing requests.
-    yield this._cancelOutgoingRequests();
+    await this._cancelOutgoingRequests();
 
     // Stop any active send tasks.
-    yield SendScheduler.shutdown();
+    await SendScheduler.shutdown();
 
     // Wait for any outstanding async ping activity.
-    yield this.promisePendingPingActivity();
+    await this.promisePendingPingActivity();
 
     // Save any outstanding pending pings to disk.
-    yield this._persistCurrentPings();
-  }),
+    await this._persistCurrentPings();
+  },
 
   reset() {
     this._log.trace("reset");
@@ -668,7 +767,7 @@ var TelemetrySendImpl = {
     this._shutdown = false;
     this._currentPings = new Map();
     this._overduePingCount = 0;
-    this._overrideOfficialCheck = Preferences.get(PREF_OVERRIDE_OFFICIAL_CHECK, false);
+    this._isOSShutdown = false;
 
     const histograms = [
       "TELEMETRY_SUCCESS",
@@ -685,25 +784,82 @@ var TelemetrySendImpl = {
    * Notify that we can start submitting data to the servers.
    */
   notifyCanUpload() {
-    // Let the scheduler trigger sending pings if possible.
+    // Let the scheduler trigger sending pings if possible, also inform the
+    // crash reporter that it can send crash pings if appropriate.
     SendScheduler.triggerSendingPings(true);
+    this._annotateCrashReport();
+
     return this.promisePendingPingActivity();
   },
 
   observe(subject, topic, data) {
+    let setOSShutdown = () => {
+      this._log.trace("setOSShutdown - in OS shutdown");
+      this._isOSShutdown = true;
+      Telemetry.scalarSet("telemetry.os_shutting_down", true);
+    };
+
     switch (topic) {
     case TOPIC_IDLE_DAILY:
       SendScheduler.triggerSendingPings(true);
       break;
+    case TOPIC_QUIT_APPLICATION_FORCED:
+      setOSShutdown();
+      break;
+    case TOPIC_QUIT_APPLICATION_GRANTED:
+      if (data == "syncShutdown") {
+        setOSShutdown();
+      }
+      break;
     }
   },
 
-  submitPing(ping) {
-    this._log.trace("submitPing - ping id: " + ping.id);
+  /**
+   * Spawn the PingSender process that sends a ping. This function does
+   * not return an error or throw, it only logs an error.
+   *
+   * Even if the function doesn't fail, it doesn't mean that the ping was
+   * successfully sent, as we have no control over the spawned process. If it,
+   * succeeds, the ping is eventually removed from the disk to prevent duplicated
+   * submissions.
+   *
+   * @param {String} pingId The id of the ping to send.
+   * @param {String} submissionURL The complete Telemetry-compliant URL for the ping.
+   */
+  _sendWithPingSender(pingId, submissionURL) {
+    this._log.trace("_sendWithPingSender - sending " + pingId + " to " + submissionURL);
+    try {
+      const pingPath = OS.Path.join(TelemetryStorage.pingDirectoryPath, pingId);
+      this.runPingSender(submissionURL, pingPath);
+    } catch (e) {
+      this._log.error("_sendWithPingSender - failed to submit ping", e);
+    }
+  },
+
+  submitPing(ping, options) {
+    this._log.trace("submitPing - ping id: " + ping.id + ", options: " + JSON.stringify(options));
 
     if (!this.sendingEnabled(ping)) {
       this._log.trace("submitPing - Telemetry is not allowed to send pings.");
       return Promise.resolve();
+    }
+
+    // Send the ping using the PingSender, if requested and the user was
+    // notified of our policy. We don't support the pingsender on Android,
+    // so ignore this option on that platform (see bug 1335917).
+    // Moreover, if the OS is shutting down, we don't want to spawn the
+    // pingsender as it could unnecessarily slow down OS shutdown.
+    // Additionally, it could be be killed before it can complete its tasks,
+    // for example after successfully sending the ping but before removing
+    // the copy from the disk, resulting in receiving duplicate pings when
+    // Firefox restarts.
+    if (options.usePingSender &&
+        !this._isOSShutdown &&
+        TelemetryReportingPolicy.canUpload() &&
+        AppConstants.platform != "android") {
+      const url = this._buildSubmissionURL(ping);
+      // Serialize the ping to the disk and then spawn the PingSender.
+      return savePing(ping).then(() => this._sendWithPingSender(ping.id, url));
     }
 
     if (!this.canSendNow) {
@@ -732,7 +888,7 @@ var TelemetrySendImpl = {
   /**
    * Clear out unpersisted, yet to be sent, pings and cancel outgoing ping requests.
    */
-  clearCurrentPings: Task.async(function*() {
+  async clearCurrentPings() {
     if (this._shutdown) {
       this._log.trace("clearCurrentPings - in shutdown, bailing out");
       return;
@@ -740,7 +896,7 @@ var TelemetrySendImpl = {
 
     // Temporarily disable the scheduler. It must not try to reschedule ping sending
     // while we're deleting them.
-    yield SendScheduler.shutdown();
+    await SendScheduler.shutdown();
 
     // Now that the ping activity has settled, abort outstanding ping requests.
     this._cancelOutgoingRequests();
@@ -759,7 +915,7 @@ var TelemetrySendImpl = {
     // Enable the scheduler again and spin the send task.
     SendScheduler.start();
     SendScheduler.triggerSendingPings(true);
-  }),
+  },
 
   _cancelOutgoingRequests() {
     // Abort any pending ping XHRs.
@@ -779,17 +935,17 @@ var TelemetrySendImpl = {
 
     for (let current of currentPings) {
       let ping = current;
-      let p = Task.spawn(function*() {
+      let p = (async () => {
         try {
-          yield this._doPing(ping, ping.id, false);
+          await this._doPing(ping, ping.id, false);
         } catch (ex) {
           this._log.info("sendPings - ping " + ping.id + " not sent, saving to disk", ex);
           // Deletion pings must be saved to a special location.
-          yield savePing(ping);
+          await savePing(ping);
         } finally {
           this._currentPings.delete(ping.id);
         }
-      }.bind(this));
+      })();
 
       this._trackPendingPingTask(p);
       pingSends.push(p);
@@ -811,7 +967,7 @@ var TelemetrySendImpl = {
    *
    * @return Promise A promise that is resolved when all pings finished sending or failed.
    */
-  _sendPersistedPings: Task.async(function*(pingIds) {
+  async _sendPersistedPings(pingIds) {
     this._log.trace("sendPersistedPings");
 
     if (TelemetryStorage.pendingPingCount < 1) {
@@ -838,8 +994,8 @@ var TelemetrySendImpl = {
 
     let promise = Promise.all(pingSendPromises);
     this._trackPendingPingTask(promise);
-    yield promise;
-  }),
+    await promise;
+  },
 
   _onPingRequestFinished(success, startTime, id, isPersisted) {
     this._log.trace("_onPingRequestFinished - success: " + success + ", persisted: " + isPersisted);
@@ -863,6 +1019,11 @@ var TelemetrySendImpl = {
       return TelemetryStorage.removePendingPing(id);
     }
     return Promise.resolve();
+  },
+
+  _buildSubmissionURL(ping) {
+    const version = isV4PingFormat(ping) ? PING_FORMAT_VERSION : 1;
+    return this._server + this._getSubmissionPath(ping) + "?v=" + version;
   },
 
   _getSubmissionPath(ping) {
@@ -908,9 +1069,7 @@ var TelemetrySendImpl = {
     this._log.trace("_doPing - server: " + this._server + ", persisted: " + isPersisted +
                     ", id: " + id);
 
-    const isNewPing = isV4PingFormat(ping);
-    const version = isNewPing ? PING_FORMAT_VERSION : 1;
-    const url = this._server + this._getSubmissionPath(ping) + "?v=" + version;
+    const url = this._buildSubmissionURL(ping);
 
     let request = new ServiceRequest();
     request.mozBackgroundRequest = true;
@@ -986,7 +1145,7 @@ var TelemetrySendImpl = {
     };
 
     // If that's a legacy ping format, just send its payload.
-    let networkPayload = isNewPing ? ping : ping.payload;
+    let networkPayload = isV4PingFormat(ping) ? ping : ping.payload;
     request.setRequestHeader("Content-Encoding", "gzip");
     let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
                     .createInstance(Ci.nsIScriptableUnicodeConverter);
@@ -1088,10 +1247,10 @@ var TelemetrySendImpl = {
     return Promise.all(p);
   },
 
-  _persistCurrentPings: Task.async(function*() {
+  async _persistCurrentPings() {
     for (let [id, ping] of this._currentPings) {
       try {
-        yield savePing(ping);
+        await savePing(ping);
         this._log.trace("_persistCurrentPings - saved ping " + id);
       } catch (ex) {
         this._log.error("_persistCurrentPings - failed to save ping " + id, ex);
@@ -1099,7 +1258,7 @@ var TelemetrySendImpl = {
         this._currentPings.delete(id);
       }
     }
-  }),
+  },
 
   /**
    * Returns the current pending, not yet persisted, pings, newest first.
@@ -1119,5 +1278,23 @@ var TelemetrySendImpl = {
       persistedPingCount: TelemetryStorage.getPendingPingList().length,
       schedulerState: SendScheduler.getShutdownState(),
     };
+  },
+
+  runPingSender(url, pingPath) {
+    if (AppConstants.platform === "android") {
+      throw Cr.NS_ERROR_NOT_IMPLEMENTED;
+    }
+
+    const exeName = AppConstants.platform === "win" ? "pingsender.exe"
+                                                    : "pingsender";
+
+    let exe = Services.dirsvc.get("GreBinD", Ci.nsIFile);
+    exe.append(exeName);
+
+    let process = Cc["@mozilla.org/process/util;1"]
+                  .createInstance(Ci.nsIProcess);
+    process.init(exe);
+    process.startHidden = true;
+    process.run(/* blocking */ false, [url, pingPath], 2);
   },
 };

@@ -539,7 +539,6 @@ struct ProfileSample
   Maybe<double> mResponsiveness;
   Maybe<double> mRSS;
   Maybe<double> mUSS;
-  Maybe<int> mFrameNumber;
 };
 
 static void WriteSample(SpliceableJSONWriter& aWriter, ProfileSample& aSample)
@@ -549,8 +548,7 @@ static void WriteSample(SpliceableJSONWriter& aWriter, ProfileSample& aSample)
     TIME = 1,
     RESPONSIVENESS = 2,
     RSS = 3,
-    USS = 4,
-    FRAME_NUMBER = 5
+    USS = 4
   };
 
   AutoArraySchemaWriter writer(aWriter);
@@ -571,10 +569,6 @@ static void WriteSample(SpliceableJSONWriter& aWriter, ProfileSample& aSample)
 
   if (aSample.mUSS.isSome()) {
     writer.DoubleElement(USS, *aSample.mUSS);
-  }
-
-  if (aSample.mFrameNumber.isSome()) {
-    writer.IntElement(FRAME_NUMBER, *aSample.mFrameNumber);
   }
 }
 
@@ -617,11 +611,6 @@ void ProfileBuffer::StreamSamplesToJSON(SpliceableJSONWriter& aWriter, int aThre
         if (sample.isSome()) {
           sample->mUSS = Some(entry.mTagDouble);
          }
-        break;
-      case ProfileBufferEntry::Kind::FrameNumber:
-        if (sample.isSome()) {
-          sample->mFrameNumber = Some(entry.mTagInt);
-        }
         break;
       case ProfileBufferEntry::Kind::Sample:
         {
@@ -693,6 +682,7 @@ void ProfileBuffer::StreamSamplesToJSON(SpliceableJSONWriter& aWriter, int aThre
               unsigned depth = aUniqueStacks.LookupJITFrameDepth(pc);
               if (depth == 0) {
                 StreamJSFramesOp framesOp(pc, stack);
+                MOZ_RELEASE_ASSERT(aContext);
                 JS::ForEachProfiledFrame(aContext, pc, framesOp);
                 aUniqueStacks.AddJITFrameDepth(pc, framesOp.depth());
               } else {
@@ -742,34 +732,50 @@ ProfileBuffer::StreamMarkersToJSON(SpliceableJSONWriter& aWriter,
   }
 }
 
-int ProfileBuffer::FindLastSampleOfThread(int aThreadId)
+int
+ProfileBuffer::FindLastSampleOfThread(int aThreadId, const LastSample& aLS)
 {
-  // We search backwards from mWritePos-1 to mReadPos.
-  // Adding mEntrySize makes the result of the modulus positive.
-  for (int readPos  = (mWritePos + mEntrySize - 1) % mEntrySize;
-           readPos !=  (mReadPos + mEntrySize - 1) % mEntrySize;
-           readPos  =   (readPos + mEntrySize - 1) % mEntrySize) {
-    ProfileBufferEntry entry = mEntries[readPos];
-    if (entry.isThreadId() && entry.mTagInt == aThreadId) {
-      return readPos;
+  // |aLS| has a valid generation number if either it matches the buffer's
+  // generation, or is one behind the buffer's generation, since the buffer's
+  // generation is incremented on wraparound.  There's no ambiguity relative to
+  // ProfileBuffer::reset, since that increments mGeneration by two.
+  if (aLS.mGeneration == mGeneration ||
+      (mGeneration > 0 && aLS.mGeneration == mGeneration - 1)) {
+    int ix = aLS.mPos;
+
+    if (ix == -1) {
+      // There's no record of |aLS|'s thread ever having recorded a sample in
+      // the buffer.
+      return -1;
     }
+
+    // It might be that the sample has since been overwritten, so check that it
+    // is still valid.
+    MOZ_RELEASE_ASSERT(0 <= ix && ix < mEntrySize);
+    ProfileBufferEntry& entry = mEntries[ix];
+    bool isStillValid = entry.isThreadId() && entry.mTagInt == aThreadId;
+    return isStillValid ? ix : -1;
   }
 
-  // This is rare. It typically happens after ProfileBuffer::reset() occurs.
+  // |aLS| denotes a sample which is older than either two wraparounds or one
+  // call to ProfileBuffer::reset.  In either case it is no longer valid.
+  MOZ_ASSERT(aLS.mGeneration <= mGeneration - 2);
   return -1;
 }
 
 bool
-ProfileBuffer::DuplicateLastSample(int aThreadId, const TimeStamp& aStartTime)
+ProfileBuffer::DuplicateLastSample(int aThreadId, const TimeStamp& aStartTime,
+                                   LastSample& aLS)
 {
-  int lastSampleStartPos = FindLastSampleOfThread(aThreadId);
+  int lastSampleStartPos = FindLastSampleOfThread(aThreadId, aLS);
   if (lastSampleStartPos == -1) {
     return false;
   }
 
-  MOZ_ASSERT(mEntries[lastSampleStartPos].isThreadId());
+  MOZ_ASSERT(mEntries[lastSampleStartPos].isThreadId() &&
+             mEntries[lastSampleStartPos].mTagInt == aThreadId);
 
-  addTag(mEntries[lastSampleStartPos]);
+  addTagThreadId(aThreadId, &aLS);
 
   // Go through the whole entry and duplicate it, until we find the next one.
   for (int readPos = (lastSampleStartPos + 1) % mEntrySize;
@@ -788,7 +794,7 @@ ProfileBuffer::DuplicateLastSample(int aThreadId, const TimeStamp& aStartTime)
         // Don't copy markers
         break;
       default:
-        // Copy anything else we don't know about
+        // Copy anything else we don't know about.
         addTag(mEntries[readPos]);
         break;
     }

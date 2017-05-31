@@ -5,10 +5,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #define INITGUID
+
+#include "mozilla/Move.h"
+#include "mozilla/mscom/DispatchForwarder.h"
 #include "mozilla/mscom/Interceptor.h"
 #include "mozilla/mscom/InterceptorLog.h"
-
-#include "mozilla/mscom/DispatchForwarder.h"
 #include "mozilla/mscom/MainThreadInvoker.h"
 #include "mozilla/mscom/Registration.h"
 #include "mozilla/mscom/Utils.h"
@@ -77,7 +78,7 @@ Interceptor::GetClassForHandler(DWORD aDestContext, void* aDestContextPtr,
     return E_INVALIDARG;
   }
   MOZ_ASSERT(mEventSink);
-  return mEventSink->GetHandler(aHandlerClsid);
+  return mEventSink->GetHandler(WrapNotNull(aHandlerClsid));
 }
 
 HRESULT
@@ -101,7 +102,7 @@ Interceptor::GetMarshalSizeMax(REFIID riid, void* pv, DWORD dwDestContext,
   }
 
   DWORD payloadSize = 0;
-  hr = mEventSink->GetHandlerPayloadSize(riid, mTarget.get(), &payloadSize);
+  hr = mEventSink->GetHandlerPayloadSize(WrapNotNull(&payloadSize));
   *pSize += payloadSize;
   return hr;
 }
@@ -117,7 +118,7 @@ Interceptor::MarshalInterface(IStream* pStm, REFIID riid, void* pv,
     return hr;
   }
 
-  return mEventSink->WriteHandlerPayload(pStm, riid, mTarget.get());
+  return mEventSink->WriteHandlerPayload(WrapNotNull(pStm));
 }
 
 HRESULT
@@ -152,7 +153,8 @@ Interceptor::Lookup(REFIID aIid)
 }
 
 HRESULT
-Interceptor::GetTargetForIID(REFIID aIid, InterceptorTargetPtr& aTarget)
+Interceptor::GetTargetForIID(REFIID aIid,
+                             InterceptorTargetPtr<IUnknown>& aTarget)
 {
   MutexAutoLock lock(mMutex);
   MapEntry* entry = Lookup(aIid);
@@ -164,10 +166,10 @@ Interceptor::GetTargetForIID(REFIID aIid, InterceptorTargetPtr& aTarget)
   return E_NOINTERFACE;
 }
 
-// CoGetInterceptor requires information from a typelib to be able to
-// generate its emulated vtable. If a typelib is unavailable,
-// CoGetInterceptor returns 0x80070002.
-static const HRESULT kFileNotFound = 0x80070002;
+// CoGetInterceptor requires type metadata to be able to generate its emulated
+// vtable. If no registered metadata is available, CoGetInterceptor returns
+// kFileNotFound.
+static const HRESULT kFileNotFound = HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 
 HRESULT
 Interceptor::CreateInterceptor(REFIID aIid, IUnknown* aOuter, IUnknown** aOutput)
@@ -362,7 +364,7 @@ Interceptor::ThreadSafeQueryInterface(REFIID aIid, IUnknown** aOutInterface)
     // support it. We'll check that by looking for a successful call to
     // IInterceptorSink::GetHandler()
     CLSID dummy;
-    if (FAILED(mEventSink->GetHandler(&dummy))) {
+    if (FAILED(mEventSink->GetHandler(WrapNotNull(&dummy)))) {
       return E_NOINTERFACE;
     }
 
@@ -376,7 +378,7 @@ Interceptor::ThreadSafeQueryInterface(REFIID aIid, IUnknown** aOutInterface)
     // support it. We'll check that by looking for a successful call to
     // IInterceptorSink::GetHandler()
     CLSID dummy;
-    if (FAILED(mEventSink->GetHandler(&dummy))) {
+    if (FAILED(mEventSink->GetHandler(WrapNotNull(&dummy)))) {
       return E_NOINTERFACE;
     }
 

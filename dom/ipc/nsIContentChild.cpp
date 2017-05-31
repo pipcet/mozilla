@@ -11,11 +11,15 @@
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/PermissionMessageUtils.h"
 #include "mozilla/dom/TabChild.h"
-#include "mozilla/dom/ipc/BlobChild.h"
 #include "mozilla/dom/ipc/StructuredCloneData.h"
 #include "mozilla/ipc/FileDescriptorSetChild.h"
 #include "mozilla/ipc/InputStreamUtils.h"
-#include "mozilla/ipc/SendStream.h"
+#include "mozilla/ipc/IPCStreamAlloc.h"
+#include "mozilla/ipc/IPCStreamDestination.h"
+#include "mozilla/ipc/IPCStreamSource.h"
+#include "mozilla/ipc/PChildToParentStreamChild.h"
+#include "mozilla/ipc/PParentToChildStreamChild.h"
+#include "mozilla/dom/ipc/IPCBlobInputStreamChild.h"
 
 #include "nsPrintfCString.h"
 #include "xpcpublic.h"
@@ -41,6 +45,7 @@ nsIContentChild::DeallocPJavaScriptChild(PJavaScriptChild* aChild)
 
 PBrowserChild*
 nsIContentChild::AllocPBrowserChild(const TabId& aTabId,
+                                    const TabId& aSameTabGroupAs,
                                     const IPCTabContext& aContext,
                                     const uint32_t& aChromeFlags,
                                     const ContentParentId& aCpID,
@@ -59,7 +64,8 @@ nsIContentChild::AllocPBrowserChild(const TabId& aTabId,
   }
 
   RefPtr<TabChild> child =
-    TabChild::Create(this, aTabId, tc.GetTabContext(), aChromeFlags);
+    TabChild::Create(this, aTabId, aSameTabGroupAs,
+                     tc.GetTabContext(), aChromeFlags);
 
   // The ref here is released in DeallocPBrowserChild.
   return child.forget().take();
@@ -76,6 +82,7 @@ nsIContentChild::DeallocPBrowserChild(PBrowserChild* aIframe)
 mozilla::ipc::IPCResult
 nsIContentChild::RecvPBrowserConstructor(PBrowserChild* aActor,
                                          const TabId& aTabId,
+                                         const TabId& aSameTabGroupAs,
                                          const IPCTabContext& aContext,
                                          const uint32_t& aChromeFlags,
                                          const ContentParentId& aCpID,
@@ -98,51 +105,47 @@ nsIContentChild::RecvPBrowserConstructor(PBrowserChild* aActor,
   return IPC_OK();
 }
 
-PBlobChild*
-nsIContentChild::AllocPBlobChild(const BlobConstructorParams& aParams)
+PIPCBlobInputStreamChild*
+nsIContentChild::AllocPIPCBlobInputStreamChild(const nsID& aID,
+                                               const uint64_t& aSize)
 {
-  return BlobChild::Create(this, aParams);
+  // IPCBlobInputStreamChild is refcounted. Here it's created and in
+  // DeallocPIPCBlobInputStreamChild is released.
+
+  RefPtr<IPCBlobInputStreamChild> actor =
+    new IPCBlobInputStreamChild(aID, aSize);
+  return actor.forget().take();
 }
 
 bool
-nsIContentChild::DeallocPBlobChild(PBlobChild* aActor)
+nsIContentChild::DeallocPIPCBlobInputStreamChild(PIPCBlobInputStreamChild* aActor)
 {
-  BlobChild::Destroy(aActor);
+  RefPtr<IPCBlobInputStreamChild> actor =
+    dont_AddRef(static_cast<IPCBlobInputStreamChild*>(aActor));
   return true;
 }
 
-BlobChild*
-nsIContentChild::GetOrCreateActorForBlob(Blob* aBlob)
+PChildToParentStreamChild*
+nsIContentChild::AllocPChildToParentStreamChild()
 {
-  MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(aBlob);
-
-  RefPtr<BlobImpl> blobImpl = aBlob->Impl();
-  MOZ_ASSERT(blobImpl);
-
-  return GetOrCreateActorForBlobImpl(blobImpl);
-}
-
-BlobChild*
-nsIContentChild::GetOrCreateActorForBlobImpl(BlobImpl* aImpl)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(aImpl);
-
-  BlobChild* actor = BlobChild::GetOrCreate(this, aImpl);
-  NS_ENSURE_TRUE(actor, nullptr);
-
-  return actor;
-}
-
-PSendStreamChild*
-nsIContentChild::AllocPSendStreamChild()
-{
-  MOZ_CRASH("PSendStreamChild actors should be manually constructed!");
+  MOZ_CRASH("PChildToParentStreamChild actors should be manually constructed!");
 }
 
 bool
-nsIContentChild::DeallocPSendStreamChild(PSendStreamChild* aActor)
+nsIContentChild::DeallocPChildToParentStreamChild(PChildToParentStreamChild* aActor)
+{
+  delete aActor;
+  return true;
+}
+
+PParentToChildStreamChild*
+nsIContentChild::AllocPParentToChildStreamChild()
+{
+  return mozilla::ipc::AllocPParentToChildStreamChild();
+}
+
+bool
+nsIContentChild::DeallocPParentToChildStreamChild(PParentToChildStreamChild* aActor)
 {
   delete aActor;
   return true;
@@ -167,6 +170,11 @@ nsIContentChild::RecvAsyncMessage(const nsString& aMsg,
                                   const IPC::Principal& aPrincipal,
                                   const ClonedMessageData& aData)
 {
+  NS_LossyConvertUTF16toASCII messageNameCStr(aMsg);
+  PROFILER_LABEL_DYNAMIC("nsIContentChild", "RecvAsyncMessage",
+                         js::ProfileEntry::Category::EVENTS,
+                         messageNameCStr.get());
+
   CrossProcessCpowHolder cpows(this, aCpows);
   RefPtr<nsFrameMessageManager> cpm = nsFrameMessageManager::GetChildProcessManager();
   if (cpm) {

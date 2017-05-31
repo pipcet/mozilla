@@ -134,7 +134,7 @@ var snapshotFormatters = {
       }
       return $.new("tr", [
         $.new("td", [
-          $.new("a", crash.id, null, {href : reportURL + crash.id})
+          $.new("a", crash.id, null, {href: reportURL + crash.id})
         ]),
         $.new("td", formattedDate)
       ]);
@@ -152,6 +152,16 @@ var snapshotFormatters = {
     }));
   },
 
+  features: function features(data) {
+    $.append($("features-tbody"), data.map(function(feature) {
+      return $.new("tr", [
+        $.new("td", feature.name),
+        $.new("td", feature.version),
+        $.new("td", feature.id),
+      ]);
+    }));
+  },
+
   experiments: function experiments(data) {
     $.append($("experiments-tbody"), data.map(function(experiment) {
       return $.new("tr", [
@@ -161,7 +171,7 @@ var snapshotFormatters = {
         $.new("td", experiment.active),
         $.new("td", experiment.endDate),
         $.new("td", [
-          $.new("a", experiment.detailURL, null, {href : experiment.detailURL, })
+          $.new("a", experiment.detailURL, null, {href: experiment.detailURL, })
         ]),
         $.new("td", experiment.branch),
       ]);
@@ -292,20 +302,24 @@ var snapshotFormatters = {
       delete data.info;
     }
 
-    if (AppConstants.NIGHTLY_BUILD || AppConstants.MOZ_DEV_EDITION) {
-      let windowUtils = window.QueryInterface(Ci.nsIInterfaceRequestor)
-                              .getInterface(Ci.nsIDOMWindowUtils);
-      let gpuProcessPid = windowUtils.gpuProcessPid;
+    let windowUtils = window.QueryInterface(Ci.nsIInterfaceRequestor)
+                            .getInterface(Ci.nsIDOMWindowUtils);
+    let gpuProcessPid = windowUtils.gpuProcessPid;
 
-      if (gpuProcessPid != -1) {
-        let gpuProcessKillButton = $.new("button");
+    if (gpuProcessPid != -1) {
+      let gpuProcessKillButton = null;
+      if (AppConstants.NIGHTLY_BUILD || AppConstants.MOZ_DEV_EDITION) {
+        gpuProcessKillButton = $.new("button");
 
         gpuProcessKillButton.addEventListener("click", function() {
           windowUtils.terminateGPUProcess();
         });
 
         gpuProcessKillButton.textContent = strings.GetStringFromName("gpuProcessKillButton");
-        addRow("diagnostics", "GPUProcessPid", gpuProcessPid);
+      }
+
+      addRow("diagnostics", "GPUProcessPid", gpuProcessPid);
+      if (gpuProcessKillButton) {
         addRow("diagnostics", "GPUProcess", [gpuProcessKillButton]);
       }
     }
@@ -674,9 +688,9 @@ function assembleFromGraphicsFailure(i, data) {
     what = "Assert";
     message = message.substring(8);
   }
-  let assembled = {"index" : index,
-                   "header" : ("(#" + index + ") " + what),
-                   "message" : message};
+  let assembled = {"index": index,
+                   "header": ("(#" + index + ") " + what),
+                   "message": message};
   return assembled;
 }
 
@@ -1015,14 +1029,14 @@ function setupEventListeners() {
   });
   $("restart-in-safe-mode-button").addEventListener("click", function(event) {
     if (Services.obs.enumerateObservers("restart-in-safe-mode").hasMoreElements()) {
-      Services.obs.notifyObservers(null, "restart-in-safe-mode", "");
+      Services.obs.notifyObservers(null, "restart-in-safe-mode");
     } else {
       safeModeRestart();
     }
   });
   $("verify-place-integrity-button").addEventListener("click", function(event) {
-    PlacesDBUtils.checkAndFixDatabase(function(aLog) {
-      let msg = aLog.join("\n");
+    PlacesDBUtils.checkAndFixDatabase().then((tasksStatusMap) => {
+      let msg = PlacesDBUtils.getLegacyLog(tasksStatusMap).join("\n");
       $("verify-place-result").style.display = "block";
       $("verify-place-result").classList.remove("no-copy");
       $("verify-place-result").textContent = msg;

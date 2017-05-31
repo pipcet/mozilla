@@ -11,8 +11,10 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(CUSTOM_GET_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
-  let { getSortedRequests } = windowRequire("devtools/client/netmonitor/selectors/index");
+  let { document, store, windowRequire } = monitor.panelWin;
+  let {
+    getSortedRequests,
+  } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
   let wait = waitForNetworkEvents(monitor, 1);
   yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
@@ -25,12 +27,10 @@ add_task(function* () {
   EventUtils.sendMouseEvent({ type: "contextmenu" },
     document.querySelectorAll(".request-list-item")[0]);
 
-  let requestItem = getSortedRequests(gStore.getState()).get(0);
+  let requestItem = getSortedRequests(store.getState()).get(0);
 
   yield waitForClipboardPromise(function setup() {
-    // Context menu is appending in XUL document, we must select it from
-    // toolbox.doc
-    monitor.toolbox.doc
+    monitor.panelWin.parent.document
       .querySelector("#request-list-context-copy-url").click();
   }, requestItem.url);
 

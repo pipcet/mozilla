@@ -74,20 +74,25 @@ public:
     //        the dispatch target were notifications should be sent.
     // @param callbacks
     //        the notification callbacks to be given to PSM.
+    // @param topLevelOuterContentWindowId
+    //        indicate the top level outer content window in which
+    //        this transaction is being loaded.
     // @param responseBody
     //        the input stream that will contain the response data.  async
     //        wait on this input stream for data.  on first notification,
     //        headers should be available (check transaction status).
     //
-    nsresult Init(uint32_t               caps,
-                  nsHttpConnectionInfo  *connInfo,
-                  nsHttpRequestHead     *reqHeaders,
-                  nsIInputStream        *reqBody,
-                  bool                   reqBodyIncludesHeaders,
-                  nsIEventTarget        *consumerTarget,
-                  nsIInterfaceRequestor *callbacks,
-                  nsITransportEventSink *eventsink,
-                  nsIAsyncInputStream  **responseBody);
+    MOZ_MUST_USE nsresult Init(uint32_t               caps,
+                               nsHttpConnectionInfo  *connInfo,
+                               nsHttpRequestHead     *reqHeaders,
+                               nsIInputStream        *reqBody,
+                               uint64_t               reqContentLength,
+                               bool                   reqBodyIncludesHeaders,
+                               nsIEventTarget        *consumerTarget,
+                               nsIInterfaceRequestor *callbacks,
+                               nsITransportEventSink *eventsink,
+                               uint64_t               topLevelOuterContentWindowId,
+                               nsIAsyncInputStream  **responseBody);
 
     // attributes
     nsHttpResponseHead    *ResponseHead()   { return mHaveAllHeaders ? mResponseHead : nullptr; }
@@ -164,28 +169,47 @@ public:
 
     int64_t GetTransferSize() { return mTransferSize; }
 
-    bool Do0RTT() override;
-    nsresult Finish0RTT(bool aRestart, bool aAlpnChanged /* ignored */) override;
+    MOZ_MUST_USE bool Do0RTT() override;
+    MOZ_MUST_USE nsresult Finish0RTT(bool aRestart, bool aAlpnChanged /* ignored */) override;
+
+    // After Finish0RTT early data may have failed but the caller did not request
+    // restart - this indicates that state for dev tools
+    void Refused0RTT();
+
+    MOZ_MUST_USE bool CanDo0RTT() override;
+    MOZ_MUST_USE nsresult RestartOnFastOpenError() override;
+
+    uint64_t TopLevelOuterContentWindowId() override
+    {
+        return mTopLevelOuterContentWindowId;
+    }
+
+    void SetFastOpenStatus(uint8_t aStatus) override;
 private:
     friend class DeleteHttpTransaction;
     virtual ~nsHttpTransaction();
 
-    nsresult Restart();
+    MOZ_MUST_USE nsresult Restart();
     char    *LocateHttpStart(char *buf, uint32_t len,
                              bool aAllowPartialMatch);
-    nsresult ParseLine(nsACString &line);
-    nsresult ParseLineSegment(char *seg, uint32_t len);
-    nsresult ParseHead(char *, uint32_t count, uint32_t *countRead);
-    nsresult HandleContentStart();
-    nsresult HandleContent(char *, uint32_t count, uint32_t *contentRead, uint32_t *contentRemaining);
-    nsresult ProcessData(char *, uint32_t, uint32_t *);
+    MOZ_MUST_USE nsresult ParseLine(nsACString &line);
+    MOZ_MUST_USE nsresult ParseLineSegment(char *seg, uint32_t len);
+    MOZ_MUST_USE nsresult ParseHead(char *, uint32_t count,
+                                    uint32_t *countRead);
+    MOZ_MUST_USE nsresult HandleContentStart();
+    MOZ_MUST_USE nsresult HandleContent(char *, uint32_t count,
+                                        uint32_t *contentRead,
+                                        uint32_t *contentRemaining);
+    MOZ_MUST_USE nsresult ProcessData(char *, uint32_t, uint32_t *);
     void     DeleteSelfOnConsumerThread();
     void     ReleaseBlockingTransaction();
 
-    static nsresult ReadRequestSegment(nsIInputStream *, void *, const char *,
-                                       uint32_t, uint32_t, uint32_t *);
-    static nsresult WritePipeSegment(nsIOutputStream *, void *, char *,
-                                     uint32_t, uint32_t, uint32_t *);
+    static MOZ_MUST_USE nsresult ReadRequestSegment(nsIInputStream *, void *,
+                                                    const char *, uint32_t,
+                                                    uint32_t, uint32_t *);
+    static MOZ_MUST_USE nsresult WritePipeSegment(nsIOutputStream *, void *,
+                                                  char *, uint32_t, uint32_t,
+                                                  uint32_t *);
 
     bool TimingEnabled() const { return mCaps & NS_HTTP_TIMING_ENABLED; }
 
@@ -288,6 +312,10 @@ private:
     Atomic<uint32_t>                mCapsToClear;
     Atomic<bool, ReleaseAcquire>    mResponseIsComplete;
 
+    // If true, this transaction was asked to stop receiving the response.
+    // NOTE: this flag is currently unused.  A useful remnant of an old throttling algorithm.
+    bool                            mThrottleResponse;
+
     // state flags, all logically boolean, but not packed together into a
     // bitfield so as to avoid bitfield-induced races.  See bug 560579.
     bool                            mClosed;
@@ -328,6 +356,8 @@ private:
     // The time when the transaction was submitted to the Connection Manager
     TimeStamp                       mPendingTime;
 
+    uint64_t                        mTopLevelOuterContentWindowId;
+
 // For Rate Pacing via an EventTokenBucket
 public:
     // called by the connection manager to run this transaction through the
@@ -347,6 +377,10 @@ public:
     // transaction is believed to be HTTP/1 (and thus subject to rate pacing)
     // but later can be dispatched via spdy (not subject to rate pacing).
     void CancelPacing(nsresult reason);
+
+    // Called only on the socket thread.  Updates the flag whether the transaction
+    // should make the underlying connection or session stop reading from the socket.
+    void ThrottleResponse(bool aThrottle);
 
 private:
     bool mSubmittedRatePacing;
@@ -386,8 +420,14 @@ private:
     NetAddr                         mPeerAddr;
 
     bool                            m0RTTInProgress;
+    enum
+    {
+        EARLY_NONE,
+        EARLY_SENT,
+        EARLY_ACCEPTED
+    } mEarlyDataDisposition;
 
-    nsresult                        mTransportStatus;
+    uint8_t mFastOpenStatus;
 };
 
 } // namespace net

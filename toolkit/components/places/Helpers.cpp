@@ -247,7 +247,7 @@ GenerateRandomBytes(uint32_t aSize,
 }
 
 nsresult
-GenerateGUID(nsCString& _guid)
+GenerateGUID(nsACString& _guid)
 {
   _guid.Truncate();
 
@@ -306,21 +306,6 @@ RoundToMilliseconds(PRTime aTime) {
 PRTime
 RoundedPRNow() {
   return RoundToMilliseconds(PR_Now());
-}
-
-void
-ForceWALCheckpoint()
-{
-  RefPtr<Database> DB = Database::GetDatabase();
-  if (DB) {
-    nsCOMPtr<mozIStorageAsyncStatement> stmt = DB->GetAsyncStatement(
-      "pragma wal_checkpoint "
-    );
-    if (stmt) {
-      nsCOMPtr<mozIStoragePendingStatement> handle;
-      (void)stmt->ExecuteAsync(nullptr, getter_AddRefs(handle));
-    }
-  }
 }
 
 bool

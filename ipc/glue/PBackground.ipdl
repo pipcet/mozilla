@@ -6,7 +6,6 @@ include protocol PAsmJSCacheEntry;
 include protocol PBackgroundIDBFactory;
 include protocol PBackgroundIndexedDBUtils;
 include protocol PBackgroundTest;
-include protocol PBlob;
 include protocol PBroadcastChannel;
 include protocol PCache;
 include protocol PCacheStorage;
@@ -15,15 +14,20 @@ include protocol PFileDescriptorSet;
 include protocol PFileSystemRequest;
 include protocol PGamepadEventChannel;
 include protocol PGamepadTestChannel;
+include protocol PIPCBlobInputStream;
+include protocol PPendingIPCBlob;
 include protocol PMessagePort;
 include protocol PCameras;
 include protocol PQuota;
-include protocol PSendStream;
+include protocol PChildToParentStream;
+include protocol PParentToChildStream;
 include protocol PServiceWorkerManager;
+include protocol PWebAuthnTransaction;
 include protocol PUDPSocket;
 include protocol PVsync;
 
 include DOMTypes;
+include IPCBlob;
 include PBackgroundSharedTypes;
 include PBackgroundIDBSharedTypes;
 include PFileSystemParams;
@@ -49,7 +53,6 @@ sync protocol PBackground
   manages PBackgroundIDBFactory;
   manages PBackgroundIndexedDBUtils;
   manages PBackgroundTest;
-  manages PBlob;
   manages PBroadcastChannel;
   manages PCache;
   manages PCacheStorage;
@@ -58,11 +61,15 @@ sync protocol PBackground
   manages PFileSystemRequest;
   manages PGamepadEventChannel;
   manages PGamepadTestChannel;
+  manages PIPCBlobInputStream;
+  manages PPendingIPCBlob;
   manages PMessagePort;
   manages PCameras;
   manages PQuota;
-  manages PSendStream;
+  manages PChildToParentStream;
+  manages PParentToChildStream;
   manages PServiceWorkerManager;
+  manages PWebAuthnTransaction;
   manages PUDPSocket;
   manages PVsync;
 
@@ -92,7 +99,7 @@ parent:
 
   async PMessagePort(nsID uuid, nsID destinationUuid, uint32_t sequenceId);
 
-  async PSendStream();
+  async PChildToParentStream();
 
   async MessagePortForceClose(nsID uuid, nsID destinationUuid, uint32_t sequenceId);
 
@@ -108,12 +115,20 @@ parent:
 
   async PGamepadTestChannel();
 
+  async PWebAuthnTransaction();
+
 child:
   async PCache();
   async PCacheStreamControl();
 
+  async PParentToChildStream();
+
+  async PPendingIPCBlob(IPCBlob blob);
+
 both:
-  async PBlob(BlobConstructorParams params);
+  // PIPCBlobInputStream is created on the parent side only if the child starts
+  // a migration.
+  async PIPCBlobInputStream(nsID aID, uint64_t aSize);
 
   async PFileDescriptorSet(FileDescriptor fd);
 };

@@ -37,6 +37,9 @@ using namespace sandbox::bpf_dsl;
 
 // Fill in defines in case of old headers.
 // (Warning: these are wrong on PA-RISC.)
+#ifndef MADV_HUGEPAGE
+#define MADV_HUGEPAGE 14
+#endif
 #ifndef MADV_NOHUGEPAGE
 #define MADV_NOHUGEPAGE 15
 #endif
@@ -500,6 +503,16 @@ private:
     return 0;
   }
 
+  static intptr_t SocketpairDatagramTrap(ArgsRef aArgs, void* aux) {
+    auto fds = reinterpret_cast<int*>(aArgs.args[3]);
+    // Return sequential packet sockets instead of the expected
+    // datagram sockets; see bug 1355274 for details.
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds) != 0) {
+      return -errno;
+    }
+    return 0;
+  }
+
 public:
   explicit ContentSandboxPolicy(SandboxBrokerClient* aBroker,
                                 const std::vector<int>& aSyscallWhitelist)
@@ -515,6 +528,7 @@ public:
     switch(aCall) {
     case SYS_RECVFROM:
     case SYS_SENDTO:
+    case SYS_SENDMMSG: // libresolv via libasyncns; see bug 1355274
       return Some(Allow());
 
     case SYS_SOCKETPAIR: {
@@ -524,9 +538,12 @@ public:
         return Some(Allow());
       }
       Arg<int> domain(0), type(1);
-      return Some(If(AllOf(domain == AF_UNIX,
-                           AnyOf(type == SOCK_STREAM, type == SOCK_SEQPACKET)),
-                     Allow())
+      return Some(If(domain == AF_UNIX,
+                     Switch(type)
+                     .Case(SOCK_STREAM, Allow())
+                     .Case(SOCK_SEQPACKET, Allow())
+                     .Case(SOCK_DGRAM, Trap(SocketpairDatagramTrap, nullptr))
+                     .Default(InvalidSyscall()))
                   .Else(InvalidSyscall()));
     }
 
@@ -538,10 +555,7 @@ public:
     case SYS_SEND:
     case SYS_SOCKET: // DANGEROUS
     case SYS_CONNECT: // DANGEROUS
-    case SYS_ACCEPT:
-    case SYS_ACCEPT4:
-    case SYS_BIND:
-    case SYS_LISTEN:
+    case SYS_ACCEPT4: // Used by a11y; see bug 1361238
     case SYS_GETSOCKOPT:
     case SYS_SETSOCKOPT:
     case SYS_GETSOCKNAME:
@@ -655,8 +669,15 @@ public:
     CASES_FOR_fchown:
     case __NR_fchmod:
     case __NR_flock:
-#endif
       return Allow();
+
+      // Bug 1354731: proprietary GL drivers try to mknod() their devices
+    case __NR_mknod: {
+      Arg<mode_t> mode(1);
+      return If((mode & S_IFMT) == S_IFCHR, Error(EPERM))
+        .Else(InvalidSyscall());
+    }
+#endif
 
     case __NR_readlinkat:
 #ifdef DESKTOP
@@ -772,6 +793,7 @@ public:
       return Allow();
 
     case __NR_eventfd2:
+    case __NR_inotify_init:
     case __NR_inotify_init1:
     case __NR_inotify_add_watch:
     case __NR_inotify_rm_watch:
@@ -947,8 +969,9 @@ public:
       Arg<int> advice(2);
       return If(advice == MADV_DONTNEED, Allow())
         .ElseIf(advice == MADV_FREE, Allow())
-#ifdef MOZ_ASAN
+        .ElseIf(advice == MADV_HUGEPAGE, Allow())
         .ElseIf(advice == MADV_NOHUGEPAGE, Allow())
+#ifdef MOZ_ASAN
         .ElseIf(advice == MADV_DONTDUMP, Allow())
 #endif
         .Else(InvalidSyscall());

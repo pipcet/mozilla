@@ -16,14 +16,14 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(POST_DATA_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
-  let Actions = windowRequire("devtools/client/netmonitor/actions/index");
+  let { document, store, windowRequire } = monitor.panelWin;
+  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getSelectedRequest,
     getSortedRequests,
-  } = windowRequire("devtools/client/netmonitor/selectors/index");
+  } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, 0, 2);
   yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
@@ -31,30 +31,30 @@ add_task(function* () {
   });
   yield wait;
 
-  let origItem = getSortedRequests(gStore.getState()).get(0);
+  let origItem = getSortedRequests(store.getState()).get(0);
 
-  gStore.dispatch(Actions.selectRequest(origItem.id));
+  store.dispatch(Actions.selectRequest(origItem.id));
 
   // add a new custom request cloned from selected request
-  gStore.dispatch(Actions.cloneSelectedRequest());
+  store.dispatch(Actions.cloneSelectedRequest());
 
   testCustomForm(origItem);
 
-  let customItem = getSelectedRequest(gStore.getState());
+  let customItem = getSelectedRequest(store.getState());
   testCustomItem(customItem, origItem);
 
   // edit the custom request
   yield editCustomForm();
   // FIXME: reread the customItem, it's been replaced by a new object (immutable!)
-  customItem = getSelectedRequest(gStore.getState());
+  customItem = getSelectedRequest(store.getState());
   testCustomItemChanged(customItem, origItem);
 
   // send the new request
   wait = waitForNetworkEvents(monitor, 0, 1);
-  gStore.dispatch(Actions.sendCustomRequest());
+  store.dispatch(Actions.sendCustomRequest());
   yield wait;
 
-  let sentItem = getSelectedRequest(gStore.getState());
+  let sentItem = getSelectedRequest(store.getState());
   testSentRequest(sentItem, origItem);
 
   return teardown(monitor);
@@ -106,6 +106,7 @@ add_task(function* () {
     let queryFocus = once(query, "focus", false);
     // Bug 1195825: Due to some unexplained dark-matter with promise,
     // focus only works if delayed by one tick.
+    query.setSelectionRange(query.value.length, query.value.length);
     executeSoon(() => query.focus());
     yield queryFocus;
 
@@ -115,6 +116,7 @@ add_task(function* () {
 
     let headers = document.getElementById("custom-headers-value");
     let headersFocus = once(headers, "focus", false);
+    headers.setSelectionRange(headers.value.length, headers.value.length);
     headers.focus();
     yield headersFocus;
 
@@ -129,6 +131,7 @@ add_task(function* () {
 
     let postData = document.getElementById("custom-postdata-value");
     let postFocus = once(postData, "focus", false);
+    postData.setSelectionRange(postData.value.length, postData.value.length);
     postData.focus();
     yield postFocus;
 

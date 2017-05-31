@@ -405,12 +405,14 @@ ProxyAutoConfig::ResolveAddress(const nsCString &aHostName,
     return false;
 
   RefPtr<PACResolver> helper = new PACResolver();
+  OriginAttributes attrs;
 
-  if (NS_FAILED(dns->AsyncResolve(aHostName,
-                                  nsIDNSService::RESOLVE_PRIORITY_MEDIUM,
-                                  helper,
-                                  NS_GetCurrentThread(),
-                                  getter_AddRefs(helper->mRequest))))
+  if (NS_FAILED(dns->AsyncResolveNative(aHostName,
+                                        nsIDNSService::RESOLVE_PRIORITY_MEDIUM,
+                                        helper,
+                                        NS_GetCurrentThread(),
+                                        attrs,
+                                        getter_AddRefs(helper->mRequest))))
     return false;
 
   if (aTimeout && helper->mRequest) {
@@ -425,8 +427,7 @@ ProxyAutoConfig::ResolveAddress(const nsCString &aHostName,
   // Spin the event loop of the pac thread until lookup is complete.
   // nsPACman is responsible for keeping a queue and only allowing
   // one PAC execution at a time even when it is called re-entrantly.
-  while (helper->mRequest)
-    NS_ProcessNextEvent(NS_GetCurrentThread());
+  SpinEventLoopUntil([&, helper]() { return !helper->mRequest; });
 
   if (NS_FAILED(helper->mStatus) ||
       NS_FAILED(helper->mResponse->GetNextAddr(0, aNetAddr)))

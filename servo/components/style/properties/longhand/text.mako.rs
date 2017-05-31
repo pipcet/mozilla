@@ -12,15 +12,12 @@
                                              Method("has_overline", "bool"),
                                              Method("has_line_through", "bool")]) %>
 
-<%helpers:longhand name="text-overflow" animatable="False" boxed="True"
+<%helpers:longhand name="text-overflow" animation_value_type="none" boxed="True"
                    spec="https://drafts.csswg.org/css-ui/#propdef-text-overflow">
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
-    use values::computed::ComputedValueAsSpecified;
     use cssparser;
 
-    impl ComputedValueAsSpecified for SpecifiedValue {}
     no_viewport_percentage!(SpecifiedValue);
 
     #[derive(PartialEq, Eq, Clone, Debug)]
@@ -39,19 +36,78 @@
     }
 
     pub mod computed_value {
-        pub type T = super::SpecifiedValue;
+        pub use super::Side;
+
+        #[derive(Debug, Clone, PartialEq)]
+        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+        pub struct T {
+            // When the specified value only has one side, that's the "second"
+            // side, and the sides are logical, so "second" means "end".  The
+            // start side is Clip in that case.
+            //
+            // When the specified value has two sides, those are our "first"
+            // and "second" sides, and they are physical sides ("left" and
+            // "right").
+            pub first: Side,
+            pub second: Side,
+            pub sides_are_logical: bool
+        }
+    }
+
+    impl ToCss for computed_value::T {
+        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+            if self.sides_are_logical {
+                assert!(self.first == Side::Clip);
+                try!(self.second.to_css(dest));
+            } else {
+                try!(self.first.to_css(dest));
+                try!(dest.write_str(" "));
+                try!(self.second.to_css(dest));
+            }
+            Ok(())
+        }
+    }
+
+    impl ToComputedValue for SpecifiedValue {
+        type ComputedValue = computed_value::T;
+
+        #[inline]
+        fn to_computed_value(&self, _context: &Context) -> Self::ComputedValue {
+            if let Some(ref second) = self.second {
+                Self::ComputedValue { first: self.first.clone(),
+                                      second: second.clone(),
+                                      sides_are_logical: false }
+            } else {
+                Self::ComputedValue { first: Side::Clip,
+                                      second: self.first.clone(),
+                                      sides_are_logical: true }
+            }
+        }
+
+        #[inline]
+        fn from_computed_value(computed: &Self::ComputedValue) -> Self {
+            if computed.sides_are_logical {
+                assert!(computed.first == Side::Clip);
+                SpecifiedValue { first: computed.second.clone(),
+                                 second: None }
+            } else {
+                SpecifiedValue { first: computed.first.clone(),
+                                 second: Some(computed.second.clone()) }
+            }
+        }
     }
 
     #[inline]
     pub fn get_initial_value() -> computed_value::T {
-        SpecifiedValue {
+        computed_value::T {
             first: Side::Clip,
-            second: None
+            second: Side::Clip,
+            sides_are_logical: true,
         }
     }
     pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
         let first = try!(Side::parse(context, input));
-        let second = Side::parse(context, input).ok();
+        let second = input.try(|input| Side::parse(context, input)).ok();
         Ok(SpecifiedValue {
             first: first,
             second: second,
@@ -97,18 +153,16 @@
 
 ${helpers.single_keyword("unicode-bidi",
                          "normal embed isolate bidi-override isolate-override plaintext",
-                         animatable=False,
+                         animation_value_type="discrete",
                          spec="https://drafts.csswg.org/css-writing-modes/#propdef-unicode-bidi")}
 
 // FIXME: This prop should be animatable.
-<%helpers:longhand name="${'text-decoration' if product == 'servo' else 'text-decoration-line'}"
+<%helpers:longhand name="text-decoration-line"
                    custom_cascade="${product == 'servo'}"
-                   animatable="False"
-                   disable_when_testing="True",
+                   animation_value_type="none"
                    spec="https://drafts.csswg.org/css-text-decor/#propdef-text-decoration-line">
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::computed::ComputedValueAsSpecified;
 
     impl ComputedValueAsSpecified for SpecifiedValue {}
@@ -138,6 +192,7 @@ ${helpers.single_keyword("unicode-bidi",
     impl ToCss for SpecifiedValue {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
             let mut has_any = false;
+
             macro_rules! write_value {
                 ($line:ident => $css:expr) => {
                     if self.contains($line) {
@@ -156,6 +211,7 @@ ${helpers.single_keyword("unicode-bidi",
             if !has_any {
                 dest.write_str("none")?;
             }
+
             Ok(())
         }
     }
@@ -209,7 +265,7 @@ ${helpers.single_keyword("unicode-bidi",
                                    _inherited_style: &ComputedValues,
                                    context: &mut computed::Context,
                                    _cacheable: &mut bool,
-                                   _error_reporter: &mut StdBox<ParseErrorReporter + Send>) {
+                                   _error_reporter: &ParseErrorReporter) {
                 longhands::_servo_text_decorations_in_effect::derive_from_text_decoration(context);
         }
     % endif
@@ -218,14 +274,85 @@ ${helpers.single_keyword("unicode-bidi",
 ${helpers.single_keyword("text-decoration-style",
                          "solid double dotted dashed wavy -moz-none",
                          products="gecko",
-                         animatable=False,
+                         animation_value_type="discrete",
                          spec="https://drafts.csswg.org/css-text-decor/#propdef-text-decoration-style")}
 
 ${helpers.predefined_type(
     "text-decoration-color", "CSSColor",
-    "::cssparser::Color::CurrentColor",
+    "computed::CSSColor::CurrentColor",
     initial_specified_value="specified::CSSColor::currentcolor()",
     complex_color=True,
     products="gecko",
-    animatable=True,
+    animation_value_type="IntermediateColor",
+    ignored_when_colors_disabled=True,
     spec="https://drafts.csswg.org/css-text-decor/#propdef-text-decoration-color")}
+
+<%helpers:longhand name="initial-letter"
+                   animation_value_type="none"
+                   products="gecko"
+                   spec="https://drafts.csswg.org/css-inline/#sizing-drop-initials">
+    use std::fmt;
+    use style_traits::ToCss;
+    use values::computed::ComputedValueAsSpecified;
+    use values::specified::{Number, Integer};
+
+    impl ComputedValueAsSpecified for SpecifiedValue {}
+    no_viewport_percentage!(SpecifiedValue);
+
+    #[derive(PartialEq, Clone, Debug)]
+    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+    pub enum SpecifiedValue {
+        Normal,
+        Specified(Number, Option<Integer>)
+    }
+
+    pub mod computed_value {
+        pub use super::SpecifiedValue as T;
+    }
+
+    impl ToCss for SpecifiedValue {
+        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+            match *self {
+                SpecifiedValue::Normal => try!(dest.write_str("normal")),
+                SpecifiedValue::Specified(size, sink) => {
+                    try!(size.to_css(dest));
+                    if let Some(sink) = sink {
+                        try!(dest.write_str(" "));
+                        try!(sink.to_css(dest));
+                    }
+                }
+            };
+
+            Ok(())
+        }
+    }
+
+    #[inline]
+    pub fn get_initial_value() -> computed_value::T {
+        computed_value::T::Normal
+    }
+
+    #[inline]
+    pub fn get_initial_specified_value() -> SpecifiedValue {
+        SpecifiedValue::Normal
+    }
+
+    /// normal | <number> <integer>?
+    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+        if input.try(|input| input.expect_ident_matching("normal")).is_ok() {
+            return Ok(SpecifiedValue::Normal);
+        }
+
+        let size = try!(Number::parse_at_least_one(context, input));
+
+        match input.try(|input| Integer::parse(context, input)) {
+            Ok(number) => {
+                if number.value() < 1 {
+                    return Err(());
+                }
+                Ok(SpecifiedValue::Specified(size, Some(number)))
+            }
+            Err(()) => Ok(SpecifiedValue::Specified(size, None)),
+        }
+    }
+</%helpers:longhand>

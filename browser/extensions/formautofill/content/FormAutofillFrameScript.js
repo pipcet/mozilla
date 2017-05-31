@@ -8,11 +8,14 @@
 
 "use strict";
 
+/* eslint-env mozilla/frame-script */
+
 const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://formautofill/FormAutofillContent.jsm");
+Cu.import("resource://formautofill/FormAutofillUtils.jsm");
 
 /**
  * Handles content's interactions for the frame.
@@ -21,7 +24,9 @@ Cu.import("resource://formautofill/FormAutofillContent.jsm");
  */
 var FormAutofillFrameScript = {
   init() {
-    addEventListener("DOMContentLoaded", this);
+    addEventListener("focusin", this);
+    addMessageListener("FormAutofill:PreviewProfile", this);
+    addMessageListener("FormAutoComplete:PopupClosed", this);
   },
 
   handleEvent(evt) {
@@ -29,19 +34,32 @@ var FormAutofillFrameScript = {
       return;
     }
 
-    if (!Services.prefs.getBoolPref("browser.formautofill.enabled")) {
+    if (!Services.prefs.getBoolPref("extensions.formautofill.addresses.enabled")) {
       return;
     }
 
     switch (evt.type) {
-      case "DOMContentLoaded": {
-        let doc = evt.target;
-        if (!(doc instanceof Ci.nsIDOMHTMLDocument)) {
+      case "focusin": {
+        let element = evt.target;
+        if (!FormAutofillUtils.isFieldEligibleForAutofill(element)) {
           return;
         }
-        FormAutofillContent.identifyAutofillFields(doc);
+        FormAutofillContent.identifyAutofillFields(element.ownerDocument);
         break;
       }
+    }
+  },
+
+  receiveMessage(message) {
+    if (!Services.prefs.getBoolPref("extensions.formautofill.addresses.enabled")) {
+      return;
+    }
+
+    switch (message.name) {
+      case "FormAutofill:PreviewProfile":
+      case "FormAutoComplete:PopupClosed":
+        FormAutofillContent._previewProfile(content.document);
+        break;
     }
   },
 };

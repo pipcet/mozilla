@@ -7,7 +7,8 @@
 #define GFX_WEBRENDERIMAGELAYER_H
 
 #include "ImageLayers.h"
-#include "WebRenderLayerManager.h"
+#include "mozilla/layers/WebRenderLayer.h"
+#include "mozilla/layers/WebRenderLayerManager.h"
 
 namespace mozilla {
 namespace layers {
@@ -22,24 +23,29 @@ public:
   virtual already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() override;
 
   virtual void ClearCachedResources() override;
+
 protected:
   virtual ~WebRenderImageLayer();
 
-  WebRenderLayerManager* Manager()
-  {
-    return static_cast<WebRenderLayerManager*>(mManager);
-  }
-
 public:
   Layer* GetLayer() override { return this; }
-  void RenderLayer() override;
+  void RenderLayer(wr::DisplayListBuilder& aBuilder,
+                   const StackingContextHelper& aSc) override;
+  Maybe<WrImageMask> RenderMaskLayer(const gfx::Matrix4x4& aTransform) override;
 
 protected:
   CompositableType GetImageClientType();
 
-  uint64_t mExternalImageId;
+  void AddWRVideoImage(size_t aChannelNumber);
+
+  wr::MaybeExternalImageId mExternalImageId;
+  // Some video image format contains multiple channel data.
+  nsTArray<wr::ImageKey> mVideoKeys;
+  // The regular single channel image.
+  Maybe<wr::ImageKey> mKey;
   RefPtr<ImageClient> mImageClient;
   CompositableType mImageClientTypeContainer;
+  Maybe<wr::PipelineId> mPipelineId;
 };
 
 } // namespace layers

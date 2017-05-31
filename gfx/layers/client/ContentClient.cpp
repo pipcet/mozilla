@@ -61,7 +61,6 @@ ContentClient::CreateContentClient(CompositableForwarder* aForwarder)
 {
   LayersBackend backend = aForwarder->GetCompositorBackendType();
   if (backend != LayersBackend::LAYERS_OPENGL &&
-      backend != LayersBackend::LAYERS_D3D9 &&
       backend != LayersBackend::LAYERS_D3D11 &&
       backend != LayersBackend::LAYERS_WR &&
       backend != LayersBackend::LAYERS_BASIC) {
@@ -103,7 +102,7 @@ ContentClient::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   aStream << aPrefix;
   aStream << nsPrintfCString("ContentClient (0x%p)", this).get();
 
-  if (profiler_feature_active("displaylistdump")) {
+  if (profiler_feature_active(ProfilerFeature::DisplayListDump)) {
     nsAutoCString pfx(aPrefix);
     pfx += "  ";
 
@@ -256,7 +255,7 @@ ContentClientRemoteBuffer::EndPaint(nsTArray<ReadbackProcessor::Update>* aReadba
   mOldTextures.Clear();
 
   if (mTextureClient && mTextureClient->IsLocked()) {
-    if (aReadbackUpdates->Length() > 0) {
+    if (aReadbackUpdates && aReadbackUpdates->Length() > 0) {
       RefPtr<TextureReadbackSink> readbackSink = new RemoteBufferReadbackProcessor(aReadbackUpdates, mBufferRect, mBufferRotation);
 
       mTextureClient->SetReadbackSink(readbackSink);
@@ -332,7 +331,9 @@ ContentClientRemoteBuffer::CreateBackBuffer(const IntRect& aBufferRect)
       AbortTextureClientCreation();
       return;
     }
-    mTextureClientOnWhite->EnableBlockingReadLock();
+    // We don't enable the readlock for the white buffer since we always
+    // use them together and waiting on the lock for the black
+    // should be sufficient.
   }
 }
 

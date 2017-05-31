@@ -8,11 +8,10 @@ linux64/opt:
         symbol: tc(B)
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 36000
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         config:
             - builds/releng_base_linux_64_builds.py
             - balrog/production.py
@@ -31,12 +30,11 @@ linux64/pgo:
         symbol: tc(B)
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 36000
     coalesce-name: linux64-pgo
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         options: [enable-pgo]
         config:
             - builds/releng_base_linux_64_builds.py
@@ -56,11 +54,10 @@ linux64/debug:
         symbol: tc(B)
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 36000
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         config:
             - builds/releng_base_linux_64_builds.py
             - balrog/production.py
@@ -69,6 +66,34 @@ linux64/debug:
         custom-build-variant-cfg: debug
         tooltool-downloads: public
         need-xvfb: true
+
+linux64-devedition-nightly/opt:
+    description: "Linux64 devedition Nightly"
+    attributes:
+        nightly: true
+    index:
+        product: devedition
+        job-name: linux64-opt
+        type: nightly
+    treeherder:
+        platform: linux64-devedition/opt
+        symbol: tc(N)
+    worker-type: aws-provisioner-v1/gecko-{level}-b-linux
+    worker:
+        max-run-time: 36000
+    run:
+        using: mozharness
+        actions: [get-secrets build generate-build-stats check-test update]
+        config:
+            - builds/releng_base_linux_64_builds.py
+            - disable_signing.py
+            - balrog/production.py
+        script: "mozharness/scripts/fx_desktop_build.py"
+        secrets: true
+        tooltool-downloads: public
+        need-xvfb: true
+        custom-build-variant-cfg: devedition
+    run-on-projects: [ 'mozilla-beta', ]
 
 linux/opt:
     description: "Linux32 Opt"
@@ -80,12 +105,11 @@ linux/opt:
         symbol: tc(B)
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 36000
     coalesce-name: opt_linux32
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         config:
             - builds/releng_base_linux_32_builds.py
             - balrog/production.py
@@ -104,12 +128,11 @@ linux/debug:
         symbol: tc(B)
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 36000
     coalesce-name: dbg_linux32
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         config:
             - builds/releng_base_linux_32_builds.py
             - balrog/production.py
@@ -129,12 +152,11 @@ linux/pgo:
         symbol: tc(B)
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 36000
     coalesce-name: linux32-pgo
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         options: [enable-pgo]
         config:
             - builds/releng_base_linux_32_builds.py
@@ -143,6 +165,34 @@ linux/pgo:
         secrets: true
         tooltool-downloads: public
         need-xvfb: true
+
+linux-devedition-nightly/opt:
+    description: "Linux32 devedition Nightly"
+    attributes:
+        nightly: true
+    index:
+        product: devedition
+        job-name: linux-opt
+        type: nightly
+    treeherder:
+        platform: linux32-devedition/opt
+        symbol: tc(N)
+    worker-type: aws-provisioner-v1/gecko-{level}-b-linux
+    worker:
+        max-run-time: 36000
+    run:
+        using: mozharness
+        actions: [get-secrets build generate-build-stats check-test update]
+        config:
+            - builds/releng_base_linux_32_builds.py
+            - disable_signing.py
+            - balrog/production.py
+        script: "mozharness/scripts/fx_desktop_build.py"
+        secrets: true
+        tooltool-downloads: public
+        need-xvfb: true
+        custom-build-variant-cfg: devedition
+    run-on-projects: [ 'mozilla-beta', ]
 
 linux-nightly/opt:
     description: "Linux32 Nightly"
@@ -157,11 +207,10 @@ linux-nightly/opt:
         symbol: tc(N)
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 36000
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         config:
             - builds/releng_base_linux_32_builds.py
             - disable_signing.py
@@ -170,7 +219,6 @@ linux-nightly/opt:
         secrets: true
         tooltool-downloads: public
         need-xvfb: true
-    run-on-projects: []
 
 
 linux64-asan/opt:
@@ -183,17 +231,40 @@ linux64-asan/opt:
         symbol: tc(Bo)
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 36000
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         config:
             - builds/releng_base_linux_64_builds.py
             - balrog/production.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
         custom-build-variant-cfg: asan-tc
+        tooltool-downloads: public
+        need-xvfb: true
+
+
+linux64-asan-fuzzing/opt:
+    description: "Linux64 Fuzzing Opt ASAN"
+    index:
+        product: firefox
+        job-name: linux64-fuzzing-asan-opt
+    treeherder:
+        platform: linux64/asan
+        symbol: tc(Bof)
+    worker-type: aws-provisioner-v1/gecko-{level}-b-linux
+    worker:
+        max-run-time: 36000
+    run:
+        using: mozharness
+        actions: [get-secrets build generate-build-stats check-test update]
+        config:
+            - builds/releng_base_linux_64_builds.py
+            - balrog/production.py
+        script: "mozharness/scripts/fx_desktop_build.py"
+        secrets: true
+        custom-build-variant-cfg: fuzzing-asan-tc
         tooltool-downloads: public
         need-xvfb: true
 
@@ -207,11 +278,10 @@ linux64-asan/debug:
         symbol: tc(Bd)
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 36000
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         config:
             - builds/releng_base_linux_64_builds.py
             - balrog/production.py
@@ -234,11 +304,10 @@ linux64-nightly/opt:
         symbol: tc(N)
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 36000
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         config:
             - builds/releng_base_linux_64_builds.py
             - disable_signing.py
@@ -247,7 +316,6 @@ linux64-nightly/opt:
         secrets: true
         tooltool-downloads: public
         need-xvfb: true
-    run-on-projects: [ ]
 
 linux64-stylo/opt:
     description: "Linux64 Opt Stylo"
@@ -260,11 +328,10 @@ linux64-stylo/opt:
         tier: 2
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 3600
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         config:
             - builds/releng_base_linux_64_builds.py
             - balrog/production.py
@@ -272,7 +339,8 @@ linux64-stylo/opt:
         secrets: true
         custom-build-variant-cfg: stylo
         tooltool-downloads: public
-    run-on-projects: [ 'stylo', 'autoland', 'mozilla-inbound', 'mozilla-central' ]
+        need-xvfb: true
+    run-on-projects: [ 'stylo', 'autoland', 'mozilla-inbound', 'mozilla-central', 'try' ]
 
 linux64-stylo/debug:
     description: "Linux64 Debug Stylo"
@@ -285,11 +353,10 @@ linux64-stylo/debug:
         tier: 2
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 3600
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         config:
             - builds/releng_base_linux_64_builds.py
             - balrog/production.py
@@ -297,7 +364,8 @@ linux64-stylo/debug:
         secrets: true
         custom-build-variant-cfg: stylo-debug
         tooltool-downloads: public
-    run-on-projects: [ 'stylo', 'autoland', 'mozilla-inbound', 'mozilla-central' ]
+        need-xvfb: true
+    run-on-projects: [ 'stylo', 'autoland', 'mozilla-inbound', 'mozilla-central', 'try' ]
 
 linux64-jsdcov/opt:
     description: "Linux64-JSDCov Opt"
@@ -305,17 +373,16 @@ linux64-jsdcov/opt:
         product: firefox
         job-name: linux64-jsdcov-opt
     treeherder:
-        platform: linux64/jsdcov
+        platform: linux64-jsdcov/opt
         symbol: tc(B)
         tier: 2
     run-on-projects: [ ]
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 36000
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         config:
             - builds/releng_base_linux_64_builds.py
             - balrog/production.py
@@ -331,17 +398,16 @@ linux64-ccov/opt:
         job-name: linux64-ccov-opt
     needs-sccache: false
     treeherder:
-        platform: linux64/ccov
+        platform: linux64-ccov/opt
         symbol: tc(B)
         tier: 2
     run-on-projects: [ ]
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 36000
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         config:
             - builds/releng_base_linux_64_builds.py
             - balrog/production.py
@@ -362,11 +428,10 @@ linux64-add-on-devel/opt:
         tier: 2
     worker-type: aws-provisioner-v1/gecko-{level}-b-linux
     worker:
-        implementation: docker-worker
         max-run-time: 36000
     run:
         using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
+        actions: [get-secrets build generate-build-stats check-test update]
         config:
             - builds/releng_base_linux_64_builds.py
             - balrog/production.py
@@ -376,108 +441,3 @@ linux64-add-on-devel/opt:
         tooltool-downloads: public
         need-xvfb: true
     run-on-projects: [ 'mozilla-beta', 'mozilla-release', 'mozilla-esr45' ]
-
-linux64-qr/debug:
-    description: "Linux64 Debug QuantumRender"
-    index:
-        product: firefox
-        job-name: linux64-qr-debug
-    treeherder:
-        platform: linux64-qr/debug
-        symbol: tc(B)
-        tier: 2
-    worker-type: aws-provisioner-v1/gecko-{level}-b-linux
-    worker:
-        implementation: docker-worker
-        max-run-time: 36000
-    run:
-        using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
-        config:
-            - builds/releng_base_linux_64_builds.py
-            - balrog/production.py
-        script: "mozharness/scripts/fx_desktop_build.py"
-        secrets: true
-        custom-build-variant-cfg: qr-debug
-        tooltool-downloads: public
-        need-xvfb: true
-    run-on-projects: [ 'mozilla-central', 'graphics' ]
-
-linux64-qr/opt:
-    description: "Linux64 Opt QuantumRender"
-    index:
-        product: firefox
-        job-name: linux64-qr-opt
-    treeherder:
-        platform: linux64-qr/opt
-        symbol: tc(B)
-        tier: 2
-    worker-type: aws-provisioner-v1/gecko-{level}-b-linux
-    worker:
-        implementation: docker-worker
-        max-run-time: 36000
-    run:
-        using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
-        config:
-            - builds/releng_base_linux_64_builds.py
-            - balrog/production.py
-        script: "mozharness/scripts/fx_desktop_build.py"
-        secrets: true
-        custom-build-variant-cfg: qr-opt
-        tooltool-downloads: public
-        need-xvfb: true
-    run-on-projects: [ 'mozilla-central', 'graphics' ]
-
-linux-qr/opt:
-    description: "Linux32 Opt QuantumRender"
-    index:
-        product: firefox
-        job-name: linux-qr-opt
-    treeherder:
-        platform: linux32-qr/opt
-        symbol: tc(B)
-        tier: 2
-    worker-type: aws-provisioner-v1/gecko-{level}-b-linux
-    worker:
-        implementation: docker-worker
-        max-run-time: 36000
-    run:
-        using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
-        config:
-            - builds/releng_base_linux_32_builds.py
-            - balrog/production.py
-        script: "mozharness/scripts/fx_desktop_build.py"
-        secrets: true
-        custom-build-variant-cfg: qr-opt
-        tooltool-downloads: public
-        need-xvfb: true
-    run-on-projects: [ 'graphics' ]
-
-linux-qr/debug:
-    description: "Linux32 Debug QuantumRender"
-    index:
-        product: firefox
-        job-name: linux-qr-debug
-    treeherder:
-        platform: linux32-qr/debug
-        symbol: tc(B)
-        tier: 2
-    worker-type: aws-provisioner-v1/gecko-{level}-b-linux
-    worker:
-        implementation: docker-worker
-        max-run-time: 36000
-    coalesce-name: dbg_linux32
-    run:
-        using: mozharness
-        actions: [get-secrets build check-test generate-build-stats update]
-        config:
-            - builds/releng_base_linux_32_builds.py
-            - balrog/production.py
-        script: "mozharness/scripts/fx_desktop_build.py"
-        secrets: true
-        custom-build-variant-cfg: qr-debug
-        tooltool-downloads: public
-        need-xvfb: true
-    run-on-projects: [ 'graphics' ]

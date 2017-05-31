@@ -2,24 +2,21 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/ExtensionParent.jsm");
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "E10SUtils",
                                   "resource:///modules/E10SUtils.jsm");
 
-const {
+var {
   watchExtensionProxyContextLoad,
 } = ExtensionParent;
 
-const {
+var {
   IconDetails,
   promiseEvent,
 } = ExtensionUtils;
 
-const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+var XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 
 /**
  * Represents an addon devtools panel in the main process.
@@ -170,6 +167,12 @@ class ParentDevToolsPanel {
       unwatchExtensionProxyContextLoad();
       browser.remove();
       toolbox.off("select", this.onToolboxPanelSelect);
+
+      // If the panel has been disabled from the toolbox preferences,
+      // we need to re-initialize the waitTopLevelContext Promise.
+      this.waitTopLevelContext = new Promise(resolve => {
+        this._resolveTopLevelContext = resolve;
+      });
     };
   }
 
@@ -184,7 +187,6 @@ class ParentDevToolsPanel {
     if (!this.waitTopLevelContext || !this.panelAdded) {
       return;
     }
-
     if (!this.visible && id === this.id) {
       // Wait that the panel is fully loaded and emit show.
       this.waitTopLevelContext.then(() => {
@@ -218,38 +220,42 @@ class ParentDevToolsPanel {
 
     this.context = null;
     this.toolbox = null;
+    this.waitTopLevelContext = null;
+    this._resolveTopLevelContext = null;
   }
 }
 
-extensions.registerSchemaAPI("devtools.panels", "devtools_parent", context => {
-  // An incremental "per context" id used in the generated devtools panel id.
-  let nextPanelId = 0;
+this.devtools_panels = class extends ExtensionAPI {
+  getAPI(context) {
+    // An incremental "per context" id used in the generated devtools panel id.
+    let nextPanelId = 0;
 
-  return {
-    devtools: {
-      panels: {
-        create(title, icon, url) {
-          // Get a fallback icon from the manifest data.
-          if (icon === "" && context.extension.manifest.icons) {
-            const iconInfo = IconDetails.getPreferredIcon(context.extension.manifest.icons,
-                                                          context.extension, 128);
-            icon = iconInfo ? iconInfo.icon : "";
-          }
+    return {
+      devtools: {
+        panels: {
+          create(title, icon, url) {
+            // Get a fallback icon from the manifest data.
+            if (icon === "" && context.extension.manifest.icons) {
+              const iconInfo = IconDetails.getPreferredIcon(context.extension.manifest.icons,
+                                                            context.extension, 128);
+              icon = iconInfo ? iconInfo.icon : "";
+            }
 
-          icon = context.extension.baseURI.resolve(icon);
-          url = context.extension.baseURI.resolve(url);
+            icon = context.extension.baseURI.resolve(icon);
+            url = context.extension.baseURI.resolve(url);
 
-          const baseId = `${context.extension.id}-${context.contextId}-${nextPanelId++}`;
-          const id = `${makeWidgetId(baseId)}-devtools-panel`;
+            const baseId = `${context.extension.id}-${context.contextId}-${nextPanelId++}`;
+            const id = `${makeWidgetId(baseId)}-devtools-panel`;
 
-          new ParentDevToolsPanel(context, {title, icon, url, id});
+            new ParentDevToolsPanel(context, {title, icon, url, id});
 
-          // Resolved to the devtools panel id into the child addon process,
-          // where it will be used to identify the messages related
-          // to the panel API onShown/onHidden events.
-          return Promise.resolve(id);
+            // Resolved to the devtools panel id into the child addon process,
+            // where it will be used to identify the messages related
+            // to the panel API onShown/onHidden events.
+            return Promise.resolve(id);
+          },
         },
       },
-    },
-  };
-});
+    };
+  }
+};

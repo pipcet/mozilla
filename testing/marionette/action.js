@@ -12,6 +12,7 @@ Cu.import("chrome://marionette/content/assert.js");
 Cu.import("chrome://marionette/content/element.js");
 Cu.import("chrome://marionette/content/error.js");
 Cu.import("chrome://marionette/content/event.js");
+Cu.import("chrome://marionette/content/interaction.js");
 
 this.EXPORTED_SYMBOLS = ["action"];
 
@@ -59,7 +60,7 @@ const NORMALIZED_KEY_LOOKUP = {
   "\uE003": "Backspace",
   "\uE004": "Tab",
   "\uE005": "Clear",
-  "\uE006": "Return",
+  "\uE006": "Enter",
   "\uE007": "Enter",
   "\uE008": "Shift",
   "\uE009": "Control",
@@ -698,11 +699,11 @@ action.Action = class {
         item.origin = action.PointerOrigin.get(actionItem.origin);
         item.x = actionItem.x;
         if (typeof item.x != "undefined") {
-          assert.positiveInteger(item.x, error.pprint`Expected 'x' (${item.x}) to be >= 0`);
+          assert.integer(item.x, error.pprint`Expected 'x' (${item.x}) to be an Integer`);
         }
         item.y = actionItem.y;
         if (typeof item.y != "undefined") {
-          assert.positiveInteger(item.y, error.pprint`Expected 'y' (${item.y}) to be >= 0`);
+          assert.integer(item.y, error.pprint`Expected 'y' (${item.y}) to be an Integer`);
         }
         break;
 
@@ -879,8 +880,7 @@ action.Key = class {
     this.metaKey = false;
     this.repeat = false;
     this.isComposing = false;
-    // Prevent keyCode from being guessed in event.js; we don't want to use it anyway.
-    this.keyCode = 0;
+    // keyCode will be computed by event.sendKeyDown
   }
 
   update(inputState) {
@@ -958,7 +958,8 @@ action.dispatch = function(chain, seenEls, container) {
  */
 action.dispatchTickActions = function(tickActions, tickDuration, seenEls, container) {
   let pendingEvents = tickActions.map(toEvents(tickDuration, seenEls, container));
-  return Promise.all(pendingEvents).then(() => flushEvents(container));
+  return Promise.all(pendingEvents).then(
+      () => interaction.flushEventLoop(container.frame));
 };
 
 /**
@@ -1082,7 +1083,7 @@ function dispatchKeyDown(a, inputState, win) {
     // Append a copy of |a| with keyUp subtype
     action.inputsToCancel.push(Object.assign({}, a, {subtype: action.KeyUp}));
     keyEvent.update(inputState);
-    event.sendKeyDown(keyEvent.key, keyEvent, win);
+    event.sendKeyDown(a.value, keyEvent, win);
 
     resolve();
   });
@@ -1113,7 +1114,7 @@ function dispatchKeyUp(a, inputState, win) {
     }
     inputState.release(keyEvent.key);
     keyEvent.update(inputState);
-    event.sendKeyUp(keyEvent.key, keyEvent, win);
+    event.sendKeyUp(a.value, keyEvent, win);
 
     resolve();
   });
@@ -1314,18 +1315,6 @@ function dispatchPause(a, tickDuration) {
 }
 
 // helpers
-/**
- * Force any pending DOM events to fire.
- *
- * @param {?} container
- *     Object with |frame| attribute of type |nsIDOMWindow|.
- *
- * @return {Promise}
- *     Promise to flush DOM events.
- */
-function flushEvents(container) {
-  return new Promise(resolve => container.frame.requestAnimationFrame(resolve));
-}
 
 function capitalize(str) {
   assert.string(str);
@@ -1333,8 +1322,8 @@ function capitalize(str) {
 }
 
 function inViewPort(x, y, win) {
-  assert.number(x);
-  assert.number(y);
+  assert.number(x, `Expected x to be finite number`);
+  assert.number(y, `Expected y to be finite number`);
   // Viewport includes scrollbars if rendered.
   return !(x < 0 || y < 0 || x > win.innerWidth || y > win.innerHeight);
 }

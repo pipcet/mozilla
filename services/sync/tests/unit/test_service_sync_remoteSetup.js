@@ -10,6 +10,8 @@ Cu.import("resource://testing-common/services/sync/fakeservices.js");
 Cu.import("resource://testing-common/services/sync/utils.js");
 
 add_task(async function run_test() {
+  enableValidationPrefs();
+
   validate_all_future_pings();
   Log.repository.rootLogger.addAppender(new Log.DumpAppender());
 
@@ -83,7 +85,7 @@ add_task(async function run_test() {
 
     Service.login();
     _("Checking that remoteSetup returns true when credentials have changed.");
-    Service.recordManager.get(Service.metaURL).payload.syncID = "foobar";
+    (await Service.recordManager.get(Service.metaURL)).payload.syncID = "foobar";
     do_check_true(Service._remoteSetup());
 
     let returnStatusCode = (method, code) => (oldMethod) => (req, res) => {

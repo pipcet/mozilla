@@ -3,6 +3,15 @@
 
 Components.utils.import("resource://gre/modules/Promise.jsm");
 
+// Tests within /browser/components/preferences/in-content/tests/
+// test the "old" preferences organization, before it was reorganized.
+// Thus, all of these tests should revert back to the "oldOrganization"
+// before running.
+Services.prefs.setBoolPref("browser.preferences.useOldOrganization", true);
+registerCleanupFunction(function() {
+  Services.prefs.clearUserPref("browser.preferences.useOldOrganization");
+});
+
 const kDefaultWait = 2000;
 
 function is_hidden(aElement) {
@@ -30,7 +39,7 @@ function is_element_hidden(aElement, aMsg) {
 }
 
 function open_preferences(aCallback) {
-  gBrowser.selectedTab = gBrowser.addTab("about:preferences");
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser, "about:preferences");
   let newTabBrowser = gBrowser.getBrowserForTab(gBrowser.selectedTab);
   newTabBrowser.addEventListener("Initialized", function() {
     aCallback(gBrowser.contentWindow);
@@ -120,24 +129,24 @@ function waitForEvent(aSubject, aEventName, aTimeoutMs, aTarget) {
 }
 
 function openPreferencesViaOpenPreferencesAPI(aPane, aAdvancedTab, aOptions) {
-  let deferred = Promise.defer();
-  gBrowser.selectedTab = gBrowser.addTab("about:blank");
-  openPreferences(aPane, aAdvancedTab ? {advancedTab: aAdvancedTab} : undefined);
-  let newTabBrowser = gBrowser.selectedBrowser;
+  return new Promise(resolve => {
+    gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser, "about:blank");
+    openPreferences(aPane, aAdvancedTab ? {advancedTab: aAdvancedTab} : undefined);
+    let newTabBrowser = gBrowser.selectedBrowser;
 
-  newTabBrowser.addEventListener("Initialized", function() {
-    newTabBrowser.contentWindow.addEventListener("load", function() {
-      let win = gBrowser.contentWindow;
-      let selectedPane = win.history.state;
-      let doc = win.document;
-      let selectedAdvancedTab = aAdvancedTab && doc.getElementById("advancedPrefs").selectedTab.id;
-      if (!aOptions || !aOptions.leaveOpen)
-        gBrowser.removeCurrentTab();
-      deferred.resolve({selectedPane, selectedAdvancedTab});
-    }, {once: true});
-  }, {capture: true, once: true});
+    newTabBrowser.addEventListener("Initialized", function() {
+      newTabBrowser.contentWindow.addEventListener("load", function() {
+        let win = gBrowser.contentWindow;
+        let selectedPane = win.history.state;
+        let doc = win.document;
+        let selectedAdvancedTab = aAdvancedTab && doc.getElementById("advancedPrefs").selectedTab.id;
+        if (!aOptions || !aOptions.leaveOpen)
+          gBrowser.removeCurrentTab();
+        resolve({selectedPane, selectedAdvancedTab});
+      }, {once: true});
+    }, {capture: true, once: true});
 
-  return deferred.promise;
+  });
 }
 
 function waitForCondition(aConditionFn, aMaxTries = 50, aCheckInterval = 100) {

@@ -15,7 +15,7 @@ function expectProcessCreated() {
       ok(true, "Expect process created");
       resolve();
     }
-    os.addObserver(observer, topic, /* weak = */ false);
+    os.addObserver(observer, topic);
     kill = () => {
       os.removeObserver(observer, topic);
       ok(true, "Expect process created killed");
@@ -33,7 +33,7 @@ function expectNoProcess() {
     ok(false, "A process was created!");
     os.removeObserver(observer, topic);
   }
-  os.addObserver(observer, topic, /* weak = */ false);
+  os.addObserver(observer, topic);
 
   return () => os.removeObserver(observer, topic);
 }
@@ -293,6 +293,7 @@ function* largeAllocSuccessTests() {
     if (!(yield getInLAProc(aBrowser))) {
       yield epc;
     } else {
+      epc.catch(() => {});
       epc.kill();
     }
 
@@ -331,6 +332,57 @@ function* largeAllocSuccessTests() {
     });
 
     yield BrowserTestUtils.browserLoaded(aBrowser);
+
+    let pid3 = yield getPID(aBrowser);
+
+    is(pid3, pid2, "PIDs 2 and 3 should match");
+    is(true, yield getInLAProc(aBrowser));
+
+    stopExpectNoProcess();
+
+    yield ContentTask.spawn(aBrowser, null, () => {
+      ok(this.__newWindow, "The window should have been stored");
+      this.__newWindow.close();
+    });
+  });
+
+  // Opening a window from the large-allocation window should prevent the
+  // process switch with reload.
+  yield BrowserTestUtils.withNewTab("about:blank", function*(aBrowser) {
+    info("Starting test 6a");
+    let pid1 = yield getPID(aBrowser);
+    is(false, yield getInLAProc(aBrowser));
+
+    let ready = Promise.all([expectProcessCreated(),
+                             BrowserTestUtils.browserLoaded(aBrowser)]);
+
+    yield ContentTask.spawn(aBrowser, TEST_URI, TEST_URI => {
+      content.document.location = TEST_URI;
+    });
+
+    yield ready;
+
+    let pid2 = yield getPID(aBrowser);
+
+    isnot(pid1, pid2, "PIDs 1 and 2 should not match");
+    is(true, yield getInLAProc(aBrowser));
+
+    let stopExpectNoProcess = expectNoProcess();
+
+    let firstTab = gBrowser.selectedTab;
+    let promiseTabOpened = BrowserTestUtils.waitForNewTab(gBrowser, "about:blank");
+    yield ContentTask.spawn(aBrowser, null, () => {
+      this.__newWindow = content.window.open("about:blank");
+    });
+    yield promiseTabOpened;
+
+    if (firstTab != gBrowser.selectedTab) {
+      firstTab = yield BrowserTestUtils.switchTab(gBrowser, firstTab);
+      aBrowser = firstTab.linkedBrowser;
+    }
+    let promiseLoad = BrowserTestUtils.browserLoaded(aBrowser);
+    document.getElementById("reload-button").doCommand();
+    yield promiseLoad;
 
     let pid3 = yield getPID(aBrowser);
 
@@ -492,6 +544,46 @@ function* largeAllocSuccessTests() {
     is(true, yield getInLAProc(newTab.linkedBrowser));
 
     yield BrowserTestUtils.closeWindow(newWindow);
+  });
+
+  // XXX: Important - reset the process count, as it was set to 1 by the
+  // previous test.
+  yield SpecialPowers.pushPrefEnv({
+    set: [["dom.ipc.processCount.webLargeAllocation", 20]],
+  });
+
+  yield BrowserTestUtils.withNewTab("about:blank", function*(aBrowser) {
+    info("Starting test 11");
+
+    let pid1 = yield getPID(aBrowser);
+    is(false, yield getInLAProc(aBrowser));
+
+    let ready = Promise.all([expectProcessCreated(),
+                             BrowserTestUtils.browserLoaded(aBrowser)]);
+    yield ContentTask.spawn(aBrowser, TEST_URI, TEST_URI => {
+      content.document.location = TEST_URI;
+    });
+
+    yield ready;
+
+    let pid2 = yield getPID(aBrowser);
+
+    isnot(pid1, pid2, "PIDs 1 and 2 should not match");
+    is(true, yield getInLAProc(aBrowser));
+
+    yield Promise.all([
+      ContentTask.spawn(aBrowser, null, () => {
+        content.document.querySelector("#submit").click();
+      }),
+      BrowserTestUtils.browserLoaded(aBrowser)
+    ]);
+
+    let innerText = yield ContentTask.spawn(aBrowser, null, () => {
+      return content.document.body.innerText;
+    });
+    isnot(innerText, "FAIL", "We should not have sent a get request!");
+    is(innerText, "textarea=default+value&button=submit",
+       "The post data should be received by the callee");
   });
 
   // XXX: Make sure to reset dom.ipc.processCount.webLargeAllocation if adding a

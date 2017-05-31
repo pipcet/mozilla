@@ -6,35 +6,98 @@
 #ifndef MOZILLA_GFX_WEBRENDERCOMPOSITABLE_HOLDER_H
 #define MOZILLA_GFX_WEBRENDERCOMPOSITABLE_HOLDER_H
 
-#include "nsDataHashtable.h"
+#include <queue>
+
+#include "mozilla/layers/TextureHost.h"
+#include "mozilla/Maybe.h"
+#include "mozilla/webrender/WebRenderTypes.h"
+#include "nsClassHashtable.h"
 
 namespace mozilla {
+
+namespace wr {
+class WebRenderAPI;
+}
+
 namespace layers {
 
 class CompositableHost;
+class WebRenderTextureHost;
 
 class WebRenderCompositableHolder final
 {
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(WebRenderCompositableHolder)
 
-  explicit WebRenderCompositableHolder();
+  explicit WebRenderCompositableHolder(uint32_t aIdNamespace);
 
 protected:
-  virtual ~WebRenderCompositableHolder();
+  ~WebRenderCompositableHolder();
 
 public:
+  void AddPipeline(const wr::PipelineId& aPipelineId);
+  void RemovePipeline(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch);
+  void HoldExternalImage(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch, WebRenderTextureHost* aTexture);
+  void Update(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch);
 
-  virtual void Destroy();
+  TimeStamp GetCompositionTime() const {
+    return mCompositionTime;
+  }
+  void SetCompositionTime(TimeStamp aTimeStamp) {
+    mCompositionTime = aTimeStamp;
+    if (!mCompositionTime.IsNull() && !mCompositeUntilTime.IsNull() &&
+        mCompositionTime >= mCompositeUntilTime) {
+      mCompositeUntilTime = TimeStamp();
+    }
+  }
+  void CompositeUntil(TimeStamp aTimeStamp) {
+    if (mCompositeUntilTime.IsNull() ||
+        mCompositeUntilTime < aTimeStamp) {
+      mCompositeUntilTime = aTimeStamp;
+    }
+  }
+  TimeStamp GetCompositeUntilTime() const {
+    return mCompositeUntilTime;
+  }
 
-  void AddExternalImageId(uint64_t aExternalImageId, CompositableHost* aHost);
-  void RemoveExternalImageId(uint64_t aExternalImageId);
-  void UpdateExternalImages();
+  uint32_t GetNextResourceId() { return ++mResourceId; }
+  uint32_t GetNamespace() { return mIdNamespace; }
+  wr::ImageKey GetImageKey()
+  {
+    wr::ImageKey key;
+    key.mNamespace = GetNamespace();
+    key.mHandle = GetNextResourceId();
+    return key;
+  }
 
 private:
 
-  // Holds CompositableHosts that are bound to external image ids.
-  nsDataHashtable<nsUint64HashKey, RefPtr<CompositableHost> > mCompositableHosts;
+  struct ForwardingTextureHost {
+    ForwardingTextureHost(const wr::Epoch& aEpoch, TextureHost* aTexture)
+      : mEpoch(aEpoch)
+      , mTexture(aTexture)
+    {}
+    wr::Epoch mEpoch;
+    CompositableTextureHostRef mTexture;
+  };
+
+  struct PipelineTexturesHolder {
+    // Holds forwarding WebRenderTextureHosts.
+    std::queue<ForwardingTextureHost> mTextureHosts;
+    Maybe<wr::Epoch> mDestroyedEpoch;
+  };
+
+  uint32_t mIdNamespace;
+  uint32_t mResourceId;
+  nsClassHashtable<nsUint64HashKey, PipelineTexturesHolder> mPipelineTexturesHolders;
+
+  // Render time for the current composition.
+  TimeStamp mCompositionTime;
+
+  // When nonnull, during rendering, some compositable indicated that it will
+  // change its rendering at this time. In order not to miss it, we composite
+  // on every vsync until this time occurs (this is the latest such time).
+  TimeStamp mCompositeUntilTime;
 };
 
 } // namespace layers

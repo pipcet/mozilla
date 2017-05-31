@@ -8,7 +8,7 @@ const {utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/TelemetryController.jsm");
-Cu.import("resource://gre/modules/Timer.jsm"); /* globals setTimeout, clearTimeout */
+Cu.import("resource://gre/modules/Timer.jsm");
 Cu.import("resource://shield-recipe-client/lib/CleanupManager.jsm");
 Cu.import("resource://shield-recipe-client/lib/EventEmitter.jsm");
 Cu.import("resource://shield-recipe-client/lib/LogManager.jsm");
@@ -166,6 +166,9 @@ this.Heartbeat = class {
 
       frag.appendChild(ratingContainer);
     }
+
+    const details = this.chromeWindow.document.getAnonymousElementByAttribute(this.notice, "anonid", "details");
+    details.style.overflow = "hidden";
 
     this.messageImage = this.chromeWindow.document.getAnonymousElementByAttribute(this.notice, "anonid", "messageImage");
     this.messageImage.classList.add("heartbeat", "pulse-onshow");

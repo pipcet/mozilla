@@ -88,8 +88,19 @@ LossyCopyUTF16toASCII(const nsAString& aSource, nsACString& aDest)
 void
 CopyASCIItoUTF16(const nsACString& aSource, nsAString& aDest)
 {
+  if (!CopyASCIItoUTF16(aSource, aDest, mozilla::fallible)) {
+    // Note that this may wildly underestimate the allocation that failed, as
+    // we report the length of aSource as UTF-16 instead of UTF-8.
+    aDest.AllocFailed(aDest.Length() + aSource.Length());
+  }
+}
+
+bool
+CopyASCIItoUTF16(const nsACString& aSource, nsAString& aDest,
+                 const mozilla::fallible_t& aFallible)
+{
   aDest.Truncate();
-  AppendASCIItoUTF16(aSource, aDest);
+  return AppendASCIItoUTF16(aSource, aDest, aFallible);
 }
 
 void
@@ -1378,6 +1389,16 @@ void Gecko_AppendUTF16toCString(nsACString* aThis, const nsAString* aOther)
 void Gecko_AppendUTF8toString(nsAString* aThis, const nsACString* aOther)
 {
   AppendUTF8toUTF16(*aOther, *aThis);
+}
+
+bool Gecko_FallibleAppendUTF16toCString(nsACString* aThis, const nsAString* aOther)
+{
+  return AppendUTF16toUTF8(*aOther, *aThis, mozilla::fallible);
+}
+
+bool Gecko_FallibleAppendUTF8toString(nsAString* aThis, const nsACString* aOther)
+{
+  return AppendUTF8toUTF16(*aOther, *aThis, mozilla::fallible);
 }
 
 }

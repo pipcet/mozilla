@@ -44,6 +44,14 @@ GetTimerLog()
   return sTimerLog;
 }
 
+TimeStamp
+NS_GetTimerDeadlineHintOnCurrentThread(TimeStamp aDefault, uint32_t aSearchBound)
+{
+  return gThread
+           ? gThread->FindNextFireTimeForCurrentThread(aDefault, aSearchBound)
+           : TimeStamp();
+}
+
 // This module prints info about which timers are firing, which is useful for
 // wakeups for the purposes of power profiling. Set the following environment
 // variable before starting the browser.
@@ -121,12 +129,16 @@ nsTimer::Release(void)
   NS_LOG_RELEASE(this, count, "nsTimer");
 
   if (count == 1) {
-    // Last ref, held by nsTimerImpl. Make sure the cycle is broken.
-    // If there is a nsTimerEvent in a queue for this timer, the nsTimer will
-    // live until that event pops, otherwise the nsTimerImpl will go away and
-    // the nsTimer along with it.
-    mImpl->Cancel();
-    mImpl = nullptr;
+    if (!mImpl->CancelCheckIfFiring()) {
+      // Last ref, in nsTimerImpl::mITimer. Make sure the cycle is broken.
+      // (when Cancel fails, nsTimerImpl::Fire is in progress, which has grabbed
+      // another ref to the nsITimer since we checked the value of mRefCnt
+      // above)
+      // If there is a nsTimerEvent in a queue for this timer, the nsTimer will
+      // live until that event pops, otherwise the nsTimerImpl will go away and
+      // the nsTimer along with it.
+      mImpl = nullptr;
+    }
   } else if (count == 0) {
     delete this;
   }
@@ -135,6 +147,7 @@ nsTimer::Release(void)
 }
 
 nsTimerImpl::nsTimerImpl(nsITimer* aTimer) :
+  mHolder(nullptr),
   mGeneration(0),
   mDelay(0),
   mITimer(aTimer),
@@ -186,25 +199,21 @@ nsTimerImpl::Shutdown()
 
 
 nsresult
-nsTimerImpl::InitCommon(uint32_t aDelay, uint32_t aType)
+nsTimerImpl::InitCommon(uint32_t aDelay, uint32_t aType, Callback&& newCallback)
 {
   mMutex.AssertCurrentThreadOwns();
-  nsresult rv;
 
   if (NS_WARN_IF(!gThread)) {
     return NS_ERROR_NOT_INITIALIZED;
   }
+
   if (!mEventTarget) {
     NS_ERROR("mEventTarget is NULL");
     return NS_ERROR_NOT_INITIALIZED;
   }
 
-  rv = gThread->Init();
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
   gThread->RemoveTimer(this);
+  mCallback.swap(newCallback);
   ++mGeneration;
 
   mType = (uint8_t)aType;
@@ -232,9 +241,7 @@ nsTimerImpl::InitWithFuncCallbackCommon(nsTimerCallbackFunc aFunc,
   cb.mName = aName;
 
   MutexAutoLock lock(mMutex);
-  cb.swap(mCallback);
-
-  return InitCommon(aDelay, aType);
+  return InitCommon(aDelay, aType, mozilla::Move(cb));
 }
 
 nsresult
@@ -284,9 +291,7 @@ nsTimerImpl::InitWithCallback(nsITimerCallback* aCallback,
   NS_ADDREF(cb.mCallback.i);
 
   MutexAutoLock lock(mMutex);
-  cb.swap(mCallback);
-
-  return InitCommon(aDelay, aType);
+  return InitCommon(aDelay, aType, mozilla::Move(cb));
 }
 
 nsresult
@@ -302,13 +307,11 @@ nsTimerImpl::Init(nsIObserver* aObserver, uint32_t aDelay, uint32_t aType)
   NS_ADDREF(cb.mCallback.o);
 
   MutexAutoLock lock(mMutex);
-  cb.swap(mCallback);
-
-  return InitCommon(aDelay, aType);
+  return InitCommon(aDelay, aType, mozilla::Move(cb));
 }
 
-nsresult
-nsTimerImpl::Cancel()
+bool
+nsTimerImpl::CancelCheckIfFiring()
 {
   Callback cb;
 
@@ -321,6 +324,16 @@ nsTimerImpl::Cancel()
   cb.swap(mCallback);
   ++mGeneration;
 
+  if (mCallbackDuringFire.mType != Callback::Type::Unknown) {
+    return true;
+  }
+  return false;
+}
+
+nsresult
+nsTimerImpl::Cancel()
+{
+  (void)CancelCheckIfFiring();
   return NS_OK;
 }
 
@@ -434,6 +447,7 @@ nsTimerImpl::Fire(int32_t aGeneration)
   uint8_t oldType;
   uint32_t oldDelay;
   TimeStamp oldTimeout;
+  nsCOMPtr<nsITimer> kungFuDeathGrip;
 
   {
     // Don't fire callbacks or fiddle with refcounts when the mutex is locked.
@@ -447,6 +461,10 @@ nsTimerImpl::Fire(int32_t aGeneration)
     oldType = mType;
     oldDelay = mDelay;
     oldTimeout = mTimeout;
+    // Ensure that the nsITimer does not unhook from the nsTimerImpl during
+    // Fire; this will cause null pointer crashes if the user of the timer drops
+    // its reference, and then uses the nsITimer* passed in the callback.
+    kungFuDeathGrip = mITimer;
   }
 
   PROFILER_LABEL("Timer", "Fire",
@@ -495,7 +513,7 @@ nsTimerImpl::Fire(int32_t aGeneration)
     // Repeating timer has not been re-init or canceled; reschedule
     mCallbackDuringFire.swap(mCallback);
     TimeDuration delay = TimeDuration::FromMilliseconds(mDelay);
-    if (mType == nsITimer::TYPE_REPEATING_SLACK) {
+    if (IsSlack()) {
       mTimeout = TimeStamp::Now() + delay;
     } else {
       mTimeout = mTimeout + delay;
@@ -527,10 +545,12 @@ nsTimerImpl::LogFiring(const Callback& aCallback, uint8_t aType, uint32_t aDelay
 {
   const char* typeStr;
   switch (aType) {
-    case nsITimer::TYPE_ONE_SHOT:                   typeStr = "ONE_SHOT"; break;
-    case nsITimer::TYPE_REPEATING_SLACK:            typeStr = "SLACK   "; break;
+    case nsITimer::TYPE_ONE_SHOT:                     typeStr = "ONE_SHOT  "; break;
+    case nsITimer::TYPE_ONE_SHOT_LOW_PRIORITY:        typeStr = "ONE_LOW   "; break;
+    case nsITimer::TYPE_REPEATING_SLACK:              typeStr = "SLACK     "; break;
+    case nsITimer::TYPE_REPEATING_SLACK_LOW_PRIORITY: typeStr = "SLACK_LOW "; break;
     case nsITimer::TYPE_REPEATING_PRECISE:          /* fall through */
-    case nsITimer::TYPE_REPEATING_PRECISE_CAN_SKIP: typeStr = "PRECISE "; break;
+    case nsITimer::TYPE_REPEATING_PRECISE_CAN_SKIP:   typeStr = "PRECISE   "; break;
     default:                              MOZ_CRASH("bad type");
   }
 
@@ -671,6 +691,12 @@ nsTimerImpl::GetName(nsACString& aName)
   }
 }
 
+void
+nsTimerImpl::SetHolder(nsTimerImplHolder* aHolder)
+{
+  mHolder = aHolder;
+}
+
 nsTimer::~nsTimer()
 {
 }
@@ -698,4 +724,3 @@ nsTimerImpl::GetTracedTask()
 }
 
 #endif
-

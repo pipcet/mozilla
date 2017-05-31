@@ -17,7 +17,6 @@
 #include "nsArray.h"
 #include "nsArrayUtils.h"
 #include "nsCOMPtr.h"
-#include "nsCRT.h"
 #include "nsComponentManagerUtils.h"
 #include "nsICertificateDialogs.h"
 #include "nsIFile.h"
@@ -969,6 +968,9 @@ nsNSSCertificateDB::ImportCertsFromFile(nsIFile* aFile, uint32_t aType)
 NS_IMETHODIMP
 nsNSSCertificateDB::ImportPKCS12File(nsIFile* aFile)
 {
+  if (!NS_IsMainThread()) {
+    return NS_ERROR_NOT_SAME_THREAD;
+  }
   nsNSSShutDownPreventionLock locker;
   if (isAlreadyShutDown()) {
     return NS_ERROR_NOT_AVAILABLE;
@@ -983,6 +985,9 @@ NS_IMETHODIMP
 nsNSSCertificateDB::ExportPKCS12File(nsIFile* aFile, uint32_t count,
                                      nsIX509Cert** certs)
 {
+  if (!NS_IsMainThread()) {
+    return NS_ERROR_NOT_SAME_THREAD;
+  }
   nsNSSShutDownPreventionLock locker;
   if (isAlreadyShutDown()) {
     return NS_ERROR_NOT_AVAILABLE;
@@ -1404,6 +1409,7 @@ VerifyCertAtTime(nsIX509Cert* aCert,
                                                nullptr, // Assume no context
                                                flatHostname.get(),
                                                resultChain,
+                                               nullptr, // no peerCertChain
                                                false, // don't save intermediates
                                                aFlags,
                                                OriginAttributes(),
@@ -1414,6 +1420,7 @@ VerifyCertAtTime(nsIX509Cert* aCert,
                                       aHostname.IsVoid() ? nullptr
                                                          : flatHostname.get(),
                                       resultChain,
+                                      nullptr, // no peerCertChain
                                       aFlags,
                                       nullptr, // stapledOCSPResponse
                                       nullptr, // sctsFromTLSExtension

@@ -13,10 +13,11 @@
 #include "nsISimpleEnumerator.h"
 #include "mozilla/Unused.h"
 #include "mozilla/dom/FileBlobImpl.h"
+#include "mozilla/dom/FileSystemSecurity.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/TabParent.h"
-#include "mozilla/dom/ipc/BlobParent.h"
+#include "mozilla/dom/IPCBlobUtils.h"
 
 using mozilla::Unused;
 using namespace mozilla::dom;
@@ -43,11 +44,6 @@ FilePickerParent::~FilePickerParent()
 {
 }
 
-// Before sending a blob to the child, we need to get its size and modification
-// date. Otherwise it will be sent as a "mystery blob" by
-// GetOrCreateActorForBlob, which will cause problems for the child
-// process. This runnable stat()s the file off the main thread.
-//
 // We run code in three places:
 // 1. The main thread calls Dispatch() to start the runnable.
 // 2. The stream transport thread stat()s the file in Run() and then dispatches
@@ -145,6 +141,8 @@ FilePickerParent::IORunnable::Destroy()
 void
 FilePickerParent::SendFilesOrDirectories(const nsTArray<BlobImplOrString>& aData)
 {
+  nsIContentParent* parent = TabParent::GetFrom(Manager())->Manager();
+
   if (mMode == nsIFilePicker::modeGetFolder) {
     MOZ_ASSERT(aData.Length() <= 1);
     if (aData.IsEmpty()) {
@@ -154,25 +152,35 @@ FilePickerParent::SendFilesOrDirectories(const nsTArray<BlobImplOrString>& aData
 
     MOZ_ASSERT(aData[0].mType == BlobImplOrString::eDirectoryPath);
 
+    // Let's inform the security singleton about the given access of this tab on
+    // this directory path.
+    RefPtr<FileSystemSecurity> fss = FileSystemSecurity::GetOrCreate();
+    fss->GrantAccessToContentProcess(parent->ChildID(),
+                                     aData[0].mDirectoryPath);
+
     InputDirectory input;
     input.directoryPath() = aData[0].mDirectoryPath;
     Unused << Send__delete__(this, input, mResult);
     return;
   }
 
-  nsIContentParent* parent = TabParent::GetFrom(Manager())->Manager();
-  InfallibleTArray<PBlobParent*> blobs;
+  InfallibleTArray<IPCBlob> ipcBlobs;
 
   for (unsigned i = 0; i < aData.Length(); i++) {
+    IPCBlob ipcBlob;
+
     MOZ_ASSERT(aData[i].mType == BlobImplOrString::eBlobImpl);
-    BlobParent* blobParent = parent->GetOrCreateActorForBlobImpl(aData[i].mBlobImpl);
-    if (blobParent) {
-      blobs.AppendElement(blobParent);
+    nsresult rv = IPCBlobUtils::Serialize(aData[i].mBlobImpl, parent, ipcBlob);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      break;
     }
+
+    ipcBlobs.AppendElement(ipcBlob);
   }
 
   InputBlobs inblobs;
-  inblobs.blobsParent().SwapElements(blobs);
+  inblobs.blobs().SwapElements(ipcBlobs);
+
   Unused << Send__delete__(this, inblobs, mResult);
 }
 
@@ -252,6 +260,7 @@ FilePickerParent::RecvOpen(const int16_t& aSelectedType,
                            InfallibleTArray<nsString>&& aFilters,
                            InfallibleTArray<nsString>&& aFilterNames,
                            const nsString& aDisplayDirectory,
+                           const nsString& aDisplaySpecialDirectory,
                            const nsString& aOkButtonLabel)
 {
   if (!CreateFilePicker()) {
@@ -276,6 +285,8 @@ FilePickerParent::RecvOpen(const int16_t& aSelectedType,
       localFile->InitWithPath(aDisplayDirectory);
       mFilePicker->SetDisplayDirectory(localFile);
     }
+  } else if (!aDisplaySpecialDirectory.IsEmpty()) {
+    mFilePicker->SetDisplaySpecialDirectory(aDisplaySpecialDirectory);
   }
 
   mCallback = new FilePickerShownCallback(this);

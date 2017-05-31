@@ -94,12 +94,12 @@ GenerateUUID()
 }
 
 const char kISO8601Date[] = "%F";
-const char kISO8601FullDate[] = "%FT%T.000Z";
+const char kISO8601DateHours[] = "%FT%H:00:00.000Z";
 
 // Return the current date as a string in the specified format, the following
 // constants are provided:
 // - kISO8601Date, the ISO 8601 date format, YYYY-MM-DD
-// - kISO8601FullDate, the ISO 8601 full date format, YYYY-MM-DDTHH:MM:SS.000Z
+// - kISO8601DateHours, the ISO 8601 full date format, YYYY-MM-DDTHH:00:00.000Z
 static string
 CurrentDate(string format)
 {
@@ -163,15 +163,18 @@ CreateMetadataNode(StringTable& strings)
 
 // Create the payload node of the crash ping
 static Json::Value
-CreatePayloadNode(StringTable& strings, const string& aSessionId)
+CreatePayloadNode(StringTable& strings, const string& aHash,
+                  const string& aSessionId)
 {
   Json::Value payload;
 
   payload["sessionId"] = aSessionId;
   payload["version"] = 1;
   payload["crashDate"] = CurrentDate(kISO8601Date);
+  payload["crashTime"] = CurrentDate(kISO8601DateHours);
   payload["hasCrashEnvironment"] = true;
   payload["crashId"] = GetDumpLocalID();
+  payload["minidumpSha256Hash"] = aHash;
   payload["processType"] = "main"; // This is always a main crash
 
   // Parse the stack traces
@@ -217,7 +220,7 @@ CreateApplicationNode(const string& aVendor, const string& aName,
 
 // Create the root node of the crash ping
 static Json::Value
-CreateRootNode(StringTable& strings, const string& aUuid,
+CreateRootNode(StringTable& strings, const string& aUuid, const string& aHash,
                const string& aClientId, const string& aSessionId,
                const string& aName, const string& aVersion,
                const string& aChannel, const string& aBuildId)
@@ -226,7 +229,7 @@ CreateRootNode(StringTable& strings, const string& aUuid,
   root["type"] = "crash"; // This is a crash ping
   root["id"] = aUuid;
   root["version"] = kTelemetryVersion;
-  root["creationDate"] = CurrentDate(kISO8601FullDate);
+  root["creationDate"] = CurrentDate(kISO8601DateHours);
   root["clientId"] = aClientId;
 
   // Parse the telemetry environment
@@ -250,7 +253,7 @@ CreateRootNode(StringTable& strings, const string& aUuid,
     root["environment"] = environment;
   }
 
-  root["payload"] = CreatePayloadNode(strings, aSessionId);
+  root["payload"] = CreatePayloadNode(strings, aHash, aSessionId);
   root["application"] = CreateApplicationNode(strings["Vendor"], aName,
                                               aVersion, aChannel, aBuildId,
                                               architecture, xpcomAbi);
@@ -269,6 +272,30 @@ GenerateSubmissionUrl(const string& aUrl, const string& aId,
          "?v=" + std::to_string(kTelemetryVersion);
 }
 
+// Write out the ping into the specified file.
+//
+// Returns true if the ping was written out successfully, false otherwise.
+static bool
+WritePing(const string& aPath, const string& aPing)
+{
+  ofstream* f = UIOpenWrite(aPath.c_str());
+  bool success = false;
+
+  if (f->is_open()) {
+    *f << aPing;
+    f->flush();
+
+    if (f->good()) {
+      success = true;
+    }
+
+    f->close();
+  }
+
+  delete f;
+  return success;
+}
+
 // Assembles the crash ping using the strings extracted from the .extra file
 // and sends it using the crash sender. All the telemetry specific data but the
 // environment will be stripped from the annotations so that it won't be sent
@@ -280,7 +307,8 @@ GenerateSubmissionUrl(const string& aUrl, const string& aId,
 // Returns true if the ping was assembled and handed over to the pingsender
 // correctly, false otherwise and populates the aUUID field with the ping UUID.
 bool
-SendCrashPing(StringTable& strings, string& pingUuid)
+SendCrashPing(StringTable& strings, const string& aHash, string& pingUuid,
+              const string& pingDir)
 {
   string clientId    = strings[kTelemetryClientId];
   string serverUrl   = strings[kTelemetryUrl];
@@ -303,15 +331,21 @@ SendCrashPing(StringTable& strings, string& pingUuid)
     return false;
   }
 
-  Json::Value root = CreateRootNode(strings, uuid, clientId, sessionId,
+  Json::Value root = CreateRootNode(strings, uuid, aHash, clientId, sessionId,
                                     name, version, channel, buildId);
 
-  // Write out the result
+  // Write out the result to the pending pings directory
   Json::FastWriter writer;
   string ping = writer.write(root);
+  string pingPath = pingDir + UI_DIR_SEPARATOR + uuid + ".json";
+
+  if (!WritePing(pingPath, ping)) {
+    return false;
+  }
 
   // Hand over the ping to the sender
-  if (UIRunProgram(GetProgramPath(UI_PING_SENDER_FILENAME), url, ping)) {
+  vector<string> args = { url, pingPath };
+  if (UIRunProgram(GetProgramPath(UI_PING_SENDER_FILENAME), args)) {
     pingUuid = uuid;
     return true;
   } else {

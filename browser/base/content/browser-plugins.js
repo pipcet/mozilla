@@ -6,6 +6,9 @@
 var gPluginHandler = {
   PREF_SESSION_PERSIST_MINUTES: "plugin.sessionPermissionNow.intervalInMinutes",
   PREF_PERSISTENT_DAYS: "plugin.persistentPermissionAlways.intervalInDays",
+  PREF_SHOW_INFOBAR: "plugins.show_infobar",
+  PREF_INFOBAR_DISMISSAL_PERMANENT: "plugins.remember_infobar_dismissal",
+
   MESSAGES: [
     "PluginContent:ShowClickToPlayNotification",
     "PluginContent:RemoveNotification",
@@ -222,7 +225,7 @@ var gPluginHandler = {
     // page. That means that we also need to compare the actual locations to
     // ensure we aren't getting a message from a Data URI that we're no longer
     // looking at.
-    let receivedURI = BrowserUtils.makeURI(location);
+    let receivedURI = Services.io.newURI(location);
     if (!browser.documentURI.equalsExceptRef(receivedURI)) {
       return;
     }
@@ -318,7 +321,7 @@ var gPluginHandler = {
     // page. That means that we also need to compare the actual locations to
     // ensure we aren't getting a message from a Data URI that we're no longer
     // looking at.
-    let receivedURI = BrowserUtils.makeURI(location);
+    let receivedURI = Services.io.newURI(location);
     if (!browser.documentURI.equalsExceptRef(receivedURI)) {
       return;
     }
@@ -345,6 +348,10 @@ var gPluginHandler = {
     // 2b. Multiple types of plugins are hidden on the page, but none are
     //     vulnerable. Show the nonvulnerable multi-UI.
     function showNotification() {
+      if (!Services.prefs.getBoolPref(gPluginHandler.PREF_SHOW_INFOBAR, true)) {
+        return;
+      }
+
       let n = notificationBox.getNotificationWithValue("plugin-hidden");
       if (n) {
         // If something is already shown, just keep it
@@ -414,9 +421,21 @@ var gPluginHandler = {
           }
         }
       ];
+      function notificationCallback(type) {
+        if (type == "dismissed") {
+          Services.telemetry.getHistogramById("PLUGINS_INFOBAR_DISMISSED").
+            add(true);
+          if (Services.prefs.getBoolPref(gPluginHandler.PREF_INFOBAR_DISMISSAL_PERMANENT, false)) {
+            Services.perms.addFromPrincipal(principal,
+                                            "plugin-hidden-notification",
+                                            Services.perms.DENY_ACTION);
+          }
+        }
+      }
       n = notificationBox.
         appendNotification(message, "plugin-hidden", null,
-                           notificationBox.PRIORITY_INFO_HIGH, buttons);
+                           notificationBox.PRIORITY_INFO_HIGH, buttons,
+                           notificationCallback);
       if (haveInsecure) {
         n.classList.add("pluginVulnerable");
       }

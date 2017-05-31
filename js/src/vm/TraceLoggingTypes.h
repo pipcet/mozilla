@@ -30,11 +30,8 @@
     _(IrregexpExecute)                                \
     _(MinorGC)                                        \
     _(Frontend)                                       \
-    _(FrontendNameAnalysis)                           \
-    _(FrontendTDZAnalysis)                            \
     _(ParsingFull)                                    \
     _(ParsingSyntax)                                  \
-    _(Tokenizing)                                     \
     _(BytecodeEmission)                               \
     _(BytecodeFoldConstants)                          \
     _(BytecodeNameFunctions)                          \
@@ -263,6 +260,10 @@ class ContinuousSpace {
 
     void clear() {
         size_ = 0;
+    }
+
+    size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
+        return mallocSizeOf(data_);
     }
 };
 

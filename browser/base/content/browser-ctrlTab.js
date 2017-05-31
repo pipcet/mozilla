@@ -204,16 +204,17 @@ var ctrlTab = {
   },
 
   uninit: function ctrlTab_uninit() {
-    this._recentlyUsedTabs = null;
-    this._init(false);
+    if (this._recentlyUsedTabs) {
+      this._recentlyUsedTabs = null;
+      this._init(false);
+    }
   },
 
   prefName: "browser.ctrlTab.previews",
   readPref: function ctrlTab_readPref() {
     var enable =
       gPrefService.getBoolPref(this.prefName) &&
-      (!gPrefService.prefHasUserValue("browser.ctrlTab.disallowForScreenReaders") ||
-       !gPrefService.getBoolPref("browser.ctrlTab.disallowForScreenReaders"));
+      !gPrefService.getBoolPref("browser.ctrlTab.disallowForScreenReaders", false);
 
     if (enable)
       this.init();
@@ -241,7 +242,7 @@ var ctrlTab = {
     aPreview._tab = aTab;
 
     if (aPreview.firstChild)
-      aPreview.removeChild(aPreview.firstChild);
+      aPreview.firstChild.remove();
     if (aTab) {
       let canvasWidth = this.canvasWidth;
       let canvasHeight = this.canvasHeight;
@@ -474,10 +475,10 @@ var ctrlTab = {
         this._initRecentlyUsedTabs();
         break;
       case "TabAttrModified":
-        // tab attribute modified (i.e. label, busy, image, selected)
+        // tab attribute modified (i.e. label, busy, image)
         // update preview only if tab attribute modified in the list
         if (event.detail.changed.some(
-          (elem, ind, arr) => ["label", "busy", "image", "selected"].includes(elem))) {
+          (elem, ind, arr) => ["label", "busy", "image"].includes(elem))) {
           for (let i = this.previews.length - 1; i >= 0; i--) {
             if (this.previews[i]._tab && this.previews[i]._tab == event.target) {
               this.updatePreview(this.previews[i], event.target);
@@ -535,15 +536,15 @@ var ctrlTab = {
   _init: function ctrlTab__init(enable) {
     var toggleEventListener = enable ? "addEventListener" : "removeEventListener";
 
-    window[toggleEventListener]("SSWindowRestored", this, false);
+    window[toggleEventListener]("SSWindowRestored", this);
 
     var tabContainer = gBrowser.tabContainer;
-    tabContainer[toggleEventListener]("TabOpen", this, false);
-    tabContainer[toggleEventListener]("TabAttrModified", this, false);
-    tabContainer[toggleEventListener]("TabSelect", this, false);
-    tabContainer[toggleEventListener]("TabClose", this, false);
+    tabContainer[toggleEventListener]("TabOpen", this);
+    tabContainer[toggleEventListener]("TabAttrModified", this);
+    tabContainer[toggleEventListener]("TabSelect", this);
+    tabContainer[toggleEventListener]("TabClose", this);
 
-    document[toggleEventListener]("keypress", this, false);
+    document[toggleEventListener]("keypress", this);
     gBrowser.mTabBox.handleCtrlTab = !enable;
 
     if (enable)

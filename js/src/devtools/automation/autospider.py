@@ -38,8 +38,10 @@ parser = argparse.ArgumentParser(
     description='Run a spidermonkey shell build job')
 parser.add_argument('--dep', action='store_true',
                     help='do not clobber the objdir before building')
+parser.add_argument('--keep', action='store_true',
+                    help='do not delete the sanitizer output directory (for testing)')
 parser.add_argument('--platform', '-p', type=str, metavar='PLATFORM',
-                    default='', help='build platform')
+                    default='', help='build platform, including a suffix ("-debug" or "") used by buildbot to override the variant\'s "debug" setting. The platform can be used to specify 32 vs 64 bits.')
 parser.add_argument('--timeout', '-t', type=int, metavar='TIMEOUT',
                     default=10800,
                     help='kill job after TIMEOUT seconds')
@@ -53,6 +55,13 @@ group.add_argument('--no-optimize', action='store_false',
                    dest='optimize',
                    help='generate a non-optimized build. Overrides variant setting.')
 group.set_defaults(optimize=None)
+group = parser.add_mutually_exclusive_group()
+group.add_argument('--debug', action='store_true',
+                   help='generate a debug build. Overrides variant setting.')
+group.add_argument('--no-debug', action='store_false',
+                   dest='debug',
+                   help='generate a non-debug build. Overrides variant setting.')
+group.set_defaults(debug=None)
 parser.add_argument('--run-tests', '--tests', type=str, metavar='TESTSUITE',
                     default='',
                     help="comma-separated set of test suites to add to the variant's default set")
@@ -145,11 +154,21 @@ MAKEFLAGS = env.get('MAKEFLAGS', '-j6' + ('' if AUTOMATION else ' -s'))
 UNAME_M = subprocess.check_output(['uname', '-m']).strip()
 
 CONFIGURE_ARGS = variant['configure-args']
+
 opt = args.optimize
 if opt is None:
     opt = variant.get('optimize')
 if opt is not None:
     CONFIGURE_ARGS += (" --enable-optimize" if opt else " --disable-optimize")
+
+opt = args.debug
+if opt is None and args.platform:
+    # Override variant['debug'].
+    opt = ('-debug' in args.platform)
+if opt is None:
+    opt = variant.get('debug')
+if opt is not None:
+    CONFIGURE_ARGS += (" --enable-debug" if opt else " --disable-debug")
 
 # Any jobs that wish to produce additional output can save them into the upload
 # directory if there is such a thing, falling back to OBJDIR.
@@ -258,7 +277,7 @@ timer.daemon = True
 timer.start()
 
 ensure_dir_exists(OBJDIR, clobber=not args.dep and not args.nobuild)
-ensure_dir_exists(OUTDIR)
+ensure_dir_exists(OUTDIR, clobber=not args.keep)
 
 
 def run_command(command, check=False, **kwargs):
@@ -284,13 +303,27 @@ for k, v in variant.get('env', {}).items():
         OUTDIR=OUTDIR,
     )
 
+def need_updating_configure(configure):
+    if not os.path.exists(configure):
+        return True
+
+    dep_files = [
+        os.path.join(DIR.js_src, 'configure.in'),
+        os.path.join(DIR.js_src, 'old-configure.in'),
+    ]
+    for file in dep_files:
+        if os.path.getmtime(file) > os.path.getmtime(configure):
+            return True
+
+    return False
+
 if not args.nobuild:
     CONFIGURE_ARGS += ' --enable-nspr-build'
     CONFIGURE_ARGS += ' --prefix={OBJDIR}/dist'.format(OBJDIR=POBJDIR)
 
     # Generate a configure script from configure.in.
     configure = os.path.join(DIR.js_src, 'configure')
-    if not os.path.exists(configure):
+    if need_updating_configure(configure):
         shutil.copyfile(configure + ".in", configure)
         os.chmod(configure, 0755)
 
@@ -342,6 +375,8 @@ test_suites |= set(normalize_tests(variant.get('extra-tests', {}).get('all', [])
 # Now adjust the variant's default test list with command-line arguments.
 test_suites |= set(normalize_tests(args.run_tests.split(",")))
 test_suites -= set(normalize_tests(args.skip_tests.split(",")))
+if 'all' in args.skip_tests.split(","):
+    test_suites = []
 
 # Always run all enabled tests, even if earlier ones failed. But return the
 # first failed status.
@@ -377,6 +412,7 @@ if args.variant in ('tsan', 'msan'):
 
     # Summarize results
     sites = Counter()
+    errors = Counter()
     for filename in fullfiles:
         with open(os.path.join(OUTDIR, filename), 'rb') as fh:
             for line in fh:
@@ -397,9 +433,47 @@ if args.variant in ('tsan', 'msan'):
     print(open(summary_filename, 'rb').read())
 
     if 'max-errors' in variant:
-        print("Found %d errors out of %d allowed" % (len(sites), variant['max-errors']))
-        if len(sites) > variant['max-errors']:
+        max_allowed = variant['max-errors']
+        print("Found %d errors out of %d allowed" % (len(sites), max_allowed))
+        if len(sites) > max_allowed:
             results.append(1)
+
+    if 'expect-errors' in variant:
+        # Line numbers may shift around between versions, so just look for
+        # matching filenames and function names. This will still produce false
+        # positives when functions are renamed or moved between files, or
+        # things change so that the actual race is in a different place. But it
+        # still seems preferable to saying "You introduced an additional race.
+        # Here are the 21 races detected; please ignore the 20 known ones in
+        # this other list."
+
+        for site in sites:
+            # Grab out the file and function names.
+            m = re.search(r'/([^/]+):\d+ in (.+)', site)
+            if m:
+                error = tuple(m.groups())
+            else:
+                # will get here if eg tsan symbolication fails
+                error = (site, '(unknown)')
+            errors[error] += 1
+
+        remaining = Counter(errors)
+        for expect in variant['expect-errors']:
+            # expect-errors is an array of (filename, function) tuples.
+            expect = tuple(expect)
+            if remaining[expect] == 0:
+                print("Did not see known error in %s function %s" % expect)
+            else:
+                remaining[expect] -= 1
+
+        status = 0
+        for filename, function in (e for e, c in remaining.items() if c > 0):
+            if AUTOMATION:
+                print("TinderboxPrint: tsan error<br/>%s function %s" % (filename, function))
+                status = 1
+            else:
+                print("*** tsan error in %s function %s" % (filename, function))
+        results.append(status)
 
     # Gather individual results into a tarball. Note that these are
     # distinguished only by pid of the JS process running within each test, so

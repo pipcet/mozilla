@@ -2,6 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* import-globals-from preferences.js */
+/* import-globals-from ../../../../toolkit/mozapps/preferences/fontbuilder.js */
+
 XPCOMUtils.defineLazyGetter(this, "AlertsServiceDND", function() {
   try {
     let alertsService = Cc["@mozilla.org/alerts-service;1"]
@@ -24,10 +27,6 @@ var gContentPane = {
 
     // Initializes the fonts dropdowns displayed in this pane.
     this._rebuildFonts();
-    var menulist = document.getElementById("defaultFont");
-    if (menulist.selectedIndex == -1) {
-      menulist.value = FontBuilder.readFontSelection(menulist);
-    }
 
     // Show translation preferences if we may:
     const prefName = "browser.translation.ui.show";
@@ -179,18 +178,18 @@ var gContentPane = {
     const kFontSizeFmtVariable      = "font.size.variable.%LANG%";
 
     var preferences = document.getElementById("contentPreferences");
-    var prefs = [{ format   : aIsSerif ? kFontNameFmtSerif : kFontNameFmtSansSerif,
-                   type     : "fontname",
-                   element  : "defaultFont",
-                   fonttype : aIsSerif ? "serif" : "sans-serif" },
-                 { format   : aIsSerif ? kFontNameListFmtSerif : kFontNameListFmtSansSerif,
-                   type     : "unichar",
-                   element  : null,
-                   fonttype : aIsSerif ? "serif" : "sans-serif" },
-                 { format   : kFontSizeFmtVariable,
-                   type     : "int",
-                   element  : "defaultFontSize",
-                   fonttype : null }];
+    var prefs = [{ format: aIsSerif ? kFontNameFmtSerif : kFontNameFmtSansSerif,
+                   type: "fontname",
+                   element: "defaultFont",
+                   fonttype: aIsSerif ? "serif" : "sans-serif" },
+                 { format: aIsSerif ? kFontNameListFmtSerif : kFontNameListFmtSansSerif,
+                   type: "unichar",
+                   element: null,
+                   fonttype: aIsSerif ? "serif" : "sans-serif" },
+                 { format: kFontSizeFmtVariable,
+                   type: "int",
+                   element: "defaultFontSize",
+                   fonttype: null }];
     for (var i = 0; i < prefs.length; ++i) {
       var preference = document.getElementById(prefs[i].format.replace(/%LANG%/, aLanguageGroup));
       if (!preference) {
