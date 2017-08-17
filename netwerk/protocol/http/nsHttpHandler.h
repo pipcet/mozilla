@@ -74,7 +74,7 @@ public:
                                               uint32_t capabilities);
     bool     IsAcceptableEncoding(const char *encoding, bool isSecure);
 
-    const nsAFlatCString &UserAgent();
+    const nsCString& UserAgent();
 
     nsHttpVersion  HttpVersion()             { return mHttpVersion; }
     nsHttpVersion  ProxyHttpVersion()        { return mProxyHttpVersion; }
@@ -135,6 +135,7 @@ public:
     uint32_t       RequestTokenBucketBurst() {return mRequestTokenBucketBurst; }
 
     bool           PromptTempRedirect()      { return mPromptTempRedirect; }
+    bool           IsUrgentStartEnabled() { return mUrgentStartEnabled; }
 
     // TCP Keepalive configuration values.
 
@@ -224,10 +225,10 @@ public:
         return mConnMgr->RescheduleTransaction(trans, priority);
     }
 
-    void ThrottleTransaction(nsHttpTransaction *trans,
-                                              bool throttle)
+    void UpdateClassOfServiceOnTransaction(nsHttpTransaction *trans,
+                                           uint32_t classOfService)
     {
-        mConnMgr->ThrottleTransaction(trans, throttle);
+        mConnMgr->UpdateClassOfServiceOnTransaction(trans, classOfService);
     }
 
     // Called to cancel a transaction, which may or may not be assigned to
@@ -331,9 +332,11 @@ public:
 
     // Called by channels before a redirect happens. This notifies both the
     // channel's and the global redirect observers.
-    MOZ_MUST_USE nsresult AsyncOnChannelRedirect(nsIChannel* oldChan,
-                                                 nsIChannel* newChan,
-                                                 uint32_t flags);
+    MOZ_MUST_USE nsresult AsyncOnChannelRedirect(
+                              nsIChannel* oldChan,
+                              nsIChannel* newChan,
+                              uint32_t flags,
+                              nsIEventTarget* mainThreadEventTarget = nullptr);
 
     // Called by the channel when the response is read from the cache without
     // communicating with the server.
@@ -362,11 +365,6 @@ public:
 
     void ShutdownConnectionManager();
 
-    bool KeepEmptyResponseHeadersAsEmtpyString() const
-    {
-        return mKeepEmptyResponseHeadersAsEmtpyString;
-    }
-
     uint32_t DefaultHpackBuffer() const
     {
         return mDefaultHpackBuffer;
@@ -380,6 +378,11 @@ public:
     float FocusedWindowTransactionRatio() const
     {
         return mFocusedWindowTransactionRatio;
+    }
+
+    bool ActiveTabPriority() const
+    {
+        return mActiveTabPriority;
     }
 
 private:
@@ -448,6 +451,14 @@ private:
     uint8_t  mMaxPersistentConnectionsPerServer;
     uint8_t  mMaxPersistentConnectionsPerProxy;
 
+    bool mThrottleEnabled;
+    uint32_t mThrottleSuspendFor;
+    uint32_t mThrottleResumeFor;
+    uint32_t mThrottleResumeIn;
+    uint32_t mThrottleTimeWindow;
+
+    bool mUrgentStartEnabled;
+
     uint8_t  mRedirectionLimit;
 
     // we'll warn the user if we load an URL containing a userpass field
@@ -487,6 +498,7 @@ private:
     nsCString      mDeviceModelId;
 
     nsCString      mUserAgent;
+    nsCString      mSpoofedUserAgent;
     nsXPIDLCString mUserAgentOverride;
     bool           mUserAgentIsDirty; // true if mUserAgent should be rebuilt
     bool           mAcceptLanguagesIsDirty;
@@ -577,13 +589,6 @@ private:
 
     nsCOMPtr<nsIRequestContextService> mRequestContextService;
 
-    // If it is set to false, headers with empty value will not appear in the
-    // header array - behavior as it used to be. If it is true: empty headers
-    // coming from the network will exits in header array as empty string.
-    // Call SetHeader with an empty value will still delete the header.
-    // (Bug 6699259)
-    bool mKeepEmptyResponseHeadersAsEmtpyString;
-
     // The default size (in bytes) of the HPACK decompressor table.
     uint32_t mDefaultHpackBuffer;
 
@@ -597,6 +602,9 @@ private:
     Atomic<bool, Relaxed> mFastOpenSupported;
     uint32_t mFastOpenConsecutiveFailureLimit;
     uint32_t mFastOpenConsecutiveFailureCounter;
+
+    // If true, the transactions from active tab will be dispatched first.
+    bool mActiveTabPriority;
 
 private:
     // For Rate Pacing Certain Network Events. Only assign this pointer on

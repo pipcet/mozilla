@@ -6,11 +6,11 @@
 #include "nsGfxRadioControlFrame.h"
 
 #include "gfx2DGlue.h"
+#include "gfxContext.h"
 #include "gfxUtils.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PathHelpers.h"
 #include "nsLayoutUtils.h"
-#include "nsRenderingContext.h"
 #include "nsDisplayList.h"
 
 using namespace mozilla;
@@ -72,14 +72,13 @@ PaintCheckedRadioButton(nsIFrame* aFrame,
 
 void
 nsGfxRadioControlFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                         const nsRect&           aDirtyRect,
                                          const nsDisplayListSet& aLists)
 {
-  nsFormControlFrame::BuildDisplayList(aBuilder, aDirtyRect, aLists);
+  nsFormControlFrame::BuildDisplayList(aBuilder, aLists);
 
   if (!IsVisibleForPainting(aBuilder))
     return;
-  
+
   if (IsThemed())
     return; // The theme will paint the check, if any.
 
@@ -87,11 +86,11 @@ nsGfxRadioControlFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   GetCurrentCheckState(&checked); // Get check state from the content model
   if (!checked)
     return;
-    
+
   aLists.Content()->AppendNewToTop(new (aBuilder)
     nsDisplayGeneric(aBuilder, this, PaintCheckedRadioButton,
                      "CheckedRadioButton",
-                     nsDisplayItem::TYPE_CHECKED_RADIOBUTTON));
+                     DisplayItemType::TYPE_CHECKED_RADIOBUTTON));
 }
 
 #endif

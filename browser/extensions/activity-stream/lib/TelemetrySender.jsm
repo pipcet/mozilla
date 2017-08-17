@@ -1,24 +1,24 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-/* globals Preferences, Services, XPCOMUtils */
 
 const {interfaces: Ci, utils: Cu} = Components;
-
 Cu.import("resource://gre/modules/Preferences.jsm");
-Cu.importGlobalProperties(["fetch"]);
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.importGlobalProperties(["fetch"]);
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Console.jsm"); // eslint-disable-line no-console
+
+XPCOMUtils.defineLazyModuleGetter(this, "console",
+  "resource://gre/modules/Console.jsm");
 
 // This is intentionally a different pref-branch than the SDK-based add-on
 // used, to avoid extra weirdness for people who happen to have the SDK-based
 // installed.  Though maybe we should just forcibly disable the old add-on?
 const PREF_BRANCH = "browser.newtabpage.activity-stream.";
 
-const ENDPOINT_PREF = "telemetry.ping.endpoint";
-const TELEMETRY_PREF = "telemetry";
-const LOGGING_PREF = "telemetry.log";
+const ENDPOINT_PREF = `${PREF_BRANCH}telemetry.ping.endpoint`;
+const TELEMETRY_PREF = `${PREF_BRANCH}telemetry`;
+const LOGGING_PREF = `${PREF_BRANCH}telemetry.log`;
 
 /**
  * Observe various notifications and send them to a telemetry endpoint.
@@ -28,10 +28,9 @@ const LOGGING_PREF = "telemetry.log";
  *                   inside the Prefs constructor. Typically used from tests
  *                   to save off a pointer to a fake Prefs instance so that
  *                   stubs and spies can be inspected by the test code.
- *
  */
 function TelemetrySender(args) {
-  let prefArgs = {branch: PREF_BRANCH};
+  let prefArgs = {};
   if (args) {
     if ("prefInitHook" in args) {
       prefArgs.initHook = args.prefInitHook;
@@ -40,7 +39,7 @@ function TelemetrySender(args) {
 
   this._prefs = new Preferences(prefArgs);
 
-  this.enabled = this._prefs.get(TELEMETRY_PREF);
+  this._enabled = this._prefs.get(TELEMETRY_PREF);
   this._onTelemetryPrefChange = this._onTelemetryPrefChange.bind(this);
   this._prefs.observe(TELEMETRY_PREF, this._onTelemetryPrefChange);
 
@@ -52,16 +51,21 @@ function TelemetrySender(args) {
 }
 
 TelemetrySender.prototype = {
+  get enabled() {
+    // Note: Services.telemetry.canRecordBase is the general indicator for
+    // opt-out Firefox Telemetry
+    return this._enabled && Services.telemetry.canRecordBase;
+  },
 
   _onLoggingPrefChange(prefVal) {
     this.logging = prefVal;
   },
 
   _onTelemetryPrefChange(prefVal) {
-    this.enabled = prefVal;
+    this._enabled = prefVal;
   },
 
-  async sendPing(data) {
+  sendPing(data) {
     if (this.logging) {
       // performance related pings cause a lot of logging, so we mute them
       if (data.action !== "activity_stream_performance") {
@@ -71,7 +75,7 @@ TelemetrySender.prototype = {
     if (!this.enabled) {
       return Promise.resolve();
     }
-    return fetch(this._pingEndpoint, {method: "POST", body: data}).then(response => {
+    return fetch(this._pingEndpoint, {method: "POST", body: JSON.stringify(data)}).then(response => {
       if (!response.ok) {
         Cu.reportError(`Ping failure with HTTP response code: ${response.status}`);
       }

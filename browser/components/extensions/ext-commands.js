@@ -2,9 +2,12 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-var {
-  PlatformInfo,
-} = ExtensionUtils;
+// The ext-* files are imported into the same scopes.
+/* import-globals-from ext-browserAction.js */
+/* import-globals-from ext-browser.js */
+
+XPCOMUtils.defineLazyModuleGetter(this, "ExtensionParent",
+                                  "resource://gre/modules/ExtensionParent.jsm");
 
 var XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 
@@ -22,7 +25,6 @@ this.commands = class extends ExtensionAPI {
     this.keysetsMap = new WeakMap();
 
     this.register();
-    EventEmitter.decorate(this);
   }
 
   onShutdown(reason) {
@@ -71,6 +73,7 @@ this.commands = class extends ExtensionAPI {
     let commands = new Map();
     // For Windows, chrome.runtime expects 'win' while chrome.commands
     // expects 'windows'.  We can special case this for now.
+    let {PlatformInfo} = ExtensionParent;
     let os = PlatformInfo.os == "win" ? "windows" : PlatformInfo.os;
     for (let [name, command] of Object.entries(manifest.commands)) {
       let suggested_key = command.suggested_key || {};
@@ -237,7 +240,7 @@ this.commands = class extends ExtensionAPI {
             });
           }));
         },
-        onCommand: new SingletonEventManager(context, "commands.onCommand", fire => {
+        onCommand: new EventManager(context, "commands.onCommand", fire => {
           let listener = (eventName, commandName) => {
             fire.async(commandName);
           };

@@ -11,6 +11,7 @@ var Cu = Components.utils;
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/ContentPrefInstance.jsm");
+Cu.import("resource://testing-common/TestUtils.jsm");
 
 const CONTENT_PREFS_DB_FILENAME = "content-prefs.sqlite";
 const CONTENT_PREFS_BACKUP_DB_FILENAME = "content-prefs.sqlite.corrupt";
@@ -90,7 +91,7 @@ var ContentPrefTest = {
     // the python harness sets this in the environment for us
     let profd = env.get("XPCSHELL_TEST_PROFILE_DIR");
     let file = Components.classes["@mozilla.org/file/local;1"]
-                         .createInstance(Components.interfaces.nsILocalFile);
+                         .createInstance(Components.interfaces.nsIFile);
     file.initWithPath(profd);
     return file;
   },

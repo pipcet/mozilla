@@ -2,7 +2,12 @@
 
 Cu.import("resource://gre/modules/ExtensionCommon.jsm");
 
-global.SingletonEventManager = ExtensionCommon.SingletonEventManager;
+// These are defined on "global" which is used for the same scopes as the other
+// ext-c-*.js files.
+/* exported EventManager */
+/* global EventManager: false */
+
+global.EventManager = ExtensionCommon.EventManager;
 
 global.initializeBackgroundPage = (contentWindow) => {
   // Override the `alert()` method inside background windows;
@@ -13,8 +18,8 @@ global.initializeBackgroundPage = (contentWindow) => {
     if (!alertDisplayedWarning) {
       require("devtools/client/framework/devtools-browser");
 
-      let hudservice = require("devtools/client/webconsole/hudservice");
-      hudservice.openBrowserConsoleOrFocus();
+      let {HUDService} = require("devtools/client/webconsole/hudservice");
+      HUDService.openBrowserConsoleOrFocus();
 
       contentWindow.console.warn("alert() is not supported in background windows; please use console.log instead.");
 
@@ -48,13 +53,6 @@ extensions.registerModules({
     scopes: ["addon_child", "content_child", "devtools_child", "proxy_script"],
     paths: [
       ["i18n"],
-    ],
-  },
-  permissions: {
-    url: "chrome://extensions/content/ext-c-permissions.js",
-    scopes: ["addon_child", "content_child", "devtools_child", "proxy_script"],
-    paths: [
-      ["permissions"],
     ],
   },
   runtime: {

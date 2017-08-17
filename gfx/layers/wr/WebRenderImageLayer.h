@@ -24,6 +24,8 @@ public:
 
   virtual void ClearCachedResources() override;
 
+  virtual bool SupportsAsyncUpdate() override;
+
 protected:
   virtual ~WebRenderImageLayer();
 
@@ -31,20 +33,19 @@ public:
   Layer* GetLayer() override { return this; }
   void RenderLayer(wr::DisplayListBuilder& aBuilder,
                    const StackingContextHelper& aSc) override;
-  Maybe<WrImageMask> RenderMaskLayer(const gfx::Matrix4x4& aTransform) override;
+  Maybe<wr::WrImageMask> RenderMaskLayer(const StackingContextHelper& aSc,
+                                         const gfx::Matrix4x4& aTransform) override;
 
 protected:
   CompositableType GetImageClientType();
+  void ClearWrResources();
 
   void AddWRVideoImage(size_t aChannelNumber);
 
   wr::MaybeExternalImageId mExternalImageId;
-  // Some video image format contains multiple channel data.
-  nsTArray<wr::ImageKey> mVideoKeys;
-  // The regular single channel image.
   Maybe<wr::ImageKey> mKey;
   RefPtr<ImageClient> mImageClient;
-  CompositableType mImageClientTypeContainer;
+  CompositableType mImageClientContainerType;
   Maybe<wr::PipelineId> mPipelineId;
 };
 

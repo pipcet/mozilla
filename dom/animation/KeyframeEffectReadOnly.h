@@ -43,9 +43,10 @@ class AnimValuesStyleRule;
 enum class CSSPseudoElementType : uint8_t;
 class ErrorResult;
 struct AnimationRule;
-struct ServoComputedValuesWithParent;
 struct TimingParams;
 class EffectSet;
+class ServoStyleContext;
+class GeckoStyleContext;
 
 namespace dom {
 class ElementOrCSSPseudoElement;
@@ -159,19 +160,15 @@ public:
 
   IterationCompositeOperation IterationComposite() const;
   CompositeOperation Composite() const;
-  void GetSpacing(nsString& aRetVal) const
-  {
-    mEffectOptions.GetSpacingAsString(aRetVal);
-  }
   void NotifyAnimationTimingUpdated();
   void RequestRestyle(EffectCompositor::RestyleType aRestyleType);
   void SetAnimation(Animation* aAnimation) override;
   void SetKeyframes(JSContext* aContext, JS::Handle<JSObject*> aKeyframes,
                     ErrorResult& aRv);
   void SetKeyframes(nsTArray<Keyframe>&& aKeyframes,
-                    nsStyleContext* aStyleContext);
+                    GeckoStyleContext* aStyleContext);
   void SetKeyframes(nsTArray<Keyframe>&& aKeyframes,
-                    const ServoComputedValuesWithParent& aServoValues);
+                    const ServoStyleContext* aComputedValues);
 
   // Returns true if the effect includes |aProperty| regardless of whether the
   // property is overridden by !important rule.
@@ -200,7 +197,7 @@ public:
   // |aStyleContext| to resolve specified values.
   void UpdateProperties(nsStyleContext* aStyleContext);
   // Servo version of the above function.
-  void UpdateProperties(const ServoComputedValuesWithParent& aServoValues);
+  void UpdateProperties(const ServoStyleContext* aComputedValues);
 
   // Update various bits of state related to running ComposeStyle().
   // We need to update this outside ComposeStyle() because we should avoid
@@ -239,8 +236,7 @@ public:
   // When returning true, |aPerformanceWarning| stores the reason why
   // we shouldn't run the transform animations.
   bool ShouldBlockAsyncTransformAnimations(
-    const nsIFrame* aFrame,
-    AnimationPerformanceWarning::Type& aPerformanceWarning) const;
+    const nsIFrame* aFrame, AnimationPerformanceWarning::Type& aPerformanceWarning) const;
   bool HasGeometricProperties() const;
   bool AffectsGeometry() const override
   {
@@ -264,8 +260,7 @@ public:
   // Cumulative change hint on each segment for each property.
   // This is used for deciding the animation is paint-only.
   void CalculateCumulativeChangeHint(nsStyleContext* aStyleContext);
-  void CalculateCumulativeChangeHint(
-    const ServoComputedValuesWithParent& aServoValues)
+  void CalculateCumulativeChangeHint(const ServoStyleContext* aComputedValues)
   {
   }
 
@@ -324,7 +319,7 @@ protected:
   // to resolve specified values. This function also applies paced spacing if
   // needed.
   template<typename StyleType>
-  nsTArray<AnimationProperty> BuildProperties(StyleType&& aStyle);
+  nsTArray<AnimationProperty> BuildProperties(StyleType* aStyle);
 
   // This effect is registered with its target element so long as:
   //
@@ -373,9 +368,9 @@ protected:
     const RefPtr<AnimValuesStyleRule>& aAnimationRule);
 
   // Ensure the base styles is available for any properties in |aProperties|.
-  void EnsureBaseStyles(nsStyleContext* aStyleContext,
+  void EnsureBaseStyles(GeckoStyleContext* aStyleContext,
                         const nsTArray<AnimationProperty>& aProperties);
-  void EnsureBaseStyles(const ServoComputedValuesWithParent& aServoValues,
+  void EnsureBaseStyles(const ServoStyleContext* aComputedValues,
                         const nsTArray<AnimationProperty>& aProperties);
 
   // If no base style is already stored for |aProperty|, resolves the base style
@@ -384,14 +379,15 @@ protected:
   // base style context will be resolved and stored in
   // |aCachedBaseStyleContext|.
   void EnsureBaseStyle(nsCSSPropertyID aProperty,
-                       nsStyleContext* aStyleContext,
-                       RefPtr<nsStyleContext>& aCachedBaseStyleContext);
+                       GeckoStyleContext* aStyleContext,
+                       RefPtr<GeckoStyleContext>& aCachedBaseStyleContext);
   // Stylo version of the above function that also first checks for an additive
   // value in |aProperty|'s list of segments.
   void EnsureBaseStyle(const AnimationProperty& aProperty,
                        CSSPseudoElementType aPseudoType,
                        nsPresContext* aPresContext,
-                       RefPtr<ServoComputedValues>& aBaseComputedValues);
+                       const ServoStyleContext* aComputedValues,
+                       RefPtr<mozilla::ServoStyleContext>& aBaseComputedValues);
 
   Maybe<OwningAnimationTarget> mTarget;
 
@@ -424,6 +420,11 @@ protected:
   nsRefPtrHashtable<nsUint32HashKey, RawServoAnimationValue>
     mBaseStyleValuesForServo;
 
+  // True if this effect is in the EffectSet for its target element. This is
+  // used as an optimization to avoid unnecessary hashmap lookups on the
+  // EffectSet.
+  bool mInEffectSet = false;
+
   // We only want to record telemetry data for "ContentTooLarge" warnings once
   // per effect:target pair so we use this member to record if we have already
   // reported a "ContentTooLarge" warning for the current target.
@@ -437,10 +438,10 @@ private:
   nsChangeHint mCumulativeChangeHint;
 
   template<typename StyleType>
-  void DoSetKeyframes(nsTArray<Keyframe>&& aKeyframes, StyleType&& aStyle);
+  void DoSetKeyframes(nsTArray<Keyframe>&& aKeyframes, StyleType* aStyle);
 
   template<typename StyleType>
-  void DoUpdateProperties(StyleType&& aStyle);
+  void DoUpdateProperties(StyleType* aStyle);
 
   void ComposeStyleRule(RefPtr<AnimValuesStyleRule>& aStyleRule,
                         const AnimationProperty& aProperty,
@@ -471,7 +472,7 @@ private:
 
   static const TimeDuration OverflowRegionRefreshInterval();
 
-  void UpadateEffectSet(mozilla::EffectSet* aEffectSet = nullptr) const;
+  void UpdateEffectSet(mozilla::EffectSet* aEffectSet = nullptr) const;
 
   // FIXME: This flag will be removed in bug 1324966.
   bool mIsComposingStyle = false;

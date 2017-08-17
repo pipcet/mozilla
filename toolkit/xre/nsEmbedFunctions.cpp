@@ -80,14 +80,13 @@
 
 #include "GeckoProfiler.h"
 
-#include "mozilla/Telemetry.h"
-
 #if defined(MOZ_SANDBOX) && defined(XP_WIN)
 #include "mozilla/sandboxTarget.h"
 #include "mozilla/sandboxing/loggingCallbacks.h"
 #endif
 
-#if defined(MOZ_CONTENT_SANDBOX) && !defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_CONTENT_SANDBOX)
+#include "mozilla/SandboxSettings.h"
 #include "mozilla/Preferences.h"
 #endif
 
@@ -306,19 +305,19 @@ SetTaskbarGroupId(const nsString& aId)
 #endif
 
 #if defined(MOZ_CRASHREPORTER)
-#if defined(MOZ_CONTENT_SANDBOX) && !defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_CONTENT_SANDBOX)
 void
 AddContentSandboxLevelAnnotation()
 {
   if (XRE_GetProcessType() == GeckoProcessType_Content) {
-    int level = Preferences::GetInt("security.sandbox.content.level");
+    int level = GetEffectiveContentSandboxLevel();
     nsAutoCString levelString;
     levelString.AppendInt(level);
     CrashReporter::AnnotateCrashReport(
       NS_LITERAL_CSTRING("ContentSandboxLevel"), levelString);
   }
 }
-#endif /* MOZ_CONTENT_SANDBOX && !MOZ_WIDGET_GONK */
+#endif /* MOZ_CONTENT_SANDBOX */
 #endif /* MOZ_CRASHREPORTER */
 
 namespace {
@@ -406,21 +405,12 @@ XRE_InitChildProcess(int aArgc,
   // NB: This must be called before profiler_init
   ScopedLogging logger;
 
-  // This is needed by Telemetry to initialize histogram collection.
-  // NB: This must be called after NS_LogInit().
-  // NS_LogInit must be called before Telemetry::CreateStatisticsRecorder
-  // so as to avoid many log messages of the form
-  //   WARNING: XPCOM objects created/destroyed from static ctor/dtor: [..]
-  // See bug 1279614.
-  Telemetry::CreateStatisticsRecorder();
-
   mozilla::LogModule::Init();
 
   char aLocal;
-  GeckoProfilerInitRAII profiler(&aLocal);
+  AutoProfilerInit profilerInit(&aLocal);
 
-  PROFILER_LABEL("Startup", "XRE_InitChildProcess",
-    js::ProfileEntry::Category::OTHER);
+  AUTO_PROFILER_LABEL("XRE_InitChildProcess", OTHER);
 
   // Ensure AbstractThread is minimally setup, so async IPC messages
   // work properly.
@@ -595,7 +585,7 @@ XRE_InitChildProcess(int aArgc,
     // '-' implies no support
     if (*appModelUserId != '-') {
       nsString appId;
-      appId.AssignWithConversion(nsDependentCString(appModelUserId));
+      CopyASCIItoUTF16(nsDependentCString(appModelUserId), appId);
       // The version string is encased in quotes
       appId.Trim("\"");
       // Set the id
@@ -700,7 +690,7 @@ XRE_InitChildProcess(int aArgc,
       OverrideDefaultLocaleIfNeeded();
 
 #if defined(MOZ_CRASHREPORTER)
-#if defined(MOZ_CONTENT_SANDBOX) && !defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_CONTENT_SANDBOX)
       AddContentSandboxLevelAnnotation();
 #endif
 #endif
@@ -728,7 +718,6 @@ XRE_InitChildProcess(int aArgc,
   }
 #endif
 
-  Telemetry::DestroyStatisticsRecorder();
   return XRE_DeinitCommandLine();
 }
 
@@ -748,10 +737,10 @@ class MainFunctionRunnable : public Runnable
 public:
   NS_DECL_NSIRUNNABLE
 
-  MainFunctionRunnable(MainFunction aFunction,
-                       void* aData)
-  : mFunction(aFunction),
-    mData(aData)
+  MainFunctionRunnable(MainFunction aFunction, void* aData)
+    : mozilla::Runnable("MainFunctionRunnable")
+    , mFunction(aFunction)
+    , mData(aData)
   {
     NS_ASSERTION(aFunction, "Don't give me a null pointer!");
   }
@@ -786,7 +775,7 @@ XRE_InitParentProcess(int aArgc,
   mozilla::LogModule::Init();
 
   char aLocal;
-  GeckoProfilerInitRAII profiler(&aLocal);
+  AutoProfilerInit profilerInit(&aLocal);
 
   ScopedXREEmbed embed;
 
@@ -850,7 +839,7 @@ XRE_RunAppShell()
     nsCOMPtr<nsIAppShell> appShell(do_GetService(kAppShellCID));
     NS_ENSURE_TRUE(appShell, NS_ERROR_FAILURE);
 #if defined(XP_MACOSX)
-    {
+    if (XRE_UseNativeEventProcessing()) {
       // In content processes that want XPCOM (and hence want
       // AppShell), we usually run our hybrid event loop through
       // MessagePump::Run(), by way of nsBaseAppShell::Run().  The

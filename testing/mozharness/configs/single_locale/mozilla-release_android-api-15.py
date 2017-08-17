@@ -2,7 +2,7 @@ import os
 BRANCH = "mozilla-release"
 MOZ_UPDATE_CHANNEL = "release"
 MOZILLA_DIR = BRANCH
-OBJDIR = "obj-l10n"
+OBJDIR = "obj-firefox"
 EN_US_BINARY_URL = None
 HG_SHARE_BASE_DIR = "/builds/hg-shared"
 
@@ -58,7 +58,6 @@ config = {
     "ssh_key_dir": "~/.ssh",
     "merge_locales": True,
     "mozilla_dir": MOZILLA_DIR,
-    "mozconfig": "%s/mobile/android/config/mozconfigs/android-api-15/l10n-release" % MOZILLA_DIR,
     "signature_verification_script": "tools/release/signing/verify-android-signature.sh",
     "key_alias": "release",
     # Mock

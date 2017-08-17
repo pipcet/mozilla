@@ -8,7 +8,6 @@
 
 #include "xpcprivate.h"
 #include "xpc_make_class.h"
-#include "xpcIJSModuleLoader.h"
 #include "XPCJSWeakReference.h"
 #include "WrapperFactory.h"
 #include "nsJSUtils.h"
@@ -39,6 +38,7 @@
 #include "nsPIDOMWindow.h"
 #include "nsGlobalWindow.h"
 #include "nsScriptError.h"
+#include "GeckoProfiler.h"
 
 using namespace mozilla;
 using namespace JS;
@@ -1707,12 +1707,10 @@ nsXPCComponents_Exception::HasInstance(nsIXPConnectWrappedNative* wrapper,
 {
     using namespace mozilla::dom;
 
-    RootedValue v(cx, val);
     if (bp) {
-        Exception* e;
-        *bp = (v.isObject() &&
-               NS_SUCCEEDED(UNWRAP_OBJECT(Exception, &v.toObject(), e))) ||
-              JSValIsInterfaceOfType(cx, v, NS_GET_IID(nsIException));
+        *bp = (val.isObject() &&
+               IS_INSTANCE_OF(Exception, &val.toObject())) ||
+              JSValIsInterfaceOfType(cx, val, NS_GET_IID(nsIException));
     }
     return NS_OK;
 }
@@ -2404,16 +2402,12 @@ nsXPCComponents_Utils::EvalInSandbox(const nsAString& source,
         if (!bytes)
             return NS_ERROR_INVALID_ARG;
 
-        jsVersion = JS_StringToVersion(bytes.ptr());
-        // Explicitly check for "latest", which we support for sandboxes but
-        // isn't in the set of web-exposed version strings.
-        if (jsVersion == JSVERSION_UNKNOWN &&
-            !strcmp(bytes.ptr(), "latest"))
+        // Treat non-default version designation as default.
+        if (JS_StringToVersion(bytes.ptr()) == JSVERSION_UNKNOWN &&
+            strcmp(bytes.ptr(), "latest"))
         {
-            jsVersion = JSVERSION_LATEST;
-        }
-        if (jsVersion == JSVERSION_UNKNOWN)
             return NS_ERROR_INVALID_ARG;
+        }
     }
 
     // Optional fourth and fifth arguments: filename and line number.
@@ -2497,30 +2491,29 @@ nsXPCComponents_Utils::Import(const nsACString& registryLocation,
                               uint8_t optionalArgc,
                               MutableHandleValue retval)
 {
-    nsCOMPtr<xpcIJSModuleLoader> moduleloader =
-        do_GetService(MOZJSCOMPONENTLOADER_CONTRACTID);
-    if (!moduleloader)
-        return NS_ERROR_FAILURE;
+    RefPtr<mozJSComponentLoader> moduleloader = mozJSComponentLoader::Get();
+    MOZ_ASSERT(moduleloader);
+
+    const nsCString& flatLocation = PromiseFlatCString(registryLocation);
+    AUTO_PROFILER_LABEL_DYNAMIC("nsXPCComponents_Utils::Import", OTHER,
+                                flatLocation.get());
+
     return moduleloader->Import(registryLocation, targetObj, cx, optionalArgc, retval);
 }
 
 NS_IMETHODIMP
 nsXPCComponents_Utils::IsModuleLoaded(const nsACString& registryLocation, bool* retval)
 {
-    nsCOMPtr<xpcIJSModuleLoader> moduleloader =
-        do_GetService(MOZJSCOMPONENTLOADER_CONTRACTID);
-    if (!moduleloader)
-        return NS_ERROR_FAILURE;
+    RefPtr<mozJSComponentLoader> moduleloader = mozJSComponentLoader::Get();
+    MOZ_ASSERT(moduleloader);
     return moduleloader->IsModuleLoaded(registryLocation, retval);
 }
 
 NS_IMETHODIMP
 nsXPCComponents_Utils::Unload(const nsACString & registryLocation)
 {
-    nsCOMPtr<xpcIJSModuleLoader> moduleloader =
-        do_GetService(MOZJSCOMPONENTLOADER_CONTRACTID);
-    if (!moduleloader)
-        return NS_ERROR_FAILURE;
+    RefPtr<mozJSComponentLoader> moduleloader = mozJSComponentLoader::Get();
+    MOZ_ASSERT(moduleloader);
     return moduleloader->Unload(registryLocation);
 }
 
@@ -2533,7 +2526,7 @@ nsXPCComponents_Utils::ImportGlobalProperties(HandleValue aPropertyList,
 
     // Don't allow doing this if the global is a Window
     nsGlobalWindow* win;
-    if (NS_SUCCEEDED(UNWRAP_OBJECT(Window, global, win))) {
+    if (NS_SUCCEEDED(UNWRAP_OBJECT(Window, &global, win))) {
         return NS_ERROR_NOT_AVAILABLE;
     }
 
@@ -2626,7 +2619,11 @@ class PreciseGCRunnable : public Runnable
 {
   public:
     PreciseGCRunnable(ScheduledGCCallback* aCallback, bool aShrinking)
-    : mCallback(aCallback), mShrinking(aShrinking) {}
+      : mozilla::Runnable("PreciseGCRunnable")
+      , mCallback(aCallback)
+      , mShrinking(aShrinking)
+    {
+    }
 
     NS_IMETHOD Run() override
     {
@@ -3032,7 +3029,7 @@ nsXPCComponents_Utils::CrashIfNotInAutomation()
 NS_IMETHODIMP
 nsXPCComponents_Utils::NukeSandbox(HandleValue obj, JSContext* cx)
 {
-    PROFILER_LABEL_FUNC(js::ProfileEntry::Category::JS);
+    AUTO_PROFILER_LABEL("nsXPCComponents_Utils::NukeSandbox", JS);
     NS_ENSURE_TRUE(obj.isObject(), NS_ERROR_INVALID_ARG);
     JSObject* wrapper = &obj.toObject();
     NS_ENSURE_TRUE(IsWrapper(wrapper), NS_ERROR_INVALID_ARG);
@@ -3349,10 +3346,8 @@ nsXPCComponents_Utils::SetAddonCallInterposition(HandleValue target,
     RootedObject targetObj(cx, &target.toObject());
     targetObj = js::CheckedUnwrap(targetObj);
     NS_ENSURE_TRUE(targetObj, NS_ERROR_INVALID_ARG);
-    XPCWrappedNativeScope* xpcScope = ObjectScope(targetObj);
-    NS_ENSURE_TRUE(xpcScope, NS_ERROR_INVALID_ARG);
 
-    xpcScope->SetAddonCallInterposition();
+    xpc::CompartmentPrivate::Get(targetObj)->SetAddonCallInterposition();
     return NS_OK;
 }
 
@@ -3486,19 +3481,6 @@ nsXPCComponents::SetReturnCode(JSContext* aCx, HandleValue aCode)
         return NS_ERROR_FAILURE;
     XPCJSContext::Get()->SetPendingResult(rv);
     return NS_OK;
-}
-
-// static
-NS_IMETHODIMP nsXPCComponents::ReportError(HandleValue error, JSContext* cx)
-{
-    NS_WARNING("Components.reportError deprecated, use Components.utils.reportError");
-
-    nsCOMPtr<nsIXPCComponents_Utils> utils;
-    nsresult rv = GetUtils(getter_AddRefs(utils));
-    if (NS_FAILED(rv))
-        return rv;
-
-    return utils->ReportError(error, cx);
 }
 
 /**********************************************/

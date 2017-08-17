@@ -271,6 +271,7 @@ struct InputContext final
   InputContext()
     : mOrigin(XRE_IsParentProcess() ? ORIGIN_MAIN : ORIGIN_CONTENT)
     , mMayBeIMEUnaware(false)
+    , mInPrivateBrowsing(false)
   {
   }
 
@@ -308,6 +309,10 @@ struct InputContext final
    * compatibility with webapps relying on key listeners. */
   bool mMayBeIMEUnaware;
 
+  /* Whether the owning document of the input element has been loaded
+   * in private browsing mode. */
+  bool mInPrivateBrowsing;
+
   bool IsOriginMainProcess() const
   {
     return mOrigin == ORIGIN_MAIN;
@@ -326,6 +331,9 @@ struct InputContext final
     return IsOriginContentProcess();
   }
 };
+
+// FYI: Implemented in nsBaseWidget.cpp
+const char* ToChar(InputContext::Origin aOrigin);
 
 struct InputContextAction final
 {
@@ -598,8 +606,8 @@ struct IMENotification final
     {
       mX = aRect.x;
       mY = aRect.y;
-      mWidth = aRect.width;
-      mHeight = aRect.height;
+      mWidth = aRect.Width();
+      mHeight = aRect.Height();
     }
     nsIntRect AsIntRect() const
     {

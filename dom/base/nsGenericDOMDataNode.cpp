@@ -496,6 +496,9 @@ nsGenericDOMDataNode::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
     if (aParent->HasFlag(NODE_CHROME_ONLY_ACCESS)) {
       SetFlags(NODE_CHROME_ONLY_ACCESS);
     }
+    if (HasFlag(NODE_IS_ANONYMOUS_ROOT)) {
+      aParent->SetMayHaveAnonymousChildren();
+    }
     if (aParent->IsInShadowTree()) {
       ClearSubtreeRootPointer();
       SetFlags(NODE_IS_IN_SHADOW_TREE);
@@ -1106,11 +1109,12 @@ nsGenericDOMDataNode::GetAttributeChangeHint(const nsIAtom* aAttribute,
   return nsChangeHint(0);
 }
 
-size_t
-nsGenericDOMDataNode::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
+void
+nsGenericDOMDataNode::AddSizeOfExcludingThis(SizeOfState& aState,
+                                             nsStyleSizes& aSizes,
+                                             size_t* aNodeSize) const
 {
-  size_t n = nsIContent::SizeOfExcludingThis(aMallocSizeOf);
-  n += mText.SizeOfExcludingThis(aMallocSizeOf);
-  return n;
+  nsIContent::AddSizeOfExcludingThis(aState, aSizes, aNodeSize);
+  *aNodeSize += mText.SizeOfExcludingThis(aState.mMallocSizeOf);
 }
 

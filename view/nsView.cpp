@@ -66,8 +66,6 @@ nsView::~nsView()
 {
   MOZ_COUNT_DTOR(nsView);
 
-  bool printRelated = mViewManager && mViewManager->GetPrintRelated();
-
   while (GetFirstChild())
   {
     nsView* child = GetFirstChild();
@@ -119,18 +117,17 @@ nsView::~nsView()
   DestroyWidget();
 
   delete mDirtyRegion;
-
-  if (MOZ_UNLIKELY(mFrame)) {
-    gfxCriticalNoteOnce << "~nsView mFrame printRelated " << (printRelated ? "true" : "false");
-  }
-  MOZ_RELEASE_ASSERT(!mFrame);
 }
 
 class DestroyWidgetRunnable : public Runnable {
 public:
   NS_DECL_NSIRUNNABLE
 
-  explicit DestroyWidgetRunnable(nsIWidget* aWidget) : mWidget(aWidget) {}
+  explicit DestroyWidgetRunnable(nsIWidget* aWidget)
+    : mozilla::Runnable("DestroyWidgetRunnable")
+    , mWidget(aWidget)
+  {
+  }
 
 private:
   nsCOMPtr<nsIWidget> mWidget;

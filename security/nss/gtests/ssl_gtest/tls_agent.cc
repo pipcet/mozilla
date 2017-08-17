@@ -10,6 +10,7 @@
 #include "pk11func.h"
 #include "ssl.h"
 #include "sslerr.h"
+#include "sslexp.h"
 #include "sslproto.h"
 #include "tls_parser.h"
 
@@ -411,6 +412,13 @@ void TlsAgent::SetShortHeadersEnabled() {
   EXPECT_TRUE(EnsureTlsSetup());
 
   SECStatus rv = SSLInt_EnableShortHeaders(ssl_fd());
+  EXPECT_EQ(SECSuccess, rv);
+}
+
+void TlsAgent::SetAltHandshakeTypeEnabled() {
+  EXPECT_TRUE(EnsureTlsSetup());
+
+  SECStatus rv = SSL_UseAltServerHelloType(ssl_fd(), true);
   EXPECT_EQ(SECSuccess, rv);
 }
 
@@ -918,10 +926,10 @@ void TlsAgent::SendBuffer(const DataBuffer& buf) {
   }
 }
 
-void TlsAgent::ReadBytes() {
-  uint8_t block[1024];
+void TlsAgent::ReadBytes(size_t amount) {
+  uint8_t block[16384];
 
-  int32_t rv = PR_Read(ssl_fd(), block, sizeof(block));
+  int32_t rv = PR_Read(ssl_fd(), block, (std::min)(amount, sizeof(block)));
   LOGV("ReadBytes " << rv);
   int32_t err;
 

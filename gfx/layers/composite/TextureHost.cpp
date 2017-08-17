@@ -22,6 +22,8 @@
 #include "mozilla/layers/TextureClient.h"
 #include "mozilla/layers/GPUVideoTextureHost.h"
 #include "mozilla/layers/WebRenderTextureHost.h"
+#include "mozilla/webrender/RenderBufferTextureHost.h"
+#include "mozilla/webrender/RenderThread.h"
 #include "mozilla/webrender/WebRenderAPI.h"
 #include "nsAString.h"
 #include "mozilla/RefPtr.h"                   // for nsRefPtr
@@ -96,8 +98,7 @@ WrapWithWebRenderTextureHost(ISurfaceAllocator* aDeallocator,
                              LayersBackend aBackend,
                              TextureFlags aFlags)
 {
-  if (!gfxVars::UseWebRender() ||
-      (aFlags & TextureFlags::SNAPSHOT) ||
+  if ((aFlags & TextureFlags::SNAPSHOT) ||
       (aBackend != LayersBackend::LAYERS_WR) ||
       (!aDeallocator->UsesImageBridge() && !aDeallocator->AsCompositorBridgeParentBase())) {
     return false;
@@ -542,7 +543,7 @@ bool
 BufferTextureHost::Lock()
 {
   MOZ_ASSERT(!mLocked);
-  if (!MaybeUpload(!mNeedsFullUpdate ? &mMaybeUpdatedRegion : nullptr)) {
+  if (!UploadIfNeeded()) {
       return false;
   }
   mLocked = !!mFirstSource;
@@ -557,30 +558,89 @@ BufferTextureHost::Unlock()
 }
 
 void
+BufferTextureHost::CreateRenderTexture(const wr::ExternalImageId& aExternalImageId)
+{
+  RefPtr<wr::RenderTextureHost> texture =
+      new wr::RenderBufferTextureHost(GetBuffer(), GetBufferDescriptor());
+
+  wr::RenderThread::Get()->RegisterExternalImage(wr::AsUint64(aExternalImageId), texture.forget());
+}
+
+void
+BufferTextureHost::GetWRImageKeys(nsTArray<wr::ImageKey>& aImageKeys,
+                                  const std::function<wr::ImageKey()>& aImageKeyAllocator)
+{
+  MOZ_ASSERT(aImageKeys.IsEmpty());
+
+  if (GetFormat() != gfx::SurfaceFormat::YUV) {
+    // 1 image key
+    aImageKeys.AppendElement(aImageKeyAllocator());
+    MOZ_ASSERT(aImageKeys.Length() == 1);
+  } else {
+    // 3 image key
+    aImageKeys.AppendElement(aImageKeyAllocator());
+    aImageKeys.AppendElement(aImageKeyAllocator());
+    aImageKeys.AppendElement(aImageKeyAllocator());
+    MOZ_ASSERT(aImageKeys.Length() == 3);
+  }
+}
+
+void
 BufferTextureHost::AddWRImage(wr::WebRenderAPI* aAPI,
                               Range<const wr::ImageKey>& aImageKeys,
                               const wr::ExternalImageId& aExtID)
 {
-  MOZ_ASSERT(aImageKeys.length() == 1);
-  // XXX handling YUV
-  gfx::SurfaceFormat wrFormat =
-      (GetFormat() == gfx::SurfaceFormat::YUV) ? gfx::SurfaceFormat::B8G8R8A8
-                                               : GetFormat();
-  gfx::SurfaceFormat format = GetFormat();
-  uint32_t wrStride = 0;
+  if (GetFormat() != gfx::SurfaceFormat::YUV) {
+    MOZ_ASSERT(aImageKeys.length() == 1);
 
-  if (format == gfx::SurfaceFormat::YUV) {
-    // XXX this stride is used until yuv image rendering by webrender is used.
-    // Software converted RGB buffers strides are aliened to 16
-    wrStride = gfx::GetAlignedStride<16>(GetSize().width, BytesPerPixel(gfx::SurfaceFormat::B8G8R8A8));
+    wr::ImageDescriptor descriptor(GetSize(),
+                                   ImageDataSerializer::ComputeRGBStride(GetFormat(), GetSize().width),
+                                   GetFormat());
+    aAPI->AddExternalImageBuffer(aImageKeys[0], descriptor, aExtID);
   } else {
-    wrStride = ImageDataSerializer::ComputeRGBStride(format, GetSize().width);
-  }
+    MOZ_ASSERT(aImageKeys.length() == 3);
 
-  wr::ImageDescriptor descriptor(GetSize(), wrStride, wrFormat);
-  aAPI->AddExternalImageBuffer(aImageKeys[0],
-                               descriptor,
-                               aExtID);
+    const layers::YCbCrDescriptor& desc = mDescriptor.get_YCbCrDescriptor();
+    wr::ImageDescriptor yDescriptor(desc.ySize(), desc.ySize().width, gfx::SurfaceFormat::A8);
+    wr::ImageDescriptor cbcrDescriptor(desc.cbCrSize(), desc.cbCrSize().width, gfx::SurfaceFormat::A8);
+    aAPI->AddExternalImage(aImageKeys[0],
+                           yDescriptor,
+                           aExtID,
+                           wr::WrExternalImageBufferType::ExternalBuffer,
+                           0);
+    aAPI->AddExternalImage(aImageKeys[1],
+                           cbcrDescriptor,
+                           aExtID,
+                           wr::WrExternalImageBufferType::ExternalBuffer,
+                           1);
+    aAPI->AddExternalImage(aImageKeys[2],
+                           cbcrDescriptor,
+                           aExtID,
+                           wr::WrExternalImageBufferType::ExternalBuffer,
+                           2);
+  }
+}
+
+void
+BufferTextureHost::PushExternalImage(wr::DisplayListBuilder& aBuilder,
+                                     const wr::LayoutRect& aBounds,
+                                     const wr::LayoutRect& aClip,
+                                     wr::ImageRendering aFilter,
+                                     Range<const wr::ImageKey>& aImageKeys)
+{
+  if (GetFormat() != gfx::SurfaceFormat::YUV) {
+    MOZ_ASSERT(aImageKeys.length() == 1);
+    aBuilder.PushImage(aBounds, aClip, aFilter, aImageKeys[0]);
+  } else {
+    MOZ_ASSERT(aImageKeys.length() == 3);
+    aBuilder.PushYCbCrPlanarImage(aBounds,
+                                  aClip,
+                                  aImageKeys[0],
+                                  aImageKeys[1],
+                                  aImageKeys[2],
+                                  wr::WrYuvColorSpace::Rec601,
+                                  aFilter);
+  }
 }
 
 void
@@ -783,6 +843,16 @@ BufferTextureHost::BindTextureSource(CompositableTextureSourceRef& aTexture)
   return !!aTexture;
 }
 
+bool
+BufferTextureHost::AcquireTextureSource(CompositableTextureSourceRef& aTexture)
+{
+  if (!UploadIfNeeded()) {
+    return false;
+  }
+  aTexture = mFirstSource;
+  return !!mFirstSource;
+}
+
 void
 BufferTextureHost::UnbindTextureSource()
 {
@@ -823,6 +893,12 @@ BufferTextureHost::GetYUVColorSpace() const
     return desc.yUVColorSpace();
   }
   return YUVColorSpace::UNKNOWN;
+}
+
+bool
+BufferTextureHost::UploadIfNeeded()
+{
+  return MaybeUpload(!mNeedsFullUpdate ? &mMaybeUpdatedRegion : nullptr);
 }
 
 bool

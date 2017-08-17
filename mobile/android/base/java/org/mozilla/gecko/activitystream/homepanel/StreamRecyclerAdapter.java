@@ -7,6 +7,7 @@ package org.mozilla.gecko.activitystream.homepanel;
 
 import android.database.Cursor;
 import android.support.v7.widget.RecyclerView;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -21,6 +22,7 @@ import org.mozilla.gecko.activitystream.homepanel.stream.HighlightsTitle;
 import org.mozilla.gecko.activitystream.homepanel.stream.StreamItem;
 import org.mozilla.gecko.activitystream.homepanel.stream.TopPanel;
 import org.mozilla.gecko.activitystream.homepanel.stream.WelcomePanel;
+import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.widget.RecyclerViewClickSupport;
 
 import java.util.Collections;
@@ -28,14 +30,15 @@ import java.util.EnumSet;
 import java.util.List;
 
 public class StreamRecyclerAdapter extends RecyclerView.Adapter<StreamItem> implements RecyclerViewClickSupport.OnItemClickListener {
+    private static final String LOGTAG = StringUtils.safeSubstring("Gecko" + StreamRecyclerAdapter.class.getSimpleName(), 0, 23);
+
     private Cursor topSitesCursor;
 
     private HomePager.OnUrlOpenListener onUrlOpenListener;
     private HomePager.OnUrlOpenInBackgroundListener onUrlOpenInBackgroundListener;
 
     private int tiles;
-    private int tilesWidth;
-    private int tilesHeight;
+    private int tilesSize;
 
     private List<Highlight> highlights;
 
@@ -50,9 +53,8 @@ public class StreamRecyclerAdapter extends RecyclerView.Adapter<StreamItem> impl
         this.onUrlOpenInBackgroundListener = onUrlOpenInBackgroundListener;
     }
 
-    public void setTileSize(int tiles, int tilesWidth, int tilesHeight) {
-        this.tilesWidth = tilesWidth;
-        this.tilesHeight = tilesHeight;
+    public void setTileSize(int tiles, int tilesSize) {
+        this.tilesSize = tilesSize;
         this.tiles = tiles;
 
         notifyDataSetChanged();
@@ -108,9 +110,9 @@ public class StreamRecyclerAdapter extends RecyclerView.Adapter<StreamItem> impl
 
             final Highlight highlight = highlights.get(actualPosition);
 
-            ((HighlightItem) holder).bind(highlight, actualPosition, tilesWidth,  tilesHeight);
+            ((HighlightItem) holder).bind(highlight, actualPosition, tilesSize);
         } else if (type == TopPanel.LAYOUT_ID) {
-            ((TopPanel) holder).bind(topSitesCursor, tiles, tilesWidth, tilesHeight);
+            ((TopPanel) holder).bind(topSitesCursor, tiles, tilesSize);
         }
     }
 
@@ -118,6 +120,21 @@ public class StreamRecyclerAdapter extends RecyclerView.Adapter<StreamItem> impl
     public void onItemClicked(RecyclerView recyclerView, int position, View v) {
         if (getItemViewType(position) != HighlightItem.LAYOUT_ID) {
             // Headers (containing topsites and/or the highlights title) do their own click handling as needed
+            return;
+        }
+
+        // The position this method receives is from RecyclerView.ViewHolder.getAdapterPosition, whose docs state:
+        // "Note that if you've called notifyDataSetChanged(), until the next layout pass, the return value of this
+        // method will be NO_POSITION."
+        //
+        // At the time of writing, we call notifyDataSetChanged for:
+        // - swapHighlights (can't do anything about this)
+        // - setTileSize (in theory, we might be able to do something hacky to get the existing highlights list)
+        //
+        // Given the low crash rate (34 crashes in 23 days), I don't think it's worth investigating further
+        // or adding a hack.
+        if (position == RecyclerView.NO_POSITION) {
+            Log.w(LOGTAG, "onItemClicked: received NO_POSITION. Returning");
             return;
         }
 

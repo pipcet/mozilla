@@ -17,29 +17,29 @@ use render_handler::CefRenderHandlerExtensions;
 use types::{cef_cursor_handle_t, cef_cursor_type_t, cef_rect_t};
 use wrappers::CefWrap;
 
-use compositing::compositor_thread::{self, CompositorProxy, CompositorReceiver};
+use compositing::compositor_thread::EventLoopWaker;
 use compositing::windowing::{WindowEvent, WindowMethods};
-use euclid::point::{Point2D, TypedPoint2D};
-use euclid::rect::TypedRect;
-use euclid::scale_factor::ScaleFactor;
-use euclid::size::{Size2D, TypedSize2D};
+use euclid::{Point2D, TypedPoint2D, Size2D, TypedSize2D, ScaleFactor};
 use gleam::gl;
 use msg::constellation_msg::{Key, KeyModifiers};
 use net_traits::net_error_list::NetError;
-use script_traits::{DevicePixel, LoadData};
+use script_traits::LoadData;
+use servo::BrowserId;
+use servo::ipc_channel::ipc::IpcSender;
 use servo_geometry::DeviceIndependentPixel;
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::os::raw::{c_char, c_void};
 use std::ptr;
 use std::rc::Rc;
-use std::sync::mpsc::{Sender, channel};
 use servo_url::ServoUrl;
 use style_traits::cursor::Cursor;
+use style_traits::DevicePixel;
 #[cfg(target_os="linux")]
 extern crate x11;
 #[cfg(target_os="linux")]
 use self::x11::xlib::{XInitThreads,XOpenDisplay};
+use webrender_api::{DeviceUintSize, DeviceUintRect};
 
 #[cfg(target_os="linux")]
 pub static mut DISPLAY: *mut c_void = 0 as *mut c_void;
@@ -48,7 +48,7 @@ pub static mut DISPLAY: *mut c_void = 0 as *mut c_void;
 #[derive(Clone)]
 pub struct Window {
     cef_browser: RefCell<Option<CefBrowser>>,
-    size: TypedSize2D<u32, DevicePixel>,
+    size: DeviceUintSize,
     gl: Rc<gl::Gl>,
 }
 
@@ -176,7 +176,7 @@ impl WindowMethods for Window {
         self.gl.clone()
     }
 
-    fn framebuffer_size(&self) -> TypedSize2D<u32, DevicePixel> {
+    fn framebuffer_size(&self) -> DeviceUintSize {
         let browser = self.cef_browser.borrow();
         match *browser {
             None => self.size,
@@ -207,16 +207,16 @@ impl WindowMethods for Window {
                         }
                     }
 
-                    TypedSize2D::new(rect.width as u32, rect.height as u32)
+                    DeviceUintSize::new(rect.width as u32, rect.height as u32)
                 }
             }
         }
     }
 
-    fn window_rect(&self) -> TypedRect<u32, DevicePixel> {
+    fn window_rect(&self) -> DeviceUintRect {
         let size = self.framebuffer_size();
         let origin = TypedPoint2D::zero();
-        TypedRect::new(origin, size)
+        DeviceUintRect::new(origin, size)
     }
 
     fn size(&self) -> TypedSize2D<f32, DeviceIndependentPixel> {
@@ -234,7 +234,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn client_window(&self) -> (Size2D<u32>, Point2D<i32>) {
+    fn client_window(&self, _: BrowserId) -> (Size2D<u32>, Point2D<i32>) {
         let size = self.size().to_untyped();
         let width = size.width as u32;
         let height = size.height as u32;
@@ -242,15 +242,15 @@ impl WindowMethods for Window {
         (Size2D::new(width, height), Point2D::zero())
     }
 
-    fn set_inner_size(&self, _size: Size2D<u32>) {
+    fn set_inner_size(&self, _: BrowserId, _size: Size2D<u32>) {
 
     }
 
-    fn set_position(&self, _point: Point2D<i32>) {
+    fn set_position(&self, _: BrowserId, _point: Point2D<i32>) {
 
     }
 
-    fn set_fullscreen_state(&self, _state: bool) {
+    fn set_fullscreen_state(&self, _: BrowserId, _state: bool) {
     }
 
     fn present(&self) {
@@ -295,13 +295,17 @@ impl WindowMethods for Window {
         }
     }
 
-    fn create_compositor_channel(&self)
-                                 -> (Box<CompositorProxy+Send>, Box<CompositorReceiver>) {
-        let (sender, receiver) = channel();
-        (box CefCompositorProxy {
-             sender: sender,
-         } as Box<CompositorProxy+Send>,
-         box receiver as Box<CompositorReceiver>)
+    fn create_event_loop_waker(&self) -> Box<EventLoopWaker> {
+        struct CefEventLoopWaker;
+        impl EventLoopWaker for CefEventLoopWaker {
+            fn wake(&self) {
+                app_wakeup();
+            }
+            fn clone(&self) -> Box<EventLoopWaker + Send> {
+                box CefEventLoopWaker
+            }
+        }
+        box CefEventLoopWaker
     }
 
     fn prepare_for_composite(&self, width: usize, height: usize) -> bool {
@@ -324,7 +328,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn set_favicon(&self, url: ServoUrl) {
+    fn set_favicon(&self, _: BrowserId, url: ServoUrl) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
@@ -333,7 +337,7 @@ impl WindowMethods for Window {
         browser.downcast().favicons.borrow_mut().push(url.into_string());
     }
 
-    fn status(&self, info: Option<String>) {
+    fn status(&self, _: BrowserId, info: Option<String>) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
@@ -350,7 +354,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn load_start(&self) {
+    fn load_start(&self, _: BrowserId) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
@@ -369,7 +373,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn load_end(&self) {
+    fn load_end(&self, _: BrowserId) {
         // FIXME(pcwalton): The status code 200 is a lie.
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
@@ -395,7 +399,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn load_error(&self, code: NetError, url: String) {
+    fn load_error(&self, _: BrowserId, code: NetError, url: String) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
@@ -412,7 +416,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn head_parsed(&self) {
+    fn head_parsed(&self, _: BrowserId) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
@@ -424,7 +428,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn set_page_title(&self, string: Option<String>) {
+    fn set_page_title(&self, _: BrowserId, string: Option<String>) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
@@ -432,7 +436,6 @@ impl WindowMethods for Window {
         };
         let frame = browser.get_main_frame();
         let frame = frame.downcast();
-        let mut title_visitor = frame.title_visitor.borrow_mut();
         let str = match string {
             Some(s) => s.encode_utf16().collect(),
             None => vec![]
@@ -443,12 +446,10 @@ impl WindowMethods for Window {
             browser.get_host().get_client().get_display_handler().on_title_change((*browser).clone(), str.as_slice());
         }
 
-        if let Some(ref mut visitor) = *title_visitor {
-            visitor.visit(&str);
-        }
+        *frame.title.borrow_mut() = str;
     }
 
-    fn history_changed(&self, history: Vec<LoadData>, current: usize) {
+    fn history_changed(&self, _: BrowserId, history: Vec<LoadData>, current: usize) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
@@ -470,7 +471,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn handle_key(&self, _: Option<char>, _: Key, _: KeyModifiers) {
+    fn handle_key(&self, _: Option<BrowserId>, _: Option<char>, _: Key, _: KeyModifiers) {
         // TODO(negge)
     }
 
@@ -491,29 +492,14 @@ impl WindowMethods for Window {
         }
     }
 
-    fn allow_navigation(&self, _: ServoUrl) -> bool {
-        true
+    fn allow_navigation(&self, _: BrowserId, _: ServoUrl, response_chan: IpcSender<bool>) {
+        if let Err(e) = response_chan.send(true) {
+            warn!("Failed to send allow_navigation() response: {}", e);
+        };
     }
 
     fn supports_clipboard(&self) -> bool {
         false
-    }
-}
-
-struct CefCompositorProxy {
-    sender: Sender<compositor_thread::Msg>,
-}
-
-impl CompositorProxy for CefCompositorProxy {
-    fn send(&self, msg: compositor_thread::Msg) {
-        self.sender.send(msg).unwrap();
-        app_wakeup();
-    }
-
-    fn clone_compositor_proxy(&self) -> Box<CompositorProxy+Send> {
-        box CefCompositorProxy {
-            sender: self.sender.clone(),
-        } as Box<CompositorProxy+Send>
     }
 }
 

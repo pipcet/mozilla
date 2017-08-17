@@ -127,6 +127,7 @@ class TlsAgent : public PollTarget {
   void Set0RttEnabled(bool en);
   void SetFallbackSCSVEnabled(bool en);
   void SetShortHeadersEnabled();
+  void SetAltHandshakeTypeEnabled();
   void SetVersionRange(uint16_t minver, uint16_t maxver);
   void GetVersionRange(uint16_t* minver, uint16_t* maxver);
   void CheckPreliminaryInfo();
@@ -151,7 +152,7 @@ class TlsAgent : public PollTarget {
   void SendBuffer(const DataBuffer& buf);
   // Send data directly to the underlying socket, skipping the TLS layer.
   void SendDirect(const DataBuffer& buf);
-  void ReadBytes();
+  void ReadBytes(size_t max = 16384U);
   void ResetSentBytes();  // Hack to test drops.
   void EnableExtendedMasterSecret();
   void CheckExtendedMasterSecret(bool expected);

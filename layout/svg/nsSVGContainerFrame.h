@@ -33,7 +33,7 @@ struct nsRect;
  *                               *** WARNING ***
  *
  * Do *not* blindly cast to SVG element types in this class's methods (see the
- * warning comment for nsSVGDisplayContainerFrame below). 
+ * warning comment for nsSVGDisplayContainerFrame below).
  */
 class nsSVGContainerFrame : public nsContainerFrame
 {
@@ -82,7 +82,6 @@ public:
   }
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override {}
 
   virtual bool ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas) override;
@@ -132,7 +131,6 @@ public:
                    nsIFrame*         aPrevInFlow) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual bool IsSVGTransformed(Matrix *aOwnTransform = nullptr,

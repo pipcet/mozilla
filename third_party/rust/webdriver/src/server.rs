@@ -23,7 +23,7 @@ enum DispatchMessage<U: WebDriverExtensionRoute> {
     Quit
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Session {
     id: String
 }
@@ -41,6 +41,7 @@ pub trait WebDriverHandler<U: WebDriverExtensionRoute=VoidWebDriverExtensionRout
     fn delete_session(&mut self, session: &Option<Session>);
 }
 
+#[derive(Debug)]
 struct Dispatcher<T: WebDriverHandler<U>,
                   U: WebDriverExtensionRoute> {
     handler: T,
@@ -105,9 +106,8 @@ impl<T: WebDriverHandler<U>, U: WebDriverExtensionRoute> Dispatcher<T, U> {
                         if existing_session.id != *msg_session_id {
                             Err(WebDriverError::new(
                                 ErrorStatus::InvalidSessionId,
-                                format!("Got unexpected session id {} expected {}",
-                                        msg_session_id,
-                                        existing_session.id)))
+                                format!("Got unexpected session id {}",
+                                        msg_session_id)))
                         } else {
                             Ok(())
                         }
@@ -149,6 +149,7 @@ impl<T: WebDriverHandler<U>, U: WebDriverExtensionRoute> Dispatcher<T, U> {
     }
 }
 
+#[derive(Debug)]
 struct HttpHandler<U: WebDriverExtensionRoute> {
     chan: Mutex<Sender<DispatchMessage<U>>>,
     api: Mutex<WebDriverHttpApi<U>>
@@ -173,7 +174,7 @@ impl<U: WebDriverExtensionRoute> Handler for HttpHandler<U> {
             req.read_to_string(&mut body).unwrap();
         }
 
-        debug!("→ {} {} {}", req.method, req.uri, body);
+        debug!("-> {} {} {}", req.method, req.uri, body);
 
         match req.uri {
             AbsolutePath(path) => {
@@ -218,7 +219,7 @@ impl<U: WebDriverExtensionRoute> Handler for HttpHandler<U> {
                     Err(err) => (err.http_status(), err.to_json_string()),
                 };
 
-                debug!("← {} {}", status, resp_body);
+                debug!("<- {} {}", status, resp_body);
 
                 {
                     let resp_status = res.status_mut();

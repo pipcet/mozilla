@@ -19,10 +19,10 @@ const TEST_STRINGS = {
 describe("Localization Feed", () => {
   let feed;
   let globals;
-  before(() => {
-    globals = new GlobalOverrider();
-  });
+  let sandbox;
   beforeEach(() => {
+    globals = new GlobalOverrider();
+    sandbox = globals.sandbox;
     feed = new LocalizationFeed();
     feed.store = {dispatch: sinon.spy()};
   });
@@ -31,7 +31,8 @@ describe("Localization Feed", () => {
   });
 
   it("should fetch strings on init", async () => {
-    sinon.stub(feed, "updateLocale");
+    sandbox.stub(feed, "updateLocale");
+    sandbox.stub(global, "fetch");
     fetch.returns(Promise.resolve({json() { return Promise.resolve(TEST_STRINGS); }}));
 
     await feed.init();
@@ -47,6 +48,8 @@ describe("Localization Feed", () => {
 
     it("should dispatch with locale and strings for default", () => {
       const locale = DEFAULT_LOCALE;
+      sandbox.stub(global.Services.locale, "negotiateLanguages")
+        .returns([locale]);
       feed.updateLocale();
 
       assert.calledOnce(feed.store.dispatch);
@@ -57,7 +60,8 @@ describe("Localization Feed", () => {
     });
     it("should use strings for other locale", () => {
       const locale = "it";
-      global.Services.locale.getRequestedLocale.returns(locale);
+      sandbox.stub(global.Services.locale, "negotiateLanguages")
+        .returns([locale]);
 
       feed.updateLocale();
 
@@ -69,7 +73,8 @@ describe("Localization Feed", () => {
     });
     it("should use some fallback strings for partial locale", () => {
       const locale = "ru";
-      global.Services.locale.getRequestedLocale.returns(locale);
+      sandbox.stub(global.Services.locale, "negotiateLanguages")
+        .returns([locale]);
 
       feed.updateLocale();
 
@@ -84,8 +89,8 @@ describe("Localization Feed", () => {
     });
     it("should use all default strings for unknown locale", () => {
       const locale = "xyz";
-      global.Services.locale.getRequestedLocale.returns(locale);
-
+      sandbox.stub(global.Services.locale, "negotiateLanguages")
+        .returns([locale]);
       feed.updateLocale();
 
       assert.calledOnce(feed.store.dispatch);
@@ -115,14 +120,18 @@ describe("Localization Feed", () => {
 
   describe("#onAction", () => {
     it("should addObserver on INIT", () => {
+      const stub = sandbox.stub(global.Services.obs, "addObserver");
+
       feed.onAction({type: at.INIT});
 
-      assert.calledOnce(global.Services.obs.addObserver);
+      assert.calledOnce(stub);
     });
     it("should removeObserver on UNINIT", () => {
+      const stub = sandbox.stub(global.Services.obs, "removeObserver");
+
       feed.onAction({type: at.UNINIT});
 
-      assert.calledOnce(global.Services.obs.removeObserver);
+      assert.calledOnce(stub);
     });
   });
 });

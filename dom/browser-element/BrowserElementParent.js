@@ -172,7 +172,6 @@ BrowserElementParent.prototype = {
       "fullscreen-origin-change": this._fullscreenOriginChange,
       "exit-dom-fullscreen": this._exitDomFullscreen,
       "got-visible": this._gotDOMRequestResult,
-      "visibilitychange": this._childVisibilityChange,
       "got-set-input-method-active": this._gotDOMRequestResult,
       "scrollviewchange": this._handleScrollViewChange,
       "caretstatechanged": this._handleCaretStateChanged,
@@ -528,26 +527,6 @@ BrowserElementParent.prototype = {
     }
   },
 
-  setVisible: defineNoReturnMethod(function(visible) {
-    this._sendAsyncMsg('set-visible', {visible: visible});
-    this._frameLoader.visible = visible;
-  }),
-
-  getVisible: defineDOMRequestMethod('get-visible'),
-
-  setActive: defineNoReturnMethod(function(active) {
-    this._frameLoader.visible = active;
-  }),
-
-  getActive: function() {
-    if (!this._isAlive()) {
-      throw Components.Exception("Dead content process",
-                                 Cr.NS_ERROR_DOM_INVALID_STATE_ERR);
-    }
-
-    return this._frameLoader.visible;
-  },
-
   getChildProcessOffset: function() {
     let offset = { x: 0, y: 0 };
     let tabParent = this._frameLoader.tabParent;
@@ -880,21 +859,6 @@ BrowserElementParent.prototype = {
   _ownerVisibilityChange: function() {
     this._sendAsyncMsg('owner-visibility-change',
                        {visible: !this._window.document.hidden});
-  },
-
-  /*
-   * Called when the child notices that its visibility has changed.
-   *
-   * This is sometimes redundant; for example, the child's visibility may
-   * change in response to a setVisible request that we made here!  But it's
-   * not always redundant; for example, the child's visibility may change in
-   * response to its parent docshell being hidden.
-   */
-  _childVisibilityChange: function(data) {
-    debug("_childVisibilityChange(" + data.json.visible + ")");
-    this._frameLoader.visible = data.json.visible;
-
-    this._fireEventFromMsg(data);
   },
 
   _requestedDOMFullscreen: function() {

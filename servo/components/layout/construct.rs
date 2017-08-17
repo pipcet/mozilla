@@ -13,7 +13,7 @@
 
 #![deny(unsafe_code)]
 
-use StyleArc;
+use ServoArc;
 use app_units::Au;
 use block::BlockFlow;
 use context::{LayoutContext, with_thread_local_font_context};
@@ -52,7 +52,7 @@ use style::computed_values::content::ContentItem;
 use style::computed_values::position;
 use style::context::SharedStyleContext;
 use style::logical_geometry::Direction;
-use style::properties::ServoComputedValues;
+use style::properties::ComputedValues;
 use style::properties::longhands::list_style_image;
 use style::selector_parser::{PseudoElement, RestyleDamage};
 use style::servo::restyle_damage::{BUBBLE_ISIZES, RECONSTRUCT_FLOW};
@@ -109,7 +109,7 @@ pub enum ConstructionItem {
     /// Inline fragments and associated {ib} splits that have not yet found flows.
     InlineFragments(InlineFragmentsConstructionResult),
     /// Potentially ignorable whitespace.
-    Whitespace(OpaqueNode, PseudoElementType<()>, StyleArc<ServoComputedValues>, RestyleDamage),
+    Whitespace(OpaqueNode, PseudoElementType<()>, ServoArc<ComputedValues>, RestyleDamage),
     /// TableColumn Fragment
     TableColumnFragment(Fragment),
 }
@@ -677,7 +677,7 @@ impl<'a, ConcreteThreadSafeLayoutNode: ThreadSafeLayoutNode>
     fn create_fragments_for_node_text_content(&self,
                                               fragments: &mut IntermediateInlineFragments,
                                               node: &ConcreteThreadSafeLayoutNode,
-                                              style: &StyleArc<ServoComputedValues>) {
+                                              style: &ServoArc<ComputedValues>) {
         // Fast path: If there is no text content, return immediately.
         let text_content = node.text_content();
         if text_content.is_empty() {
@@ -1806,7 +1806,7 @@ pub fn strip_ignorable_whitespace_from_end(this: &mut LinkedList<Fragment>) {
 
 /// If the 'unicode-bidi' property has a value other than 'normal', return the bidi control codes
 /// to inject before and after the text content of the element.
-fn bidi_control_chars(style: &StyleArc<ServoComputedValues>) -> Option<(&'static str, &'static str)> {
+fn bidi_control_chars(style: &ServoArc<ComputedValues>) -> Option<(&'static str, &'static str)> {
     use style::computed_values::direction::T::*;
     use style::computed_values::unicode_bidi::T::*;
 
@@ -1851,7 +1851,7 @@ trait ComputedValueUtils {
     fn has_padding_or_border(&self) -> bool;
 }
 
-impl ComputedValueUtils for ServoComputedValues {
+impl ComputedValueUtils for ComputedValues {
     fn has_padding_or_border(&self) -> bool {
         let padding = self.get_padding();
         let border = self.get_border();
@@ -1860,10 +1860,10 @@ impl ComputedValueUtils for ServoComputedValues {
            !padding.padding_right.is_definitely_zero() ||
            !padding.padding_bottom.is_definitely_zero() ||
            !padding.padding_left.is_definitely_zero() ||
-           border.border_top_width != Au(0) ||
-           border.border_right_width != Au(0) ||
-           border.border_bottom_width != Au(0) ||
-           border.border_left_width != Au(0)
+           border.border_top_width.0 != Au(0) ||
+           border.border_right_width.0 != Au(0) ||
+           border.border_bottom_width.0 != Au(0) ||
+           border.border_left_width.0 != Au(0)
     }
 }
 
@@ -1921,7 +1921,7 @@ impl Legalizer {
     /// true for anonymous block children of flex flows.
     fn try_to_add_child(&mut self, context: &SharedStyleContext, parent: &mut FlowRef, child: &mut FlowRef)
                         -> bool {
-        let mut parent = self.stack.last_mut().unwrap_or(parent);
+        let parent = self.stack.last_mut().unwrap_or(parent);
         let (parent_class, child_class) = (parent.class(), child.class());
         match (parent_class, child_class) {
             (FlowClass::TableWrapper, FlowClass::Table) |
@@ -1962,7 +1962,7 @@ impl Legalizer {
                     } else {
                         IS_BLOCK_FLEX_ITEM
                     };
-                    let mut block = FlowRef::deref_mut(&mut block_wrapper).as_mut_block();
+                    let block = FlowRef::deref_mut(&mut block_wrapper).as_mut_block();
                     block.base.flags.insert(MARGINS_CANNOT_COLLAPSE);
                     block.fragment.flags.insert(flag);
                 }
@@ -1979,7 +1979,7 @@ impl Legalizer {
                     } else {
                         IS_BLOCK_FLEX_ITEM
                     };
-                    let mut block = FlowRef::deref_mut(child).as_mut_block();
+                    let block = FlowRef::deref_mut(child).as_mut_block();
                     block.base.flags.insert(MARGINS_CANNOT_COLLAPSE);
                     block.fragment.flags.insert(flag);
                 }

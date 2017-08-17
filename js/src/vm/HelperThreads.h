@@ -36,9 +36,9 @@ namespace js {
 class AutoLockHelperThreadState;
 class AutoUnlockHelperThreadState;
 class CompileError;
-class PromiseTask;
 struct HelperThread;
 struct ParseTask;
+struct PromiseHelperTask;
 namespace jit {
   class IonBuilder;
 } // namespace jit
@@ -76,7 +76,7 @@ class GlobalHelperThreadState
     typedef Vector<UniquePtr<SourceCompressionTask>, 0, SystemAllocPolicy> SourceCompressionTaskVector;
     typedef Vector<GCHelperState*, 0, SystemAllocPolicy> GCHelperStateVector;
     typedef Vector<GCParallelTask*, 0, SystemAllocPolicy> GCParallelTaskVector;
-    typedef Vector<PromiseTask*, 0, SystemAllocPolicy> PromiseTaskVector;
+    typedef Vector<PromiseHelperTask*, 0, SystemAllocPolicy> PromiseHelperTaskVector;
 
     // List of available threads, or null if the thread state has not been initialized.
     using HelperThreadVector = Vector<HelperThread, 0, SystemAllocPolicy>;
@@ -86,7 +86,7 @@ class GlobalHelperThreadState
     // The lists below are all protected by |lock|.
 
     // Ion compilation worklist and finished jobs.
-    IonBuilderVector ionWorklist_, ionFinishedList_;
+    IonBuilderVector ionWorklist_, ionFinishedList_, ionFreeList_;
 
     // wasm worklist and finished jobs.
     wasm::CompileTaskPtrVector wasmWorklist_, wasmFinishedList_;
@@ -99,7 +99,7 @@ class GlobalHelperThreadState
   private:
     // Async tasks that, upon completion, are dispatched back to the JSContext's
     // owner thread via embedding callbacks instead of a finished list.
-    PromiseTaskVector promiseTasks_;
+    PromiseHelperTaskVector promiseHelperTasks_;
 
     // Script parsing/emitting worklist and finished jobs.
     ParseTaskVector parseWorklist_, parseFinishedList_;
@@ -146,10 +146,14 @@ class GlobalHelperThreadState
 #endif
 
     enum CondVar {
-        // For notifying threads waiting for work that they may be able to make progress.
+        // For notifying threads waiting for work that they may be able to make
+        // progress, ie, a work item has been completed by a helper thread and
+        // the thread that created the work item can now consume it.
         CONSUMER,
 
-        // For notifying threads doing work that they may be able to make progress.
+        // For notifying helper threads doing the work that they may be able to
+        // make progress, ie, a work item has been enqueued and an idle helper
+        // thread may pick up up the work item and perform it.
         PRODUCER,
 
         // For notifying threads doing work which are paused that they may be
@@ -179,6 +183,9 @@ class GlobalHelperThreadState
     IonBuilderVector& ionFinishedList(const AutoLockHelperThreadState&) {
         return ionFinishedList_;
     }
+    IonBuilderVector& ionFreeList(const AutoLockHelperThreadState&) {
+        return ionFreeList_;
+    }
 
     wasm::CompileTaskPtrVector& wasmWorklist(const AutoLockHelperThreadState&) {
         return wasmWorklist_;
@@ -187,8 +194,8 @@ class GlobalHelperThreadState
         return wasmFinishedList_;
     }
 
-    PromiseTaskVector& promiseTasks(const AutoLockHelperThreadState&) {
-        return promiseTasks_;
+    PromiseHelperTaskVector& promiseHelperTasks(const AutoLockHelperThreadState&) {
+        return promiseHelperTasks_;
     }
 
     ParseTaskVector& parseWorklist(const AutoLockHelperThreadState&) {
@@ -222,8 +229,9 @@ class GlobalHelperThreadState
     }
 
     bool canStartWasmCompile(const AutoLockHelperThreadState& lock);
-    bool canStartPromiseTask(const AutoLockHelperThreadState& lock);
+    bool canStartPromiseHelperTask(const AutoLockHelperThreadState& lock);
     bool canStartIonCompile(const AutoLockHelperThreadState& lock);
+    bool canStartIonFreeTask(const AutoLockHelperThreadState& lock);
     bool canStartParseTask(const AutoLockHelperThreadState& lock);
     bool canStartCompressionTask(const AutoLockHelperThreadState& lock);
     bool canStartGCHelperTask(const AutoLockHelperThreadState& lock);
@@ -231,10 +239,14 @@ class GlobalHelperThreadState
 
     // Used by a major GC to signal processing enqueued compression tasks.
     void startHandlingCompressionTasks(const AutoLockHelperThreadState&);
+
+  private:
     void scheduleCompressionTasks(const AutoLockHelperThreadState&);
 
-    // Unlike the methods above, the value returned by this method can change
-    // over time, even if the helper thread state lock is held throughout.
+  public:
+    // Unlike the public methods above, the value returned by this method can
+    // change over time, even if the helper thread state lock is held
+    // throughout.
     bool pendingIonCompileHasSufficientPriority(const AutoLockHelperThreadState& lock);
 
     jit::IonBuilder* highestPriorityPendingIonCompile(const AutoLockHelperThreadState& lock,
@@ -306,7 +318,7 @@ class GlobalHelperThreadState
     void waitForAllThreads();
 
     template <typename T>
-    bool checkTaskThreadLimit(size_t maxThreads) const;
+    bool checkTaskThreadLimit(size_t maxThreads, bool isMaster = false) const;
 
   private:
 
@@ -340,6 +352,14 @@ HelperThreadState()
     return *gHelperThreadState;
 }
 
+typedef mozilla::Variant<jit::IonBuilder*,
+                         wasm::CompileTask*,
+                         PromiseHelperTask*,
+                         ParseTask*,
+                         SourceCompressionTask*,
+                         GCHelperState*,
+                         GCParallelTask*> HelperTaskUnion;
+
 /* Individual helper thread, one allocated per core. */
 struct HelperThread
 {
@@ -359,13 +379,7 @@ struct HelperThread
     mozilla::Atomic<bool, mozilla::Relaxed> pause;
 
     /* The current task being executed by this thread, if any. */
-    mozilla::Maybe<mozilla::Variant<jit::IonBuilder*,
-                                    wasm::CompileTask*,
-                                    PromiseTask*,
-                                    ParseTask*,
-                                    SourceCompressionTask*,
-                                    GCHelperState*,
-                                    GCParallelTask*>> currentTask;
+    mozilla::Maybe<HelperTaskUnion> currentTask;
 
     bool idle() const {
         return currentTask.isNothing();
@@ -416,8 +430,9 @@ struct HelperThread
     }
 
     void handleWasmWorkload(AutoLockHelperThreadState& locked);
-    void handlePromiseTaskWorkload(AutoLockHelperThreadState& locked);
+    void handlePromiseHelperTaskWorkload(AutoLockHelperThreadState& locked);
     void handleIonWorkload(AutoLockHelperThreadState& locked);
+    void handleIonFreeWorkload(AutoLockHelperThreadState& locked);
     void handleParseWorkload(AutoLockHelperThreadState& locked);
     void handleCompressionWorkload(AutoLockHelperThreadState& locked);
     void handleGCHelperWorkload(AutoLockHelperThreadState& locked);
@@ -464,13 +479,12 @@ CompileFunction(CompileTask* task, UniqueChars* error);
 }
 
 /*
- * If helper threads are available, start executing the given PromiseTask on a
- * helper thread, finishing back on the originating JSContext's owner thread. If
- * no helper threads are available, the PromiseTask is synchronously executed
- * and finished.
+ * If helper threads are available, call execute() then dispatchResolve() on the
+ * given task in a helper thread. If no helper threads are available, the given
+ * task is executed and resolved synchronously.
  */
 bool
-StartPromiseTask(JSContext* cx, UniquePtr<PromiseTask> task);
+StartOffThreadPromiseHelperTask(JSContext* cx, UniquePtr<PromiseHelperTask> task);
 
 /*
  * Schedule an Ion compilation for a script, given a builder which has been
@@ -479,13 +493,21 @@ StartPromiseTask(JSContext* cx, UniquePtr<PromiseTask> task);
 bool
 StartOffThreadIonCompile(JSContext* cx, jit::IonBuilder* builder);
 
+/*
+ * Schedule deletion of Ion compilation data.
+ */
+bool
+StartOffThreadIonFree(jit::IonBuilder* builder, const AutoLockHelperThreadState& lock);
+
 struct AllCompilations {};
 struct ZonesInState { JSRuntime* runtime; JS::Zone::GCState state; };
+struct CompilationsUsingNursery { JSRuntime* runtime; };
 
 using CompilationSelector = mozilla::Variant<JSScript*,
                                              JSCompartment*,
                                              ZonesInState,
                                              JSRuntime*,
+                                             CompilationsUsingNursery,
                                              AllCompilations>;
 
 /*
@@ -516,6 +538,12 @@ inline void
 CancelOffThreadIonCompile(JSRuntime* runtime)
 {
     CancelOffThreadIonCompile(CompilationSelector(runtime), true);
+}
+
+inline void
+CancelOffThreadIonCompilesUsingNurseryPointers(JSRuntime* runtime)
+{
+    CancelOffThreadIonCompile(CompilationSelector(CompilationsUsingNursery{runtime}), true);
 }
 
 inline void
@@ -759,6 +787,23 @@ class SourceCompressionTask
 
     void work();
     void complete();
+};
+
+// A PromiseHelperTask is an OffThreadPromiseTask that executes a single job on
+// a helper thread. Derived classes do their helper-thread work by implementing
+// execute().
+struct PromiseHelperTask : OffThreadPromiseTask
+{
+    PromiseHelperTask(JSContext* cx, Handle<PromiseObject*> promise)
+      : OffThreadPromiseTask(cx, promise)
+    {}
+
+    // To be called on a helper thread and implemented by the derived class.
+    virtual void execute() = 0;
+
+    // May be called in the absence of helper threads or off-thread promise
+    // support to synchronously execute and resolve a PromiseTask.
+    void executeAndResolve(JSContext* cx);
 };
 
 } /* namespace js */

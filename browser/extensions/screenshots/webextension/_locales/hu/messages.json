@@ -62,10 +62,19 @@
     "message": "Ez egy nem szabványos weblap, így nem készíthet róla képernyőképet."
   },
   "selfScreenshotErrorTitle": {
-    "message": "Nem készíthet képet a Firefox képernyőképek oldalról!"
+    "message": "Nem készíthet képet a Firefox Screenshots oldalról!"
+  },
+  "emptySelectionErrorTitle": {
+    "message": "A kijelölés túl kicsi"
+  },
+  "privateWindowErrorTitle": {
+    "message": "A képernyőképek le vannak tiltva Privát böngészésben"
+  },
+  "privateWindowErrorDetails": {
+    "message": "Sajnáljuk a kényelmetlenséget. Dolgozunk ezen a funkción a jövőbeli kiadásokhoz."
   },
   "genericErrorTitle": {
-    "message": "Húha! A Firefox képernyőképek megkergült."
+    "message": "Húha! A Firefox Screenshots megkergült."
   },
   "genericErrorDetails": {
     "message": "Nem vagyunk benne biztosak, hogy mi történt. Próbálja újra, vagy készítsen képet egy másik oldalról."
@@ -80,16 +89,16 @@
     "message": "Kattintson és húzzon, hogy csak a lap egy részét mentse el. Vagy csak rá is mutathat a kijelöléshez."
   },
   "tourHeaderThree": {
-    "message": "Ahogy tetszik"
-  },
-  "tourBodyThree": {
-    "message": "Mentse a kivágott képeket a webre a könnyebb megosztáshoz, vagy töltse le a számítógépére. Rá is kattinthat a Képernyőképek gombra, hogy megtalálja az összes képét."
-  },
-  "tourHeaderFour": {
     "message": "Mentsen ablakokat vagy teljes lapokat"
   },
-  "tourBodyFour": {
+  "tourBodyThree": {
     "message": "Válassza a jobb felső sarokban lévő gombokat, hogy egy látható területet mentsen az ablakból, vagy elmentsen egy teljes oldalt."
+  },
+  "tourHeaderFour": {
+    "message": "Ahogy tetszik"
+  },
+  "tourBodyFour": {
+    "message": "Mentse a kivágott képeket a webre a könnyebb megosztáshoz, vagy töltse le a számítógépére. Rá is kattinthat a Képernyőképek gombra, hogy megtalálja az összes képét."
   },
   "tourSkip": {
     "message": "Kihagyás"
@@ -115,9 +124,9 @@
     }
   },
   "termsAndPrivacyNoticeTermsLink": {
-    "message": "Feltételeibe"
+    "message": "Feltételekbe"
   },
   "termsAndPrivacyNoticyPrivacyLink": {
-    "message": "Adatvédelmi nyilatkozatába"
+    "message": "Adatvédelmi nyilatkozatba"
   }
 }

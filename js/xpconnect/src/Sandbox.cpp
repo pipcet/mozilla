@@ -35,6 +35,8 @@
 #include "mozilla/dom/IndexedDatabaseManager.h"
 #include "mozilla/dom/Fetch.h"
 #include "mozilla/dom/FileBinding.h"
+#include "mozilla/dom/MessageChannelBinding.h"
+#include "mozilla/dom/MessagePortBinding.h"
 #include "mozilla/dom/PromiseBinding.h"
 #include "mozilla/dom/RequestBinding.h"
 #include "mozilla/dom/ResponseBinding.h"
@@ -81,8 +83,6 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(SandboxPrivate)
   NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
 NS_INTERFACE_MAP_END
 
-const char kScriptSecurityManagerContractID[] = NS_SCRIPTSECURITYMANAGER_CONTRACTID;
-
 class nsXPCComponents_utils_Sandbox : public nsIXPCComponents_utils_Sandbox,
                                       public nsIXPCScriptable
 {
@@ -114,6 +114,10 @@ xpc::NewSandboxConstructor()
 static bool
 SandboxDump(JSContext* cx, unsigned argc, Value* vp)
 {
+    if (!nsContentUtils::DOMWindowDumpEnabled()) {
+        return true;
+    }
+
     CallArgs args = CallArgsFromVp(argc, vp);
 
     if (args.length() == 0)
@@ -546,7 +550,7 @@ sandbox_addProperty(JSContext* cx, HandleObject obj, HandleId id, HandleValue v)
 
 static const js::ClassOps SandboxClassOps = {
     nullptr, nullptr, nullptr, nullptr,
-    JS_EnumerateStandardClasses, JS_ResolveStandardClass,
+    nullptr, JS_NewEnumerateStandardClasses, JS_ResolveStandardClass,
     JS_MayResolveStandardClass,
     sandbox_finalize,
     nullptr, nullptr, nullptr, JS_GlobalObjectTraceHook,
@@ -571,7 +575,7 @@ static const js::Class SandboxClass = {
 // to do the work for this class.
 static const js::ClassOps SandboxWriteToProtoClassOps = {
     sandbox_addProperty, nullptr, nullptr, nullptr,
-    JS_EnumerateStandardClasses, JS_ResolveStandardClass,
+    nullptr, JS_NewEnumerateStandardClasses, JS_ResolveStandardClass,
     JS_MayResolveStandardClass,
     sandbox_finalize,
     nullptr, nullptr, nullptr, JS_GlobalObjectTraceHook,
@@ -873,11 +877,10 @@ xpc::SandboxProxyHandler::getOwnEnumerablePropertyKeys(JSContext* cx,
     return BaseProxyHandler::getOwnEnumerablePropertyKeys(cx, proxy, props);
 }
 
-bool
-xpc::SandboxProxyHandler::enumerate(JSContext* cx, JS::Handle<JSObject*> proxy,
-                                    JS::MutableHandle<JSObject*> objp) const
+JSObject*
+xpc::SandboxProxyHandler::enumerate(JSContext* cx, JS::Handle<JSObject*> proxy) const
 {
-    return BaseProxyHandler::enumerate(cx, proxy, objp);
+    return BaseProxyHandler::enumerate(cx, proxy);
 }
 
 bool
@@ -934,6 +937,8 @@ xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj)
             caches = true;
         } else if (!strcmp(name.ptr(), "FileReader")) {
             fileReader = true;
+        } else if (!strcmp(name.ptr(), "MessageChannel")) {
+            messageChannel = true;
         } else {
             JS_ReportErrorUTF8(cx, "Unknown property name: %s", name.ptr());
             return false;
@@ -1009,6 +1014,11 @@ xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj)
         return false;
 
     if (fileReader && !dom::FileReaderBinding::GetConstructorObject(cx))
+        return false;
+
+    if (messageChannel &&
+        (!dom::MessageChannelBinding::GetConstructorObject(cx) ||
+         !dom::MessagePortBinding::GetConstructorObject(cx)))
         return false;
 
     return true;
@@ -1288,8 +1298,7 @@ GetPrincipalOrSOP(JSContext* cx, HandleObject from, nsISupports** out)
     MOZ_ASSERT(out);
     *out = nullptr;
 
-    nsXPConnect* xpc = nsXPConnect::XPConnect();
-    nsISupports* native = xpc->GetNativeOfWrapper(cx, from);
+    nsCOMPtr<nsISupports> native = xpc::UnwrapReflectorToISupports(from);
 
     if (nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(native)) {
         sop.forget(out);
@@ -1697,16 +1706,20 @@ AssembleSandboxMemoryReporterName(JSContext* cx, nsCString& sandboxName)
     // Use a default name when the caller did not provide a sandboxName.
     if (sandboxName.IsEmpty())
         sandboxName = NS_LITERAL_CSTRING("[anonymous sandbox]");
+#ifndef DEBUG
+    // Adding the caller location is fairly expensive, so in non-debug builds,
+    // only add it if we don't have an explicit sandbox name.
+    else
+        return NS_OK;
+#endif
 
-    nsXPConnect* xpc = nsXPConnect::XPConnect();
     // Get the xpconnect native call context.
-    nsAXPCNativeCallContext* cc = nullptr;
-    xpc->GetCurrentNativeCallContext(&cc);
+    XPCCallContext* cc = XPCJSContext::Get()->GetCallContext();
     NS_ENSURE_TRUE(cc, NS_ERROR_INVALID_ARG);
 
     // Get the current source info from xpc.
     nsCOMPtr<nsIStackFrame> frame;
-    xpc->GetCurrentJSStack(getter_AddRefs(frame));
+    nsXPConnect::XPConnect()->GetCurrentJSStack(getter_AddRefs(frame));
 
     // Append the caller's location information.
     if (frame) {

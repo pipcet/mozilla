@@ -23,11 +23,12 @@ use std::borrow::ToOwned;
 use std::collections::LinkedList;
 use std::mem;
 use std::sync::Arc;
-use style::computed_values::{line_height, text_rendering, text_transform};
+use style::computed_values::{text_rendering, text_transform};
 use style::computed_values::{word_break, white_space};
 use style::logical_geometry::{LogicalSize, WritingMode};
-use style::properties::ServoComputedValues;
+use style::properties::ComputedValues;
 use style::properties::style_structs;
+use style::values::generics::text::LineHeight;
 use unicode_bidi as bidi;
 use unicode_script::{Script, get_script};
 
@@ -165,8 +166,8 @@ impl TextRunScanner {
                     white_space::T::pre_line => CompressionMode::CompressWhitespace,
                 };
                 text_transform = inherited_text_style.text_transform;
-                letter_spacing = inherited_text_style.letter_spacing.0;
-                word_spacing = inherited_text_style.word_spacing.0
+                letter_spacing = inherited_text_style.letter_spacing;
+                word_spacing = inherited_text_style.word_spacing.value()
                                .map(|lop| lop.to_hash_key())
                                .unwrap_or((Au(0), NotNaN::new(0.0).unwrap()));
                 text_rendering = inherited_text_style.text_rendering;
@@ -288,8 +289,8 @@ impl TextRunScanner {
             // example, `finally` with a wide `letter-spacing` renders as `f i n a l l y` and not
             // `ﬁ n a l l y`.
             let mut flags = ShapingFlags::empty();
-            match letter_spacing {
-                Some(Au(0)) | None => {}
+            match letter_spacing.value() {
+                Some(&Au(0)) | None => {}
                 Some(_) => flags.insert(IGNORE_LIGATURES_SHAPING_FLAG),
             }
             if text_rendering == text_rendering::T::optimizespeed {
@@ -300,7 +301,7 @@ impl TextRunScanner {
                 flags.insert(KEEP_ALL_FLAG);
             }
             let options = ShapingOptions {
-                letter_spacing: letter_spacing,
+                letter_spacing: letter_spacing.value().cloned(),
                 word_spacing: word_spacing,
                 script: Script::Common,
                 flags: flags,
@@ -435,7 +436,7 @@ fn bounding_box_for_run_metrics(metrics: &RunMetrics, writing_mode: WritingMode)
 ///
 /// `#[inline]` because often the caller only needs a few fields from the font metrics.
 #[inline]
-pub fn font_metrics_for_style(font_context: &mut FontContext, font_style: ::StyleArc<style_structs::Font>)
+pub fn font_metrics_for_style(font_context: &mut FontContext, font_style: ::ServoArc<style_structs::Font>)
                               -> FontMetrics {
     let fontgroup = font_context.layout_font_group_for_style(font_style);
     // FIXME(https://github.com/rust-lang/rust/issues/23338)
@@ -444,12 +445,12 @@ pub fn font_metrics_for_style(font_context: &mut FontContext, font_style: ::Styl
 }
 
 /// Returns the line block-size needed by the given computed style and font size.
-pub fn line_height_from_style(style: &ServoComputedValues, metrics: &FontMetrics) -> Au {
-    let font_size = style.get_font().font_size;
+pub fn line_height_from_style(style: &ComputedValues, metrics: &FontMetrics) -> Au {
+    let font_size = style.get_font().font_size.0;
     match style.get_inheritedtext().line_height {
-        line_height::T::Normal => metrics.line_gap,
-        line_height::T::Number(l) => font_size.scale_by(l),
-        line_height::T::Length(l) => l
+        LineHeight::Normal => metrics.line_gap,
+        LineHeight::Number(l) => font_size.scale_by(l.0),
+        LineHeight::Length(l) => l.0
     }
 }
 
@@ -459,7 +460,7 @@ fn split_first_fragment_at_newline_if_necessary(fragments: &mut LinkedList<Fragm
     }
 
     let new_fragment = {
-        let mut first_fragment = fragments.front_mut().unwrap();
+        let first_fragment = fragments.front_mut().unwrap();
         let string_before;
         let selection_before;
         {

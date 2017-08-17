@@ -6,49 +6,66 @@
 //! quickly whether it's worth to share style, and whether two different
 //! elements can indeed share the same style.
 
+use Atom;
+use bloom::StyleBloom;
 use context::{SelectorFlagsMap, SharedStyleContext};
 use dom::TElement;
-use element_state::*;
-use selectors::bloom::BloomFilter;
-use selectors::matching::StyleRelations;
+use servo_arc::Arc;
 use sharing::{StyleSharingCandidate, StyleSharingTarget};
-use stylearc::Arc;
 
-/// Determines, based on the results of selector matching, whether it's worth to
-/// try to share style with this element, that is, to try to insert the element
-/// in the chache.
-#[inline]
-pub fn relations_are_shareable(relations: &StyleRelations) -> bool {
-    use selectors::matching::*;
-    !relations.intersects(AFFECTED_BY_ID_SELECTOR |
-                          AFFECTED_BY_PSEUDO_ELEMENTS |
-                          AFFECTED_BY_STYLE_ATTRIBUTE)
-}
-
-/// Whether, given two elements, they have pointer-equal computed values.
+/// Whether styles may be shared across the children of the given parent elements.
+/// This is used to share style across cousins.
 ///
 /// Both elements need to be styled already.
-///
-/// This is used to know whether we can share style across cousins (if the two
-/// parents have the same style).
-pub fn same_computed_values<E>(first: Option<E>, second: Option<E>) -> bool
+pub fn can_share_style_across_parents<E>(first: Option<E>, second: Option<E>) -> bool
     where E: TElement,
 {
-    let (a, b) = match (first, second) {
+    let (first, second) = match (first, second) {
         (Some(f), Some(s)) => (f, s),
         _ => return false,
     };
 
-    let eq = Arc::ptr_eq(a.borrow_data().unwrap().styles().primary.values(),
-                         b.borrow_data().unwrap().styles().primary.values());
-    eq
+    debug_assert_ne!(first, second);
+
+    let first_data = first.borrow_data().unwrap();
+    let second_data = second.borrow_data().unwrap();
+
+    // If a parent element was already styled and we traversed past it without
+    // restyling it, that may be because our clever invalidation logic was able
+    // to prove that the styles of that element would remain unchanged despite
+    // changes to the id or class attributes. However, style sharing relies in
+    // the strong guarantee that all the classes and ids up the respective parent
+    // chains are identical. As such, if we skipped styling for one (or both) of
+    // the parents on this traversal, we can't share styles across cousins.
+    //
+    // This is a somewhat conservative check. We could tighten it by having the
+    // invalidation logic explicitly flag elements for which it ellided styling.
+    if first_data.restyle.traversed_without_styling() ||
+       second_data.restyle.traversed_without_styling() {
+        return false;
+    }
+
+    let same_computed_values =
+        Arc::ptr_eq(first_data.styles.primary(), second_data.styles.primary());
+
+    same_computed_values
 }
 
-/// Whether a given element has presentational hints.
-///
-/// We consider not worth to share style with an element that has presentational
-/// hints, both because implementing the code that compares that the hints are
-/// equal is somewhat annoying, and also because it'd be expensive enough.
+/// Whether two elements have the same same style attribute (by pointer identity).
+pub fn have_same_style_attribute<E>(
+    target: &mut StyleSharingTarget<E>,
+    candidate: &mut StyleSharingCandidate<E>
+) -> bool
+    where E: TElement,
+{
+    match (target.style_attribute(), candidate.style_attribute()) {
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+        (Some(a), Some(b)) => &*a as *const _ == &*b as *const _
+    }
+}
+
+/// Whether two elements have the same same presentational attributes.
 pub fn have_same_presentational_hints<E>(
     target: &mut StyleSharingTarget<E>,
     candidate: &mut StyleSharingCandidate<E>
@@ -69,20 +86,6 @@ pub fn have_same_class<E>(target: &mut StyleSharingTarget<E>,
     target.class_list() == candidate.class_list()
 }
 
-/// Compare element and candidate state, but ignore visitedness.  Styles don't
-/// actually changed based on visitedness (since both possibilities are computed
-/// up front), so it's safe to share styles if visitedness differs.
-pub fn have_same_state_ignoring_visitedness<E>(element: E,
-                                               candidate: &StyleSharingCandidate<E>)
-                                               -> bool
-    where E: TElement,
-{
-    let state_mask = !IN_VISITED_OR_UNVISITED_STATE;
-    let state = element.get_state() & state_mask;
-    let candidate_state = candidate.element.get_state() & state_mask;
-    state == candidate_state
-}
-
 /// Whether a given element and a candidate match the same set of "revalidation"
 /// selectors.
 ///
@@ -93,7 +96,7 @@ pub fn have_same_state_ignoring_visitedness<E>(element: E,
 pub fn revalidate<E>(target: &mut StyleSharingTarget<E>,
                      candidate: &mut StyleSharingCandidate<E>,
                      shared_context: &SharedStyleContext,
-                     bloom: &BloomFilter,
+                     bloom: &StyleBloom<E>,
                      selector_flags_map: &mut SelectorFlagsMap<E>)
                      -> bool
     where E: TElement,
@@ -111,4 +114,29 @@ pub fn revalidate<E>(target: &mut StyleSharingTarget<E>,
     debug_assert_eq!(for_element.len(), for_candidate.len());
 
     for_element == for_candidate
+}
+
+/// Checks whether we might have rules for either of the two ids.
+#[inline]
+pub fn may_have_rules_for_ids(shared_context: &SharedStyleContext,
+                              element_id: Option<&Atom>,
+                              candidate_id: Option<&Atom>) -> bool
+{
+    // We shouldn't be called unless the ids are different.
+    debug_assert!(element_id.is_some() || candidate_id.is_some());
+    let stylist = &shared_context.stylist;
+
+    let may_have_rules_for_element = match element_id {
+        Some(id) => stylist.may_have_rules_for_id(id),
+        None => false
+    };
+
+    if may_have_rules_for_element {
+        return true;
+    }
+
+    match candidate_id {
+        Some(id) => stylist.may_have_rules_for_id(id),
+        None => false
+    }
 }

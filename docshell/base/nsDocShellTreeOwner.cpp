@@ -42,9 +42,7 @@
 #include "nsIDOMHTMLInputElement.h"
 #include "nsIDOMHTMLTextAreaElement.h"
 #include "nsIDOMHTMLHtmlElement.h"
-#include "nsIDOMHTMLAppletElement.h"
 #include "nsIDOMHTMLObjectElement.h"
-#include "nsIDOMHTMLEmbedElement.h"
 #include "nsIDOMHTMLDocument.h"
 #include "nsIImageLoadingContent.h"
 #include "nsIWebNavigation.h"
@@ -994,20 +992,8 @@ nsDocShellTreeOwner::HandleEvent(nsIDOMEvent* aEvent)
           if (webBrowserChrome) {
             nsCOMPtr<nsITabChild> tabChild = do_QueryInterface(webBrowserChrome);
             if (tabChild) {
-              nsCOMPtr<nsIDOMDataTransfer> domDataTransfer;
-              dragEvent->GetDataTransfer(getter_AddRefs(domDataTransfer));
-              NS_ENSURE_TRUE(domDataTransfer, NS_ERROR_UNEXPECTED);
-              nsCOMPtr<nsIDOMNode> domSourceNode;
-              domDataTransfer->GetMozSourceNode(getter_AddRefs(domSourceNode));
-              nsCOMPtr<nsINode> sourceNode = do_QueryInterface(domSourceNode);
-              nsCOMPtr<nsIPrincipal> triggeringPrincipal;
-              if (sourceNode) {
-                triggeringPrincipal = sourceNode->NodePrincipal();
-              } else {
-                triggeringPrincipal = NullPrincipal::Create();
-              }
-              nsresult rv = tabChild->RemoteDropLinks(linksCount, links,
-                                                      triggeringPrincipal);
+              // Bug 1370843 - Explicitly pass triggeringPrincipal
+              nsresult rv = tabChild->RemoteDropLinks(linksCount, links);
               for (uint32_t i = 0; i < linksCount; i++) {
                 NS_RELEASE(links[i]);
               }
@@ -1272,10 +1258,12 @@ ChromeTooltipListener::MouseMove(nsIDOMEvent* aMouseEvent)
         }
       }
       if (mPossibleTooltipNode) {
-        nsresult rv = mTooltipTimer->InitWithFuncCallback(
-          sTooltipCallback, this,
+        nsresult rv = mTooltipTimer->InitWithNamedFuncCallback(
+          sTooltipCallback,
+          this,
           LookAndFeel::GetInt(LookAndFeel::eIntID_TooltipDelay, 500),
-          nsITimer::TYPE_ONE_SHOT);
+          nsITimer::TYPE_ONE_SHOT,
+          "ChromeTooltipListener::MouseMove");
         if (NS_FAILED(rv)) {
           mPossibleTooltipNode = nullptr;
         }
@@ -1393,18 +1381,15 @@ ChromeTooltipListener::sTooltipCallback(nsITimer* aTimer,
     // if there is text associated with the node, show the tip and fire
     // off a timer to auto-hide it.
 
-    nsXPIDLString tooltipText;
-    nsXPIDLString directionText;
     if (self->mTooltipTextProvider) {
+      nsString tooltipText;
+      nsString directionText;
       bool textFound = false;
-
       self->mTooltipTextProvider->GetNodeText(
         self->mPossibleTooltipNode, getter_Copies(tooltipText),
         getter_Copies(directionText), &textFound);
 
       if (textFound) {
-        nsString tipText(tooltipText);
-        nsString dirText(directionText);
         LayoutDeviceIntPoint screenDot = widget->WidgetToScreenOffset();
         double scaleFactor = 1.0;
         if (shell->GetPresContext()) {
@@ -1415,7 +1400,7 @@ ChromeTooltipListener::sTooltipCallback(nsITimer* aTimer,
         // ShowTooltip expects widget-relative position.
         self->ShowTooltip(self->mMouseScreenX - screenDot.x / scaleFactor,
                           self->mMouseScreenY - screenDot.y / scaleFactor,
-                          tipText, dirText);
+                          tooltipText, directionText);
       }
     }
 
@@ -1559,10 +1544,10 @@ ChromeContextMenuListener::HandleEvent(nsIDOMEvent* aMouseEvent)
 
   // First, checks for nodes that never have children.
   if (nodeType == nsIDOMNode::ELEMENT_NODE) {
-    nsCOMPtr<nsIImageLoadingContent> content(do_QueryInterface(node));
-    if (content) {
+    nsCOMPtr<nsIImageLoadingContent> imageContent(do_QueryInterface(node));
+    if (imageContent) {
       nsCOMPtr<nsIURI> imgUri;
-      content->GetCurrentURI(getter_AddRefs(imgUri));
+      imageContent->GetCurrentURI(getter_AddRefs(imgUri));
       if (imgUri) {
         flags |= nsIContextMenuListener::CONTEXT_IMAGE;
         flags2 |= nsIContextMenuListener2::CONTEXT_IMAGE;
@@ -1594,17 +1579,16 @@ ChromeContextMenuListener::HandleEvent(nsIDOMEvent* aMouseEvent)
       }
     }
 
-    // always consume events for plugins and Java who may throw their
-    // own context menus but not for image objects.  Document objects
-    // will never be targets or ancestors of targets, so that's OK.
+    // always consume events for plugins who may throw their own context menus
+    // but not for image objects. Document objects will never be targets or
+    // ancestors of targets, so that's OK.
     nsCOMPtr<nsIDOMHTMLObjectElement> objectElement;
     if (!(flags & nsIContextMenuListener::CONTEXT_IMAGE)) {
       objectElement = do_QueryInterface(node);
     }
-    nsCOMPtr<nsIDOMHTMLEmbedElement> embedElement(do_QueryInterface(node));
-    nsCOMPtr<nsIDOMHTMLAppletElement> appletElement(do_QueryInterface(node));
 
-    if (objectElement || embedElement || appletElement) {
+    nsCOMPtr<nsIContent> content = do_QueryInterface(node);
+    if (objectElement || (content && content->IsHTMLElement(nsGkAtoms::embed))) {
       return NS_OK;
     }
   }

@@ -394,7 +394,7 @@ SSL_IMPORT SECStatus SSL_SignaturePrefGet(
 ** can be set or retrieved using SSL_SignatureSchemePrefSet or
 ** SSL_SignatureSchemePrefGet.
 */
-SSL_IMPORT unsigned int SSL_SignatureMaxCount();
+SSL_IMPORT unsigned int SSL_SignatureMaxCount(void);
 
 /*
 ** Define custom priorities for EC and FF groups used in DH key exchange and EC
@@ -942,6 +942,9 @@ SSL_ConfigSecureServerWithCertChain(PRFileDesc *fd, CERTCertificate *cert,
 ** associated with a configured certificate to perform session ticket
 ** encryption.  If this function isn't used, the keys provided with a configured
 ** RSA certificate are used for wrapping session ticket keys.
+**
+** NOTE: This key is used for all self-encryption but is named for
+** session tickets for historical reasons.
 */
 SSL_IMPORT SECStatus
 SSL_SetSessionTicketKeyPair(SECKEYPublicKey *pubKey, SECKEYPrivateKey *privKey);
@@ -1371,6 +1374,13 @@ extern const char *NSSSSL_GetVersion(void);
  */
 SSL_IMPORT SECStatus SSL_AuthCertificateComplete(PRFileDesc *fd,
                                                  PRErrorCode error);
+
+/*
+ * This is used to access experimental APIs.  Don't call this directly.  This is
+ * used to enable the experimental APIs that are defined in "sslexp.h".
+ */
+SSL_IMPORT void *SSL_GetExperimentalAPI(const char *name);
+
 SEC_END_PROTOS
 
 #endif /* __ssl_h_ */

@@ -6,6 +6,7 @@
 #include "nsNativeAppSupportBase.h"
 #include "nsNativeAppSupportWin.h"
 #include "nsAppRunner.h"
+#include "nsContentUtils.h"
 #include "nsXULAppAPI.h"
 #include "nsString.h"
 #include "nsIBrowserDOMWindow.h"
@@ -988,7 +989,7 @@ nsNativeAppSupportWin::HandleDDENotification( UINT uType,       // transaction t
                             break;
                         }
                         // And from the base window we can get the title.
-                        nsXPIDLString title;
+                        nsString title;
                         if(!baseWindow) {
                             break;
                         }
@@ -1463,6 +1464,7 @@ nsNativeAppSupportWin::OpenBrowserWindow()
             rv = bwin->OpenURI( uri, 0,
                                 nsIBrowserDOMWindow::OPEN_DEFAULTWINDOW,
                                 nsIBrowserDOMWindow::OPEN_EXTERNAL,
+                                nsContentUtils::GetSystemPrincipal(),
                                 getter_AddRefs( container ) );
             if ( NS_SUCCEEDED( rv ) )
               return NS_OK;

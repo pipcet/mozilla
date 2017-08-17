@@ -36,160 +36,90 @@ struct ParamTraits<mozilla::wr::ByteBuffer>
 };
 
 template<>
-struct ParamTraits<mozilla::wr::ImageKey>
+struct ParamTraits<mozilla::wr::IdNamespace>
+  : public PlainOldDataSerializer<mozilla::wr::IdNamespace>
 {
-  static void
-  Write(Message* aMsg, const mozilla::wr::ImageKey& aParam)
-  {
-    WriteParam(aMsg, aParam.mNamespace);
-    WriteParam(aMsg, aParam.mHandle);
-  }
+};
 
-  static bool
-  Read(const Message* aMsg, PickleIterator* aIter, mozilla::wr::ImageKey* aResult)
-  {
-    return ReadParam(aMsg, aIter, &aResult->mNamespace)
-        && ReadParam(aMsg, aIter, &aResult->mHandle);
-  }
+template<>
+struct ParamTraits<mozilla::wr::ImageKey>
+  : public PlainOldDataSerializer<mozilla::wr::ImageKey>
+{
 };
 
 template<>
 struct ParamTraits<mozilla::wr::FontKey>
+  : public PlainOldDataSerializer<mozilla::wr::FontKey>
 {
-  static void
-  Write(Message* aMsg, const mozilla::wr::FontKey& aParam)
-  {
-    WriteParam(aMsg, aParam.mNamespace);
-    WriteParam(aMsg, aParam.mHandle);
-  }
-
-  static bool
-  Read(const Message* aMsg, PickleIterator* aIter, mozilla::wr::FontKey* aResult)
-  {
-    return ReadParam(aMsg, aIter, &aResult->mNamespace)
-        && ReadParam(aMsg, aIter, &aResult->mHandle);
-  }
 };
 
 template<>
 struct ParamTraits<mozilla::wr::ExternalImageId>
+  : public PlainOldDataSerializer<mozilla::wr::ExternalImageId>
 {
-  static void
-  Write(Message* aMsg, const mozilla::wr::ExternalImageId& aParam)
-  {
-    WriteParam(aMsg, aParam.mHandle);
-  }
-
-  static bool
-  Read(const Message* aMsg, PickleIterator* aIter, mozilla::wr::ExternalImageId* aResult)
-  {
-    return ReadParam(aMsg, aIter, &aResult->mHandle);
-  }
 };
 
 template<>
 struct ParamTraits<mozilla::wr::PipelineId>
+  : public PlainOldDataSerializer<mozilla::wr::PipelineId>
 {
-  static void
-  Write(Message* aMsg, const mozilla::wr::PipelineId& aParam)
-  {
-    WriteParam(aMsg, aParam.mNamespace);
-    WriteParam(aMsg, aParam.mHandle);
-  }
-
-  static bool
-  Read(const Message* aMsg, PickleIterator* aIter, mozilla::wr::PipelineId* aResult)
-  {
-    return ReadParam(aMsg, aIter, &aResult->mNamespace)
-        && ReadParam(aMsg, aIter, &aResult->mHandle);
-  }
 };
 
 template<>
-struct ParamTraits<WrImageFormat>
+struct ParamTraits<mozilla::wr::ImageFormat>
   : public ContiguousEnumSerializer<
-        WrImageFormat,
-        WrImageFormat::Invalid,
-        WrImageFormat::Sentinel>
+        mozilla::wr::ImageFormat,
+        mozilla::wr::ImageFormat::Invalid,
+        mozilla::wr::ImageFormat::Sentinel>
 {
 };
 
 template<>
-struct ParamTraits<WrSize>
+struct ParamTraits<mozilla::wr::LayoutSize>
+  : public PlainOldDataSerializer<mozilla::wr::LayoutSize>
 {
-  static void
-  Write(Message* aMsg, const WrSize& aParam)
-  {
-    WriteParam(aMsg, aParam.width);
-    WriteParam(aMsg, aParam.height);
-  }
-
-  static bool
-  Read(const Message* aMsg, PickleIterator* aIter, WrSize* aResult)
-  {
-    return ReadParam(aMsg, aIter, &aResult->width)
-        && ReadParam(aMsg, aIter, &aResult->height);
-  }
 };
 
 template<>
-struct ParamTraits<WrRect>
+struct ParamTraits<mozilla::wr::LayoutRect>
+  : public PlainOldDataSerializer<mozilla::wr::LayoutRect>
 {
-  static void
-  Write(Message* aMsg, const WrRect& aParam)
-  {
-    WriteParam(aMsg, aParam.x);
-    WriteParam(aMsg, aParam.y);
-    WriteParam(aMsg, aParam.width);
-    WriteParam(aMsg, aParam.height);
-  }
-
-  static bool
-  Read(const Message* aMsg, PickleIterator* aIter, WrRect* aResult)
-  {
-    return ReadParam(aMsg, aIter, &aResult->x)
-        && ReadParam(aMsg, aIter, &aResult->y)
-        && ReadParam(aMsg, aIter, &aResult->width)
-        && ReadParam(aMsg, aIter, &aResult->height);
-  }
 };
 
 template<>
-struct ParamTraits<WrPoint>
+struct ParamTraits<mozilla::wr::LayoutPoint>
+  : public PlainOldDataSerializer<mozilla::wr::LayoutPoint>
 {
-  static void
-  Write(Message* aMsg, const WrPoint& aParam)
-  {
-    WriteParam(aMsg, aParam.x);
-    WriteParam(aMsg, aParam.y);
-  }
-
-  static bool
-  Read(const Message* aMsg, PickleIterator* aIter, WrPoint* aResult)
-  {
-    return ReadParam(aMsg, aIter, &aResult->x) &&
-           ReadParam(aMsg, aIter, &aResult->y);
-  }
 };
 
 template<>
-struct ParamTraits<WrBuiltDisplayListDescriptor>
+struct ParamTraits<mozilla::wr::WrImageMask>
+  : public PlainOldDataSerializer<mozilla::wr::WrImageMask>
 {
-  static void
-  Write(Message* aMsg, const WrBuiltDisplayListDescriptor& aParam)
-  {
-    WriteParam(aMsg, aParam.display_list_items_size);
-    WriteParam(aMsg, aParam.builder_start_time);
-    WriteParam(aMsg, aParam.builder_finish_time);
-  }
+};
 
-  static bool
-  Read(const Message* aMsg, PickleIterator* aIter, WrBuiltDisplayListDescriptor* aResult)
-  {
-    return ReadParam(aMsg, aIter, &aResult->display_list_items_size)
-        && ReadParam(aMsg, aIter, &aResult->builder_start_time)
-        && ReadParam(aMsg, aIter, &aResult->builder_finish_time);
-  }
+template<>
+struct ParamTraits<mozilla::wr::ImageRendering>
+  : public ContiguousEnumSerializer<
+        mozilla::wr::ImageRendering,
+        mozilla::wr::ImageRendering::Auto,
+        mozilla::wr::ImageRendering::Sentinel>
+{
+};
+
+template<>
+struct ParamTraits<mozilla::wr::MixBlendMode>
+  : public ContiguousEnumSerializer<
+        mozilla::wr::MixBlendMode,
+        mozilla::wr::MixBlendMode::Normal,
+        mozilla::wr::MixBlendMode::Sentinel>
+{
+};
+
+template<>
+struct ParamTraits<mozilla::wr::BuiltDisplayListDescriptor>
+  : public PlainOldDataSerializer<mozilla::wr::BuiltDisplayListDescriptor>
+{
 };
 
 } // namespace IPC

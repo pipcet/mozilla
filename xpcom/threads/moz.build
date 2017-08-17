@@ -11,6 +11,7 @@ XPIDL_SOURCES += [
     'nsINamed.idl',
     'nsIProcess.idl',
     'nsIRunnable.idl',
+    'nsISerialEventTarget.idl',
     'nsISupportsPriority.idl',
     'nsIThread.idl',
     'nsIThreadInternal.idl',
@@ -35,17 +36,18 @@ EXPORTS += [
 
 EXPORTS.mozilla += [
     'AbstractThread.h',
-    'BackgroundHangMonitor.h',
     'BlockingResourceBase.h',
     'CondVar.h',
     'DeadlockDetector.h',
     'HangAnnotations.h',
     'HangMonitor.h',
+    'IdleTaskRunner.h',
     'LazyIdleThread.h',
     'MainThreadIdlePeriod.h',
     'Monitor.h',
     'MozPromise.h',
     'Mutex.h',
+    'RecursiveMutex.h',
     'ReentrantMonitor.h',
     'RWLock.h',
     'SchedulerGroup.h',
@@ -60,12 +62,16 @@ EXPORTS.mozilla += [
     'ThrottledEventQueue.h',
 ]
 
+SOURCES += [
+    'IdleTaskRunner.cpp',
+]
+
 UNIFIED_SOURCES += [
     'AbstractThread.cpp',
-    'BackgroundHangMonitor.cpp',
     'BlockingResourceBase.cpp',
     'HangAnnotations.cpp',
     'HangMonitor.cpp',
+    'InputEventStatistics.cpp',
     'LazyIdleThread.cpp',
     'MainThreadIdlePeriod.cpp',
     'nsEnvironment.cpp',
@@ -78,12 +84,12 @@ UNIFIED_SOURCES += [
     'nsThreadPool.cpp',
     'nsThreadUtils.cpp',
     'nsTimerImpl.cpp',
+    'RecursiveMutex.cpp',
     'RWLock.cpp',
     'SchedulerGroup.cpp',
     'SharedThreadPool.cpp',
     'SystemGroup.cpp',
     'TaskQueue.cpp',
-    'ThreadStackHelper.cpp',
     'ThrottledEventQueue.cpp',
     'TimerThread.cpp',
 ]
@@ -93,14 +99,6 @@ LOCAL_INCLUDES += [
     '/caps',
     '/tools/profiler',
 ]
-
-# BHR disabled for Release builds because of bug 965392.
-# BHR disabled for debug builds because of bug 979069.
-# BHR disabled for TSan builds because of bug 1121216.
-if CONFIG['MOZ_UPDATE_CHANNEL'] not in ('release') and \
-   not CONFIG['MOZ_DEBUG'] and \
-   not CONFIG['MOZ_TSAN']:
-    DEFINES['MOZ_ENABLE_BACKGROUND_HANG_MONITOR'] = 1
 
 FINAL_LIBRARY = 'xul'
 

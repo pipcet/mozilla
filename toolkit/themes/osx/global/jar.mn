@@ -6,8 +6,6 @@
 
 toolkit.jar:
   skin/classic/global/10pct_transparent_grey.png
-  skin/classic/global/50pct_transparent_grey.png
-  skin/classic/global/arrow.css
   skin/classic/global/autocomplete.css
   skin/classic/global/button.css
   skin/classic/global/checkbox.css
@@ -45,7 +43,7 @@ toolkit.jar:
 * skin/classic/global/tree.css
 * skin/classic/global/viewbuttons.css
   skin/classic/global/wizard.css
-  skin/classic/global/alerts/alert.css                               (alerts/alert.css)
+* skin/classic/global/alerts/alert.css                               (alerts/alert.css)
   skin/classic/global/arrow/arrow-dn-dis.gif                         (arrow/arrow-dn-dis.gif)
   skin/classic/global/arrow/arrow-dn-dis.png                         (arrow/arrow-dn-dis.png)
   skin/classic/global/arrow/arrow-dn-sharp.gif                       (arrow/arrow-dn-sharp.gif)
@@ -53,12 +51,10 @@ toolkit.jar:
   skin/classic/global/arrow/arrow-dn.png                             (arrow/arrow-dn.png)
   skin/classic/global/arrow/arrow-lft-dis.gif                        (arrow/arrow-lft-dis.gif)
   skin/classic/global/arrow/arrow-lft-hov.gif                        (arrow/arrow-lft-hov.gif)
-  skin/classic/global/arrow/arrow-lft-sharp-end.gif                  (arrow/arrow-lft-sharp-end.gif)
   skin/classic/global/arrow/arrow-lft-sharp.gif                      (arrow/arrow-lft-sharp.gif)
   skin/classic/global/arrow/arrow-lft.gif                            (arrow/arrow-lft.gif)
   skin/classic/global/arrow/arrow-rit-dis.gif                        (arrow/arrow-rit-dis.gif)
   skin/classic/global/arrow/arrow-rit-hov.gif                        (arrow/arrow-rit-hov.gif)
-  skin/classic/global/arrow/arrow-rit-sharp-end.gif                  (arrow/arrow-rit-sharp-end.gif)
   skin/classic/global/arrow/arrow-rit-sharp.gif                      (arrow/arrow-rit-sharp.gif)
   skin/classic/global/arrow/arrow-rit.gif                            (arrow/arrow-rit.gif)
   skin/classic/global/arrow/arrow-up-dis.gif                         (arrow/arrow-up-dis.gif)
@@ -78,12 +74,6 @@ toolkit.jar:
   skin/classic/global/icons/autoscroll.png                           (icons/autoscroll.png)
   skin/classic/global/icons/blacklist_favicon.png                    (icons/blacklist_favicon.png)
   skin/classic/global/icons/blacklist_64.png                         (icons/blacklist_64.png)
-  skin/classic/global/icons/chevron.png                              (icons/chevron.png)
-  skin/classic/global/icons/chevron-inverted.png                     (icons/chevron-inverted.png)
-  skin/classic/global/icons/chevron@2x.png                           (icons/chevron@2x.png)
-  skin/classic/global/icons/chevron-inverted@2x.png                  (icons/chevron-inverted@2x.png)
-  skin/classic/global/icons/close.png                                (icons/close.png)
-  skin/classic/global/icons/close@2x.png                             (icons/close@2x.png)
   skin/classic/global/icons/glyph-dropdown.png                       (icons/glyph-dropdown.png)
   skin/classic/global/icons/glyph-dropdown@2x.png                    (icons/glyph-dropdown@2x.png)
   skin/classic/global/icons/menulist-dropmarker.png                  (icons/menulist-dropmarker.png)
@@ -95,6 +85,7 @@ toolkit.jar:
   skin/classic/global/icons/resizer@2x.png                           (icons/resizer@2x.png)
   skin/classic/global/icons/resizer-rtl.png                          (icons/resizer-rtl.png)
   skin/classic/global/icons/resizer-rtl@2x.png                       (icons/resizer-rtl@2x.png)
+  skin/classic/global/icons/search-textbox.svg                       (icons/search-textbox.svg)
   skin/classic/global/icons/searchfield-cancel.svg                   (icons/searchfield-cancel.svg)
   skin/classic/global/icons/tabprompts-bgtexture.png                 (icons/tabprompts-bgtexture.png)
   skin/classic/global/icons/warning-16.png                           (icons/warning-16.png)

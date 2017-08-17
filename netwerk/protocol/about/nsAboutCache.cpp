@@ -179,7 +179,7 @@ nsAboutCache::Channel::ParseURI(nsIURI * uri, nsACString & storage)
     nsresult rv;
 
     nsAutoCString path;
-    rv = uri->GetPath(path);
+    rv = uri->GetPathQueryRef(path);
     if (NS_FAILED(rv)) return rv;
 
     mContextString.Truncate();
@@ -224,7 +224,10 @@ nsAboutCache::Channel::VisitNextStorage()
     // from visitor callback.  The cache v1 service doesn't like it.
     // TODO - mayhemer, bug 913828, remove this dispatch and call
     // directly.
-    return NS_DispatchToMainThread(mozilla::NewRunnableMethod(this, &nsAboutCache::Channel::FireVisitStorage));
+    return NS_DispatchToMainThread(
+      mozilla::NewRunnableMethod("nsAboutCache::Channel::FireVisitStorage",
+                                 this,
+                                 &nsAboutCache::Channel::FireVisitStorage));
 }
 
 void

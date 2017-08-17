@@ -4,7 +4,8 @@
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 /* import-globals-from ../../../../framework/test/shared-head.js */
 /* exported WCUL10n, openNewTabAndConsole, waitForMessages, waitFor, findMessage,
-   openContextMenu, hideContextMenu */
+   openContextMenu, hideContextMenu, loadDocument,
+   waitForNodeMutation, testOpenInDebugger, checkClickOnNode */
 
 "use strict";
 
@@ -64,7 +65,7 @@ function waitForMessages({ hud, messages }) {
   return new Promise(resolve => {
     let numMatched = 0;
     let receivedLog = hud.ui.on("new-messages",
-      function messagesReceieved(e, newMessages) {
+      function messagesReceived(e, newMessages) {
         for (let message of messages) {
           if (message.matched) {
             continue;
@@ -72,7 +73,7 @@ function waitForMessages({ hud, messages }) {
 
           for (let newMessage of newMessages) {
             let messageBody = newMessage.node.querySelector(".message-body");
-            if (messageBody.textContent == message.text) {
+            if (messageBody.textContent.includes(message.text)) {
               numMatched++;
               message.matched = true;
               info("Matched a message with text: " + message.text +
@@ -82,7 +83,7 @@ function waitForMessages({ hud, messages }) {
           }
 
           if (numMatched === messages.length) {
-            hud.ui.off("new-messages", messagesReceieved);
+            hud.ui.off("new-messages", messagesReceived);
             resolve(receivedLog);
             return;
           }
@@ -136,14 +137,13 @@ function findMessage(hud, text, selector = ".message") {
  *        The selector to use in finding the message.
  */
 function findMessages(hud, text, selector = ".message") {
-  const messages = hud.ui.experimentalOutputNode.querySelectorAll(selector);
+  const messages = hud.ui.outputNode.querySelectorAll(selector);
   const elements = Array.prototype.filter.call(
     messages,
     (el) => el.textContent.includes(text)
   );
   return elements;
 }
-
 /**
  * Simulate a context menu event on the provided element, and wait for the console context
  * menu to open. Returns a promise that resolves the menu popup element.
@@ -178,4 +178,77 @@ function hideContextMenu(hud) {
   let onPopupHidden = once(popup, "popuphidden");
   popup.hidePopup();
   return onPopupHidden;
+}
+
+function loadDocument(url, browser = gBrowser.selectedBrowser) {
+  return new Promise(resolve => {
+    browser.addEventListener("load", resolve, {capture: true, once: true});
+    BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
+  });
+}
+
+/**
+* Returns a promise that resolves when the node passed as an argument mutate
+* according to the passed configuration.
+*
+* @param {Node} node - The node to observe mutations on.
+* @param {Object} observeConfig - A configuration object for MutationObserver.observe.
+* @returns {Promise}
+*/
+function waitForNodeMutation(node, observeConfig = {}) {
+  return new Promise(resolve => {
+    const observer = new MutationObserver(mutations => {
+      resolve(mutations);
+      observer.disconnect();
+    });
+    observer.observe(node, observeConfig);
+  });
+}
+
+/**
+ * Search for a given message.  When found, simulate a click on the
+ * message's location, checking to make sure that the debugger opens
+ * the corresponding URL.
+ *
+ * @param {Object} hud
+ *        The webconsole
+ * @param {Object} toolbox
+ *        The toolbox
+ * @param {String} text
+ *        The text to search for.  This should be contained in the
+ *        message.  The searching is done with @see findMessage.
+ */
+function* testOpenInDebugger(hud, toolbox, text) {
+  info(`Finding message for open-in-debugger test; text is "${text}"`);
+  let messageNode = yield waitFor(() => findMessage(hud, text));
+  let frameLinkNode = messageNode.querySelector(".message-location .frame-link");
+  ok(frameLinkNode, "The message does have a location link");
+  yield checkClickOnNode(hud, toolbox, frameLinkNode);
+}
+
+/**
+ * Helper function for testOpenInDebugger.
+ */
+function* checkClickOnNode(hud, toolbox, frameLinkNode) {
+  info("checking click on node location");
+
+  let url = frameLinkNode.getAttribute("data-url");
+  ok(url, `source url found ("${url}")`);
+
+  let line = frameLinkNode.getAttribute("data-line");
+  ok(line, `source line found ("${line}")`);
+
+  let onSourceInDebuggerOpened = once(hud.ui, "source-in-debugger-opened");
+
+  EventUtils.sendMouseEvent({ type: "click" },
+    frameLinkNode.querySelector(".frame-link-filename"));
+
+  yield onSourceInDebuggerOpened;
+
+  let dbg = toolbox.getPanel("jsdebugger");
+  is(
+    dbg._selectors.getSelectedSource(dbg._getState()).get("url"),
+    url,
+    "expected source url"
+  );
 }

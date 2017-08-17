@@ -37,14 +37,46 @@ public:
   void StoreRange(nsRange* aRange);
   already_AddRefed<nsRange> GetRange();
 
-  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(RangeItem)
-  NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(RangeItem)
+  NS_INLINE_DECL_REFCOUNTING(RangeItem)
 
-  nsCOMPtr<nsINode> startNode;
-  int32_t startOffset;
-  nsCOMPtr<nsINode> endNode;
-  int32_t endOffset;
+  void Unlink();
+  void Traverse(nsCycleCollectionTraversalCallback& aCallback, uint32_t aFlags);
+
+  nsCOMPtr<nsINode> mStartContainer;
+  int32_t mStartOffset;
+  nsCOMPtr<nsINode> mEndContainer;
+  int32_t mEndOffset;
 };
+
+inline void
+ImplCycleCollectionUnlink(RangeItem& aItem)
+{
+  aItem.Unlink();
+}
+
+inline void
+ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
+                            RangeItem& aItem,
+                            const char* aName,
+                            uint32_t aFlags = 0)
+{
+  aItem.Traverse(aCallback, aFlags);
+}
+
+inline void
+ImplCycleCollectionUnlink(RefPtr<RangeItem>& aItem)
+{
+  aItem->Unlink();
+}
+
+inline void
+ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
+                            RefPtr<RangeItem>& aItem,
+                            const char* aName,
+                            uint32_t aFlags = 0)
+{
+  aItem->Traverse(aCallback, aFlags);
+}
 
 /**
  * mozilla::SelectionState
@@ -67,7 +99,7 @@ public:
   void MakeEmpty();
   bool IsEmpty();
 private:
-  nsTArray<RefPtr<RangeItem>> mArray;
+  AutoTArray<RefPtr<RangeItem>, 1> mArray;
 
   friend class RangeUpdater;
   friend void ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback&,
@@ -109,11 +141,8 @@ public:
   // DOM Range gravity will promote the selection out of the node on deletion,
   // which is not what you want if you know you are reinserting it.
   nsresult SelAdjCreateNode(nsINode* aParent, int32_t aPosition);
-  nsresult SelAdjCreateNode(nsIDOMNode* aParent, int32_t aPosition);
   nsresult SelAdjInsertNode(nsINode* aParent, int32_t aPosition);
-  nsresult SelAdjInsertNode(nsIDOMNode* aParent, int32_t aPosition);
   void SelAdjDeleteNode(nsINode* aNode);
-  void SelAdjDeleteNode(nsIDOMNode* aNode);
   nsresult SelAdjSplitNode(nsIContent& aOldRightNode, int32_t aOffset,
                            nsIContent* aNewLeftNode);
   nsresult SelAdjJoinNodes(nsINode& aLeftNode,
@@ -194,10 +223,10 @@ public:
     , mOffset(aOffset)
   {
     mRangeItem = new RangeItem();
-    mRangeItem->startNode = *mNode;
-    mRangeItem->endNode = *mNode;
-    mRangeItem->startOffset = *mOffset;
-    mRangeItem->endOffset = *mOffset;
+    mRangeItem->mStartContainer = *mNode;
+    mRangeItem->mEndContainer = *mNode;
+    mRangeItem->mStartOffset = *mOffset;
+    mRangeItem->mEndOffset = *mOffset;
     mRangeUpdater.RegisterRangeItem(mRangeItem);
   }
 
@@ -209,10 +238,10 @@ public:
     , mOffset(aOffset)
   {
     mRangeItem = new RangeItem();
-    mRangeItem->startNode = do_QueryInterface(*mDOMNode);
-    mRangeItem->endNode = do_QueryInterface(*mDOMNode);
-    mRangeItem->startOffset = *mOffset;
-    mRangeItem->endOffset = *mOffset;
+    mRangeItem->mStartContainer = do_QueryInterface(*mDOMNode);
+    mRangeItem->mEndContainer = do_QueryInterface(*mDOMNode);
+    mRangeItem->mStartOffset = *mOffset;
+    mRangeItem->mEndOffset = *mOffset;
     mRangeUpdater.RegisterRangeItem(mRangeItem);
   }
 
@@ -220,11 +249,11 @@ public:
   {
     mRangeUpdater.DropRangeItem(mRangeItem);
     if (mNode) {
-      *mNode = mRangeItem->startNode;
+      *mNode = mRangeItem->mStartContainer;
     } else {
-      *mDOMNode = GetAsDOMNode(mRangeItem->startNode);
+      *mDOMNode = GetAsDOMNode(mRangeItem->mStartContainer);
     }
-    *mOffset = mRangeItem->startOffset;
+    *mOffset = mRangeItem->mStartOffset;
   }
 };
 

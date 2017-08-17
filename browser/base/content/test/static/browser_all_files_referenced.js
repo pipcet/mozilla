@@ -1,6 +1,10 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
+// Note to run this test similar to try server, you need to run:
+// ./mach package
+// ./mach mochitest --appname dist <path to test>
+
 // Slow on asan builds.
 requestLongerTimeout(5);
 
@@ -19,6 +23,9 @@ var gExceptionPaths = [
   // https://github.com/mozilla/normandy/issues/577
   "resource://shield-recipe-client/test/",
 
+  // https://github.com/mozilla/activity-stream/issues/3053
+  "resource://activity-stream/data/content/tippytop/images/",
+
   // browser/extensions/pdfjs/content/build/pdf.js#1999
   "resource://pdf.js/web/images/",
 ];
@@ -28,7 +35,7 @@ var gExceptionPaths = [
 if (AppConstants.platform == "macosx")
   gExceptionPaths.push("resource://gre/res/cursors/");
 
-var whitelist = new Set([
+var whitelist = [
   // browser/extensions/pdfjs/content/PdfStreamConverter.jsm
   {file: "chrome://pdf.js/locale/chrome.properties"},
   {file: "chrome://pdf.js/locale/viewer.properties"},
@@ -80,9 +87,6 @@ var whitelist = new Set([
   {file: "resource://app/modules/NewTabSearchProvider.jsm"},
   {file: "resource://app/modules/NewTabWebChannel.jsm"},
 
-  // Activity Stream currently needs this file in all channels except Nightly
-  {file: "resource://app/modules/PreviewProvider.jsm", skipNightly: true},
-
   // layout/mathml/nsMathMLChar.cpp
   {file: "resource://gre/res/fonts/mathfontSTIXGeneral.properties"},
   {file: "resource://gre/res/fonts/mathfontUnicode.properties"},
@@ -98,11 +102,11 @@ var whitelist = new Set([
    platforms: ["linux", "win"]},
   {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/mac/platformKeys.properties",
    platforms: ["linux", "win"]},
-  {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/gtk/accessible.properties",
+  {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/unix/accessible.properties",
    platforms: ["macosx", "win"]},
-  {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/gtk/intl.properties",
+  {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/unix/intl.properties",
    platforms: ["macosx", "win"]},
-  {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/gtk/platformKeys.properties",
+  {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/unix/platformKeys.properties",
    platforms: ["macosx", "win"]},
   {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/win/accessible.properties",
    platforms: ["linux", "macosx"]},
@@ -114,49 +118,24 @@ var whitelist = new Set([
   // browser/extensions/pdfjs/content/web/viewer.js#7450
   {file: "resource://pdf.js/web/debugger.js"},
 
+  // Needed by Normandy
+  {file: "resource://gre/modules/IndexedDB.jsm"},
+
+  // New L10n API that is not yet used in production
+  {file: "resource://gre/modules/Localization.jsm"},
+
   // Starting from here, files in the whitelist are bugs that need fixing.
   // Bug 1339420
   {file: "chrome://branding/content/icon128.png"},
   // Bug 1339424 (wontfix?)
   {file: "chrome://browser/locale/taskbar.properties",
    platforms: ["linux", "macosx"]},
-  // Bug 1343824
-  {file: "chrome://browser/skin/customizableui/customize-illustration-rtl@2x.png",
-   platforms: ["linux", "win"]},
-  {file: "chrome://browser/skin/customizableui/customize-illustration@2x.png",
-   platforms: ["linux", "win"]},
-  {file: "chrome://browser/skin/customizableui/info-icon-customizeTip@2x.png",
-   platforms: ["linux", "win"]},
-  {file: "chrome://browser/skin/customizableui/panelarrow-customizeTip@2x.png",
-   platforms: ["linux", "win"]},
-  // Bug 1320058
-  {file: "chrome://browser/skin/preferences/saveFile.png", platforms: ["win"]},
   // Bug 1316187
   {file: "chrome://global/content/customizeToolbar.xul"},
   // Bug 1343837
   {file: "chrome://global/content/findUtils.js"},
   // Bug 1343843
   {file: "chrome://global/content/url-classifier/unittests.xul"},
-  // Bug 1343839
-  {file: "chrome://global/locale/headsUpDisplay.properties"},
-  // Bug 1348358
-  {file: "chrome://global/skin/arrow.css"},
-  {file: "chrome://global/skin/arrow/arrow-dn-sharp.gif",
-   platforms: ["linux", "win"]},
-  {file: "chrome://global/skin/arrow/arrow-down.png",
-   platforms: ["linux", "win"]},
-  {file: "chrome://global/skin/arrow/arrow-lft-sharp-end.gif"},
-  {file: "chrome://global/skin/arrow/arrow-lft-sharp.gif",
-   platforms: ["linux", "win"]},
-  {file: "chrome://global/skin/arrow/arrow-rit-sharp-end.gif"},
-  {file: "chrome://global/skin/arrow/arrow-rit-sharp.gif",
-   platforms: ["linux", "win"]},
-  {file: "chrome://global/skin/arrow/arrow-up-sharp.gif",
-   platforms: ["linux", "win"]},
-  {file: "chrome://global/skin/arrow/panelarrow-horizontal.svg",
-   platforms: ["linux"]},
-  {file: "chrome://global/skin/arrow/panelarrow-vertical.svg",
-   platforms: ["linux"]},
   // Bug 1348362
   {file: "chrome://global/skin/icons/warning-64.png", platforms: ["linux", "win"]},
   // Bug 1348525
@@ -191,14 +170,14 @@ var whitelist = new Set([
   {file: "resource://gre/modules/ISO8601DateUtils.jsm"},
   // Bug 1337345
   {file: "resource://gre/modules/Manifest.jsm"},
-  // Bug 1351089
-  {file: "resource://gre/modules/PresentationDeviceInfoManager.jsm"},
   // Bug 1351097
   {file: "resource://gre/modules/accessibility/AccessFu.jsm"},
   // Bug 1351637
   {file: "resource://gre/modules/sdk/bootstrap.js"},
 
-].filter(item =>
+];
+
+whitelist = new Set(whitelist.filter(item =>
   ("isFromDevTools" in item) == isDevtools &&
   (!item.skipNightly || !AppConstants.NIGHTLY_BUILD) &&
   (!item.platforms || item.platforms.includes(AppConstants.platform))
@@ -243,15 +222,11 @@ if (!isDevtools) {
     whitelist.add("resource://services-sync/engines/" + module);
   }
 
-  // intl/unicharutil/nsEntityConverter.h
-  for (let name of ["html40Latin1", "html40Symbols", "html40Special", "mathml20"]) {
-    whitelist.add("resource://gre/res/entityTables/" + name + ".properties");
-  }
 }
 
 const gInterestingCategories = new Set([
-  "agent-style-sheets", "addon-provider-module", "webextension-scripts",
-  "webextension-schemas", "webextension-scripts-addon",
+  "agent-style-sheets", "addon-provider-module", "webextension-modules",
+  "webextension-scripts", "webextension-schemas", "webextension-scripts-addon",
   "webextension-scripts-content", "webextension-scripts-devtools"
 ]);
 
@@ -344,7 +319,7 @@ function parseCodeFile(fileUri) {
     let baseUri;
     for (let line of data.split("\n")) {
       let urls =
-        line.match(/["']chrome:\/\/[a-zA-Z0-9 -]+\/(content|skin|locale)\/[^"' ]*["']/g);
+        line.match(/["'`]chrome:\/\/[a-zA-Z0-9 -]+\/(content|skin|locale)\/[^"'` ]*["'`]/g);
       if (!urls) {
         urls = line.match(/["']resource:\/\/[^"']+["']/g);
         if (urls && isDevtools &&
@@ -408,8 +383,14 @@ function parseCodeFile(fileUri) {
         // Remove quotes.
         url = url.slice(1, -1);
         // Remove ? or \ trailing characters.
-        if (url.endsWith("?") || url.endsWith("\\"))
+        if (url.endsWith("\\")) {
           url = url.slice(0, -1);
+        }
+
+        let pos = url.indexOf("?");
+        if (pos != -1) {
+          url = url.slice(0, pos);
+        }
 
         // Make urls like chrome://browser/skin/ point to an actual file,
         // and remove the ref if any.
@@ -512,20 +493,20 @@ add_task(async function checkAllTheFiles() {
   findChromeUrlsFromArray(uint16, "chrome://");
   findChromeUrlsFromArray(uint16, "resource://");
 
-  const kCodeExtensions = [".xul", ".xml", ".xsl", ".js", ".jsm", ".html", ".xhtml"];
+  const kCodeExtensions = [".xul", ".xml", ".xsl", ".js", ".jsm", ".json", ".html", ".xhtml"];
 
   let appDir = Services.dirsvc.get("GreD", Ci.nsIFile);
   // This asynchronously produces a list of URLs (sadly, mostly sync on our
   // test infrastructure because it runs against jarfiles there, and
   // our zipreader APIs are all sync)
-  let uris = await generateURIsFromDirTree(appDir, [".css", ".manifest", ".json", ".jpg", ".png", ".gif", ".svg",  ".dtd", ".properties"].concat(kCodeExtensions));
+  let uris = await generateURIsFromDirTree(appDir, [".css", ".manifest", ".jpg", ".png", ".gif", ".svg",  ".dtd", ".properties"].concat(kCodeExtensions));
 
   // Parse and remove all manifests from the list.
   // NOTE that this must be done before filtering out devtools paths
   // so that all chrome paths can be recorded.
   let manifestPromises = [];
   uris = uris.filter(uri => {
-    let path = uri.path;
+    let path = uri.pathQueryRef;
     if (path.endsWith(".manifest")) {
       manifestPromises.push(parseManifest(uri));
       return false;
@@ -542,7 +523,7 @@ add_task(async function checkAllTheFiles() {
   let allPromises = [];
 
   for (let uri of uris) {
-    let path = uri.path;
+    let path = uri.pathQueryRef;
     if (path.endsWith(".css"))
       allPromises.push(parseCSSFile(uri));
     else if (kCodeExtensions.some(ext => path.endsWith(ext)))

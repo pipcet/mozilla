@@ -480,7 +480,7 @@ HTMLTableCellElement::MapAttributesIntoRule(const nsMappedAttributes* aAttribute
         if (!value || value->Type() != nsAttrValue::eInteger ||
             value->GetIntegerValue() == 0 ||
             eCompatibility_NavQuirks != mode) {
-          aData->SetKeywordValue(eCSSProperty_white_space, NS_STYLE_WHITESPACE_NOWRAP);
+          aData->SetKeywordValue(eCSSProperty_white_space, StyleWhiteSpace::Nowrap);
         }
       }
     }
@@ -496,7 +496,7 @@ NS_IMETHODIMP_(bool)
 HTMLTableCellElement::IsAttributeMapped(const nsIAtom* aAttribute) const
 {
   static const MappedAttributeEntry attributes[] = {
-    { &nsGkAtoms::align }, 
+    { &nsGkAtoms::align },
     { &nsGkAtoms::valign },
     { &nsGkAtoms::nowrap },
 #if 0

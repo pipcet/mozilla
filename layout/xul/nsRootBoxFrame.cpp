@@ -76,7 +76,6 @@ public:
                                nsEventStatus* aEventStatus) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override
@@ -86,7 +85,7 @@ public:
       return false;
     return nsBoxFrame::IsFrameOfType(aFlags);
   }
-  
+
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
@@ -170,14 +169,14 @@ nsRootBoxFrame::Reflow(nsPresContext*           aPresContext,
 
 void
 nsRootBoxFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                 const nsRect&           aDirtyRect,
                                  const nsDisplayListSet& aLists)
 {
   if (mContent && mContent->GetProperty(nsGkAtoms::DisplayPortMargins)) {
     // The XUL document's root element may have displayport margins set in
     // ChromeProcessController::InitializeRoot, and we should to supply the
     // base rect.
-    nsRect displayPortBase = aDirtyRect.Intersect(nsRect(nsPoint(0, 0), GetSize()));
+    nsRect displayPortBase =
+      aBuilder->GetDirtyRect().Intersect(nsRect(nsPoint(0, 0), GetSize()));
     nsLayoutUtils::SetDisplayPortBase(mContent, displayPortBase);
   }
 
@@ -186,7 +185,7 @@ nsRootBoxFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   // of a background display list element.
   DisplayBorderBackgroundOutline(aBuilder, aLists, true);
 
-  BuildDisplayListForChildren(aBuilder, aDirtyRect, aLists);
+  BuildDisplayListForChildren(aBuilder, aLists);
 }
 
 nsresult
@@ -258,8 +257,8 @@ nsresult
 nsRootBoxFrame::RemoveTooltipSupport(nsIContent* aNode)
 {
   // XXjh yuck, I'll have to implement a way to get at
-  // the tooltip listener for a given node to make 
-  // this work.  Not crucial, we aren't removing 
+  // the tooltip listener for a given node to make
+  // this work.  Not crucial, we aren't removing
   // tooltips from any nodes in the app just yet.
   return NS_ERROR_NOT_IMPLEMENTED;
 }

@@ -12,6 +12,9 @@
 #include "nsIStyleRule.h"
 
 namespace mozilla {
+
+class TextEditor;
+
 namespace dom {
 
 class OnBeforeUnloadEventHandlerNonNull;
@@ -105,11 +108,11 @@ public:
                               nsAttrValue& aResult) override;
   virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
   NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const override;
-  virtual already_AddRefed<nsIEditor> GetAssociatedEditor() override;
+  virtual already_AddRefed<TextEditor> GetAssociatedEditor() override;
   virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
                          bool aPreallocateChildren) const override;
 
-  virtual bool IsEventAttributeName(nsIAtom* aName) override;
+  virtual bool IsEventAttributeNameInternal(nsIAtom* aName) override;
 
 
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,

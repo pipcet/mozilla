@@ -253,19 +253,6 @@ this.CryptoUtils = {
     return ret;
   },
 
-  deriveKeyFromPassphrase: function deriveKeyFromPassphrase(passphrase,
-                                                            salt,
-                                                            keyLength,
-                                                            forceJS) {
-    if (Svc.Crypto.deriveKeyFromPassphrase && !forceJS) {
-      return Svc.Crypto.deriveKeyFromPassphrase(passphrase, salt, keyLength);
-    }
-    // Fall back to JS implementation.
-    // 4096 is hardcoded in WeaveCrypto, so do so here.
-    return CryptoUtils.pbkdf2Generate(passphrase, atob(salt), 4096,
-                                      keyLength);
-  },
-
   /**
    * Compute the HTTP MAC SHA-1 for an HTTP request.
    *
@@ -332,7 +319,7 @@ this.CryptoUtils = {
     let requestString = ts.toString(10) + "\n" +
                         nonce + "\n" +
                         usedMethod + "\n" +
-                        uri.path + "\n" +
+                        uri.pathQueryRef + "\n" +
                         host + "\n" +
                         port + "\n" +
                         ext + "\n";
@@ -486,7 +473,7 @@ this.CryptoUtils = {
       ts,
       nonce: options.nonce || btoa(CryptoUtils.generateRandomBytes(8)),
       method: method.toUpperCase(),
-      resource: uri.path, // This includes both path and search/queryarg.
+      resource: uri.pathQueryRef, // This includes both path and search/queryarg.
       host: uri.asciiHost.toLowerCase(), // This includes punycoding.
       port: port.toString(10),
       hash: options.hash,
@@ -561,15 +548,6 @@ XPCOMUtils.defineLazyServiceGetter(Svc,
                                    "KeyFactory",
                                    "@mozilla.org/security/keyobjectfactory;1",
                                    "nsIKeyObjectFactory");
-
-Svc.__defineGetter__("Crypto", function() {
-  let ns = {};
-  Cu.import("resource://services-crypto/WeaveCrypto.js", ns);
-
-  let wc = new ns.WeaveCrypto();
-  delete Svc.Crypto;
-  return Svc.Crypto = wc;
-});
 
 Observers.add("xpcom-shutdown", function unloadServices() {
   Observers.remove("xpcom-shutdown", unloadServices);

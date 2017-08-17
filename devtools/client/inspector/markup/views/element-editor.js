@@ -69,7 +69,6 @@ function ElementEditor(container, node) {
       trigger: "dblclick",
       stopOnReturn: true,
       done: this.onTagEdit.bind(this),
-      contextMenu: this.markup.inspector.onTextBoxContextMenu,
       cssProperties: this._cssProperties
     });
   }
@@ -97,7 +96,6 @@ function ElementEditor(container, node) {
         undoMods.apply();
       });
     },
-    contextMenu: this.markup.inspector.onTextBoxContextMenu,
     cssProperties: this._cssProperties
   });
 
@@ -402,7 +400,6 @@ ElementEditor.prototype = {
           undoMods.apply();
         });
       },
-      contextMenu: this.markup.inspector.onTextBoxContextMenu,
       cssProperties: this._cssProperties
     });
 
@@ -611,7 +608,7 @@ ElementEditor.prototype = {
     // Changing the tagName removes the node. Make sure the replacing node gets
     // selected afterwards.
     this.markup.reselectOnRemoved(this.node, "edittagname");
-    this.markup.walker.editTagName(this.node, newTagName).then(null, () => {
+    this.markup.walker.editTagName(this.node, newTagName).catch(() => {
       // Failed to edit the tag name, cancel the reselection.
       this.markup.cancelReselectOnRemoved();
     });

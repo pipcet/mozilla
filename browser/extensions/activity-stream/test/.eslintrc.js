@@ -6,6 +6,10 @@ module.exports = {
   },
   "globals": {
     "assert": true,
-    "sinon": true
+    "sinon": true,
+    "chai": true
+  },
+  "rules": {
+    "react/jsx-no-bind": 0
   }
 };

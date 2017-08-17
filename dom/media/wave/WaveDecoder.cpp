@@ -6,24 +6,15 @@
 
 #include "WaveDemuxer.h"
 #include "MediaContainerType.h"
-#include "MediaDecoderStateMachine.h"
 #include "WaveDecoder.h"
-#include "MediaFormatReader.h"
 #include "PDMFactory.h"
 
 namespace mozilla {
 
-MediaDecoder*
-WaveDecoder::Clone(MediaDecoderOwner* aOwner)
+ChannelMediaDecoder*
+WaveDecoder::CloneImpl(MediaDecoderInit& aInit)
 {
-  return new WaveDecoder(aOwner);
-}
-
-MediaDecoderStateMachine*
-WaveDecoder::CreateStateMachine()
-{
-  return new MediaDecoderStateMachine(
-    this, new MediaFormatReader(this, new WAVDemuxer(GetResource())));
+  return new WaveDecoder(aInit);
 }
 
 /* static */ bool

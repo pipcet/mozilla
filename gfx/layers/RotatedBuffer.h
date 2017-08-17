@@ -11,6 +11,7 @@
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/RefPtr.h"             // for RefPtr, already_AddRefed
 #include "mozilla/gfx/2D.h"             // for DrawTarget, etc
+#include "mozilla/gfx/MatrixFwd.h"      // for Matrix
 #include "mozilla/mozalloc.h"           // for operator delete
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsDebug.h"                    // for NS_RUNTIMEABORT
@@ -19,11 +20,11 @@
 #include "LayersTypes.h"
 
 namespace mozilla {
-namespace gfx {
-class Matrix;
-} // namespace gfx
-
 namespace layers {
+
+class CapturedPaintState;
+
+typedef bool (*PrepDrawTargetForPaintingCallback)(CapturedPaintState*);
 
 class TextureClient;
 class PaintedLayer;
@@ -296,6 +297,19 @@ public:
   gfx::DrawTarget* BorrowDrawTargetForPainting(PaintState& aPaintState,
                                                DrawIterator* aIter = nullptr);
 
+  /**
+   * Borrow a draw target for recording. The aOutTransform is not applied
+   * to the returned DrawTarget, BUT it is required to be painting in the right
+   * location whenever drawing does happen.
+   */
+  RefPtr<CapturedPaintState> BorrowDrawTargetForRecording(PaintState& aPaintState,
+                                                          DrawIterator* aIter);
+
+  nsIntRegion ExpandDrawRegion(PaintState& aPaintState,
+                               DrawIterator* aIter,
+                               gfx::BackendType aBackendType);
+
+  static bool PrepareDrawTargetForPainting(CapturedPaintState*);
   enum {
     BUFFER_COMPONENT_ALPHA = 0x02 // Dual buffers should be created for drawing with
                                   // component alpha.
@@ -368,14 +382,16 @@ protected:
    * BorrowDrawTargetForQuadrantUpdate may not be called more than once without
    * first calling ReturnDrawTarget.
    *
-   * ReturnDrawTarget will restore the transform on the draw target. But it is
-   * the callers responsibility to restore the clip. The caller should flush the
-   * draw target, if necessary.
+   * ReturnDrawTarget will by default restore the transform on the draw target.
+   * But it is the callers responsibility to restore the clip.
+   * The caller should flush the draw target, if necessary.
    */
   gfx::DrawTarget*
   BorrowDrawTargetForQuadrantUpdate(const gfx::IntRect& aBounds,
                                     ContextSource aSource,
-                                    DrawIterator* aIter);
+                                    DrawIterator* aIter,
+                                    bool aSetTransform = true,
+                                    gfx::Matrix* aOutTransform = nullptr);
 
   static bool IsClippingCheap(gfx::DrawTarget* aTarget, const nsIntRegion& aRegion);
 

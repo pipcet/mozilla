@@ -9,8 +9,10 @@
        flip="slide"
        position="bottomcenter topright"
        noautofocus="true">
-  <panelmultiview id="PanelUI-multiView" mainViewId="PanelUI-mainView">
-    <panelview id="PanelUI-mainView" context="customizationPanelContextMenu">
+  <panelmultiview id="PanelUI-multiView" mainViewId="PanelUI-mainView"
+                  viewCacheId="appMenu-viewCache">
+    <panelview id="PanelUI-mainView" context="customizationPanelContextMenu"
+               descriptionheightworkaround="true" blockinboxworkaround="true">
       <vbox id="PanelUI-contents-scroller">
         <vbox id="PanelUI-contents" class="panelUI-grid"/>
       </vbox>
@@ -82,25 +84,40 @@
         <toolbarbutton id="appMenuViewHistorySidebar"
                        label="&appMenuHistory.viewSidebar.label;"
                        type="checkbox"
-                       class="subviewbutton"
+                       class="subviewbutton subviewbutton-iconic"
                        key="key_gotoHistory"
                        oncommand="SidebarUI.toggle('viewHistorySidebar'); PanelUI.hide();">
           <observes element="viewHistorySidebar" attribute="checked"/>
         </toolbarbutton>
         <toolbarbutton id="appMenuClearRecentHistory"
                        label="&appMenuHistory.clearRecent.label;"
-                       class="subviewbutton"
+                       class="subviewbutton subviewbutton-iconic"
                        command="Tools:Sanitize"/>
         <toolbarbutton id="appMenuRestoreLastSession"
                        label="&appMenuHistory.restoreSession.label;"
-                       class="subviewbutton"
+                       class="subviewbutton subviewbutton-iconic"
                        command="Browser:RestoreLastSession"/>
-        <menuseparator id="PanelUI-recentlyClosedTabs-separator"/>
-        <vbox id="PanelUI-recentlyClosedTabs" tooltip="bhTooltip"/>
-        <menuseparator id="PanelUI-recentlyClosedWindows-separator"/>
-        <vbox id="PanelUI-recentlyClosedWindows" tooltip="bhTooltip"/>
-        <menuseparator id="PanelUI-historyItems-separator"/>
-        <vbox id="PanelUI-historyItems" tooltip="bhTooltip"/>
+        <toolbarseparator/>
+        <toolbarbutton id="appMenuRecentlyClosedTabs"
+                       label="&historyUndoMenu.label;"
+                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
+                       closemenu="none"
+                       oncommand="PanelUI.showSubView('appMenu-library-recentlyClosedTabs', this)"/>
+        <toolbarbutton id="appMenuRecentlyClosedWindows"
+                       label="&historyUndoWindowMenu.label;"
+                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
+                       closemenu="none"
+                       oncommand="PanelUI.showSubView('appMenu-library-recentlyClosedWindows', this)"/>
+        <toolbarseparator/>
+        <label value="&appMenuHistory.recentHistory.label;"
+               class="subview-subheader"/>
+        <toolbaritem id="appMenu_historyMenu"
+                     orient="vertical"
+                     smoothscroll="false"
+                     flatList="true"
+                     tooltip="bhTooltip">
+          <!-- history menu items will go here -->
+        </toolbaritem>
       </vbox>
       <toolbarbutton id="PanelUI-historyMore"
                      class="panel-subview-footer subviewbutton"
@@ -108,7 +125,11 @@
                      oncommand="PlacesCommandHook.showPlacesOrganizer('History'); CustomizableUI.hidePanelForNode(this);"/>
     </panelview>
 
-    <panelview id="PanelUI-remotetabs" flex="1" class="PanelUI-subView">
+    <panelview id="appMenu-library-recentlyClosedTabs"/>
+    <panelview id="appMenu-library-recentlyClosedWindows"/>
+
+    <panelview id="PanelUI-remotetabs" flex="1" class="PanelUI-subView"
+               descriptionheightworkaround="true">
       <label value="&appMenuRemoteTabs.label;" class="panel-subview-header"/>
       <vbox class="panel-subview-body">
         <!-- this widget has 3 boxes in the body, but only 1 is ever visible -->
@@ -116,16 +137,16 @@
         <vbox id="PanelUI-remotetabs-main" observes="sync-syncnow-state">
           <vbox id="PanelUI-remotetabs-buttons">
             <toolbarbutton id="PanelUI-remotetabs-view-sidebar"
-                           class="subviewbutton"
+                           class="subviewbutton subviewbutton-iconic"
                            observes="viewTabsSidebar"
                            label="&appMenuRemoteTabs.sidebar.label;"/>
             <toolbarbutton id="PanelUI-remotetabs-view-managedevices"
-                           class="subviewbutton"
+                           class="subviewbutton subviewbutton-iconic"
                            label="&appMenuRemoteTabs.managedevices.label;"
                            oncommand="gSync.openDevicesManagementPage('syncedtabs-menupanel');"/>
             <toolbarbutton id="PanelUI-remotetabs-syncnow"
                            observes="sync-status"
-                           class="subviewbutton"
+                           class="subviewbutton subviewbutton-iconic"
                            oncommand="gSync.doSync();"
                            closemenu="none"/>
             <menuseparator id="PanelUI-remotetabs-separator"/>
@@ -209,39 +230,26 @@
       <label value="&bookmarksMenu.label;" class="panel-subview-header"/>
       <vbox class="panel-subview-body">
         <toolbarbutton id="panelMenuBookmarkThisPage"
-                       class="subviewbutton"
+                       class="subviewbutton subviewbutton-iconic"
                        observes="bookmarkThisPageBroadcaster"
                        command="Browser:AddBookmarkAs"
                        onclick="PanelUI.hide();"/>
+        <toolbarbutton id="panelMenu_bookmarkingTools"
+                       label="&bookmarkingTools.label;"
+                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
+                       closemenu="none"
+                       oncommand="BookmarkingUI.showBookmarkingTools(this);"/>
+        <toolbarbutton id="panelMenu_searchBookmarks"
+                       label="&searchBookmarks.label;"
+                       class="subviewbutton subviewbutton-iconic"
+                       oncommand="PlacesCommandHook.searchBookmarks(); PanelUI.hide();"/>
         <toolbarseparator/>
-        <toolbarbutton id="panelMenu_viewBookmarksSidebar"
-                       label="&viewBookmarksSidebar2.label;"
-                       class="subviewbutton"
-                       key="viewBookmarksSidebarKb"
-                       oncommand="SidebarUI.toggle('viewBookmarksSidebar'); PanelUI.hide();">
-          <observes element="viewBookmarksSidebar" attribute="checked"/>
-        </toolbarbutton>
-        <toolbarbutton id="panelMenu_viewBookmarksToolbar"
-                       label="&viewBookmarksToolbar.label;"
-                       type="checkbox"
-                       toolbarId="PersonalToolbar"
-                       class="subviewbutton"
-                       oncommand="onViewToolbarCommand(event); PanelUI.hide();"/>
-        <toolbarseparator/>
-        <toolbarbutton id="panelMenu_bookmarksToolbar"
-                       label="&personalbarCmd.label;"
-                       class="subviewbutton cui-withicon"
-                       oncommand="PlacesCommandHook.showPlacesOrganizer('BookmarksToolbar'); PanelUI.hide();"/>
-        <toolbarbutton id="panelMenu_unsortedBookmarks"
-                       label="&otherBookmarksCmd.label;"
-                       class="subviewbutton cui-withicon"
-                       oncommand="PlacesCommandHook.showPlacesOrganizer('UnfiledBookmarks'); PanelUI.hide();"/>
-        <toolbarseparator class="small-separator"/>
+        <label id="panelMenu_recentBookmarks"
+               value="&recentBookmarks.label;"
+               class="subview-subheader"/>
         <toolbaritem id="panelMenu_bookmarksMenu"
                      orient="vertical"
                      smoothscroll="false"
-                     onclick="if (event.button == 1) BookmarkingUI.onPanelMenuViewCommand(event, this._placesView);"
-                     oncommand="BookmarkingUI.onPanelMenuViewCommand(event, this._placesView);"
                      flatList="true"
                      tooltip="bhTooltip">
           <!-- bookmarks menu items will go here -->
@@ -297,7 +305,8 @@
       </vbox>
     </panelview>
 
-    <panelview id="PanelUI-panicView" flex="1">
+    <panelview id="PanelUI-panicView" flex="1"
+               descriptionheightworkaround="true">
       <vbox class="panel-subview-body">
         <hbox id="PanelUI-panic-timeframe">
           <image id="PanelUI-panic-timeframe-icon" alt=""/>
@@ -332,6 +341,7 @@
     </panelview>
 
   </panelmultiview>
+
 </panel>
 
 <panel id="widget-overflow"
@@ -339,18 +349,53 @@
        type="arrow"
        noautofocus="true"
        position="bottomcenter topright"
+       photon="true"
        hidden="true">
-  <panelmultiview mainViewId="widget-overflow-mainView">
+  <photonpanelmultiview mainViewId="widget-overflow-mainView">
     <panelview id="widget-overflow-mainView"
                context="toolbar-context-menu">
-      <vbox id="widget-overflow-scroller">
+      <vbox class="panel-subview-body">
         <vbox id="widget-overflow-list" class="widget-overflow-list"
               overflowfortoolbar="nav-bar"/>
         <toolbarseparator id="widget-overflow-fixed-separator" hidden="true"/>
-        <vbox id="widget-overflow-fixed-list" class="widget-overflow-list" hidden="true"/>
+        <vbox id="widget-overflow-fixed-list" class="widget-overflow-list" hidden="true"
+              emptylabel="&customizeMode.emptyOverflowList.description;"/>
       </vbox>
+      <toolbarbutton command="cmd_CustomizeToolbars"
+                      id="overflowMenu-customize-button"
+                      class="subviewbutton panel-subview-footer"
+                      accesskey="&overflowCustomizeToolbar.accesskey;"
+                      label="&overflowCustomizeToolbar.label;"/>
     </panelview>
-  </panelmultiview>
+  </photonpanelmultiview>
+  <!-- This menu is here because not having it in the menu in which it's used flickers
+       when hover styles overlap. See https://bugzilla.mozilla.org/show_bug.cgi?id=1378427 .
+       -->
+  <menupopup id="customizationPanelItemContextMenu"
+             onpopupshowing="gCustomizeMode.onPanelContextMenuShowing(event)">
+    <menuitem oncommand="gCustomizeMode.addToPanel(document.popupNode)"
+              id="customizationPanelItemContextMenuPin"
+              accesskey="&customizeMenu.pinToOverflowMenu.accesskey;"
+              label="&customizeMenu.pinToOverflowMenu.label;"
+              closemenu="single"
+              class="customize-context-moveToPanel"/>
+    <menuitem oncommand="gCustomizeMode.addToToolbar(document.popupNode)"
+              id="customizationPanelItemContextMenuUnpin"
+              closemenu="single"
+              class="customize-context-moveToToolbar"
+              accesskey="&customizeMenu.unpinFromOverflowMenu.accesskey;"
+              label="&customizeMenu.unpinFromOverflowMenu.label;"/>
+    <menuitem oncommand="gCustomizeMode.removeFromArea(document.popupNode)"
+              closemenu="single"
+              class="customize-context-removeFromPanel"
+              accesskey="&customizeMenu.removeFromToolbar.accesskey;"
+              label="&customizeMenu.removeFromToolbar.label;"/>
+    <menuseparator/>
+    <menuitem command="cmd_CustomizeToolbars"
+              class="viewCustomizeToolbar"
+              accesskey="&viewCustomizeToolbar.accesskey;"
+              label="&viewCustomizeToolbar.label;"/>
+  </menupopup>
 </panel>
 
 <panel id="customization-tipPanel"
@@ -454,28 +499,6 @@
   </popupnotification>
 </panel>
 
-<menupopup id="customizationPanelItemContextMenu">
-  <menuitem oncommand="gCustomizeMode.addToToolbar(document.popupNode)"
-            closemenu="single"
-            class="customize-context-moveToToolbar"
-            photonaccesskey="&customizeMenu.unpinFromOverflowMenu.accesskey;"
-            photonlabel="&customizeMenu.unpinFromOverflowMenu.label;"
-            accesskey="&customizeMenu.moveToToolbar.accesskey;"
-            label="&customizeMenu.moveToToolbar.label;"/>
-  <menuitem oncommand="gCustomizeMode.removeFromArea(document.popupNode)"
-            closemenu="single"
-            class="customize-context-removeFromPanel"
-            photonaccesskey="&customizeMenu.removeFromToolbar.accesskey;"
-            photonlabel="&customizeMenu.removeFromToolbar.label;"
-            accesskey="&customizeMenu.removeFromMenu.accesskey;"
-            label="&customizeMenu.removeFromMenu.label;"/>
-  <menuseparator/>
-  <menuitem command="cmd_CustomizeToolbars"
-            class="viewCustomizeToolbar"
-            accesskey="&viewCustomizeToolbar.accesskey;"
-            label="&viewCustomizeToolbar.label;"/>
-</menupopup>
-
 <menupopup id="customizationPaletteItemContextMenu">
   <menuitem oncommand="gCustomizeMode.addToToolbar(document.popupNode)"
             class="customize-context-addToToolbar"
@@ -483,10 +506,8 @@
             label="&customizeMenu.addToToolbar.label;"/>
   <menuitem oncommand="gCustomizeMode.addToPanel(document.popupNode)"
             class="customize-context-addToPanel"
-            photonaccesskey="&customizeMenu.addToOverflowMenu.accesskey;"
-            photonlabel="&customizeMenu.addToOverflowMenu.label;"
-            accesskey="&customizeMenu.addToPanel.accesskey;"
-            label="&customizeMenu.addToPanel.label;"/>
+            accesskey="&customizeMenu.addToOverflowMenu.accesskey;"
+            label="&customizeMenu.addToOverflowMenu.label;"/>
 </menupopup>
 
 <menupopup id="customizationPanelContextMenu">
@@ -503,8 +524,10 @@
        flip="slide"
        position="bottomcenter topright"
        noautofocus="true">
-  <photonpanelmultiview id="appMenu-multiView" mainViewId="appMenu-mainView" descriptionheightworkaround="true">
-    <panelview id="appMenu-mainView" class="PanelUI-subView">
+  <photonpanelmultiview id="appMenu-multiView" mainViewId="appMenu-mainView"
+                        viewCacheId="appMenu-viewCache">
+    <panelview id="appMenu-mainView" class="PanelUI-subView"
+               descriptionheightworkaround="true">
       <vbox class="panel-subview-body">
         <vbox id="appMenu-addon-banners"/>
         <toolbarbutton class="panel-banner-item"
@@ -514,7 +537,7 @@
                        oncommand="PanelUI._onBannerItemSelected(event)"
                        wrap="true"
                        hidden="true"/>
-        <toolbaritem id="appMenu-fxa-container">
+        <toolbaritem id="appMenu-fxa-container" class="toolbaritem-combined-buttons">
           <hbox id="appMenu-fxa-status"
                 flex="1"
                 defaultlabel="&fxaSignIn.label;"
@@ -529,7 +552,7 @@
                            label="&fxaSignIn.label;"
                            fxabrandname="&syncBrand.fxAccount.label;"/>
           </hbox>
-          <toolbarseparator/>
+          <toolbarseparator orient="vertical"/>
           <toolbarbutton id="appMenu-fxa-icon"
                          class="subviewbutton subviewbutton-iconic"
                          oncommand="gSync.doSync();"
@@ -550,6 +573,31 @@
                        key="key_privatebrowsing"
                        command="Tools:PrivateBrowsing"/>
         <toolbarseparator/>
+        <toolbaritem id="appMenu-zoom-controls" class="toolbaritem-combined-buttons">
+          <label value="&fullZoom.label;"/>
+          <toolbarbutton id="appMenu-zoomReduce-button"
+                         class="subviewbutton subviewbutton-iconic"
+                         command="cmd_fullZoomReduce"
+                         closemenu="none"
+                         tooltip="dynamic-shortcut-tooltip"/>
+          <toolbarbutton id="appMenu-zoomReset-button"
+                         class="subviewbutton"
+                         command="cmd_fullZoomReset"
+                         closemenu="none"
+                         tooltip="dynamic-shortcut-tooltip"/>
+          <toolbarbutton id="appMenu-zoomEnlarge-button"
+                         class="subviewbutton subviewbutton-iconic"
+                         command="cmd_fullZoomEnlarge"
+                         closemenu="none"
+                         tooltip="dynamic-shortcut-tooltip"/>
+          <toolbarseparator orient="vertical"/>
+          <toolbarbutton id="appMenu-fullscreen-button"
+                         class="subviewbutton subviewbutton-iconic"
+                         observes="View:FullScreen"
+                         type="checkbox"
+                         tooltip="dynamic-shortcut-tooltip"/>
+        </toolbaritem>
+        <toolbarseparator/>
         <toolbaritem id="appMenu-edit-controls" class="toolbaritem-combined-buttons" closemenu="none">
           <label value="&editMenu.label;"/>
           <toolbarbutton id="appMenu-cut-button"
@@ -566,39 +614,11 @@
                          tooltip="dynamic-shortcut-tooltip"/>
         </toolbaritem>
         <toolbarseparator/>
-        <toolbarbutton id="appMenu-open-file-button"
-                       class="subviewbutton"
-                       label="&openFileCmd.label;"
-                       key="openFileKb"
-                       command="Browser:OpenFile"
-                       />
-        <toolbarbutton id="appMenu-save-file-button"
-                       class="subviewbutton"
-                       label="&savePageCmd.label;"
-                       key="key_savePage"
-                       command="Browser:SavePage"
-                       />
-        <toolbarbutton id="appMenu-page-setup-button"
-                       class="subviewbutton"
-                       label="&printSetupCmd.label;"
-                       command="cmd_pageSetup"
-                       />
-        <toolbarbutton id="appMenu-print-button"
-                       class="subviewbutton subviewbutton-iconic"
-                       label="&printButton.label;"
-                       key="printKb"
-#ifdef XP_MACOSX
-                       command="cmd_print"
-#else
-                       command="cmd_printPreview"
-#endif
-                       />
-        <toolbarseparator/>
         <toolbarbutton id="appMenu-library-button"
-                       class="subviewbutton subviewbutton-iconic"
+                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
                        label="&places.library.title;"
-                       command="Browser:ShowAllBookmarks"
-                       />
+                       closemenu="none"
+                       oncommand="PanelUI.showSubView('appMenu-libraryView', this)"/>
         <toolbarbutton id="appMenu-addons-button"
                        class="subviewbutton subviewbutton-iconic"
                        label="&addons.label;"
@@ -623,6 +643,29 @@
                        command="cmd_CustomizeToolbars"
                        />
         <toolbarseparator/>
+        <toolbarbutton id="appMenu-open-file-button"
+                       class="subviewbutton"
+                       label="&openFileCmd.label;"
+                       key="openFileKb"
+                       command="Browser:OpenFile"
+                       />
+        <toolbarbutton id="appMenu-save-file-button"
+                       class="subviewbutton"
+                       label="&savePageCmd.label;"
+                       key="key_savePage"
+                       command="Browser:SavePage"
+                       />
+        <toolbarbutton id="appMenu-print-button"
+                       class="subviewbutton subviewbutton-iconic"
+                       label="&printCmd.label;"
+                       key="printKb"
+#ifdef XP_MACOSX
+                       command="cmd_print"
+#else
+                       command="cmd_printPreview"
+#endif
+                       />
+        <toolbarseparator/>
         <toolbarbutton id="appMenu-find-button"
                        class="subviewbutton subviewbutton-iconic"
                        label="&findOnCmd.label;"
@@ -637,12 +680,25 @@
                        class="subviewbutton subviewbutton-nav"
                        label="&webDeveloperMenu.label;"
                        closemenu="none"
-                       oncommand="PanelUI.showSubView('PanelUI-developer', this, null, true)"/>
+                       oncommand="PanelUI.showSubView('PanelUI-developer', this)"/>
         <toolbarbutton id="appMenu-help-button"
                        class="subviewbutton subviewbutton-iconic subviewbutton-nav"
                        label="&appMenuHelp.label;"
                        closemenu="none"
-                       oncommand="PanelUI.showSubView('PanelUI-helpView', this, null, true)"/>
+                       oncommand="PanelUI.showSubView('PanelUI-helpView', this)"/>
+#ifndef XP_MACOSX
+        <toolbarseparator/>
+        <toolbarbutton id="appMenu-quit-button"
+                       class="subviewbutton subviewbutton-iconic"
+#ifdef XP_WIN
+                       label="&quitApplicationCmdWin2.label;"
+                       tooltiptext="&quitApplicationCmdWin2.tooltip;"
+#else
+                       label="&quitApplicationCmd.label;"
+#endif
+                       key="key_quitApplication"
+                       command="cmd_quitApplication"/>
+#endif
       </vbox>
     </panelview>
     <panelview id="appMenu-moreView" title="&moreMenu.label;" class="PanelUI-subView">
@@ -651,13 +707,58 @@
                        class="subviewbutton subviewbutton-nav"
                        label="&charsetMenu2.label;"
                        closemenu="none"
-                       oncommand="PanelUI.showSubView('PanelUI-characterEncodingView', this, null, true)"/>
+                       oncommand="PanelUI.showSubView('PanelUI-characterEncodingView', this)"/>
         <toolbarbutton id="appMenu-workoffline-button"
                        class="subviewbutton"
                        label="&goOfflineCmd.label;"
                        type="checkbox"
                        observes="workOfflineMenuitemState"
                        oncommand="BrowserOffline.toggleOfflineStatus();"/>
+      </vbox>
+    </panelview>
+    <panelview id="appMenu-libraryView" class="PanelUI-subView">
+      <vbox class="panel-subview-body">
+        <toolbarbutton id="appMenu-library-bookmarks-button"
+                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
+                       label="&bookmarksMenuButton.label;"
+                       closemenu="none"
+                       oncommand="BookmarkingUI.showSubView(this);"/>
+        <toolbarbutton id="appMenu-library-history-button"
+                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
+                       label="&historyMenu.label;"
+                       closemenu="none"
+                       oncommand="PanelUI.showSubView('PanelUI-history', this)"/>
+        <toolbarbutton id="appMenu-library-remotetabs-button"
+                       class="subviewbutton subviewbutton-iconic subviewbutton-nav"
+                       label="&appMenuRemoteTabs.label;"
+                       closemenu="none"
+                       oncommand="PanelUI.showSubView('PanelUI-remotetabs', this)"/>
+      </vbox>
+    </panelview>
+
+    <panelview id="PanelUI-bookmarkingTools" class="PanelUI-subView">
+      <vbox class="panel-subview-body">
+        <toolbarbutton id="panelMenu_toggleBookmarksMenu"
+                       label="&addBookmarksMenu.label;"
+                       label-checked="&removeBookmarksMenu.label;"
+                       class="subviewbutton subviewbutton-iconic"
+                       oncommand="BookmarkingUI.toggleMenuButtonInToolbar(this); PanelUI.hide();"/>
+        <toolbarbutton id="panelMenu_viewBookmarksSidebar"
+                       label="&viewBookmarksSidebar2.label;"
+                       label-checked="&hideBookmarksSidebar.label;"
+                       class="subviewbutton subviewbutton-iconic"
+                       key="viewBookmarksSidebarKb"
+                       oncommand="SidebarUI.toggle('viewBookmarksSidebar', this); PanelUI.hide();">
+          <observes element="viewBookmarksSidebar" attribute="checked"/>
+        </toolbarbutton>
+        <toolbarbutton id="panelMenu_viewBookmarksToolbar"
+                       class="subviewbutton subviewbutton-iconic"
+                       placesanonid="view-toolbar"
+                       toolbarId="PersonalToolbar"
+                       type="checkbox"
+                       oncommand="onViewToolbarCommand(event)"
+                       label="&viewBookmarksToolbar.label;"
+                       label-checked="&hideBookmarksToolbar.label;"/>
       </vbox>
     </panelview>
   </photonpanelmultiview>

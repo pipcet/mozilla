@@ -14,6 +14,7 @@ const { AppConstants } = devtools.require("resource://gre/modules/AppConstants.j
 const BROWSER_BASED_DIRS = [
   "resource://devtools/client/inspector/boxmodel",
   "resource://devtools/client/inspector/computed",
+  "resource://devtools/client/inspector/fonts",
   "resource://devtools/client/inspector/grids",
   "resource://devtools/client/inspector/layout",
   "resource://devtools/client/jsonview",
@@ -111,6 +112,8 @@ function BrowserLoaderBuilder({ baseURI, window, useOnlyShared, commonLibRequire
     id: "browser-loader",
     sharedGlobal: true,
     sandboxPrototype: window,
+    sandboxName: "DevTools (UI loader)",
+    noSandboxAddonId: true,
     paths: Object.assign({}, dynamicPaths, loaderOptions.paths),
     invisibleToDebugger: loaderOptions.invisibleToDebugger,
     requireHook: (id, require) => {

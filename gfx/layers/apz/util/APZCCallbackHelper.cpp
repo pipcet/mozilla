@@ -210,8 +210,8 @@ SetDisplayPortMargins(nsIPresShell* aPresShell,
 
   CSSRect baseCSS = aMetrics.CalculateCompositedRectInCssPixels();
   nsRect base(0, 0,
-              baseCSS.width * nsPresContext::AppUnitsPerCSSPixel(),
-              baseCSS.height * nsPresContext::AppUnitsPerCSSPixel());
+              baseCSS.Width() * nsPresContext::AppUnitsPerCSSPixel(),
+              baseCSS.Height() * nsPresContext::AppUnitsPerCSSPixel());
   nsLayoutUtils::SetDisplayPortBaseIfNotSet(aContent, base);
 }
 
@@ -959,6 +959,30 @@ APZCCallbackHelper::NotifyAsyncScrollbarDragRejected(const FrameMetrics::ViewID&
 }
 
 /* static */ void
+APZCCallbackHelper::NotifyAutoscrollHandledByAPZ(const FrameMetrics::ViewID& aScrollId)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  nsCOMPtr<nsIObserverService> observerService = mozilla::services::GetObserverService();
+  MOZ_ASSERT(observerService);
+
+  nsAutoString data;
+  data.AppendInt(aScrollId);
+  observerService->NotifyObservers(nullptr, "autoscroll-handled-by-apz", data.get());
+}
+
+/* static */ void
+APZCCallbackHelper::CancelAutoscroll(const FrameMetrics::ViewID& aScrollId)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  nsCOMPtr<nsIObserverService> observerService = mozilla::services::GetObserverService();
+  MOZ_ASSERT(observerService);
+
+  nsAutoString data;
+  data.AppendInt(aScrollId);
+  observerService->NotifyObservers(nullptr, "apz:cancel-autoscroll", data.get());
+}
+
+/* static */ void
 APZCCallbackHelper::NotifyPinchGesture(PinchGestureInput::PinchGestureType aType,
                                        LayoutDeviceCoord aSpanChange,
                                        Modifiers aModifiers,
@@ -975,10 +999,6 @@ APZCCallbackHelper::NotifyPinchGesture(PinchGestureInput::PinchGestureType aType
     case PinchGestureInput::PINCHGESTURE_END:
       msg = eMagnifyGesture;
       break;
-    case PinchGestureInput::PINCHGESTURE_SENTINEL:
-    default:
-      MOZ_ASSERT_UNREACHABLE("Invalid gesture type");
-      return;
   }
 
   WidgetSimpleGestureEvent event(true, msg, aWidget);

@@ -14,7 +14,7 @@
 namespace mozilla {
 namespace dom {
 
-class FileHandleBase;
+class IDBFileHandle;
 
 namespace indexedDB {
 
@@ -69,6 +69,12 @@ protected:
   virtual bool
   DeallocPBackgroundIndexedDBUtilsChild(PBackgroundIndexedDBUtilsChild* aActor)
                                         override;
+
+  virtual PBackgroundStorageChild*
+  AllocPBackgroundStorageChild(const nsString& aProfilePath) override;
+
+  virtual bool
+  DeallocPBackgroundStorageChild(PBackgroundStorageChild* aActor) override;
 
   virtual PPendingIPCBlobChild*
   AllocPPendingIPCBlobChild(const IPCBlob& aBlob) override;
@@ -202,6 +208,20 @@ protected:
 
   virtual bool
   DeallocPWebAuthnTransactionChild(PWebAuthnTransactionChild* aActor) override;
+
+  virtual PHttpBackgroundChannelChild*
+  AllocPHttpBackgroundChannelChild(const uint64_t& aChannelId) override;
+
+  virtual bool
+  DeallocPHttpBackgroundChannelChild(PHttpBackgroundChannelChild* aActor) override;
+
+  virtual mozilla::ipc::IPCResult
+  RecvDispatchLocalStorageChange(const nsString& aDocumentURI,
+                                 const nsString& aKey,
+                                 const nsString& aOldValue,
+                                 const nsString& aNewValue,
+                                 const PrincipalInfo& aPrincipalInfo,
+                                 const bool& aIsPrivate) override;
 };
 
 class BackgroundChildImpl::ThreadLocal final
@@ -210,7 +230,7 @@ class BackgroundChildImpl::ThreadLocal final
 
 public:
   nsAutoPtr<mozilla::dom::indexedDB::ThreadLocal> mIndexedDBThreadLocal;
-  mozilla::dom::FileHandleBase* mCurrentFileHandle;
+  mozilla::dom::IDBFileHandle* mCurrentFileHandle;
 
 public:
   ThreadLocal();

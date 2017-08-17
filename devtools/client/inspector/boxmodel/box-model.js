@@ -324,7 +324,6 @@ BoxModel.prototype = {
           this.store.dispatch(updateLayout(layout));
         }, e => console.error(e));
       },
-      contextMenu: this.inspector.onTextBoxContextMenu,
       cssProperties: getCssProperties(this.inspector.toolbox)
     }, event);
   },
@@ -347,10 +346,9 @@ BoxModel.prototype = {
   },
 
   /**
-   * Handler for the inspector sidebar select event. Starts listening for
-   * "grid-layout-changed" if the layout panel is visible. Otherwise, stop
-   * listening for grid layout changes. Finally, refresh the layout view if
-   * it is visible.
+   * Handler for the inspector sidebar select event. Starts tracking reflows if the
+   * layout panel is visible. Otherwise, stop tracking reflows. Finally, refresh the box
+   * model view if it is visible.
    */
   onSidebarSelect() {
     if (!this.isPanelVisible()) {

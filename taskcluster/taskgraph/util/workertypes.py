@@ -24,8 +24,10 @@ WORKER_TYPES = {
     'aws-provisioner-v1/gecko-t-linux-xlarge': ('docker-worker', 'linux'),
     'aws-provisioner-v1/gecko-t-win10-64': ('generic-worker', 'windows'),
     'aws-provisioner-v1/gecko-t-win10-64-gpu': ('generic-worker', 'windows'),
+    'releng-hardware/gecko-t-win10-64-hw': ('generic-worker', 'windows'),
     'aws-provisioner-v1/gecko-t-win7-32': ('generic-worker', 'windows'),
     'aws-provisioner-v1/gecko-t-win7-32-gpu': ('generic-worker', 'windows'),
+    'releng-hardware/gecko-t-win7-32-hw': ('generic-worker', 'windows'),
     'aws-provisioner-v1/taskcluster-generic': ('docker-worker', 'linux'),
     'buildbot-bridge/buildbot-bridge': ('buildbot-bridge', None),
     'invalid/invalid': ('invalid', None),
@@ -36,7 +38,7 @@ WORKER_TYPES = {
     'scriptworker-prov-v1/beetmoverworker-v1': ('beetmover', None),
     'scriptworker-prov-v1/pushapk-v1': ('push-apk', None),
     "scriptworker-prov-v1/signing-linux-v1": ('scriptworker-signing', None),
-    'tc-worker-provisioner/gecko-t-osx-10-10': ('native-engine', 'macosx'),
+    'releng-hardware/gecko-t-osx-1010': ('generic-worker', 'macosx'),
 }
 
 

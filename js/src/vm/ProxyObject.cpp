@@ -72,8 +72,7 @@ ProxyObject::New(JSContext* cx, const BaseProxyHandler* handler, HandleValue pri
         MOZ_ASSERT(priv.isNull() || (priv.isGCThing() && priv.toGCThing()->isTenured()));
         newKind = SingletonObject;
     } else if ((priv.isGCThing() && priv.toGCThing()->isTenured()) ||
-               !handler->canNurseryAllocate() ||
-               !handler->finalizeInBackground(priv))
+               !handler->canNurseryAllocate())
     {
         newKind = TenuredObject;
     }
@@ -92,7 +91,10 @@ ProxyObject::New(JSContext* cx, const BaseProxyHandler* handler, HandleValue pri
     values->init(proxy->numReservedSlots());
 
     proxy->data.handler = handler;
-    proxy->setCrossCompartmentPrivate(priv);
+    if (IsCrossCompartmentWrapper(proxy))
+        proxy->setCrossCompartmentPrivate(priv);
+    else
+        proxy->setSameCompartmentPrivate(priv);
 
     /* Don't track types of properties of non-DOM and non-singleton proxies. */
     if (newKind != SingletonObject && !clasp->isDOMClass())

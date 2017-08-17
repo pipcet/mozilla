@@ -10,25 +10,25 @@ const MAX_ORDINAL = 99;
 const SPLITCONSOLE_ENABLED_PREF = "devtools.toolbox.splitconsoleEnabled";
 const SPLITCONSOLE_HEIGHT_PREF = "devtools.toolbox.splitconsoleHeight";
 const DISABLE_AUTOHIDE_PREF = "ui.popup.disable_autohide";
-const OS_HISTOGRAM = "DEVTOOLS_OS_ENUMERATED_PER_USER";
-const OS_IS_64_BITS = "DEVTOOLS_OS_IS_64_BITS_PER_USER";
 const HOST_HISTOGRAM = "DEVTOOLS_TOOLBOX_HOST";
 const SCREENSIZE_HISTOGRAM = "DEVTOOLS_SCREEN_RESOLUTION_ENUMERATED_PER_USER";
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 
-var {Ci, Cu} = require("chrome");
+var {Ci, Cu, Cc} = require("chrome");
 var promise = require("promise");
 var defer = require("devtools/shared/defer");
 var Services = require("Services");
 var {Task} = require("devtools/shared/task");
 var {gDevTools} = require("devtools/client/framework/devtools");
-var EventEmitter = require("devtools/shared/event-emitter");
+var EventEmitter = require("devtools/shared/old-event-emitter");
 var Telemetry = require("devtools/client/shared/telemetry");
 var { attachThread, detachThread } = require("./attach-thread");
 var Menu = require("devtools/client/framework/menu");
 var MenuItem = require("devtools/client/framework/menu-item");
 var { DOMHelpers } = require("resource://devtools/client/shared/DOMHelpers.jsm");
 const { KeyCodes } = require("devtools/client/shared/keycodes");
+var Startup = Cc["@mozilla.org/devtools/startup-clh;1"].getService(Ci.nsISupports)
+  .wrappedJSObject;
 
 const { BrowserLoader } =
   Cu.import("resource://devtools/client/shared/browser-loader.js", {});
@@ -63,9 +63,13 @@ loader.lazyRequireGetter(this, "ToolboxButtons",
 loader.lazyRequireGetter(this, "SourceMapURLService",
   "devtools/client/framework/source-map-url-service", true);
 loader.lazyRequireGetter(this, "HUDService",
-  "devtools/client/webconsole/hudservice");
+  "devtools/client/webconsole/hudservice", true);
 loader.lazyRequireGetter(this, "viewSource",
   "devtools/client/shared/view-source");
+
+loader.lazyGetter(this, "domNodeConstants", () => {
+  return require("devtools/shared/dom-node-constants");
+});
 
 loader.lazyGetter(this, "registerHarOverlay", () => {
   return require("devtools/client/netmonitor/src/har/toolbox-overlay").register;
@@ -134,6 +138,8 @@ function Toolbox(target, selectedTool, hostType, contentWindow, frameId) {
   this._onPickerKeypress = this._onPickerKeypress.bind(this);
   this._onPickerStarted = this._onPickerStarted.bind(this);
   this._onPickerStopped = this._onPickerStopped.bind(this);
+  this._onInspectObject = this._onInspectObject.bind(this);
+  this._onNewSelectedNodeFront = this._onNewSelectedNodeFront.bind(this);
   this.selectTool = this.selectTool.bind(this);
 
   this._target.on("close", this.destroy);
@@ -152,6 +158,7 @@ function Toolbox(target, selectedTool, hostType, contentWindow, frameId) {
 
   this._target.on("navigate", this._refreshHostTitle);
   this._target.on("frame-update", this._updateFrames);
+  this._target.on("inspect-object", this._onInspectObject);
 
   this.on("host-changed", this._refreshHostTitle);
   this.on("select", this._refreshHostTitle);
@@ -213,7 +220,9 @@ Toolbox.prototype = {
 
   set visibleAdditionalTools(tools) {
     this._visibleAdditionalTools = tools;
-    this._combineAndSortPanelDefinitions();
+    if (this.isReady) {
+      this._combineAndSortPanelDefinitions();
+    }
   },
 
   /**
@@ -422,6 +431,7 @@ Toolbox.prototype = {
       yield domReady.promise;
 
       this.isReady = true;
+
       let framesPromise = this._listFrames();
 
       Services.prefs.addObserver("devtools.cache.disabled", this._applyCacheSettings);
@@ -432,6 +442,13 @@ Toolbox.prototype = {
         this.doc.getElementById("toolbox-textbox-context-popup");
       this.textBoxContextMenuPopup.addEventListener("popupshowing",
         this._updateTextBoxMenuItems, true);
+      this.doc.addEventListener("contextmenu", (e) => {
+        if (e.originalTarget.closest("input") || e.originalTarget.closest("textarea")) {
+          e.stopPropagation();
+          e.preventDefault();
+          this.openTextBoxContextMenu(e.screenX, e.screenY);
+        }
+      }, true);
 
       this.shortcuts = new KeyShortcuts({
         window: this.doc.defaultView
@@ -503,7 +520,7 @@ Toolbox.prototype = {
 
       this.emit("ready");
       this._isOpenDeferred.resolve();
-    }.bind(this)).then(null, console.error.bind(console));
+    }.bind(this)).catch(console.error.bind(console));
   },
 
   /**
@@ -527,6 +544,62 @@ Toolbox.prototype = {
   },
 
   /**
+   * Unconditionally create and get the source map service.
+   */
+  _createSourceMapService: function () {
+    if (this._sourceMapService) {
+      return this._sourceMapService;
+    }
+    // Uses browser loader to access the `Worker` global.
+    let service = this.browserRequire("devtools/client/shared/source-map/index");
+
+    // Provide a wrapper for the service that reports errors more nicely.
+    this._sourceMapService = new Proxy(service, {
+      get: (target, name) => {
+        switch (name) {
+          case "getOriginalURLs":
+            return (urlInfo) => {
+              return target.getOriginalURLs(urlInfo)
+                .catch(text => {
+                  let message = L10N.getFormatStr("toolbox.sourceMapFailure",
+                                                  text, urlInfo.url,
+                                                  urlInfo.sourceMapURL);
+                  this.target.logErrorInPage(message, "source map");
+                  // It's ok to swallow errors here, because a null
+                  // result just means that no source map was found.
+                  return null;
+                });
+            };
+
+          case "getOriginalSourceText":
+            return (originalSource) => {
+              return target.getOriginalSourceText(originalSource)
+                .catch(text => {
+                  let message = L10N.getFormatStr("toolbox.sourceMapSourceFailure",
+                                                  text, originalSource.url);
+                  this.target.logErrorInPage(message, "source map");
+                  // Also replace the result with the error text.
+                  // Note that this result has to have the same form
+                  // as whatever the upstream getOriginalSourceText
+                  // returns.
+                  return {
+                    text: message,
+                    contentType: "text/plain",
+                  };
+                });
+            };
+
+          default:
+            return target[name];
+        }
+      },
+    });
+
+    this._sourceMapService.startSourceMapWorker(SOURCE_MAP_WORKER);
+    return this._sourceMapService;
+  },
+
+  /**
    * A common access point for the client-side mapping service for source maps that
    * any panel can use.  This is a "low-level" API that connects to
    * the source map worker.
@@ -535,14 +608,7 @@ Toolbox.prototype = {
     if (!Services.prefs.getBoolPref("devtools.source-map.client-service.enabled")) {
       return null;
     }
-    if (this._sourceMapService) {
-      return this._sourceMapService;
-    }
-    // Uses browser loader to access the `Worker` global.
-    this._sourceMapService =
-      this.browserRequire("devtools/client/shared/source-map/index");
-    this._sourceMapService.startSourceMapWorker(SOURCE_MAP_WORKER);
-    return this._sourceMapService;
+    return this._createSourceMapService();
   },
 
   /**
@@ -556,11 +622,9 @@ Toolbox.prototype = {
     if (this._sourceMapURLService) {
       return this._sourceMapURLService;
     }
-    let sourceMaps = this.sourceMapService;
-    if (!sourceMaps) {
-      return null;
-    }
-    this._sourceMapURLService = new SourceMapURLService(this._target, sourceMaps);
+    let sourceMaps = this._createSourceMapService();
+    this._sourceMapURLService = new SourceMapURLService(this._target, this.threadClient,
+                                                        sourceMaps);
     return this._sourceMapURLService;
   },
 
@@ -578,9 +642,6 @@ Toolbox.prototype = {
   _pingTelemetry: function () {
     this._telemetry.toolOpened("toolbox");
 
-    this._telemetry.logOncePerBrowserVersion(OS_HISTOGRAM, system.getOSCPU());
-    this._telemetry.logOncePerBrowserVersion(OS_IS_64_BITS,
-                                             Services.appinfo.is64Bit ? 1 : 0);
     this._telemetry.logOncePerBrowserVersion(SCREENSIZE_HISTOGRAM,
                                              system.getScreenDimensions());
     this._telemetry.log(HOST_HISTOGRAM, this._getTelemetryHostId());
@@ -847,24 +908,25 @@ Toolbox.prototype = {
 
     let doc = this.win.parent.document;
 
-    for (let [id, toolDefinition] of gDevTools.getToolDefinitionMap()) {
-      // Prevent multiple entries for the same tool.
-      if (!toolDefinition.key || doc.getElementById("key_" + id)) {
+    for (let item of Startup.KeyShortcuts) {
+      // KeyShortcuts contain tool-specific and global key shortcuts,
+      // here we only need to copy shortcut specific to each tool.
+      if (!item.toolId) {
         continue;
       }
+      let { toolId, shortcut, modifiers } = item;
 
-      let toolId = id;
       let key = doc.createElement("key");
 
       key.id = "key_" + toolId;
 
-      if (toolDefinition.key.startsWith("VK_")) {
-        key.setAttribute("keycode", toolDefinition.key);
+      if (shortcut.startsWith("VK_")) {
+        key.setAttribute("keycode", shortcut);
       } else {
-        key.setAttribute("key", toolDefinition.key);
+        key.setAttribute("key", shortcut);
       }
 
-      key.setAttribute("modifiers", toolDefinition.modifiers);
+      key.setAttribute("modifiers", modifiers);
       // needed. See bug 371900
       key.setAttribute("oncommand", "void(0);");
       key.addEventListener("command", () => {
@@ -1376,11 +1438,17 @@ Toolbox.prototype = {
       throw new Error("Tool definition already registered: " +
                       definition.id);
     }
+
     this.additionalToolDefinitions.set(definition.id, definition);
     this.visibleAdditionalTools = [...this.visibleAdditionalTools, definition.id];
 
-    this._combineAndSortPanelDefinitions();
-    this._buildPanelForTool(definition);
+    const buildPanel = () => this._buildPanelForTool(definition);
+
+    if (this.isReady) {
+      buildPanel();
+    } else {
+      this.once("ready", buildPanel);
+    }
   },
 
   /**
@@ -2204,6 +2272,7 @@ Toolbox.prototype = {
         let showAllAnonymousContent = Services.prefs.getBoolPref(pref);
         this._walker = yield this._inspector.getWalker({ showAllAnonymousContent });
         this._selection = new Selection(this._walker);
+        this._selection.on("new-node-front", this._onNewSelectedNodeFront);
 
         if (this.highlighterUtils.isRemoteHighlightable()) {
           this.walker.on("highlighter-ready", this._highlighterReady);
@@ -2215,6 +2284,40 @@ Toolbox.prototype = {
       }.bind(this));
     }
     return this._initInspector;
+  },
+
+  _onNewSelectedNodeFront: function (evt) {
+    // Emit a "selection-changed" event when the toolbox.selection has been set
+    // to a new node (or cleared). Currently used in the WebExtensions APIs (to
+    // provide the `devtools.panels.elements.onSelectionChanged` event).
+    this.emit("selection-changed");
+  },
+
+  _onInspectObject: function (evt, packet) {
+    this.inspectObjectActor(packet.objectActor, packet.inspectFromAnnotation);
+  },
+
+  inspectObjectActor: async function (objectActor, inspectFromAnnotation) {
+    if (objectActor.preview &&
+        objectActor.preview.nodeType === domNodeConstants.ELEMENT_NODE) {
+      // Open the inspector and select the DOM Element.
+      await this.loadTool("inspector");
+      const inspector = await this.getPanel("inspector");
+      const nodeFound = await inspector.inspectNodeActor(objectActor.actor,
+                                                         inspectFromAnnotation);
+      if (nodeFound) {
+        await this.selectTool("inspector");
+      }
+    } else if (objectActor.type !== "null" &&
+               objectActor.type !== "undefined") {
+      // Open then split console and inspect the object in the variables view,
+      // when the objectActor doesn't represent an undefined or null value.
+      await this.openSplitConsole();
+      const panel = this.getPanel("webconsole");
+      const jsterm = panel.hud.jsterm;
+
+      jsterm.inspectObjectActor(objectActor);
+    }
   },
 
   /**
@@ -2261,6 +2364,7 @@ Toolbox.prototype = {
         yield this._highlighter.destroy();
       }
       if (this._selection) {
+        this._selection.off("new-node-front", this._onNewSelectedNodeFront);
         this._selection.destroy();
       }
 
@@ -2300,6 +2404,7 @@ Toolbox.prototype = {
 
     this.emit("destroy");
 
+    this._target.off("inspect-object", this._onInspectObject);
     this._target.off("navigate", this._refreshHostTitle);
     this._target.off("frame-update", this._updateFrames);
     this.off("select", this._refreshHostTitle);
@@ -2443,7 +2548,7 @@ Toolbox.prototype = {
               .getInterface(Ci.nsIDOMWindowUtils)
               .garbageCollect();
           }
-        }).then(null, console.error));
+        }).catch(console.error));
 
     let leakCheckObserver = ({wrappedJSObject: barrier}) => {
       // Make the leak detector wait until this toolbox is properly destroyed.

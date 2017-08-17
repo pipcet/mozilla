@@ -235,6 +235,7 @@ public:
 
   nsTArray<Saiz> mSaizs;
   nsTArray<Saio> mSaios;
+  nsTArray<nsTArray<uint8_t>> mPsshes;
 
 private:
     // aDecodeTime is updated to the end of the parsed TRAF on return.
@@ -262,6 +263,11 @@ public:
   }
   bool RebuildFragmentedIndex(
     const mozilla::MediaByteRangeSet& aByteRanges);
+  // If *aCanEvict is set to true. then will remove all moofs already parsed
+  // from index then rebuild the index. *aCanEvict is set to true upon return if
+  // some moofs were removed.
+  bool RebuildFragmentedIndex(
+    const mozilla::MediaByteRangeSet& aByteRanges, bool* aCanEvict);
   bool RebuildFragmentedIndex(BoxContext& aContext);
   Interval<Microseconds> GetCompositionRange(
     const mozilla::MediaByteRangeSet& aByteRanges);
@@ -286,7 +292,6 @@ public:
   mozilla::MediaByteRange mInitRange;
   RefPtr<Stream> mSource;
   uint64_t mOffset;
-  nsTArray<uint64_t> mMoofOffsets;
   Mvhd mMvhd;
   Mdhd mMdhd;
   Trex mTrex;

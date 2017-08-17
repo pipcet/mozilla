@@ -69,8 +69,6 @@ class EnterDebuggeeNoExecute;
 class TraceLoggerThread;
 #endif
 
-typedef Vector<UniquePtr<PromiseTask>, 0, SystemAllocPolicy> PromiseTaskPtrVector;
-
 } // namespace js
 
 struct DtoaState;
@@ -466,15 +464,20 @@ struct JSRuntime : public js::MallocProvider<JSRuntime>
     void setTelemetryCallback(JSRuntime* rt, JSAccumulateTelemetryDataCallback callback);
 
   public:
-    js::ActiveThreadData<JS::StartAsyncTaskCallback> startAsyncTaskCallback;
-    js::UnprotectedData<JS::FinishAsyncTaskCallback> finishAsyncTaskCallback;
-    js::ExclusiveData<js::PromiseTaskPtrVector> promiseTasksToDestroy;
+    js::UnprotectedData<js::OffThreadPromiseRuntimeState> offThreadPromiseState;
 
     JSObject* getIncumbentGlobal(JSContext* cx);
     bool enqueuePromiseJob(JSContext* cx, js::HandleFunction job, js::HandleObject promise,
                            js::HandleObject incumbentGlobal);
     void addUnhandledRejectedPromise(JSContext* cx, js::HandleObject promise);
     void removeUnhandledRejectedPromise(JSContext* cx, js::HandleObject promise);
+
+    js::UnprotectedData<JS::RequestReadableStreamDataCallback> readableStreamDataRequestCallback;
+    js::UnprotectedData<JS::WriteIntoReadRequestBufferCallback> readableStreamWriteIntoReadRequestCallback;
+    js::UnprotectedData<JS::CancelReadableStreamCallback> readableStreamCancelCallback;
+    js::UnprotectedData<JS::ReadableStreamClosedCallback> readableStreamClosedCallback;
+    js::UnprotectedData<JS::ReadableStreamErroredCallback> readableStreamErroredCallback;
+    js::UnprotectedData<JS::ReadableStreamFinalizeCallback> readableStreamFinalizeCallback;
 
     /* Had an out-of-memory error which did not populate an exception. */
     mozilla::Atomic<bool> hadOutOfMemory;
@@ -494,6 +497,12 @@ struct JSRuntime : public js::MallocProvider<JSRuntime>
     /* Call this to get the name of a compartment. */
     js::ActiveThreadData<JSCompartmentNameCallback> compartmentNameCallback;
 
+    /* Realm destroy callback. */
+    js::ActiveThreadData<JS::DestroyRealmCallback> destroyRealmCallback;
+
+    /* Call this to get the name of a realm. */
+    js::ActiveThreadData<JS::RealmNameCallback> realmNameCallback;
+
     /* Callback for doing memory reporting on external strings. */
     js::ActiveThreadData<JSExternalStringSizeofCallback> externalStringSizeofCallback;
 
@@ -509,9 +518,9 @@ struct JSRuntime : public js::MallocProvider<JSRuntime>
 
   private:
     /* Gecko profiling metadata */
-    js::UnprotectedData<js::GeckoProfiler> geckoProfiler_;
+    js::UnprotectedData<js::GeckoProfilerRuntime> geckoProfiler_;
   public:
-    js::GeckoProfiler& geckoProfiler() { return geckoProfiler_.ref(); }
+    js::GeckoProfilerRuntime& geckoProfiler() { return geckoProfiler_.ref(); }
 
     // Heap GC roots for PersistentRooted pointers.
     js::ActiveThreadData<mozilla::EnumeratedArray<JS::RootKind, JS::RootKind::Limit,
@@ -554,10 +563,10 @@ struct JSRuntime : public js::MallocProvider<JSRuntime>
 
   private:
     // List of non-ephemeron weak containers to sweep during beginSweepingSweepGroup.
-    js::ActiveThreadData<mozilla::LinkedList<JS::WeakCache<void*>>> weakCaches_;
+    js::ActiveThreadData<mozilla::LinkedList<JS::detail::WeakCacheBase>> weakCaches_;
   public:
-    mozilla::LinkedList<JS::WeakCache<void*>>& weakCaches() { return weakCaches_.ref(); }
-    void registerWeakCache(JS::WeakCache<void*>* cachep) {
+    mozilla::LinkedList<JS::detail::WeakCacheBase>& weakCaches() { return weakCaches_.ref(); }
+    void registerWeakCache(JS::detail::WeakCacheBase* cachep) {
         weakCaches().insertBack(cachep);
     }
 
@@ -815,6 +824,9 @@ struct JSRuntime : public js::MallocProvider<JSRuntime>
     // AutoLockForExclusiveAccess.
     js::ExclusiveAccessLockOrGCTaskData<js::AtomSet*> atoms_;
 
+    // Set of all atoms added while the main atoms table is being swept.
+    js::ExclusiveAccessLockData<js::AtomSet*> atomsAddedWhileSweeping_;
+
     // Compartment and associated zone containing all atoms in the runtime, as
     // well as runtime wide IonCode stubs. Modifying the contents of this
     // compartment requires the calling thread to use AutoLockForExclusiveAccess.
@@ -830,14 +842,26 @@ struct JSRuntime : public js::MallocProvider<JSRuntime>
     void finishAtoms();
     bool atomsAreFinished() const { return !atoms_; }
 
-    void sweepAtoms();
+    js::AtomSet* atomsForSweeping() {
+        MOZ_ASSERT(JS::CurrentThreadIsHeapCollecting());
+        return atoms_;
+    }
 
     js::AtomSet& atoms(js::AutoLockForExclusiveAccess& lock) {
+        MOZ_ASSERT(atoms_);
         return *atoms_;
     }
     js::AtomSet& unsafeAtoms() {
+        MOZ_ASSERT(atoms_);
         return *atoms_;
     }
+
+    bool createAtomsAddedWhileSweepingTable();
+    void destroyAtomsAddedWhileSweepingTable();
+    js::AtomSet* atomsAddedWhileSweeping() {
+        return atomsAddedWhileSweeping_;
+    }
+
     JSCompartment* atomsCompartment(js::AutoLockForExclusiveAccess& lock) {
         return atomsCompartment_;
     }
@@ -847,6 +871,10 @@ struct JSRuntime : public js::MallocProvider<JSRuntime>
 
     bool isAtomsCompartment(JSCompartment* comp) {
         return comp == atomsCompartment_;
+    }
+
+    const JS::Zone* atomsZone(js::AutoLockForExclusiveAccess& lock) const {
+        return gc.atomsZone;
     }
 
     // The atoms compartment is the only one in its zone.
@@ -1070,13 +1098,26 @@ struct JSRuntime : public js::MallocProvider<JSRuntime>
     // resume PC at a time.
     js::ActiveThreadData<void*> wasmResumePC_;
 
+    // To ensure a consistent state of fp/pc, the unwound pc might be
+    // different from the resumePC, especially at call boundaries.
+    js::ActiveThreadData<void*> wasmUnwindPC_;
+
   public:
+    void startWasmInterrupt(void* resumePC, void* unwindPC) {
+        MOZ_ASSERT(resumePC && unwindPC);
+        wasmResumePC_ = resumePC;
+        wasmUnwindPC_ = unwindPC;
+    }
+    void finishWasmInterrupt() {
+        MOZ_ASSERT(wasmResumePC_ && wasmUnwindPC_);
+        wasmResumePC_ = nullptr;
+        wasmUnwindPC_ = nullptr;
+    }
     void* wasmResumePC() const {
         return wasmResumePC_;
     }
-    void setWasmResumePC(void* resumePC) {
-        MOZ_ASSERT(!!resumePC == !wasmResumePC_);
-        wasmResumePC_ = resumePC;
+    void* wasmUnwindPC() const {
+        return wasmUnwindPC_;
     }
 };
 
@@ -1352,12 +1393,6 @@ inline gc::StoreBuffer&
 ZoneGroup::storeBuffer()
 {
     return runtime->gc.storeBuffer();
-}
-
-inline void
-ZoneGroup::callAfterMinorGC(void (*thunk)(void* data), void* data)
-{
-    nursery().queueSweepAction(thunk, data);
 }
 
 // This callback is set by JS::SetProcessLargeAllocationFailureCallback

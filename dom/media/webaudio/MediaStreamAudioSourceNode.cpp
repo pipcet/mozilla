@@ -11,6 +11,8 @@
 #include "AudioStreamTrack.h"
 #include "nsIDocument.h"
 #include "mozilla/CORSMode.h"
+#include "nsContentUtils.h"
+#include "nsIScriptError.h"
 
 namespace mozilla {
 namespace dom {
@@ -84,9 +86,7 @@ MediaStreamAudioSourceNode::Init(DOMMediaStream* aMediaStream, ErrorResult& aRv)
 
   mInputStream = aMediaStream;
   AudioNodeEngine* engine = new MediaStreamAudioSourceNodeEngine(this);
-  mStream =
-    AudioNodeExternalInputStream::Create(graph, engine,
-                                         aMediaStream->AbstractMainThread());
+  mStream = AudioNodeExternalInputStream::Create(graph, engine);
   mInputStream->AddConsumerToKeepAlive(static_cast<nsIDOMEventTarget*>(this));
 
   mInputStream->RegisterTrackListener(this);

@@ -28,18 +28,13 @@
     <command id="Browser:SendLink"
              oncommand="MailIntegration.sendLinkForBrowser(gBrowser.selectedBrowser);"/>
 
-    <command id="PageAction:copyURL"
-             oncommand="gPageActionButton.copyURL();"/>
-    <command id="PageAction:emailLink"
-             oncommand="gPageActionButton.emailLink();"/>
-
     <command id="cmd_pageSetup" oncommand="PrintUtils.showPageSetup();"/>
     <command id="cmd_print" oncommand="PrintUtils.printWindow(window.gBrowser.selectedBrowser.outerWindowID, window.gBrowser.selectedBrowser);"/>
     <command id="cmd_printPreview" oncommand="PrintUtils.printPreview(PrintPreviewListener);"/>
     <command id="cmd_close" oncommand="BrowserCloseTabOrWindow()"/>
     <command id="cmd_closeWindow" oncommand="BrowserTryToCloseWindow()"/>
     <command id="cmd_toggleMute" oncommand="gBrowser.selectedTab.toggleMuteAudio()"/>
-    <command id="cmd_CustomizeToolbars" oncommand="BrowserCustomizeToolbar()"/>
+    <command id="cmd_CustomizeToolbars" oncommand="gCustomizeMode.enter()"/>
     <command id="cmd_quitApplication" oncommand="goQuitApplication()"/>
 
 
@@ -352,10 +347,20 @@
     <key id="key_sanitize" command="Tools:Sanitize" keycode="VK_DELETE" modifiers="accel,shift"/>
 #ifdef XP_MACOSX
     <key id="key_sanitize_mac" command="Tools:Sanitize" keycode="VK_BACK" modifiers="accel,shift"/>
-    <key id="key_quitApplication" key="&quitApplicationCmdUnix.key;" modifiers="accel" reserved="true"/>
-#elifdef XP_UNIX
-    <key id="key_quitApplication" key="&quitApplicationCmdUnix.key;" command="cmd_quitApplication" modifiers="accel" reserved="true"/>
 #endif
+    <key id="key_quitApplication" key="&quitApplicationCmd.key;"
+#ifdef XP_WIN
+         modifiers="accel,shift"
+#else
+         modifiers="accel"
+#endif
+# On OS X, dark voodoo magic invokes the quit code for this key.
+# So we're not adding the attribute on OSX because of backwards/add-on compat.
+# See bug 1369909 for background on this.
+#ifndef XP_MACOSX
+         command="cmd_quitApplication"
+#endif
+         reserved="true"/>
 
 #ifdef FULL_BROWSER_WINDOW
     <key id="key_undoCloseTab" command="History:UndoCloseTab" key="&tabCmd.commandkey;" modifiers="accel,shift"/>

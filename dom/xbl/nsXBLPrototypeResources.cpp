@@ -38,6 +38,9 @@ nsXBLPrototypeResources::~nsXBLPrototypeResources()
   if (mLoader) {
     mLoader->mResources = nullptr;
   }
+  if (mServoStyleSet) {
+    mServoStyleSet->Shutdown();
+  }
 }
 
 void
@@ -47,13 +50,14 @@ nsXBLPrototypeResources::AddResource(nsIAtom* aResourceType, const nsAString& aS
     mLoader->AddResource(aResourceType, aSrc);
 }
 
-void
-nsXBLPrototypeResources::LoadResources(bool* aResult)
+bool
+nsXBLPrototypeResources::LoadResources(nsIContent* aBoundElement)
 {
-  if (mLoader)
-    mLoader->LoadResources(aResult);
-  else
-    *aResult = true; // All resources loaded.
+  if (mLoader) {
+    return mLoader->LoadResources(aBoundElement);
+  }
+
+  return true; // All resources loaded.
 }
 
 void
@@ -158,6 +162,23 @@ nsXBLPrototypeResources::GatherRuleProcessor()
                                           SheetType::Doc,
                                           nullptr,
                                           mRuleProcessor);
+}
+
+void
+nsXBLPrototypeResources::ComputeServoStyleSet(nsPresContext* aPresContext)
+{
+  mServoStyleSet.reset(new ServoStyleSet());
+  mServoStyleSet->Init(aPresContext, nullptr);
+  for (StyleSheet* sheet : mStyleSheetList) {
+    MOZ_ASSERT(sheet->IsServo(),
+               "This should only be called with Servo-flavored style backend!");
+    // The XBL style sheets aren't document level sheets, but we need to
+    // decide a particular SheetType to add them to style set. This type
+    // doesn't affect the place where we pull those rules from
+    // stylist::push_applicable_declarations_as_xbl_only_stylist().
+    mServoStyleSet->AppendStyleSheet(SheetType::Doc, sheet->AsServo());
+  }
+  mServoStyleSet->UpdateStylistIfNeeded();
 }
 
 void

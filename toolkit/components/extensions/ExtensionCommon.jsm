@@ -15,19 +15,24 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 this.EXPORTED_SYMBOLS = ["ExtensionCommon"];
 
+Cu.importGlobalProperties(["fetch"]);
+
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Locale",
-                                  "resource://gre/modules/Locale.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "MessageChannel",
-                                  "resource://gre/modules/MessageChannel.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
-                                  "resource://gre/modules/PrivateBrowsingUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Schemas",
-                                  "resource://gre/modules/Schemas.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  ConsoleAPI: "resource://gre/modules/Console.jsm",
+  MessageChannel: "resource://gre/modules/MessageChannel.jsm",
+  Preferences: "resource://gre/modules/Preferences.jsm",
+  PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
+  Schemas: "resource://gre/modules/Schemas.jsm",
+});
+
+XPCOMUtils.defineLazyServiceGetter(this, "styleSheetService",
+                                   "@mozilla.org/content/style-sheet-service;1",
+                                   "nsIStyleSheetService");
+
+const global = this;
 
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 
@@ -36,7 +41,6 @@ var {
   DefaultWeakMap,
   EventEmitter,
   ExtensionError,
-  SpreadArgs,
   defineLazyGetter,
   getConsole,
   getInnerWindowID,
@@ -47,6 +51,131 @@ var {
 } = ExtensionUtils;
 
 XPCOMUtils.defineLazyGetter(this, "console", getConsole);
+
+var ExtensionCommon;
+
+/**
+ * A sentinel class to indicate that an array of values should be
+ * treated as an array when used as a promise resolution value, but as a
+ * spread expression (...args) when passed to a callback.
+ */
+class SpreadArgs extends Array {
+  constructor(args) {
+    super();
+    this.push(...args);
+  }
+}
+
+/**
+ * Like SpreadArgs, but also indicates that the array values already
+ * belong to the target compartment, and should not be cloned before
+ * being passed.
+ *
+ * The `unwrappedValues` property contains an Array object which belongs
+ * to the target compartment, and contains the same unwrapped values
+ * passed the NoCloneSpreadArgs constructor.
+ */
+class NoCloneSpreadArgs {
+  constructor(args) {
+    this.unwrappedValues = args;
+  }
+
+  [Symbol.iterator]() {
+    return this.unwrappedValues[Symbol.iterator]();
+  }
+}
+
+class ExtensionAPI extends ExtensionUtils.EventEmitter {
+  constructor(extension) {
+    super();
+
+    this.extension = extension;
+
+    extension.once("shutdown", () => {
+      if (this.onShutdown) {
+        this.onShutdown(extension.shutdownReason);
+      }
+      this.extension = null;
+    });
+  }
+
+  destroy() {
+  }
+
+  onManifestEntry(entry) {
+  }
+
+  getAPI(context) {
+    throw new Error("Not Implemented");
+  }
+}
+
+var ExtensionAPIs = {
+  apis: new Map(),
+
+  load(apiName) {
+    let api = this.apis.get(apiName);
+
+    if (api.loadPromise) {
+      return api.loadPromise;
+    }
+
+    let {script, schema} = api;
+
+    let addonId = `${apiName}@experiments.addons.mozilla.org`;
+    api.sandbox = Cu.Sandbox(global, {
+      wantXrays: false,
+      sandboxName: script,
+      addonId,
+      metadata: {addonID: addonId},
+    });
+
+    api.sandbox.ExtensionAPI = ExtensionAPI;
+
+    // Create a console getter which lazily provide a ConsoleAPI instance.
+    XPCOMUtils.defineLazyGetter(api.sandbox, "console", () => {
+      return new ConsoleAPI({prefix: addonId});
+    });
+
+    Services.scriptloader.loadSubScript(script, api.sandbox, "UTF-8");
+
+    api.loadPromise = Schemas.load(schema).then(() => {
+      let API = Cu.evalInSandbox("API", api.sandbox);
+      API.prototype.namespace = apiName;
+      return API;
+    });
+
+    return api.loadPromise;
+  },
+
+  unload(apiName) {
+    let api = this.apis.get(apiName);
+
+    let {schema} = api;
+
+    Schemas.unload(schema);
+    Cu.nukeSandbox(api.sandbox);
+
+    api.sandbox = null;
+    api.loadPromise = null;
+  },
+
+  register(namespace, schema, script) {
+    if (this.apis.has(namespace)) {
+      throw new Error(`API namespace already exists: ${namespace}`);
+    }
+
+    this.apis.set(namespace, {schema, script});
+  },
+
+  unregister(namespace) {
+    if (!this.apis.has(namespace)) {
+      throw new Error(`API namespace does not exist: ${namespace}`);
+    }
+
+    this.apis.delete(namespace);
+  },
+};
 
 class BaseContext {
   constructor(envType, extension) {
@@ -311,6 +440,8 @@ class BaseContext {
             dump(`Promise resolved after context unloaded\n`);
           } else if (!this.active) {
             dump(`Promise resolved while context is inactive\n`);
+          } else if (args instanceof NoCloneSpreadArgs) {
+            this.runSafeWithoutClone(callback, ...args.unwrappedValues);
           } else if (args instanceof SpreadArgs) {
             runSafe(callback, ...args);
           } else {
@@ -336,6 +467,9 @@ class BaseContext {
               dump(`Promise resolved after context unloaded\n`);
             } else if (!this.active) {
               dump(`Promise resolved while context is inactive\n`);
+            } else if (value instanceof NoCloneSpreadArgs) {
+              let values = value.unwrappedValues;
+              this.runSafeWithoutClone(resolve, values.length == 1 ? values[0] : values);
             } else if (value instanceof SpreadArgs) {
               runSafe(resolve, value.length == 1 ? value[0] : value);
             } else {
@@ -411,10 +545,12 @@ class SchemaAPIInterface {
    * @param {Array} args The parameters for the function.
    * @param {function(*)} [callback] The callback to be called when the function
    *     completes.
+   * @param {boolean} [requireUserInput=false] If true, the function should
+   *                  fail if the browser is not currently handling user input.
    * @returns {Promise|undefined} Must be void if `callback` is set, and a
    *     promise otherwise. The promise is resolved when the function completes.
    */
-  callAsyncFunction(args, callback) {
+  callAsyncFunction(args, callback, requireUserInput = false) {
     throw new Error("Not implemented");
   }
 
@@ -520,9 +656,16 @@ class LocalAPIImplementation extends SchemaAPIInterface {
     this.pathObj[this.name](...args);
   }
 
-  callAsyncFunction(args, callback) {
+  callAsyncFunction(args, callback, requireUserInput) {
     let promise;
     try {
+      if (requireUserInput) {
+        let winUtils = this.context.contentWindow
+                           .getInterface(Ci.nsIDOMWindowUtils);
+        if (!winUtils.isHandlingUserInput) {
+          throw new ExtensionError(`${this.name} may only be called from a user input handler`);
+        }
+      }
       promise = this.pathObj[this.name](...args) || Promise.resolve();
     } catch (e) {
       promise = Promise.reject(e);
@@ -568,6 +711,26 @@ function deepCopy(dest, source) {
       Object.defineProperty(dest, prop, desc);
     }
   }
+}
+
+function getChild(map, key) {
+  let child = map.children.get(key);
+  if (!child) {
+    child = {
+      modules: new Set(),
+      children: new Map(),
+    };
+
+    map.children.set(key, child);
+  }
+  return child;
+}
+
+function getPath(map, path) {
+  for (let key of path) {
+    map = getChild(map, key);
+  }
+  return map;
 }
 
 /**
@@ -664,7 +827,7 @@ class CanOfAPIs {
       if (!obj) {
         return;
       }
-      modules = modules.get(key);
+      modules = getChild(modules, key);
 
       for (let name of modules.modules) {
         if (!this.apis.has(name)) {
@@ -700,7 +863,7 @@ class CanOfAPIs {
       if (!obj) {
         return;
       }
-      modules = modules.get(key);
+      modules = getChild(modules, key);
 
       for (let name of modules.modules) {
         if (!this.apis.has(name)) {
@@ -717,18 +880,6 @@ class CanOfAPIs {
 
     this.apiPaths.set(path, obj);
     return obj;
-  }
-}
-
-class DeepMap extends DefaultMap {
-  constructor() {
-    super(() => new DeepMap());
-
-    this.modules = new Set();
-  }
-
-  getPath(path) {
-    return path.reduce((map, key) => map.get(key), this);
   }
 }
 
@@ -784,15 +935,52 @@ class SchemaAPIManager extends EventEmitter {
     this.global = this._createExtGlobal();
 
     this.modules = new Map();
-    this.modulePaths = new DeepMap();
+    this.modulePaths = {children: new Map(), modules: new Set()};
     this.manifestKeys = new Map();
     this.eventModules = new DefaultMap(() => new Set());
 
-    this.schemaURLs = new Set();
+    this._modulesJSONLoaded = false;
+
+    this.schemaURLs = new Map();
 
     this.apis = new DefaultWeakMap(() => new Map());
 
     this._scriptScopes = [];
+  }
+
+  async loadModuleJSON(urls) {
+    function fetchJSON(url) {
+      return fetch(url).then(resp => resp.json());
+    }
+
+    for (let json of await Promise.all(urls.map(fetchJSON))) {
+      this.registerModules(json);
+    }
+
+    this._modulesJSONLoaded = true;
+
+    return new StructuredCloneHolder({
+      modules: this.modules,
+      modulePaths: this.modulePaths,
+      manifestKeys: this.manifestKeys,
+      eventModules: this.eventModules,
+      schemaURLs: this.schemaURLs,
+    });
+  }
+
+  initModuleData(moduleData) {
+    if (!this._modulesJSONLoaded) {
+      let data = moduleData.deserialize({});
+
+      this.modules = data.modules;
+      this.modulePaths = data.modulePaths;
+      this.manifestKeys = data.manifestKeys;
+      this.eventModules = new DefaultMap(() => new Set(),
+                                         data.eventModules);
+      this.schemaURLs = data.schemaURLs;
+    }
+
+    this._modulesJSONLoaded = true;
   }
 
   /**
@@ -814,7 +1002,10 @@ class SchemaAPIManager extends EventEmitter {
       this.modules.set(name, details);
 
       if (details.schema) {
-        this.schemaURLs.add(details.schema);
+        let content = (details.scopes &&
+                       (details.scopes.includes("content_parent") ||
+                        details.scopes.includes("content_child")));
+        this.schemaURLs.set(details.schema, {content});
       }
 
       for (let event of details.events || []) {
@@ -830,7 +1021,7 @@ class SchemaAPIManager extends EventEmitter {
       }
 
       for (let path of details.paths || []) {
-        this.modulePaths.getPath(path).modules.add(name);
+        getPath(this.modulePaths, path).modules.add(name);
       }
     }
   }
@@ -969,7 +1160,7 @@ class SchemaAPIManager extends EventEmitter {
 
     module.loaded = true;
 
-    return this._initModule(module, this.global[name]);
+    return this.global[name];
   }
   /**
    * aSynchronously loads an API module, if not already loaded, and
@@ -996,7 +1187,7 @@ class SchemaAPIManager extends EventEmitter {
 
       module.loaded = true;
 
-      return this._initModule(module, this.global[name]);
+      return this.global[name];
     });
 
     return module.asyncLoaded;
@@ -1035,13 +1226,6 @@ class SchemaAPIManager extends EventEmitter {
     return true;
   }
 
-  _initModule(info, cls) {
-    cls.namespaceName = cls.namespaceName;
-    cls.scopes = new Set(info.scopes);
-
-    return cls;
-  }
-
   _checkLoadModule(module, name) {
     if (!module) {
       throw new Error(`Module '${name}' does not exist`);
@@ -1064,22 +1248,20 @@ class SchemaAPIManager extends EventEmitter {
   _createExtGlobal() {
     let global = Cu.Sandbox(Services.scriptSecurityManager.getSystemPrincipal(), {
       wantXrays: false,
-      sandboxName: `Namespace of ext-*.js scripts for ${this.processType}`,
+      sandboxName: `Namespace of ext-*.js scripts for ${this.processType} (from: resource://gre/modules/ExtensionCommon.jsm)`,
     });
 
-    Object.assign(global, {global, Cc, Ci, Cu, Cr, XPCOMUtils, ChromeWorker, extensions: this});
+    Object.assign(global, {global, Cc, Ci, Cu, Cr, XPCOMUtils, ChromeWorker, ExtensionAPI, ExtensionCommon, MatchPattern, MatchPatternSet, StructuredCloneHolder, extensions: this});
 
     Cu.import("resource://gre/modules/AppConstants.jsm", global);
-    Cu.import("resource://gre/modules/ExtensionAPI.jsm", global);
 
     XPCOMUtils.defineLazyGetter(global, "console", getConsole);
 
-    XPCOMUtils.defineLazyModuleGetter(global, "ExtensionUtils",
-                                      "resource://gre/modules/ExtensionUtils.jsm");
-    XPCOMUtils.defineLazyModuleGetter(global, "XPCOMUtils",
-                                      "resource://gre/modules/XPCOMUtils.jsm");
-    XPCOMUtils.defineLazyModuleGetter(global, "require",
-                                      "resource://devtools/shared/Loader.jsm");
+    XPCOMUtils.defineLazyModuleGetters(global, {
+      ExtensionUtils: "resource://gre/modules/ExtensionUtils.jsm",
+      XPCOMUtils: "resource://gre/modules/XPCOMUtils.jsm",
+      require: "resource://devtools/shared/Loader.jsm",
+    });
 
     return global;
   }
@@ -1208,8 +1390,7 @@ LocaleData.prototype = {
     if (message == "@@ui_locale") {
       return this.uiLocale;
     } else if (message.startsWith("@@bidi_")) {
-      let registry = Cc["@mozilla.org/chrome/chrome-registry;1"].getService(Ci.nsIXULChromeRegistry);
-      let rtl = registry.isLocaleRTL("global");
+      let rtl = Services.locale.isAppLocaleRTL;
 
       if (message == "@@bidi_dir") {
         return rtl ? "rtl" : "ltr";
@@ -1314,7 +1495,7 @@ LocaleData.prototype = {
   get uiLocale() {
     // Return the browser locale, but convert it to a Chrome-style
     // locale code.
-    return Locale.getLocale().replace(/-/g, "_");
+    return Services.locale.getAppLocaleAsBCP47().replace(/-/g, "_");
   },
 };
 
@@ -1325,7 +1506,7 @@ defineLazyGetter(LocaleData.prototype, "availableLocales", function() {
 
 // This is a generic class for managing event listeners. Example usage:
 //
-// new SingletonEventManager(context, "api.subAPI", fire => {
+// new EventManager(context, "api.subAPI", fire => {
 //   let listener = (...) => {
 //     // Fire any listeners registered with addListener.
 //     fire.async(arg1, arg2);
@@ -1344,14 +1525,15 @@ defineLazyGetter(LocaleData.prototype, "availableLocales", function() {
 // content process). |name| is for debugging. |register| is a function
 // to register the listener. |register| should return an
 // unregister function that will unregister the listener.
-function SingletonEventManager(context, name, register) {
+function EventManager(context, name, register) {
   this.context = context;
   this.name = name;
   this.register = register;
   this.unregister = new Map();
+  this.inputHandling = false;
 }
 
-SingletonEventManager.prototype = {
+EventManager.prototype = {
   addListener(callback, ...args) {
     if (this.unregister.has(callback)) {
       return;
@@ -1438,18 +1620,52 @@ SingletonEventManager.prototype = {
       addListener: (...args) => this.addListener(...args),
       removeListener: (...args) => this.removeListener(...args),
       hasListener: (...args) => this.hasListener(...args),
+      setUserInput: this.inputHandling,
       [Schemas.REVOKE]: () => this.revoke(),
     };
   },
 };
 
+// Simple API for event listeners where events never fire.
+function ignoreEvent(context, name) {
+  return {
+    addListener: function(callback) {
+      let id = context.extension.id;
+      let frame = Components.stack.caller;
+      let msg = `In add-on ${id}, attempting to use listener "${name}", which is unimplemented.`;
+      let scriptError = Cc["@mozilla.org/scripterror;1"]
+        .createInstance(Ci.nsIScriptError);
+      scriptError.init(msg, frame.filename, null, frame.lineNumber,
+                       frame.columnNumber, Ci.nsIScriptError.warningFlag,
+                       "content javascript");
+      let consoleService = Cc["@mozilla.org/consoleservice;1"]
+        .getService(Ci.nsIConsoleService);
+      consoleService.logMessage(scriptError);
+    },
+    removeListener: function(callback) {},
+    hasListener: function(callback) {},
+  };
+}
 
-const ExtensionCommon = {
+
+const stylesheetMap = new DefaultMap(url => {
+  let uri = Services.io.newURI(url);
+  return styleSheetService.preloadSheet(uri, styleSheetService.AGENT_SHEET);
+});
+
+
+ExtensionCommon = {
   BaseContext,
   CanOfAPIs,
+  EventManager,
+  ExtensionAPI,
+  ExtensionAPIs,
   LocalAPIImplementation,
   LocaleData,
+  NoCloneSpreadArgs,
   SchemaAPIInterface,
   SchemaAPIManager,
-  SingletonEventManager,
+  SpreadArgs,
+  ignoreEvent,
+  stylesheetMap,
 };

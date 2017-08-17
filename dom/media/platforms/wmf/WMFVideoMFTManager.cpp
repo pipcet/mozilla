@@ -4,18 +4,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include <algorithm>
-#include <psapi.h>
-#include <winsdkver.h>
-
 #include "WMFVideoMFTManager.h"
+
 #include "DXVA2Manager.h"
 #include "GMPUtils.h" // For SplitAt. TODO: Move SplitAt to a central place.
 #include "IMFYCbCrImage.h"
 #include "ImageContainer.h"
 #include "Layers.h"
 #include "MP4Decoder.h"
-#include "MediaDecoderReader.h"
 #include "MediaInfo.h"
 #include "MediaTelemetryConstants.h"
 #include "VPXDecoder.h"
@@ -24,16 +20,23 @@
 #include "gfx2DGlue.h"
 #include "gfxPrefs.h"
 #include "gfxWindowsPlatform.h"
+#include "mozilla/gfx/gfxVars.h"
+#include "mozilla/gfx/DeviceManagerDx.h"
 #include "mozilla/AbstractThread.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Logging.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/WindowsVersion.h"
+#include "mozilla/gfx/DeviceManagerDx.h"
 #include "mozilla/layers/LayersTypes.h"
 #include "nsPrintfCString.h"
 #include "nsThreadUtils.h"
 #include "nsWindowsHelpers.h"
+#include "WMFDecoderModule.h"
+#include <algorithm>
+#include <psapi.h>
+#include <winsdkver.h>
 
 #define LOG(...) MOZ_LOG(sPDMLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
 
@@ -62,7 +65,9 @@ const GUID MFVideoFormat_VP90 =
 };
 #endif
 
-const CLSID CLSID_WebmMfVpxDec =
+// Note: CLSID_WebmMfVpxDec needs to be extern for the CanCreateWMFDecoder
+// template in WMFDecoderModule.cpp to work.
+extern const GUID CLSID_WebmMfVpxDec =
 {
   0xe3aaf548,
   0xc9a4,
@@ -92,7 +97,7 @@ private:
 template<class T>
 void DeleteOnMainThread(nsAutoPtr<T>& aObject) {
   nsCOMPtr<nsIRunnable> r = new DeleteObjectTask<T>(aObject);
-  SystemGroup::Dispatch("VideoUtils::DeleteObjectTask", TaskCategory::Other, r.forget());
+  SystemGroup::Dispatch(TaskCategory::Other, r.forget());
 }
 
 LayersBackend
@@ -151,16 +156,15 @@ WMFVideoMFTManager::~WMFVideoMFTManager()
         ? 2
         : mGotValidOutputAfterNullOutput ? 3 : 4;
 
-  nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction([=]() -> void {
+  nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction("WMFVideoMFTManager::~WMFVideoMFTManager",
+                                                      [=]() -> void {
     LOG(nsPrintfCString("Reporting telemetry VIDEO_MFT_OUTPUT_NULL_SAMPLES=%d",
                         telemetry)
         .get());
     Telemetry::Accumulate(Telemetry::HistogramID::VIDEO_MFT_OUTPUT_NULL_SAMPLES,
                           telemetry);
   });
-  SystemGroup::Dispatch("~WMFVideoMFTManager::report_telemetry",
-                        TaskCategory::Other,
-                        task.forget());
+  SystemGroup::Dispatch(TaskCategory::Other, task.forget());
 }
 
 const GUID&
@@ -388,7 +392,8 @@ class CreateDXVAManagerEvent : public Runnable
 public:
   CreateDXVAManagerEvent(layers::KnowsCompositor* aKnowsCompositor,
                          nsCString& aFailureReason)
-    : mBackend(LayersBackend::LAYERS_D3D11)
+    : Runnable("CreateDXVAManagerEvent")
+    , mBackend(LayersBackend::LAYERS_D3D11)
     , mKnowsCompositor(aKnowsCompositor)
     , mFailureReason(aFailureReason)
   {
@@ -448,7 +453,10 @@ WMFVideoMFTManager::InitializeDXVA()
   }
   MOZ_ASSERT(!mDXVA2Manager);
   LayersBackend backend = GetCompositorBackendType(mKnowsCompositor);
-  if (backend != LayersBackend::LAYERS_D3D11) {
+  bool useANGLE =
+      mKnowsCompositor ? mKnowsCompositor->GetCompositorUseANGLE() : false;
+  bool wrWithANGLE = (backend == LayersBackend::LAYERS_WR) && useANGLE;
+  if (backend != LayersBackend::LAYERS_D3D11 && !wrWithANGLE) {
     mDXVAFailureReason.AssignLiteral("Unsupported layers backend");
     return false;
   }
@@ -604,6 +612,22 @@ WMFVideoMFTManager::InitInternal()
       mVideoInfo.mDisplay.width,
       mVideoInfo.mDisplay.height);
 
+  if (!mUseHwAccel) {
+    RefPtr<ID3D11Device> device =
+      gfx::DeviceManagerDx::Get()->GetCompositorDevice();
+    if (!device) {
+      device = gfx::DeviceManagerDx::Get()->GetContentDevice();
+    }
+    if (device) {
+      RefPtr<ID3D10Multithread> multi;
+      HRESULT hr =
+        device->QueryInterface((ID3D10Multithread**)getter_AddRefs(multi));
+      if (SUCCEEDED(hr) && multi) {
+        multi->SetMultithreadProtected(TRUE);
+        mIMFUsable = true;
+      }
+    }
+  }
   return true;
 }
 
@@ -673,8 +697,8 @@ WMFVideoMFTManager::Input(MediaRawData* aSample)
                                            &inputSample);
   NS_ENSURE_TRUE(SUCCEEDED(hr) && inputSample != nullptr, hr);
 
-  mLastDuration = aSample->mDuration.ToMicroseconds();
-  mLastTime = aSample->mTime.ToMicroseconds();
+  mLastDuration = aSample->mDuration;
+  mLastTime = aSample->mTime;
   mSamplesCount++;
 
   // Forward sample data to the decoder.
@@ -686,7 +710,8 @@ public:
   SupportsConfigEvent(DXVA2Manager* aDXVA2Manager,
                       IMFMediaType* aMediaType,
                       float aFramerate)
-    : mDXVA2Manager(aDXVA2Manager)
+    : Runnable("SupportsConfigEvent")
+    , mDXVA2Manager(aDXVA2Manager)
     , mMediaType(aMediaType)
     , mFramerate(aFramerate)
     , mSupportsConfig(false)
@@ -731,7 +756,7 @@ WMFVideoMFTManager::CanUseDXVA(IMFMediaType* aType)
 
   // Assume the current samples duration is representative for the
   // entire video.
-  float framerate = 1000000.0 / mLastDuration;
+  float framerate = 1000000.0 / mLastDuration.ToMicroseconds();
 
   // The supports config check must be done on the main thread since we have
   // a crash guard protecting it.
@@ -834,7 +859,7 @@ WMFVideoMFTManager::CreateBasicVideoFrame(IMFSample* aSample,
   nsIntRect pictureRegion = mVideoInfo.ScaledImageRect(videoWidth, videoHeight);
 
   LayersBackend backend = GetCompositorBackendType(mKnowsCompositor);
-  if (backend != LayersBackend::LAYERS_D3D11) {
+  if (backend != LayersBackend::LAYERS_D3D11 || !mIMFUsable) {
     RefPtr<VideoData> v =
       VideoData::CreateAndCopyData(mVideoInfo,
                                    mImageContainer,
@@ -916,7 +941,7 @@ WMFVideoMFTManager::CreateD3DVideoFrame(IMFSample* aSample,
   return S_OK;
 }
 
-// Blocks until decoded sample is produced by the deoder.
+// Blocks until decoded sample is produced by the decoder.
 HRESULT
 WMFVideoMFTManager::Output(int64_t aStreamOffset,
                            RefPtr<MediaData>& aOutData)
@@ -1000,8 +1025,8 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset,
         // circumstances.
         // Seeing that we've only fed the decoder a single frame, the pts
         // and duration are known, it's of the last sample.
-        pts = TimeUnit::FromMicroseconds(mLastTime);
-        duration = TimeUnit::FromMicroseconds(mLastDuration);
+        pts = mLastTime;
+        duration = mLastDuration;
       }
       if (mSeekTargetThreshold.isSome()) {
         if ((pts + duration) < mSeekTargetThreshold.ref()) {
@@ -1034,7 +1059,12 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset,
   aOutData = frame;
   // Set the potentially corrected pts and duration.
   aOutData->mTime = pts;
-  aOutData->mDuration = duration;
+  // The VP9 decoder doesn't provide a valid duration. AS VP9 doesn't have a
+  // concept of pts vs dts and have no latency. We can as such use the last
+  // known input duration.
+  aOutData->mDuration = (mStreamType == VP9 && duration == TimeUnit::Zero())
+                        ? mLastDuration
+                        : duration;
 
   if (mNullOutputCount) {
     mGotValidOutputAfterNullOutput = true;

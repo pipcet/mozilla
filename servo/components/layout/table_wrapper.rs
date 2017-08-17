@@ -30,7 +30,7 @@ use std::ops::Add;
 use style::computed_values::{border_collapse, position, table_layout};
 use style::context::SharedStyleContext;
 use style::logical_geometry::{LogicalRect, LogicalSize};
-use style::properties::ServoComputedValues;
+use style::properties::ComputedValues;
 use style::values::CSSFloat;
 use style::values::computed::LengthOrPercentageOrAuto;
 use table::{ColumnComputedInlineSize, ColumnIntrinsicInlineSize};
@@ -428,8 +428,8 @@ impl Flow for TableWrapperFlow {
         debug_assert!(remaining.is_none());
     }
 
-    fn compute_absolute_position(&mut self, layout_context: &LayoutContext) {
-        self.block_flow.compute_absolute_position(layout_context)
+    fn compute_stacking_relative_position(&mut self, layout_context: &LayoutContext) {
+        self.block_flow.compute_stacking_relative_position(layout_context)
     }
 
     fn place_float_if_applicable<'a>(&mut self) {
@@ -466,7 +466,7 @@ impl Flow for TableWrapperFlow {
         self.block_flow.collect_stacking_contexts(state);
     }
 
-    fn repair_style(&mut self, new_style: &::StyleArc<ServoComputedValues>) {
+    fn repair_style(&mut self, new_style: &::ServoArc<ComputedValues>) {
         self.block_flow.repair_style(new_style)
     }
 

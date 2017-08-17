@@ -32,7 +32,7 @@
  */
 
 const { Cu, CC, Cc, Ci } = require("chrome");
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 const Services = require("Services");
 
 const UDPSocket = CC("@mozilla.org/network/udp-socket;1",
@@ -176,7 +176,8 @@ LocalDevice.prototype = {
       // TODO: Bug 1180997: Find the right way to expose an editable name
       this.name = sysInfo.get("device");
     } else {
-      this.name = sysInfo.get("host");
+      this.name = Cc["@mozilla.org/network/dns-service;1"].getService(Ci.nsIDNSService)
+                                                          .myHostName;
     }
   },
 

@@ -36,19 +36,15 @@ bool
 XPC_WN_Helper_SetProperty(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
                           JS::MutableHandleValue vp,
                           JS::ObjectOpResult& result);
-bool
-XPC_WN_MaybeResolvingSetPropertyStub(JSContext* cx, JS::HandleObject obj,
-                                     JS::HandleId id, JS::MutableHandleValue vp,
-                                     JS::ObjectOpResult& result);
-bool
-XPC_WN_CannotModifySetPropertyStub(JSContext* cx, JS::HandleObject obj,
-                                   JS::HandleId id, JS::MutableHandleValue vp,
-                                   JS::ObjectOpResult& result);
 
 bool
 XPC_WN_Helper_Enumerate(JSContext* cx, JS::HandleObject obj);
 bool
 XPC_WN_Shared_Enumerate(JSContext* cx, JS::HandleObject obj);
+
+bool
+XPC_WN_NewEnumerate(JSContext* cx, JS::HandleObject obj, JS::AutoIdVector& properties,
+                    bool enumerableOnly);
 
 bool
 XPC_WN_Helper_Resolve(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
@@ -74,8 +70,6 @@ XPCWrappedNative_Trace(JSTracer* trc, JSObject* obj);
 
 extern const js::ClassExtension XPC_WN_JSClassExtension;
 
-extern const js::ObjectOps XPC_WN_ObjectOpsWithEnumerate;
-
 #define XPC_MAKE_CLASS_OPS(_flags) { \
     /* addProperty */ \
     ((_flags) & XPC_SCRIPTABLE_USE_JSSTUB_FOR_ADDPROPERTY) \
@@ -99,18 +93,19 @@ extern const js::ObjectOps XPC_WN_ObjectOpsWithEnumerate;
     /* setProperty */ \
     ((_flags) & XPC_SCRIPTABLE_WANT_SETPROPERTY) \
     ? XPC_WN_Helper_SetProperty \
-    : ((_flags) & XPC_SCRIPTABLE_USE_JSSTUB_FOR_SETPROPERTY) \
-      ? nullptr \
-      : ((_flags) & XPC_SCRIPTABLE_ALLOW_PROP_MODS_DURING_RESOLVE) \
-        ? XPC_WN_MaybeResolvingSetPropertyStub \
-        : XPC_WN_CannotModifySetPropertyStub, \
+    : nullptr, \
     \
     /* enumerate */ \
     ((_flags) & XPC_SCRIPTABLE_WANT_NEWENUMERATE) \
-    ? nullptr /* We will use oOps->enumerate set below in this case */ \
+    ? nullptr /* We will use newEnumerate set below in this case */ \
     : ((_flags) & XPC_SCRIPTABLE_WANT_ENUMERATE) \
       ? XPC_WN_Helper_Enumerate \
       : XPC_WN_Shared_Enumerate, \
+    \
+    /* newEnumerate */ \
+    ((_flags) & XPC_SCRIPTABLE_WANT_NEWENUMERATE) \
+    ? XPC_WN_NewEnumerate \
+    : nullptr, \
     \
     /* resolve */ \
     /* We have to figure out resolve strategy at call time */ \
@@ -167,9 +162,7 @@ extern const js::ObjectOps XPC_WN_ObjectOpsWithEnumerate;
     &XPC_WN_JSClassExtension, \
     \
     /* oOps */ \
-    ((_flags) & XPC_SCRIPTABLE_WANT_NEWENUMERATE) \
-    ? &XPC_WN_ObjectOpsWithEnumerate \
-    : nullptr, \
+    nullptr, \
 }
 
 #endif

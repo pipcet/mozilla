@@ -22,6 +22,14 @@ function manifestVideo() {
   return gManifestNavigatorSource.contentDocument.createElement('video');
 }
 
+// Need to get the server url composed with ip:port instead of mochi.test.
+// Since we will provide the url to Exoplayer which cannot recognize the domain
+// name "mochi.test".
+let serverUrl = SpecialPowers.Services.prefs.getCharPref("media.hls.server.url");
+var gHLSTests = [
+  { name: serverUrl + "/bipbop_4x3_variant.m3u8", type:"audio/x-mpegurl", duration:20.000 }
+];
+
 // These are small test files, good for just seeing if something loads. We
 // really only need one test file per backend here.
 var gSmallTests = [
@@ -38,6 +46,14 @@ var gSmallTests = [
   { name:"gizmo-short.mp4", type:"video/mp4", width:560, height:320, duration:0.27 },
   { name:"flac-s24.flac", type:"audio/flac", duration:4.04 },
   { name:"bogus.duh", type:"bogus/duh" }
+];
+
+var gFrameCountTests = [
+  { name:"bipbop.mp4", type:"video/mp4", totalFrameCount:297},
+  { name:"gizmo.mp4", type:"video/mp4", totalFrameCount:166},
+  { name:"seek-short.webm", type:"video/webm", totalFrameCount:8},
+  { name:"seek.webm", type:"video/webm", totalFrameCount:120},
+  { name:"320x240.ogv", type:"video/ogg", totalFrameCount:8},
 ];
 
 if (SpecialPowers.Services.appinfo.name != "B2G") {
@@ -263,10 +279,10 @@ var gPlayTests = [
   { name:"small-shot.mp3", type:"audio/mpeg", duration:0.27 },
   { name:"owl.mp3", type:"audio/mpeg", duration:3.343 },
   // owl.mp3 as above, but with something funny going on in the ID3v2 tag
-  // that causes DirectShow to fail.
+  // that caused DirectShow to fail.
   { name:"owl-funny-id3.mp3", type:"audio/mpeg", duration:3.343 },
   // owl.mp3 as above, but with something even funnier going on in the ID3v2 tag
-  // that causes DirectShow to fail.
+  // that caused DirectShow to fail.
   { name:"owl-funnier-id3.mp3", type:"audio/mpeg", duration:3.343 },
   // One second of silence with ~140KB of ID3 tags. Usually when the first MP3
   // frame is at such a high offset into the file, MP3FrameParser will give up
@@ -452,7 +468,7 @@ function fileUriToSrc(path, mustExist) {
   const Cr = SpecialPowers.Cr;
   var dirSvc = Cc["@mozilla.org/file/directory_service;1"].
                getService(Ci.nsIProperties);
-  var f = dirSvc.get("CurWorkD", Ci.nsILocalFile);
+  var f = dirSvc.get("CurWorkD", Ci.nsIFile);
   var split = path.split("/");
   for(var i = 0; i < split.length; ++i) {
     f.append(split[i]);
@@ -1542,13 +1558,10 @@ function getMajorMimeType(mimetype) {
 // Force releasing decoder to avoid timeout in waiting for decoding resource.
 function removeNodeAndSource(n) {
   n.remove();
-  // Clearing srcObject and/or src will actually set them to some default
-  // URI that will fail to load, so make sure we don't produce a spurious
-  // bailing error.
-  n.onerror = null;
   // reset |srcObject| first since it takes precedence over |src|.
   n.srcObject = null;
-  n.src = "";
+  n.removeAttribute("src");
+  n.load();
   while (n.firstChild) {
     n.firstChild.remove();
   }
@@ -1681,7 +1694,8 @@ function MediaTestManager() {
       this.finished(token);
     };
     // Default timeout to 180s for each test.
-    this.timers[token] = setTimeout(onTimeout, 180000);
+    // Call SimpleTest._originalSetTimeout() to bypass the flaky timeout checker.
+    this.timers[token] = SimpleTest._originalSetTimeout.call(window, onTimeout, 180000);
 
     is(this.numTestsRunning, this.tokens.length,
        "[started " + token + " t=" + elapsedTime(this.startTime) + "] Length of array should match number of running tests");

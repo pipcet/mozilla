@@ -56,6 +56,7 @@ const protocol = require("devtools/shared/protocol");
 const {LayoutActor} = require("devtools/server/actors/layout");
 const {LongStringActor} = require("devtools/server/actors/string");
 const promise = require("promise");
+const defer = require("devtools/shared/defer");
 const {Task} = require("devtools/shared/task");
 const events = require("sdk/event/core");
 const {WalkerSearch} = require("devtools/server/actors/utils/walker-search");
@@ -159,6 +160,7 @@ loader.lazyGetter(this, "eventListenerService", function () {
 loader.lazyRequireGetter(this, "CssLogic", "devtools/server/css-logic", true);
 loader.lazyRequireGetter(this, "findCssSelector", "devtools/shared/inspector/css-logic", true);
 loader.lazyRequireGetter(this, "getCssPath", "devtools/shared/inspector/css-logic", true);
+loader.lazyRequireGetter(this, "getXPath", "devtools/shared/inspector/css-logic", true);
 
 /**
  * We only send nodeValue up to a certain size by default.  This stuff
@@ -663,6 +665,18 @@ var NodeActor = exports.NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
       return "";
     }
     return getCssPath(this.rawNode);
+  },
+
+  /**
+   * Get the XPath for this node.
+   *
+   * @return {String} The XPath for finding this node on the page.
+   */
+  getXPath: function () {
+    if (Cu.isDeadWrapper(this.rawNode)) {
+      return "";
+    }
+    return getXPath(this.rawNode);
   },
 
   /**
@@ -1984,6 +1998,7 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     if (rawNode.nodeType !== rawNode.ownerDocument.ELEMENT_NODE) {
       throw new Error("Can only change innerHTML to element nodes");
     }
+    // eslint-disable-next-line no-unsanitized/property
     rawNode.innerHTML = value;
   },
 
@@ -2023,12 +2038,14 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       if (parsedDOM.head.innerHTML === "") {
         parentNode.replaceChild(parsedDOM.body, rawNode);
       } else {
+      // eslint-disable-next-line no-unsanitized/property
         rawNode.outerHTML = value;
       }
     } else if (rawNode.tagName === "HEAD") {
       if (parsedDOM.body.innerHTML === "") {
         parentNode.replaceChild(parsedDOM.head, rawNode);
       } else {
+        // eslint-disable-next-line no-unsanitized/property
         rawNode.outerHTML = value;
       }
     } else if (node.isDocumentElement()) {
@@ -2052,6 +2069,7 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       rawNode.replaceChild(parsedDOM.head, rawNode.querySelector("head"));
       rawNode.replaceChild(parsedDOM.body, rawNode.querySelector("body"));
     } else {
+      // eslint-disable-next-line no-unsanitized/property
       rawNode.outerHTML = value;
     }
   },
@@ -2733,7 +2751,7 @@ exports.InspectorActor = protocol.ActorClassWithSpec(inspectorSpec, {
       return this._walkerPromise;
     }
 
-    let deferred = promise.defer();
+    let deferred = defer();
     this._walkerPromise = deferred.promise;
 
     let window = this.window;

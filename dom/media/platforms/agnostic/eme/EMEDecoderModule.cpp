@@ -21,6 +21,7 @@
 #include "nsClassHashtable.h"
 #include "nsServiceManagerUtils.h"
 #include "DecryptThroughputLimit.h"
+#include "ChromiumCDMVideoDecoder.h"
 
 namespace mozilla {
 
@@ -113,7 +114,7 @@ public:
     MOZ_ASSERT(aDecrypted.mSample);
 
     nsAutoPtr<DecryptPromiseRequestHolder> holder;
-    mDecrypts.RemoveAndForget(aDecrypted.mSample, holder);
+    mDecrypts.Remove(aDecrypted.mSample, &holder);
     if (holder) {
       holder->Complete();
     } else {

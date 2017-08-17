@@ -10,10 +10,12 @@ const Cu = Components.utils;
 
 Cu.import("resource://gre/modules/Services.jsm");
 
+const PREF_DEBUG_ENABLED = "browser.safebrowsing.debug";
+let loggingEnabled = false;
+
 // Log only if browser.safebrowsing.debug is true
 function log(...stuff) {
-  let logging = Services.prefs.getBoolPref("browser.safebrowsing.debug", false);
-  if (!logging) {
+  if (!loggingEnabled) {
     return;
   }
 
@@ -47,12 +49,13 @@ const tablePreferences = [
   "urlclassifier.flashTable",
   "urlclassifier.flashExceptTable",
   "urlclassifier.flashSubDocTable",
-  "urlclassifier.flashSubDocExceptTable"
+  "urlclassifier.flashSubDocExceptTable",
+  "urlclassifier.flashInfobarTable"
 ];
 
 this.SafeBrowsing = {
 
-  init: function() {
+  init() {
     if (this.initialized) {
       log("Already initialized");
       return;
@@ -72,7 +75,7 @@ this.SafeBrowsing = {
     log("init() finished");
   },
 
-  registerTableWithURLs: function(listname) {
+  registerTableWithURLs(listname) {
     let listManager = Cc["@mozilla.org/url-classifier/listmanager;1"].
       getService(Ci.nsIUrlListManager);
 
@@ -93,7 +96,7 @@ this.SafeBrowsing = {
     listManager.registerTable(listname, providerName, provider.updateURL, provider.gethashURL);
   },
 
-  registerTables: function() {
+  registerTables() {
     for (let i = 0; i < this.phishingLists.length; ++i) {
       this.registerTableWithURLs(this.phishingLists[i]);
     }
@@ -118,6 +121,9 @@ this.SafeBrowsing = {
     for (let i = 0; i < this.flashLists.length; ++i) {
       this.registerTableWithURLs(this.flashLists[i]);
     }
+    for (let i = 0; i < this.flashInfobarLists.length; ++i) {
+      this.registerTableWithURLs(this.flashInfobarLists[i]);
+    }
   },
 
 
@@ -128,6 +134,7 @@ this.SafeBrowsing = {
   blockedEnabled:       false,
   trackingAnnotations:  false,
   flashBlockEnabled:    false,
+  flashInfobarListEnabled: true,
 
   phishingLists:                [],
   malwareLists:                 [],
@@ -136,13 +143,15 @@ this.SafeBrowsing = {
   trackingProtectionLists:      [],
   trackingProtectionWhitelists: [],
   blockedLists:                 [],
+  flashLists:                   [],
+  flashInfobarLists:            [],
 
   updateURL:             null,
   gethashURL:            null,
 
   reportURL:             null,
 
-  getReportURL: function(kind, info) {
+  getReportURL(kind, info) {
     let pref;
     switch (kind) {
       case "Phish":
@@ -178,18 +187,24 @@ this.SafeBrowsing = {
     return reportUrl;
   },
 
-  observe: function(aSubject, aTopic, aData) {
+  observe(aSubject, aTopic, aData) {
     // skip nextupdatetime and lastupdatetime
     if (aData.indexOf("lastupdatetime") >= 0 || aData.indexOf("nextupdatetime") >= 0) {
       return;
     }
+
+    if (aData == PREF_DEBUG_ENABLED) {
+      loggingEnabled = Services.prefs.getBoolPref(PREF_DEBUG_ENABLED);
+      return;
+    }
+
     this.readPrefs();
   },
 
-  readPrefs: function() {
+  readPrefs() {
+    loggingEnabled = Services.prefs.getBoolPref(PREF_DEBUG_ENABLED);
     log("reading prefs");
 
-    this.debug = Services.prefs.getBoolPref("browser.safebrowsing.debug");
     this.phishingEnabled = Services.prefs.getBoolPref("browser.safebrowsing.phishing.enabled");
     this.malwareEnabled = Services.prefs.getBoolPref("browser.safebrowsing.malware.enabled");
     this.trackingEnabled = Services.prefs.getBoolPref("privacy.trackingprotection.enabled") || Services.prefs.getBoolPref("privacy.trackingprotection.pbmode.enabled");
@@ -213,7 +228,8 @@ this.SafeBrowsing = {
      flashTable,
      flashExceptTable,
      flashSubDocTable,
-     flashSubDocExceptTable] = tablePreferences.map(getLists);
+     flashSubDocExceptTable,
+     this.flashInfobarLists] = tablePreferences.map(getLists);
 
     this.flashLists = flashAllowTable.concat(flashAllowExceptTable,
                                              flashTable,
@@ -233,10 +249,10 @@ this.SafeBrowsing = {
   },
 
 
-  updateProviderURLs: function() {
+  updateProviderURLs() {
     try {
       var clientID = Services.prefs.getCharPref("browser.safebrowsing.id");
-    } catch(e) {
+    } catch (e) {
       clientID = Services.appinfo.name;
     }
 
@@ -255,7 +271,7 @@ this.SafeBrowsing = {
       this.providers[providerName] = {};
     }
 
-    if (this.debug) {
+    if (loggingEnabled) {
       let providerStr = "";
       Object.keys(this.providers).forEach(function(provider) {
         if (providerStr === "") {
@@ -279,8 +295,8 @@ this.SafeBrowsing = {
       let googleKey = Services.urlFormatter.formatURL("%GOOGLE_API_KEY%").trim();
       if ((provider == "google" || provider == "google4") &&
           (!googleKey || googleKey == "no-google-api-key")) {
-        updateURL= "";
-        gethashURL= "";
+        updateURL = "";
+        gethashURL = "";
       }
 
       log("Provider: " + provider + " updateURL=" + updateURL);
@@ -302,11 +318,12 @@ this.SafeBrowsing = {
     }, this);
   },
 
-  controlUpdateChecking: function() {
+  controlUpdateChecking() {
     log("phishingEnabled:", this.phishingEnabled, "malwareEnabled:",
         this.malwareEnabled, "trackingEnabled:", this.trackingEnabled,
         "blockedEnabled:", this.blockedEnabled, "trackingAnnotations",
-        this.trackingAnnotations, "flashBlockEnabled", this.flashBlockEnabled);
+        this.trackingAnnotations, "flashBlockEnabled", this.flashBlockEnabled,
+        "flashInfobarListEnabled:", this.flashInfobarListEnabled);
 
     let listManager = Cc["@mozilla.org/url-classifier/listmanager;1"].
                       getService(Ci.nsIUrlListManager);
@@ -367,16 +384,24 @@ this.SafeBrowsing = {
         listManager.disableUpdate(this.flashLists[i]);
       }
     }
+    for (let i = 0; i < this.flashInfobarLists.length; ++i) {
+      if (this.flashInfobarListEnabled) {
+        listManager.enableUpdate(this.flashInfobarLists[i]);
+      } else {
+        listManager.disableUpdate(this.flashInfobarLists[i]);
+      }
+    }
     listManager.maybeToggleUpdateChecking();
   },
 
 
-  addMozEntries: function() {
+  addMozEntries() {
     // Add test entries to the DB.
     // XXX bug 779008 - this could be done by DB itself?
     const phishURL    = "itisatrap.org/firefox/its-a-trap.html";
     const malwareURL  = "itisatrap.org/firefox/its-an-attack.html";
     const unwantedURL = "itisatrap.org/firefox/unwanted.html";
+    const harmfulURL  = "itisatrap.org/firefox/harmful.html";
     const trackerURLs = [
       "trackertest.org/",
       "itisatracker.org/",
@@ -384,22 +409,18 @@ this.SafeBrowsing = {
     const whitelistURL  = "itisatrap.org/?resource=itisatracker.org";
     const blockedURL    = "itisatrap.org/firefox/blocked.html";
 
-    const flashDenyURL = "flashblock.itisatrap.org/";
-    const flashDenyExceptURL = "except.flashblock.itisatrap.org/";
-    const flashAllowURL = "flashallow.itisatrap.org/";
-    const flashAllowExceptURL = "except.flashallow.itisatrap.org/";
-    const flashSubDocURL = "flashsubdoc.itisatrap.org/";
-    const flashSubDocExceptURL = "except.flashsubdoc.itisatrap.org/";
-
     let update = "n:1000\ni:test-malware-simple\nad:1\n" +
                  "a:1:32:" + malwareURL.length + "\n" +
                  malwareURL + "\n";
     update += "n:1000\ni:test-phish-simple\nad:1\n" +
               "a:1:32:" + phishURL.length + "\n" +
-              phishURL  + "\n";
+              phishURL + "\n";
     update += "n:1000\ni:test-unwanted-simple\nad:1\n" +
               "a:1:32:" + unwantedURL.length + "\n" +
               unwantedURL + "\n";
+    update += "n:1000\ni:test-harmful-simple\nad:1\n" +
+              "a:1:32:" + harmfulURL.length + "\n" +
+              harmfulURL + "\n";
     update += "n:1000\ni:test-track-simple\n" +
               "ad:" + trackerURLs.length + "\n";
     trackerURLs.forEach((trackerURL, i) => {
@@ -412,24 +433,6 @@ this.SafeBrowsing = {
     update += "n:1000\ni:test-block-simple\nad:1\n" +
               "a:1:32:" + blockedURL.length + "\n" +
               blockedURL;
-    update += "n:1000\ni:test-flash-simple\nad:1\n" +
-              "a:1:32:" + flashDenyURL.length + "\n" +
-              flashDenyURL;
-    update += "n:1000\ni:testexcept-flash-simple\nad:1\n" +
-              "a:1:32:" + flashDenyExceptURL.length + "\n" +
-              flashDenyExceptURL;
-    update += "n:1000\ni:test-flashallow-simple\nad:1\n" +
-              "a:1:32:" + flashAllowURL.length + "\n" +
-              flashAllowURL;
-    update += "n:1000\ni:testexcept-flashallow-simple\nad:1\n" +
-              "a:1:32:" + flashAllowExceptURL.length + "\n" +
-              flashAllowExceptURL;
-    update += "n:1000\ni:test-flashsubdoc-simple\nad:1\n" +
-              "a:1:32:" + flashSubDocURL.length + "\n" +
-              flashSubDocURL;
-    update += "n:1000\ni:testexcept-flashsubdoc-simple\nad:1\n" +
-              "a:1:32:" + flashSubDocExceptURL.length + "\n" +
-              flashSubDocExceptURL;
     log("addMozEntries:", update);
 
     let db = Cc["@mozilla.org/url-classifier/dbservice;1"].
@@ -437,26 +440,26 @@ this.SafeBrowsing = {
 
     // nsIUrlClassifierUpdateObserver
     let dummyListener = {
-      updateUrlRequested: function() { },
-      streamFinished:     function() { },
+      updateUrlRequested() { },
+      streamFinished() { },
       // We notify observers when we're done in order to be able to make perf
       // test results more consistent
-      updateError:        function() {
+      updateError() {
         Services.obs.notifyObservers(db, "mozentries-update-finished", "error");
       },
-      updateSuccess:      function() {
+      updateSuccess() {
         Services.obs.notifyObservers(db, "mozentries-update-finished", "success");
       }
     };
 
     try {
-      let tables = "test-malware-simple,test-phish-simple,test-unwanted-simple,test-track-simple,test-trackwhite-simple,test-block-simple,test-flash-simple,testexcept-flash-simple,test-flashallow-simple,testexcept-flashallow-simple,test-flashsubdoc-simple,testexcept-flashsubdoc-simple";
+      let tables = "test-malware-simple,test-phish-simple,test-unwanted-simple,test-harmful-simple,test-track-simple,test-trackwhite-simple,test-block-simple";
       db.beginUpdate(dummyListener, tables, "");
       db.beginStream("", "");
       db.updateStream(update);
       db.finishStream();
       db.finishUpdate();
-    } catch(ex) {
+    } catch (ex) {
       // beginUpdate will throw harmlessly if there's an existing update in progress, ignore failures.
       log("addMozEntries failed!", ex);
       Services.obs.notifyObservers(db, "mozentries-update-finished", "exception");

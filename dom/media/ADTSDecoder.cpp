@@ -7,27 +7,17 @@
 #include "ADTSDecoder.h"
 #include "ADTSDemuxer.h"
 #include "MediaContainerType.h"
-#include "MediaDecoderStateMachine.h"
-#include "MediaFormatReader.h"
 #include "PDMFactory.h"
 
 namespace mozilla {
 
-MediaDecoder*
-ADTSDecoder::Clone(MediaDecoderOwner* aOwner)
+ChannelMediaDecoder*
+ADTSDecoder::CloneImpl(MediaDecoderInit& aInit)
 {
   if (!IsEnabled())
     return nullptr;
 
-  return new ADTSDecoder(aOwner);
-}
-
-MediaDecoderStateMachine*
-ADTSDecoder::CreateStateMachine()
-{
-  RefPtr<MediaDecoderReader> reader =
-      new MediaFormatReader(this, new ADTSDemuxer(GetResource()));
-  return new MediaDecoderStateMachine(this, reader);
+  return new ADTSDecoder(aInit);
 }
 
 /* static */ bool

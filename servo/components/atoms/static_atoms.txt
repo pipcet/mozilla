@@ -68,3 +68,8 @@ fullscreenchange
 fullscreenerror
 gattserverdisconnected
 onchange
+
+reftest-wait
+
+screen
+print

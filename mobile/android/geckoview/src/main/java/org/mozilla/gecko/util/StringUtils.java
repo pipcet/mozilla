@@ -278,21 +278,16 @@ public class StringUtils {
     }
 
     /**
-     * Joining together a sequence of strings with a separator.
+     * Case-insensitive version of {@link String#startsWith(String)}.
      */
-    public static String join(@NonNull String separator, @NonNull List<String> parts) {
-        if (parts.size() == 0) {
-            return "";
-        }
+    public static boolean caseInsensitiveStartsWith(String text, String prefix) {
+        return caseInsensitiveStartsWith(text, prefix, 0);
+    }
 
-        final StringBuilder builder = new StringBuilder();
-        builder.append(parts.get(0));
-
-        for (int i = 1; i < parts.size(); i++) {
-            builder.append(separator);
-            builder.append(parts.get(i));
-        }
-
-        return builder.toString();
+    /**
+     * Case-insensitive version of {@link String#startsWith(String, int)}.
+     */
+    public static boolean caseInsensitiveStartsWith(String text, String prefix, int start) {
+        return text.regionMatches(true, start, prefix, 0, prefix.length());
     }
 }

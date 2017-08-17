@@ -302,7 +302,7 @@ nsAbsoluteContainingBlock::FrameDependsOnContainer(nsIFrame* f,
         !IsFixedPaddingSize(padding->mPadding.GetBEnd(wm))) {
       return true;
     }
-      
+
     // See if f's position might have changed.
     if (!IsFixedMarginSize(margin->mMargin.GetBStart(wm)) ||
         !IsFixedMarginSize(margin->mMargin.GetBEnd(wm))) {
@@ -379,25 +379,13 @@ nsAbsoluteContainingBlock::DoMarkFramesDirty(bool aMarkAllDirty)
   }
 }
 
-// Given an out-of-flow frame, this method returns the parent frame of
-// its placeholder frame, if that parent is a nsContainerFrame.
+// Given an out-of-flow frame, this method returns the parent frame of its
+// placeholder frame or null if it doesn't have a placeholder for some reason.
 static nsContainerFrame*
-GetPlaceholderContainer(nsPresContext* aPresContext,
-                        nsIFrame* aPositionedFrame)
+GetPlaceholderContainer(nsIFrame* aPositionedFrame)
 {
-  MOZ_ASSERT(aPositionedFrame, "need non-null frame");
-  MOZ_ASSERT(aPositionedFrame->HasAnyStateBits(NS_FRAME_OUT_OF_FLOW),
-             "expecting abspos frame");
-  MOZ_ASSERT(aPresContext && aPresContext == aPositionedFrame->PresContext(),
-             "need non-null pres context which matches our frame");
-
-  nsIFrame* placeholder =
-    aPresContext->PresShell()->GetPlaceholderFrameFor(aPositionedFrame);
-
-  if (!placeholder) {
-    return nullptr;
-  }
-  return do_QueryFrame(placeholder->GetParent());
+  nsIFrame* placeholder = aPositionedFrame->GetPlaceholderFrame();
+  return placeholder ? placeholder->GetParent() : nullptr;
 }
 
 /**
@@ -585,8 +573,7 @@ nsAbsoluteContainingBlock::ResolveSizeDependentOffsets(
         aOffsets->IEnd(outerWM) - aMargin.IStartEnd(outerWM) -
         aKidSize.ISize(outerWM);
     } else if (aKidReflowInput.mFlags.mIOffsetsNeedCSSAlign) {
-      placeholderContainer = GetPlaceholderContainer(aPresContext,
-                                                     aKidReflowInput.mFrame);
+      placeholderContainer = GetPlaceholderContainer(aKidReflowInput.mFrame);
       nscoord offset = OffsetToAlignedStaticPos(aKidReflowInput, aKidSize,
                                                 logicalCBSizeOuterWM,
                                                 placeholderContainer,
@@ -607,8 +594,7 @@ nsAbsoluteContainingBlock::ResolveSizeDependentOffsets(
         aKidSize.BSize(outerWM);
     } else if (aKidReflowInput.mFlags.mBOffsetsNeedCSSAlign) {
       if (!placeholderContainer) {
-        placeholderContainer = GetPlaceholderContainer(aPresContext,
-                                                       aKidReflowInput.mFrame);
+        placeholderContainer = GetPlaceholderContainer(aKidReflowInput.mFrame);
       }
       nscoord offset = OffsetToAlignedStaticPos(aKidReflowInput, aKidSize,
                                                 logicalCBSizeOuterWM,
@@ -630,7 +616,7 @@ nsAbsoluteContainingBlock::ResolveSizeDependentOffsets(
 // positioned child has the exact same size and position and skip the
 // reflow...
 
-// When bug 154892 is checked in, make sure that when 
+// When bug 154892 is checked in, make sure that when
 // mChildListID == kFixedList, the height is unconstrained.
 // since we don't allow replicated frames to split.
 
@@ -683,8 +669,7 @@ nsAbsoluteContainingBlock::ReflowAbsoluteFrame(nsIFrame*                aDelegat
     // due to the multiple coordinate spaces in play, we use a convenience flag
     // to simply have the child's ReflowInput give it a static position at its
     // abs.pos. CB origin, and then we'll align & offset it from there.
-    nsIFrame* placeholder =
-      aPresContext->PresShell()->GetPlaceholderFrameFor(aKidFrame);
+    nsIFrame* placeholder = aKidFrame->GetPlaceholderFrame();
     if (placeholder && placeholder->GetParent() == aDelegatingFrame) {
       rsFlags |= ReflowInput::STATIC_POS_IS_CB_ORIGIN;
     }
@@ -696,8 +681,8 @@ nsAbsoluteContainingBlock::ReflowAbsoluteFrame(nsIFrame*                aDelegat
 
   // Get the border values
   WritingMode outerWM = aReflowInput.GetWritingMode();
-  const LogicalMargin border(outerWM,
-                             aReflowInput.mStyleBorder->GetComputedBorder());
+  const LogicalMargin border(outerWM, aDelegatingFrame->GetUsedBorder());
+
   LogicalMargin margin =
     kidReflowInput.ComputedLogicalMargin().ConvertTo(outerWM, wm);
 

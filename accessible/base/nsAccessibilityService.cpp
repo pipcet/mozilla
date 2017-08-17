@@ -58,6 +58,7 @@
 #endif
 
 #include "nsImageFrame.h"
+#include "nsINamed.h"
 #include "nsIObserverService.h"
 #include "nsLayoutUtils.h"
 #include "nsPluginFrame.h"
@@ -194,6 +195,19 @@ New_HTMLDefinition(nsIContent* aContent, Accessible* aContext)
 
 static Accessible* New_HTMLLabel(nsIContent* aContent, Accessible* aContext)
   { return new HTMLLabelAccessible(aContent, aContext->Document()); }
+
+static Accessible* New_HTMLInput(nsIContent* aContent, Accessible* aContext)
+{
+  if (aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+                            nsGkAtoms::checkbox, eIgnoreCase)) {
+    return new HTMLCheckboxAccessible(aContent, aContext->Document());
+  }
+  if (aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+                            nsGkAtoms::radio, eIgnoreCase)) {
+    return new HTMLRadioButtonAccessible(aContent, aContext->Document());
+  }
+  return nullptr;
+}
 
 static Accessible* New_HTMLOutput(nsIContent* aContent, Accessible* aContext)
   { return new HTMLOutputAccessible(aContent, aContext->Document()); }
@@ -399,6 +413,7 @@ static StaticAutoPtr<nsTArray<nsCOMPtr<nsIContent> > > sPendingPlugins;
 static StaticAutoPtr<nsTArray<nsCOMPtr<nsITimer> > > sPluginTimers;
 
 class PluginTimerCallBack final : public nsITimerCallback
+                                , public nsINamed
 {
   ~PluginTimerCallBack() {}
 
@@ -431,11 +446,17 @@ public:
     return NS_OK;
   }
 
+  NS_IMETHOD GetName(nsACString& aName) final
+  {
+    aName.AssignLiteral("PluginTimerCallBack");
+    return NS_OK;
+  }
+
 private:
   nsCOMPtr<nsIContent> mContent;
 };
 
-NS_IMPL_ISUPPORTS(PluginTimerCallBack, nsITimerCallback)
+NS_IMPL_ISUPPORTS(PluginTimerCallBack, nsITimerCallback, nsINamed)
 #endif
 
 already_AddRefed<Accessible>
@@ -732,7 +753,7 @@ void
 nsAccessibilityService::GetStringStates(uint32_t aState, uint32_t aExtraState,
                                         nsISupports** aStringStates)
 {
-  RefPtr<DOMStringList> stringStates = 
+  RefPtr<DOMStringList> stringStates =
     GetStringStates(nsAccUtils::To64State(aState, aExtraState));
 
   // unknown state
@@ -906,6 +927,21 @@ nsAccessibilityService::GetStringEventType(uint32_t aEventType,
   }
 
   CopyUTF8toUTF16(kEventTypeNames[aEventType], aString);
+}
+
+void
+nsAccessibilityService::GetStringEventType(uint32_t aEventType,
+                                           nsACString& aString)
+{
+  MOZ_ASSERT(nsIAccessibleEvent::EVENT_LAST_ENTRY == ArrayLength(kEventTypeNames),
+             "nsIAccessibleEvent constants are out of sync to kEventTypeNames");
+
+  if (aEventType >= ArrayLength(kEventTypeNames)) {
+    aString.AssignLiteral("unknown");
+    return;
+  }
+
+  aString = nsDependentCString(kEventTypeNames[aEventType]);
 }
 
 void

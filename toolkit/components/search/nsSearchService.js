@@ -9,38 +9,27 @@ const Cu = Components.utils;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Promise.jsm");
+Cu.import("resource://gre/modules/PromiseUtils.jsm");
 Cu.import("resource://gre/modules/debug.js");
 Cu.import("resource://gre/modules/AppConstants.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
-  "resource://gre/modules/AsyncShutdown.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "DeferredTask",
-  "resource://gre/modules/DeferredTask.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
-  "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryStopwatch",
-  "resource://gre/modules/TelemetryStopwatch.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Deprecated",
-  "resource://gre/modules/Deprecated.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "SearchStaticData",
-  "resource://gre/modules/SearchStaticData.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "setTimeout",
-  "resource://gre/modules/Timer.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "clearTimeout",
-  "resource://gre/modules/Timer.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Lz4",
-  "resource://gre/modules/lz4.js");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
+  DeferredTask: "resource://gre/modules/DeferredTask.jsm",
+  OS: "resource://gre/modules/osfile.jsm",
+  TelemetryStopwatch: "resource://gre/modules/TelemetryStopwatch.jsm",
+  Deprecated: "resource://gre/modules/Deprecated.jsm",
+  SearchStaticData: "resource://gre/modules/SearchStaticData.jsm",
+  setTimeout: "resource://gre/modules/Timer.jsm",
+  clearTimeout: "resource://gre/modules/Timer.jsm",
+  Lz4: "resource://gre/modules/lz4.js",
+});
 
-XPCOMUtils.defineLazyServiceGetter(this, "gTextToSubURI",
-                                   "@mozilla.org/intl/texttosuburi;1",
-                                   "nsITextToSubURI");
-XPCOMUtils.defineLazyServiceGetter(this, "gEnvironment",
-                                   "@mozilla.org/process/environment;1",
-                                   "nsIEnvironment");
-XPCOMUtils.defineLazyServiceGetter(this, "gChromeReg",
-                                   "@mozilla.org/chrome/chrome-registry;1",
-                                   "nsIChromeRegistry");
+XPCOMUtils.defineLazyServiceGetters(this, {
+  gTextToSubURI: ["@mozilla.org/intl/texttosuburi;1", "nsITextToSubURI"],
+  gEnvironment: ["@mozilla.org/process/environment;1", "nsIEnvironment"],
+  gChromeReg: ["@mozilla.org/chrome/chrome-registry;1", "nsIChromeRegistry"],
+});
 
 Cu.importGlobalProperties(["XMLHttpRequest"]);
 
@@ -112,7 +101,8 @@ const NEW_LINES = /(\r\n|\r|\n)/;
 const MAX_ICON_SIZE   = 10000;
 
 // Default charset to use for sending search parameters. ISO-8859-1 is used to
-// match previous nsInternetSearchService behavior.
+// match previous nsInternetSearchService behavior as a URL parameter. Label
+// resolution causes windows-1252 to be actually used.
 const DEFAULT_QUERY_CHARSET = "ISO-8859-1";
 
 const SEARCH_BUNDLE = "chrome://global/locale/search/search.properties";
@@ -296,8 +286,6 @@ loadListener.prototype = {
     Ci.nsIStreamListener,
     Ci.nsIChannelEventSink,
     Ci.nsIInterfaceRequestor,
-    // See FIXME comment below.
-    Ci.nsIHttpEventSink,
     Ci.nsIProgressEventSink
   ]),
 
@@ -348,9 +336,6 @@ loadListener.prototype = {
     return this.QueryInterface(aIID);
   },
 
-  // FIXME: bug 253127
-  // nsIHttpEventSink
-  onRedirect(aChannel, aNewChannel) {},
   // nsIProgressEventSink
   onProgress(aRequest, aContext, aProgress, aProgressMax) {},
   onStatus(aRequest, aContext, aStatus, aStatusArg) {}
@@ -1198,7 +1183,7 @@ EngineURL.prototype = {
 /**
  * nsISearchEngine constructor.
  * @param aLocation
- *        A nsILocalFile or nsIURI object representing the location of the
+ *        A nsIFile or nsIURI object representing the location of the
  *        search engine data file.
  * @param aIsReadOnly
  *        Boolean indicating whether the engine should be treated as read-only.
@@ -1211,7 +1196,7 @@ function Engine(aLocation, aIsReadOnly) {
   let file, uri;
   if (typeof aLocation == "string") {
     this._shortName = aLocation;
-  } else if (aLocation instanceof Ci.nsILocalFile) {
+  } else if (aLocation instanceof Ci.nsIFile) {
     if (!aIsReadOnly) {
       // This is an engine that was installed in NS_APP_USER_SEARCH_DIR by a
       // previous version. We are converting the file to an engine stored only
@@ -1815,20 +1800,22 @@ Engine.prototype = {
   /**
    * Initialize this Engine object from a collection of metadata.
    */
-  _initFromMetadata: function SRCH_ENG_initMetaData(aName, aIconURL, aAlias,
-                                                    aDescription, aMethod,
-                                                    aTemplate, aExtensionID) {
+  _initFromMetadata: function SRCH_ENG_initMetaData(aName, aParams) {
     ENSURE_WARN(!this._readOnly,
                 "Can't call _initFromMetaData on a readonly engine!",
                 Cr.NS_ERROR_FAILURE);
 
-    this._urls.push(new EngineURL(URLTYPE_SEARCH_HTML, aMethod, aTemplate));
+    let method = aParams.method || "GET";
+    this._urls.push(new EngineURL(URLTYPE_SEARCH_HTML, method, aParams.template));
+    if (aParams.suggestURL) {
+      this._urls.push(new EngineURL(URLTYPE_SUGGEST_JSON, "GET", aParams.suggestURL));
+    }
 
     this._name = aName;
-    this.alias = aAlias;
-    this._description = aDescription;
-    this._setIcon(aIconURL, true);
-    this._extensionID = aExtensionID;
+    this.alias = aParams.alias;
+    this._description = aParams.description;
+    this._setIcon(aParams.iconURL, true);
+    this._extensionID = aParams.extensionID;
   },
 
   /**
@@ -2195,7 +2182,7 @@ Engine.prototype = {
           appPath = appPath.spec;
           let spec = uri.spec;
           if (spec.includes(appPath)) {
-            let appURI = Services.io.newFileURI(getDir(knownDirs["app"]));
+            let appURI = Services.io.newFileURI(getDir(knownDirs.app));
             uri = Services.io.newURI(spec.replace(appPath, appURI.spec));
           }
         }
@@ -2643,7 +2630,7 @@ function SearchService() {
   if (getBoolPref(BROWSER_SEARCH_PREF + "log", false))
     LOG = DO_LOG;
 
-  this._initObservers = Promise.defer();
+  this._initObservers = PromiseUtils.defer();
 }
 
 SearchService.prototype = {
@@ -3464,7 +3451,7 @@ SearchService.prototype = {
 
       let addedEngine = null;
       try {
-        let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsILocalFile);
+        let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
         file.initWithPath(osfile.path);
         addedEngine = new Engine(file, !isInProfile);
         await checkForSyncCompletion(addedEngine._asyncInitFromFile(file));
@@ -3584,26 +3571,26 @@ SearchService.prototype = {
     let uris = [];
 
     // Read list.json to find the engines we need to load.
-    let deferred = Promise.defer();
     let request = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].
                     createInstance(Ci.nsIXMLHttpRequest);
     request.overrideMimeType("text/plain");
-    request.onload = function(aEvent) {
-      deferred.resolve(aEvent.target.responseText);
-    };
-    request.onerror = function(aEvent) {
-      LOG("_asyncFindJAREngines: failed to read " + listURL);
-      // Couldn't find list.json, try list.txt
+    let list = await new Promise(resolve => {
+      request.onload = function(aEvent) {
+        resolve(aEvent.target.responseText);
+      };
       request.onerror = function(aEvent) {
-        LOG("_asyncFindJAREngines: failed to read " + APP_SEARCH_PREFIX + "list.txt");
-        deferred.resolve("");
-      }
-      request.open("GET", Services.io.newURI(APP_SEARCH_PREFIX + "list.txt").spec, true);
+        LOG("_asyncFindJAREngines: failed to read " + listURL);
+        // Couldn't find list.json, try list.txt
+        request.onerror = function(aEvent) {
+          LOG("_asyncFindJAREngines: failed to read " + APP_SEARCH_PREFIX + "list.txt");
+          resolve("");
+        }
+        request.open("GET", Services.io.newURI(APP_SEARCH_PREFIX + "list.txt").spec, true);
+        request.send();
+      };
+      request.open("GET", Services.io.newURI(listURL).spec, true);
       request.send();
-    };
-    request.open("GET", Services.io.newURI(listURL).spec, true);
-    request.send();
-    let list = await deferred.promise;
+    });
 
     if (request.responseURL.endsWith(".txt")) {
       this._parseListTxt(list, uris);
@@ -3635,7 +3622,7 @@ SearchService.prototype = {
         if (!("visibleDefaultEngines" in searchSettings[region])) {
           continue;
         }
-        for (let engine of searchSettings[region]["visibleDefaultEngines"]) {
+        for (let engine of searchSettings[region].visibleDefaultEngines) {
           jarNames.add(engine);
         }
       }
@@ -3666,7 +3653,7 @@ SearchService.prototype = {
       if (!region || !(region in searchSettings)) {
         region = "default";
       }
-      engineNames = searchSettings[region]["visibleDefaultEngines"];
+      engineNames = searchSettings[region].visibleDefaultEngines;
     }
 
     // Remove any engine names that are supposed to be ignored.
@@ -4018,23 +4005,38 @@ SearchService.prototype = {
     return null;
   },
 
-  addEngineWithDetails: function SRCH_SVC_addEWD(aName, aIconURL, aAlias,
-                                                 aDescription, aMethod,
-                                                 aTemplate, aExtensionID) {
+  addEngineWithDetails: function SRCH_SVC_addEWD(aName, iconURL, alias,
+                                                 description, method,
+                                                 template, extensionID) {
+    var params;
+
+    if (iconURL && typeof iconURL == "object") {
+      params = iconURL;
+    } else {
+      params = {
+        iconURL,
+        alias,
+        description,
+        method,
+        template,
+        extensionID,
+      };
+    }
+
     this._ensureInitialized();
     if (!aName)
       FAIL("Invalid name passed to addEngineWithDetails!");
-    if (!aMethod)
-      FAIL("Invalid method passed to addEngineWithDetails!");
-    if (!aTemplate)
+    if (!params.template)
       FAIL("Invalid template passed to addEngineWithDetails!");
     if (this._engines[aName])
       FAIL("An engine with that name already exists!", Cr.NS_ERROR_FILE_ALREADY_EXISTS);
 
     var engine = new Engine(sanitizeName(aName), false);
-    engine._initFromMetadata(aName, aIconURL, aAlias, aDescription,
-                             aMethod, aTemplate, aExtensionID);
+    engine._initFromMetadata(aName, params);
     engine._loadPath = "[other]addEngineWithDetails";
+    if (params.extensionID) {
+      engine._loadPath += ":" + params.extensionID;
+    }
     this._addEngineToStore(engine);
   },
 
@@ -4096,7 +4098,7 @@ SearchService.prototype = {
     } else {
       // Remove the engine file from disk if we had a legacy file in the profile.
       if (engineToRemove._filePath) {
-        let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsILocalFile);
+        let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
         file.persistentDescriptor = engineToRemove._filePath;
         if (file.exists()) {
           file.remove(false);

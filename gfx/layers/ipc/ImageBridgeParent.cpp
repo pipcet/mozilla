@@ -106,7 +106,10 @@ ImageBridgeParent::CreateForGPUProcess(Endpoint<PImageBridgeParent>&& aEndpoint)
   RefPtr<ImageBridgeParent> parent = new ImageBridgeParent(loop, aEndpoint.OtherPid());
 
   loop->PostTask(NewRunnableMethod<Endpoint<PImageBridgeParent>&&>(
-    parent, &ImageBridgeParent::Bind, Move(aEndpoint)));
+    "layers::ImageBridgeParent::Bind",
+    parent,
+    &ImageBridgeParent::Bind,
+    Move(aEndpoint)));
 
   sImageBridgeParentSingleton = parent;
   return true;
@@ -122,7 +125,10 @@ ImageBridgeParent::ActorDestroy(ActorDestroyReason aWhy)
     MonitorAutoLock lock(*sImageBridgesLock);
     sImageBridges.erase(OtherPid());
   }
-  MessageLoop::current()->PostTask(NewRunnableMethod(this, &ImageBridgeParent::DeferredDestroy));
+  MessageLoop::current()->PostTask(
+    NewRunnableMethod("layers::ImageBridgeParent::DeferredDestroy",
+                      this,
+                      &ImageBridgeParent::DeferredDestroy));
 
   // It is very important that this method gets called at shutdown (be it a clean
   // or an abnormal shutdown), because DeferredDestroy is what clears mSelfRef.
@@ -210,7 +216,10 @@ ImageBridgeParent::CreateForContent(Endpoint<PImageBridgeParent>&& aEndpoint)
 
   RefPtr<ImageBridgeParent> bridge = new ImageBridgeParent(loop, aEndpoint.OtherPid());
   loop->PostTask(NewRunnableMethod<Endpoint<PImageBridgeParent>&&>(
-    bridge, &ImageBridgeParent::Bind, Move(aEndpoint)));
+    "layers::ImageBridgeParent::Bind",
+    bridge,
+    &ImageBridgeParent::Bind,
+    Move(aEndpoint)));
 
   return true;
 }
@@ -239,9 +248,12 @@ mozilla::ipc::IPCResult ImageBridgeParent::RecvWillClose()
 }
 
 mozilla::ipc::IPCResult
-ImageBridgeParent::RecvNewCompositable(const CompositableHandle& aHandle, const TextureInfo& aInfo)
+ImageBridgeParent::RecvNewCompositable(const CompositableHandle& aHandle,
+                                       const TextureInfo& aInfo,
+                                       const LayersBackend& aLayersBackend)
 {
-  RefPtr<CompositableHost> host = AddCompositable(aHandle, aInfo);
+  bool useWebRender = aLayersBackend == LayersBackend::LAYERS_WR;
+  RefPtr<CompositableHost> host = AddCompositable(aHandle, aInfo, useWebRender);
   if (!host) {
     return IPC_FAIL_NO_REASON(this);
   }

@@ -2,10 +2,9 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-Cu.import("resource://gre/modules/Services.jsm");
+// The ext-* files are imported into the same scopes.
+/* import-globals-from ../../../toolkit/components/extensions/ext-c-toolkit.js */
 
-XPCOMUtils.defineLazyModuleGetter(this, "EventEmitter",
-                                  "resource://gre/modules/EventEmitter.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ExtensionChildDevToolsUtils",
                                   "resource://gre/modules/ExtensionChildDevToolsUtils.jsm");
 
@@ -22,7 +21,7 @@ var {
  * @param {string} panelOptions.id
  *   The id of the addon devtools panel registered in the main process.
  */
-class ChildDevToolsPanel extends EventEmitter {
+class ChildDevToolsPanel extends ExtensionUtils.EventEmitter {
   constructor(context, {id}) {
     super();
 
@@ -99,7 +98,7 @@ class ChildDevToolsPanel extends EventEmitter {
 
   api() {
     return {
-      onShown: new SingletonEventManager(
+      onShown: new EventManager(
         this.context, "devtoolsPanel.onShown", fire => {
           const listener = (eventName, panelContentWindow) => {
             fire.asyncWithoutClone(panelContentWindow);
@@ -110,7 +109,7 @@ class ChildDevToolsPanel extends EventEmitter {
           };
         }).api(),
 
-      onHidden: new SingletonEventManager(
+      onHidden: new EventManager(
         this.context, "devtoolsPanel.onHidden", fire => {
           const listener = () => {
             fire.async();
@@ -157,7 +156,7 @@ this.devtools_panels = class extends ExtensionAPI {
           get themeName() {
             return themeChangeObserver.themeName;
           },
-          onThemeChanged: new SingletonEventManager(
+          onThemeChanged: new EventManager(
             context, "devtools.panels.onThemeChanged", fire => {
               const listener = (eventName, themeName) => {
                 fire.async(themeName);

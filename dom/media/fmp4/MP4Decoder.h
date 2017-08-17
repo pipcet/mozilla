@@ -6,8 +6,7 @@
 #if !defined(MP4Decoder_h_)
 #define MP4Decoder_h_
 
-#include "MediaDecoder.h"
-#include "MediaFormatReader.h"
+#include "ChannelMediaDecoder.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/layers/KnowsCompositor.h"
 
@@ -16,19 +15,10 @@ namespace mozilla {
 class MediaContainerType;
 
 // Decoder that uses a bundled MP4 demuxer and platform decoders to play MP4.
-class MP4Decoder : public MediaDecoder
+class MP4Decoder : public ChannelMediaDecoder
 {
 public:
-  explicit MP4Decoder(MediaDecoderOwner* aOwner);
-
-  MediaDecoder* Clone(MediaDecoderOwner* aOwner) override {
-    if (!IsEnabled()) {
-      return nullptr;
-    }
-    return new MP4Decoder(aOwner);
-  }
-
-  MediaDecoderStateMachine* CreateStateMachine() override;
+  explicit MP4Decoder(MediaDecoderInit& aInit);
 
   // Returns true if aContainerType is an MP4 type that we think we can render
   // with the a platform decoder backend.
@@ -55,7 +45,13 @@ public:
   void GetMozDebugReaderData(nsACString& aString) override;
 
 private:
-  RefPtr<MediaFormatReader> mReader;
+  ChannelMediaDecoder* CloneImpl(MediaDecoderInit& aInit) override
+  {
+    if (!IsEnabled()) {
+      return nullptr;
+    }
+    return new MP4Decoder(aInit);
+  }
 };
 
 } // namespace mozilla

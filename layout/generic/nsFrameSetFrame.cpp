@@ -25,7 +25,6 @@
 #include "nsStyleConsts.h"
 #include "nsStyleContext.h"
 #include "nsHTMLParts.h"
-#include "nsRenderingContext.h"
 #include "nsIDOMMutationEvent.h"
 #include "nsNameSpaceManager.h"
 #include "nsCSSAnonBoxes.h"
@@ -100,7 +99,6 @@ public:
                              nsIFrame::Cursor& aCursor) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual void Reflow(nsPresContext*           aPresContext,
@@ -148,7 +146,6 @@ public:
 #endif
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual void Reflow(nsPresContext*           aPresContext,
@@ -676,10 +673,9 @@ nsHTMLFramesetFrame::GetCursor(const nsPoint&    aPoint,
 
 void
 nsHTMLFramesetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                      const nsRect&           aDirtyRect,
                                       const nsDisplayListSet& aLists)
 {
-  BuildDisplayListForInline(aBuilder, aDirtyRect, aLists);
+  BuildDisplayListForInline(aBuilder, aLists);
 
   if (mDragger && aBuilder->IsForEventDelivery()) {
     aLists.Content()->AppendNewToTop(
@@ -1408,12 +1404,12 @@ public:
     aOutFrames->AppendElement(mFrame);
   }
   virtual void Paint(nsDisplayListBuilder* aBuilder,
-                     nsRenderingContext* aCtx) override;
+                     gfxContext* aCtx) override;
   NS_DISPLAY_DECL_NAME("FramesetBorder", TYPE_FRAMESET_BORDER)
 };
 
 void nsDisplayFramesetBorder::Paint(nsDisplayListBuilder* aBuilder,
-                                    nsRenderingContext* aCtx)
+                                    gfxContext* aCtx)
 {
   static_cast<nsHTMLFramesetBorderFrame*>(mFrame)->
     PaintBorder(aCtx->GetDrawTarget(), ToReferenceFrame());
@@ -1421,7 +1417,6 @@ void nsDisplayFramesetBorder::Paint(nsDisplayListBuilder* aBuilder,
 
 void
 nsHTMLFramesetBorderFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                            const nsRect&           aDirtyRect,
                                             const nsDisplayListSet& aLists)
 {
   aLists.Content()->AppendNewToTop(
@@ -1616,12 +1611,12 @@ public:
 #endif
 
   virtual void Paint(nsDisplayListBuilder* aBuilder,
-                     nsRenderingContext* aCtx) override;
+                     gfxContext* aCtx) override;
   NS_DISPLAY_DECL_NAME("FramesetBlank", TYPE_FRAMESET_BLANK)
 };
 
 void nsDisplayFramesetBlank::Paint(nsDisplayListBuilder* aBuilder,
-                                   nsRenderingContext* aCtx)
+                                   gfxContext* aCtx)
 {
   DrawTarget* drawTarget = aCtx->GetDrawTarget();
   int32_t appUnitsPerDevPixel = mFrame->PresContext()->AppUnitsPerDevPixel();
@@ -1633,7 +1628,6 @@ void nsDisplayFramesetBlank::Paint(nsDisplayListBuilder* aBuilder,
 
 void
 nsHTMLFramesetBlankFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                           const nsRect&           aDirtyRect,
                                            const nsDisplayListSet& aLists)
 {
   aLists.Content()->AppendNewToTop(

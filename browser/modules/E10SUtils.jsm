@@ -24,7 +24,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "console",
 
 function getAboutModule(aURL) {
   // Needs to match NS_GetAboutModuleName
-  let moduleName = aURL.path.replace(/[#?].*/, "").toLowerCase();
+  let moduleName = aURL.pathQueryRef.replace(/[#?].*/, "").toLowerCase();
   let contract = "@mozilla.org/network/protocol/about;1?what=" + moduleName;
   try {
     return Cc[contract].getService(Ci.nsIAboutModule);
@@ -47,6 +47,13 @@ const LARGE_ALLOCATION_REMOTE_TYPE = "webLargeAllocation";
 const DEFAULT_REMOTE_TYPE = WEB_REMOTE_TYPE;
 
 function validatedWebRemoteType(aPreferredRemoteType, aTargetUri, aCurrentUri) {
+  // If the domain is whitelisted to allow it to use file:// URIs, then we have
+  // to run it in a file content process, in case it uses file:// sub-resources.
+  const sm = Services.scriptSecurityManager;
+  if (sm.inFileURIWhitelist(aTargetUri)) {
+    return FILE_REMOTE_TYPE;
+  }
+
   if (!aPreferredRemoteType) {
     return WEB_REMOTE_TYPE;
   }
@@ -60,7 +67,6 @@ function validatedWebRemoteType(aPreferredRemoteType, aTargetUri, aCurrentUri) {
     // If aCurrentUri is passed then we should only allow FILE_REMOTE_TYPE
     // when it is same origin as target.
     if (aCurrentUri) {
-      const sm = Services.scriptSecurityManager;
       try {
         // checkSameOriginURI throws when not same origin.
         sm.checkSameOriginURI(aCurrentUri, aTargetUri, false);
@@ -235,6 +241,14 @@ this.E10SUtils = {
       let remoteType = Services.appinfo.remoteType;
       return remoteType ==
         this.getRemoteTypeForURIObject(aURI, true, remoteType, webNav.currentURI);
+    }
+
+    if (sessionHistory.count == 1 && webNav.currentURI.spec == "about:newtab") {
+      // This is possibly a preloaded browser and we're about to navigate away for
+      // the first time. On the child side there is no way to tell for sure if that
+      // is the case, so let's redirect this request to the parent to decide if a new
+      // process is needed.
+      return false;
     }
 
     // If the URI can be loaded in the current process then continue

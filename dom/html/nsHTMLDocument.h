@@ -22,7 +22,6 @@
 #include "mozilla/dom/HTMLSharedElement.h"
 #include "mozilla/dom/BindingDeclarations.h"
 
-class nsIEditor;
 class nsIURI;
 class nsIDocShell;
 class nsICachingChannel;
@@ -74,6 +73,8 @@ public:
     return mWriteLevel != uint32_t(0);
   }
 
+  virtual nsIContent* GetUnfocusedKeyEventTarget() override;
+
   virtual nsContentList* GetForms() override;
 
   virtual nsContentList* GetFormControls() override;
@@ -103,7 +104,7 @@ public:
   virtual void AddedForm() override;
   virtual void RemovedForm() override;
   virtual int32_t GetNumFormsSynchronous() override;
-  virtual void TearingDownEditor(nsIEditor *aEditor) override;
+  virtual void TearingDownEditor() override;
   virtual void SetIsXHTML(bool aXHTML) override
   {
     mType = (aXHTML ? eXHTML : eHTML);
@@ -158,7 +159,7 @@ public:
     return nsDocument::GetElementById(aElementId);
   }
 
-  virtual void DocAddSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const override;
+  virtual void DocAddSizeOfExcludingThis(nsWindowSizes& aWindowSizes) const override;
   // DocAddSizeOfIncludingThis is inherited from nsIDocument.
 
   virtual bool WillIgnoreCharsetOverride() override;
@@ -191,8 +192,11 @@ public:
   nsIHTMLCollection* Scripts();
   already_AddRefed<nsContentList> GetElementsByName(const nsAString & aName)
   {
-    return NS_GetFuncStringNodeList(this, MatchNameAttribute, nullptr,
-                                    UseExistingNameString, aName);
+    return GetFuncStringContentList<nsCachableElementsByNameNodeList>(this,
+                                                                      MatchNameAttribute,
+                                                                      nullptr,
+                                                                      UseExistingNameString,
+                                                                      aName);
   }
   already_AddRefed<nsIDocument> Open(JSContext* cx,
                                      const nsAString& aType,
@@ -246,7 +250,6 @@ public:
   {
     // Deprecated
   }
-  mozilla::dom::Selection* GetSelection(mozilla::ErrorResult& aRv);
   // The XPCOM CaptureEvents works fine for us.
   // The XPCOM ReleaseEvents works fine for us.
   // We're picking up GetLocation from Document
@@ -304,7 +307,7 @@ protected:
   void *GenerateParserKey(void);
 
   RefPtr<nsContentList> mImages;
-  RefPtr<nsContentList> mApplets;
+  RefPtr<nsEmptyContentList> mApplets;
   RefPtr<nsContentList> mEmbeds;
   RefPtr<nsContentList> mLinks;
   RefPtr<nsContentList> mAnchors;
@@ -321,21 +324,24 @@ protected:
 
   static void TryHintCharset(nsIContentViewer* aContentViewer,
                              int32_t& aCharsetSource,
-                             nsACString& aCharset);
+                             NotNull<const Encoding*>& aEncoding);
   void TryUserForcedCharset(nsIContentViewer* aCv,
                             nsIDocShell*  aDocShell,
                             int32_t& aCharsetSource,
-                            nsACString& aCharset);
+                            NotNull<const Encoding*>& aEncoding);
   static void TryCacheCharset(nsICachingChannel* aCachingChannel,
-                                int32_t& aCharsetSource,
-                                nsACString& aCharset);
+                              int32_t& aCharsetSource,
+                              NotNull<const Encoding*>& aEncoding);
   void TryParentCharset(nsIDocShell*  aDocShell,
-                        int32_t& charsetSource, nsACString& aCharset);
-  void TryTLD(int32_t& aCharsetSource, nsACString& aCharset);
-  static void TryFallback(int32_t& aCharsetSource, nsACString& aCharset);
+                        int32_t& charsetSource,
+                        NotNull<const Encoding*>& aEncoding);
+  void TryTLD(int32_t& aCharsetSource, NotNull<const Encoding*>& aCharset);
+  static void TryFallback(int32_t& aCharsetSource,
+                          NotNull<const Encoding*>& aEncoding);
 
   // Override so we can munge the charset on our wyciwyg channel as needed.
-  virtual void SetDocumentCharacterSet(const nsACString& aCharSetID) override;
+  virtual void
+    SetDocumentCharacterSet(NotNull<const Encoding*> aEncoding) override;
 
   // Tracks if we are currently processing any document.write calls (either
   // implicit or explicit). Note that if a write call writes out something which

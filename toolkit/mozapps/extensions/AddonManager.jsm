@@ -77,20 +77,12 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/AsyncShutdown.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-                                  "resource://gre/modules/Promise.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AddonRepository",
-                                  "resource://gre/modules/addons/AddonRepository.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Extension",
-                                  "resource://gre/modules/Extension.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
-                                  "resource://gre/modules/FileUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PromptUtils",
-                                  "resource://gre/modules/SharedPromptUtils.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AddonRepository: "resource://gre/modules/addons/AddonRepository.jsm",
+  Extension: "resource://gre/modules/Extension.jsm",
+  FileUtils: "resource://gre/modules/FileUtils.jsm",
+  PromptUtils: "resource://gre/modules/SharedPromptUtils.jsm",
+});
 
 XPCOMUtils.defineLazyGetter(this, "CertUtils", function() {
   let certUtils = {};
@@ -101,7 +93,12 @@ XPCOMUtils.defineLazyGetter(this, "CertUtils", function() {
 XPCOMUtils.defineLazyPreferenceGetter(this, "WEBEXT_PERMISSION_PROMPTS",
                                       PREF_WEBEXT_PERM_PROMPTS, false);
 
-Services.ppmm.loadProcessScript("chrome://extensions/content/extension-process-script.js", true);
+// Initialize the WebExtension process script service as early as possible,
+// since it needs to be able to track things like new frameLoader globals that
+// are created before other framework code has been initialized.
+Services.ppmm.loadProcessScript(
+  "data:,Components.classes['@mozilla.org/webextensions/extension-process-script;1'].getService()",
+  true);
 
 const INTEGER = /^[1-9]\d*$/;
 
@@ -630,10 +627,10 @@ var gNonMpcDisabled = false;
  * contents hidden from API users.
  */
 var AddonManagerInternal = {
-  managerListeners: [],
-  installListeners: [],
-  addonListeners: [],
-  typeListeners: [],
+  managerListeners: new Set(),
+  installListeners: new Set(),
+  addonListeners: new Set(),
+  typeListeners: new Set(),
   pendingProviders: new Set(),
   providers: new Set(),
   providerShutdowns: new Map(),
@@ -959,7 +956,7 @@ var AddonManagerInternal = {
             providers: [aProvider]
           };
 
-          let typeListeners = this.typeListeners.slice(0);
+          let typeListeners = new Set(this.typeListeners);
           for (let listener of typeListeners)
             safeCall(() => listener.onTypeAdded(type));
         } else {
@@ -1000,7 +997,7 @@ var AddonManagerInternal = {
         let oldType = this.types[type].type;
         delete this.types[type];
 
-        let typeListeners = this.typeListeners.slice(0);
+        let typeListeners = new Set(this.typeListeners);
         for (let listener of typeListeners)
           safeCall(() => listener.onTypeRemoved(oldType));
       }
@@ -1145,10 +1142,10 @@ var AddonManagerInternal = {
     }
 
     logger.debug("Async provider shutdown done");
-    this.managerListeners.splice(0, this.managerListeners.length);
-    this.installListeners.splice(0, this.installListeners.length);
-    this.addonListeners.splice(0, this.addonListeners.length);
-    this.typeListeners.splice(0, this.typeListeners.length);
+    this.managerListeners.clear();
+    this.installListeners.clear();
+    this.addonListeners.clear();
+    this.typeListeners.clear();
     this.providerShutdowns.clear();
     for (let type in this.startupChanges)
       delete this.startupChanges[type];
@@ -1515,7 +1512,7 @@ var AddonManagerInternal = {
                                    "addons-background-update-complete");
     })();
     // Fork the promise chain so we can log the error and let our caller see it too.
-    buPromise.then(null, e => logger.warn("Error in background update", e));
+    buPromise.catch(e => logger.warn("Error in background update", e));
     return buPromise;
   },
 
@@ -1595,7 +1592,7 @@ var AddonManagerInternal = {
       throw Components.Exception("aMethod must be a non-empty string",
                                  Cr.NS_ERROR_INVALID_ARG);
 
-    let managerListeners = this.managerListeners.slice(0);
+    let managerListeners = new Set(this.managerListeners);
     for (let listener of managerListeners) {
       try {
         if (aMethod in listener)
@@ -1633,9 +1630,9 @@ var AddonManagerInternal = {
     let result = true;
     let listeners;
     if (aExtraListeners)
-      listeners = aExtraListeners.concat(this.installListeners);
+      listeners = new Set(aExtraListeners.concat(Array.from(this.installListeners)));
     else
-      listeners = this.installListeners.slice(0);
+      listeners = new Set(this.installListeners);
 
     for (let listener of listeners) {
       try {
@@ -1666,7 +1663,7 @@ var AddonManagerInternal = {
       throw Components.Exception("aMethod must be a non-empty string",
                                  Cr.NS_ERROR_INVALID_ARG);
 
-    let addonListeners = this.addonListeners.slice(0);
+    let addonListeners = new Set(this.addonListeners);
     for (let listener of addonListeners) {
       try {
         if (aMethod in listener)
@@ -2184,10 +2181,7 @@ var AddonManagerInternal = {
       throw Components.Exception("aListener must be a InstallListener object",
                                  Cr.NS_ERROR_INVALID_ARG);
 
-    if (!this.installListeners.some(function(i) {
-      return i == aListener;
-}))
-      this.installListeners.push(aListener);
+      this.installListeners.add(aListener);
   },
 
   /**
@@ -2201,13 +2195,7 @@ var AddonManagerInternal = {
       throw Components.Exception("aListener must be a InstallListener object",
                                  Cr.NS_ERROR_INVALID_ARG);
 
-    let pos = 0;
-    while (pos < this.installListeners.length) {
-      if (this.installListeners[pos] == aListener)
-        this.installListeners.splice(pos, 1);
-      else
-        pos++;
-    }
+    this.installListeners.delete(aListener);
   },
   /*
    * Adds new or overrides existing UpgradeListener.
@@ -2523,7 +2511,7 @@ var AddonManagerInternal = {
     for (let provider of this.providers) {
       let providerAddons;
       if ("getActiveAddons" in provider) {
-        providerAddons = await callProvider(provider, "getActiveAddons", aTypes);
+        providerAddons = await callProvider(provider, "getActiveAddons", null, aTypes);
       } else {
         providerAddons = await promiseCallProvider(provider, "getAddonsByTypes", aTypes);
         providerAddons = providerAddons.filter(a => a.isActive);
@@ -2589,8 +2577,7 @@ var AddonManagerInternal = {
       throw Components.Exception("aListener must be an AddonManagerListener object",
                                  Cr.NS_ERROR_INVALID_ARG);
 
-    if (!this.managerListeners.some(i => i == aListener))
-      this.managerListeners.push(aListener);
+    this.managerListeners.add(aListener);
   },
 
   /**
@@ -2604,13 +2591,7 @@ var AddonManagerInternal = {
       throw Components.Exception("aListener must be an AddonManagerListener object",
                                  Cr.NS_ERROR_INVALID_ARG);
 
-    let pos = 0;
-    while (pos < this.managerListeners.length) {
-      if (this.managerListeners[pos] == aListener)
-        this.managerListeners.splice(pos, 1);
-      else
-        pos++;
-    }
+    this.managerListeners.delete(aListener);
   },
 
   /**
@@ -2624,8 +2605,7 @@ var AddonManagerInternal = {
       throw Components.Exception("aListener must be an AddonListener object",
                                  Cr.NS_ERROR_INVALID_ARG);
 
-    if (!this.addonListeners.some(i => i == aListener))
-      this.addonListeners.push(aListener);
+    this.addonListeners.add(aListener);
   },
 
   /**
@@ -2639,13 +2619,7 @@ var AddonManagerInternal = {
       throw Components.Exception("aListener must be an AddonListener object",
                                  Cr.NS_ERROR_INVALID_ARG);
 
-    let pos = 0;
-    while (pos < this.addonListeners.length) {
-      if (this.addonListeners[pos] == aListener)
-        this.addonListeners.splice(pos, 1);
-      else
-        pos++;
-    }
+    this.addonListeners.delete(aListener);
   },
 
   /**
@@ -2659,8 +2633,7 @@ var AddonManagerInternal = {
       throw Components.Exception("aListener must be a TypeListener object",
                                  Cr.NS_ERROR_INVALID_ARG);
 
-    if (!this.typeListeners.some(i => i == aListener))
-      this.typeListeners.push(aListener);
+    this.typeListeners.add(aListener);
   },
 
   /**
@@ -2674,13 +2647,7 @@ var AddonManagerInternal = {
       throw Components.Exception("aListener must be a TypeListener object",
                                  Cr.NS_ERROR_INVALID_ARG);
 
-    let pos = 0;
-    while (pos < this.typeListeners.length) {
-      if (this.typeListeners[pos] == aListener)
-        this.typeListeners.splice(pos, 1);
-      else
-        pos++;
-    }
+    this.typeListeners.delete(aListener);
   },
 
   get addonTypes() {
@@ -2869,7 +2836,7 @@ var AddonManagerInternal = {
           } catch (e) {}
         }
 
-        if (Preferences.get("xpinstall.customConfirmationUI", false)) {
+        if (Services.prefs.getBoolPref("xpinstall.customConfirmationUI", false)) {
           this.installNotifyObservers("addon-install-confirmation",
                                       browser, url, proxy);
           return;
@@ -3073,7 +3040,7 @@ var AddonManagerInternal = {
 
       return state.installPromise.then(addon => new Promise(resolve => {
         let callback = () => resolve(result);
-        if (Preferences.get(PREF_WEBEXT_PERM_PROMPTS, false)) {
+        if (Services.prefs.getBoolPref(PREF_WEBEXT_PERM_PROMPTS, false)) {
           let subject = {wrappedJSObject: {target, addon, callback}};
           Services.obs.notifyObservers(subject, "webextension-install-notify")
         } else {
@@ -3205,6 +3172,11 @@ this.AddonManagerPrivate = {
   AddonCompatibilityOverride,
 
   AddonType,
+
+  get BOOTSTRAP_REASONS() {
+    return AddonManagerInternal._getProviderByName("XPIProvider")
+            .BOOTSTRAP_REASONS;
+  },
 
   recordTimestamp(name, value) {
     AddonManagerInternal.recordTimestamp(name, value);
@@ -3367,7 +3339,18 @@ this.AddonManager = {
     // The addon did not have the expected ID
     ["ERROR_INCORRECT_ID", -7],
   ]),
-
+  // The update check timed out
+  ERROR_TIMEOUT: -1,
+  // There was an error while downloading the update information.
+  ERROR_DOWNLOAD_ERROR: -2,
+  // The update information was malformed in some way.
+  ERROR_PARSE_ERROR: -3,
+  // The update information was not in any known format.
+  ERROR_UNKNOWN_FORMAT: -4,
+  // The update information was not correctly signed or there was an SSL error.
+  ERROR_SECURITY_ERROR: -5,
+  // The update was cancelled
+  ERROR_CANCELLED: -6,
   // These must be kept in sync with AddonUpdateChecker.
   // No error was encountered.
   UPDATE_STATUS_NO_ERROR: 0,
@@ -3383,7 +3366,6 @@ this.AddonManager = {
   UPDATE_STATUS_SECURITY_ERROR: -5,
   // The update was cancelled.
   UPDATE_STATUS_CANCELLED: -6,
-
   // Constants to indicate why an update check is being performed
   // Update check has been requested by the user.
   UPDATE_WHEN_USER_REQUESTED: 1,

@@ -28,11 +28,11 @@ using namespace mozilla;
 #endif
 
 nsBlockReflowContext::nsBlockReflowContext(nsPresContext* aPresContext,
-                                           const ReflowInput& aParentRS)
+                                           const ReflowInput& aParentRI)
   : mPresContext(aPresContext),
-    mOuterReflowInput(aParentRS),
-    mSpace(aParentRS.GetWritingMode()),
-    mMetrics(aParentRS)
+    mOuterReflowInput(aParentRI),
+    mSpace(aParentRI.GetWritingMode()),
+    mMetrics(aParentRI)
 {
 }
 
@@ -211,7 +211,7 @@ nsBlockReflowContext::ComputeCollapsedBStartMargin(const ReflowInput& aRI,
   if (!setBlockIsEmpty && aBlockIsEmpty) {
     *aBlockIsEmpty = aRI.mFrame->IsEmpty();
   }
-  
+
 #ifdef NOISY_BLOCKDIR_MARGINS
   nsFrame::ListTag(stdout, aRI.mFrame);
   printf(": => %d\n", aMargin->get());

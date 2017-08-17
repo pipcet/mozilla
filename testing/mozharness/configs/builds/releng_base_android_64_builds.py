@@ -11,7 +11,6 @@ config = {
         'checkout-sources',
         'setup-mock',
         'build',
-        'generate-build-stats',
         'upload-files',
         'sendchange',
         'multi-l10n',
@@ -31,6 +30,7 @@ config = {
         ('/home/cltbld/.ssh', '/home/mock_mozilla/.ssh'),
         ('/home/cltbld/.hgrc', '/builds/.hgrc'),
         ('/home/cltbld/.boto', '/builds/.boto'),
+        ('/builds/gapi.data', '/builds/gapi.data'),
         ('/builds/relengapi.tok', '/builds/relengapi.tok'),
         ('/tools/tooltool.py', '/builds/tooltool.py'),
         ('/builds/mozilla-api.key', '/builds/mozilla-api.key'),
@@ -39,6 +39,9 @@ config = {
         ('/usr/local/lib/hgext', '/usr/local/lib/hgext'),
     ],
     'secret_files': [
+        {'filename': '/builds/gapi.data',
+         'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/gapi.data',
+         'min_scm_level': 1},
         {'filename': '/builds/mozilla-fennec-geoloc-api.key',
          'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/mozilla-fennec-geoloc-api.key',
          'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
@@ -57,6 +60,16 @@ config = {
         {'filename': '/builds/leanplum-sdk-nightly.token',
          'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/leanplum-sdk-nightly.token',
          'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
+        {'filename': '/builds/pocket-api-release.token',
+         'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/pocket-api-release.token',
+         'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
+        {'filename': '/builds/pocket-api-beta.token',
+         'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/pocket-api-beta.token',
+         'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
+        {'filename': '/builds/pocket-api-nightly.token',
+         'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/pocket-api-nightly.token',
+         'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
+
     ],
     'vcs_share_base': '/builds/hg-shared',
     'objdir': 'obj-firefox',
@@ -113,6 +126,5 @@ config = {
                       'ant', 'ant-apache-regexp'
                       ],
     'src_mozconfig': 'mobile/android/config/mozconfigs/android/nightly',
-    'tooltool_manifest_src': "mobile/android/config/tooltool-manifests/android/releng.manifest",
     #########################################################################
 }

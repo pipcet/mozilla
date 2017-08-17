@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-'use strict';
+"use strict";
 
 function checkTextChangeEvent(event, id, text, start, end, isInserted, isFromUserInput) {
   let tcEvent = event.QueryInterface(nsIAccessibleTextChangeEvent);
@@ -16,9 +16,9 @@ function checkTextChangeEvent(event, id, text, start, end, isInserted, isFromUse
 }
 
 async function changeText(browser, id, value, events) {
-  let onEvents = waitForMultipleEvents(events.map(({ isInserted }) => {
+  let onEvents = waitForOrderedEvents(events.map(({ isInserted }) => {
     let eventType = isInserted ? EVENT_TEXT_INSERTED : EVENT_TEXT_REMOVED;
-    return { id, eventType };
+    return [ eventType, id ];
   }));
   // Change text in the subtree.
   await ContentTask.spawn(browser, [id, value], ([contentId, contentValue]) => {
@@ -40,7 +40,7 @@ async function removeTextFromInput(browser, id, value, start, end) {
     el.focus();
     el.setSelectionRange(contentStart, contentEnd);
   });
-  await BrowserTestUtils.sendChar('VK_DELETE', browser);
+  await BrowserTestUtils.sendChar("VK_DELETE", browser);
 
   let event = await onTextRemoved;
   checkTextChangeEvent(event, id, value, start, end, false, true);
@@ -58,14 +58,14 @@ addAccessibleTask(`
   <p id="p">abc</p>
   <input id="input" value="input" />`, async function(browser) {
   let events = [
-    { isInserted: false, str: 'abc', offset: 0 },
-    { isInserted: true, str: 'def', offset: 0 }
+    { isInserted: false, str: "abc", offset: 0 },
+    { isInserted: true, str: "def", offset: 0 }
   ];
-  await changeText(browser, 'p', 'def', events);
+  await changeText(browser, "p", "def", events);
 
-  events = [{ isInserted: true, str: 'DEF', offset: 2 }];
-  await changeText(browser, 'p', 'deDEFf', events);
+  events = [{ isInserted: true, str: "DEF", offset: 2 }];
+  await changeText(browser, "p", "deDEFf", events);
 
   // Test isFromUserInput property.
-  await removeTextFromInput(browser, 'input', 'n', 1, 2);
+  await removeTextFromInput(browser, "input", "n", 1, 2);
 });

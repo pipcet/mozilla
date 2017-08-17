@@ -130,6 +130,7 @@ NS_IMPL_ISUPPORTS_CI(
 , nsIFaviconService
 , mozIAsyncFavicons
 , nsITimerCallback
+, nsINamed
 )
 
 nsFaviconService::nsFaviconService()
@@ -202,11 +203,15 @@ nsFaviconService::ExpireAllFavicons()
   , removeIconsStmt.get()
   , unlinkIconsStmt.get()
   };
+  nsCOMPtr<mozIStorageConnection> conn = mDB->MainConn();
+  if (!conn) {
+    return NS_ERROR_UNEXPECTED;
+  }
   nsCOMPtr<mozIStoragePendingStatement> ps;
   RefPtr<ExpireFaviconsStatementCallbackNotifier> callback =
     new ExpireFaviconsStatementCallbackNotifier();
-  return mDB->MainConn()->ExecuteAsync(stmts, ArrayLength(stmts),
-                                       callback, getter_AddRefs(ps));
+  return conn->ExecuteAsync(stmts, ArrayLength(stmts),
+                                        callback, getter_AddRefs(ps));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -233,6 +238,16 @@ nsFaviconService::Notify(nsITimer* timer)
       this, UNASSOCIATED_ICON_EXPIRY_INTERVAL, nsITimer::TYPE_ONE_SHOT);
   }
 
+  return NS_OK;
+}
+
+////////////////////////////////////////////////////////////////////////
+//// nsINamed
+
+NS_IMETHODIMP
+nsFaviconService::GetName(nsACString& aName)
+{
+  aName.AssignLiteral("nsFaviconService");
   return NS_OK;
 }
 
@@ -375,7 +390,7 @@ nsFaviconService::SetAndFetchFaviconForPage(nsIURI* aPageURI,
       icon.host.Cut(0, 4);
     }
     nsAutoCString path;
-    rv = aFaviconURI->GetPath(path);
+    rv = aFaviconURI->GetPathQueryRef(path);
     if (NS_SUCCEEDED(rv) && path.EqualsLiteral("/favicon.ico")) {
       icon.rootIcon = 1;
     }
@@ -448,7 +463,7 @@ nsFaviconService::ReplaceFaviconData(nsIURI* aFaviconURI,
   nsresult rv = aFaviconURI->GetSpec(iconData->spec);
   NS_ENSURE_SUCCESS(rv, rv);
   nsAutoCString path;
-  rv = aFaviconURI->GetPath(path);
+  rv = aFaviconURI->GetPathQueryRef(path);
   if (NS_SUCCEEDED(rv) && path.EqualsLiteral("/favicon.ico")) {
     iconData->rootIcon = 1;
   }
@@ -635,6 +650,45 @@ nsFaviconService::GetFaviconDataForPage(nsIURI* aPageURI,
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsFaviconService::CopyFavicons(nsIURI* aFromPageURI,
+                               nsIURI* aToPageURI,
+                               uint32_t aFaviconLoadType,
+                               nsIFaviconDataCallback* aCallback)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  NS_ENSURE_ARG(aFromPageURI);
+  NS_ENSURE_ARG(aToPageURI);
+  NS_ENSURE_TRUE(aFaviconLoadType >= nsIFaviconService::FAVICON_LOAD_PRIVATE &&
+                 aFaviconLoadType <= nsIFaviconService::FAVICON_LOAD_NON_PRIVATE,
+                 NS_ERROR_INVALID_ARG);
+
+  PageData fromPage;
+  nsresult rv = aFromPageURI->GetSpec(fromPage.spec);
+  NS_ENSURE_SUCCESS(rv, rv);
+  PageData toPage;
+  rv = aToPageURI->GetSpec(toPage.spec);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  bool canAddToHistory;
+  nsNavHistory* navHistory = nsNavHistory::GetHistoryService();
+  NS_ENSURE_TRUE(navHistory, NS_ERROR_OUT_OF_MEMORY);
+  rv = navHistory->CanAddURI(aToPageURI, &canAddToHistory);
+  NS_ENSURE_SUCCESS(rv, rv);
+  toPage.canAddToHistory = !!canAddToHistory &&
+                           aFaviconLoadType != nsIFaviconService::FAVICON_LOAD_PRIVATE;
+
+  RefPtr<AsyncCopyFavicons> event = new AsyncCopyFavicons(fromPage, toPage, aCallback);
+
+  // Get the target thread and start the work.
+  // DB will be updated and observers notified when done.
+  RefPtr<Database> DB = Database::GetDatabase();
+  NS_ENSURE_STATE(DB);
+  DB->DispatchToAsyncThread(event);
+
+  return NS_OK;
+}
+
 nsresult
 nsFaviconService::GetFaviconLinkForIcon(nsIURI* aFaviconURI,
                                         nsIURI** aOutputURI)
@@ -771,8 +825,8 @@ nsFaviconService::OptimizeIconSizes(IconData& aIcon)
 
   // decode image
   nsCOMPtr<imgIContainer> container;
-  rv = GetImgTools()->DecodeImageData(stream, payload.mimeType,
-                                      getter_AddRefs(container));
+  rv = GetImgTools()->DecodeImage(stream, payload.mimeType,
+                                  getter_AddRefs(container));
   NS_ENSURE_SUCCESS(rv, rv);
 
   // For ICO files, we must evaluate each of the frames we care about.

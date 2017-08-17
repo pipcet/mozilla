@@ -4,21 +4,25 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-Components.utils.import("resource://gre/modules/ContextualIdentityService.jsm");
 Components.utils.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
-Components.utils.import("resource://gre/modules/InlineSpellChecker.jsm");
-Components.utils.import("resource://gre/modules/LoginManagerContextMenu.jsm");
 Components.utils.import("resource://gre/modules/BrowserUtils.jsm");
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 
-
-XPCOMUtils.defineLazyModuleGetter(this, "LoginHelper",
-  "resource://gre/modules/LoginHelper.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "WebNavigationFrames",
-  "resource://gre/modules/WebNavigationFrames.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  SpellCheckHelper: "resource://gre/modules/InlineSpellChecker.jsm",
+  LoginHelper: "resource://gre/modules/LoginHelper.jsm",
+  LoginManagerContextMenu: "resource://gre/modules/LoginManagerContextMenu.jsm",
+  WebNavigationFrames: "resource://gre/modules/WebNavigationFrames.jsm",
+  ContextualIdentityService: "resource://gre/modules/ContextualIdentityService.jsm",
+  DevToolsShim: "chrome://devtools-shim/content/DevToolsShim.jsm",
+});
 
 var gContextMenuContentData = null;
+
+function setContextMenuContentData(data) {
+  gContextMenuContentData = data;
+}
 
 function openContextMenu(aMessage) {
   let data = aMessage.data;
@@ -57,14 +61,14 @@ function openContextMenu(aMessage) {
   let popup = browser.ownerDocument.getElementById("contentAreaContextMenu");
   let event = gContextMenuContentData.event;
 
-  // Set touch mode to get larger menu items.
-  if (event.mozInputSource == MouseEvent.MOZ_SOURCE_TOUCH) {
-    popup.setAttribute("touchmode", "true");
-  } else {
-    popup.removeAttribute("touchmode");
-  }
+  // The event is a CPOW that can't be passed into the native openPopupAtScreen
+  // function. Therefore we synthesize a new MouseEvent to propagate the
+  // inputSource to the subsequently triggered popupshowing event.
+  var newEvent = document.createEvent("MouseEvent");
+  newEvent.initNSMouseEvent("contextmenu", true, true, null, 0, event.screenX, event.screenY,
+                            0, 0, false, false, false, false, 0, null, 0, event.mozInputSource);
 
-  popup.openPopupAtScreen(event.screenX, event.screenY, true);
+  popup.openPopupAtScreen(newEvent.screenX, newEvent.screenY, true, newEvent);
 }
 
 function nsContextMenu(aXulMenu, aIsShift) {
@@ -109,8 +113,9 @@ nsContextMenu.prototype = {
         srcUrl: this.mediaURL,
         frameUrl: gContextMenuContentData ? gContextMenuContentData.docLocation : undefined,
         pageUrl: this.browser ? this.browser.currentURI.spec : undefined,
+        linkText: this.linkTextStr,
         linkUrl: this.linkURL,
-        selectionText: this.isTextSelected ? this.selectionInfo.text : undefined,
+        selectionText: this.isTextSelected ? this.selectionInfo.fullText : undefined,
         frameId: this.frameOuterWindowID,
       };
       subject.wrappedJSObject = subject;
@@ -145,7 +150,9 @@ nsContextMenu.prototype = {
     InlineSpellCheckerUI.clearSuggestionsFromMenu();
     InlineSpellCheckerUI.clearDictionaryListFromMenu();
     InlineSpellCheckerUI.uninit();
-    LoginManagerContextMenu.clearLoginsFromMenu(document);
+    if (Cu.isModuleLoaded("resource://gre/modules/LoginManagerContextMenu.jsm")) {
+      LoginManagerContextMenu.clearLoginsFromMenu(document);
+    }
 
     // This handler self-deletes, only run it if it is still there:
     if (this._onPopupHiding) {
@@ -299,7 +306,10 @@ nsContextMenu.prototype = {
                        this.onImage || this.onCanvas ||
                        this.onVideo || this.onAudio ||
                        this.onLink || this.onTextInput);
-    var showInspect = this.inTabBrowser && gPrefService.getBoolPref("devtools.inspector.enabled");
+
+    var showInspect = this.inTabBrowser &&
+                      gPrefService.getBoolPref("devtools.inspector.enabled", true);
+
     this.showItem("context-viewsource", shouldShow);
     this.showItem("context-viewinfo", shouldShow);
     // The page info is broken for WebExtension popups, as the browser is
@@ -618,7 +628,7 @@ nsContextMenu.prototype = {
   },
 
   initSyncItems() {
-    gSync.initPageContextMenu(this);
+    gSync.updateContentContextMenu(this);
   },
 
   openPasswordManager() {
@@ -626,10 +636,7 @@ nsContextMenu.prototype = {
   },
 
   inspectNode() {
-    let gBrowser = this.browser.ownerGlobal.gBrowser;
-    let { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
-    let { gDevToolsBrowser } = require("devtools/client/framework/devtools-browser");
-    return gDevToolsBrowser.inspectNode(gBrowser.selectedTab, this.targetSelectors);
+    return DevToolsShim.inspectNode(gBrowser.selectedTab, this.targetSelectors);
   },
 
   /**
@@ -856,8 +863,7 @@ nsContextMenu.prototype = {
         }
       }
     } else if ((this.target instanceof HTMLEmbedElement ||
-              this.target instanceof HTMLObjectElement ||
-              this.target instanceof HTMLAppletElement) &&
+              this.target instanceof HTMLObjectElement) &&
              this.target.displayedType == HTMLObjectElement.TYPE_NULL &&
              this.target.pluginFallbackType == HTMLObjectElement.PLUGIN_CLICK_TO_PLAY) {
       this.onCTPPlugin = true;
@@ -1179,7 +1185,8 @@ nsContextMenu.prototype = {
       }
       let tab = tabBrowser.loadOneTab("about:blank", {
         relatedToCurrent: true,
-        inBackground: false
+        inBackground: false,
+        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
       });
       return tabBrowser.getBrowserForTab(tab);
     }
@@ -1318,6 +1325,7 @@ nsContextMenu.prototype = {
 
       let image = document.createElementNS("http://www.w3.org/1999/xhtml", "img");
       image.src = message.data.dataUrl;
+      let imageName = message.data.imageName;
 
       // Confirm since it's annoying if you hit this accidentally.
       const kDesktopBackgroundURL =
@@ -1330,18 +1338,18 @@ nsContextMenu.prototype = {
                    getService(Ci.nsIWindowMediator);
         let dbWin = wm.getMostRecentWindow("Shell:SetDesktopBackground");
         if (dbWin) {
-          dbWin.gSetBackground.init(image);
+          dbWin.gSetBackground.init(image, imageName);
           dbWin.focus();
         } else {
           openDialog(kDesktopBackgroundURL, "",
                      "centerscreen,chrome,dialog=no,dependent,resizable=no",
-                     image);
+                     image, imageName);
         }
       } else {
         // On non-Mac platforms, the Set Wallpaper dialog is modal.
         openDialog(kDesktopBackgroundURL, "",
                    "centerscreen,chrome,dialog,modal,dependent",
-                   image);
+                   image, imageName);
       }
     };
 
@@ -1798,7 +1806,9 @@ nsContextMenu.prototype = {
   },
 
   bookmarkThisPage: function CM_bookmarkThisPage() {
-    window.top.PlacesCommandHook.bookmarkPage(this.browser, PlacesUtils.bookmarksMenuFolderId, true);
+    window.top.PlacesCommandHook
+              .bookmarkPage(this.browser, PlacesUtils.bookmarksMenuFolderId, true)
+              .catch(Components.utils.reportError);
   },
 
   bookmarkLink: function CM_bookmarkLink() {

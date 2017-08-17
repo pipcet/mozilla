@@ -4,6 +4,7 @@
 Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://services-sync/constants.js");
 Cu.import("resource://services-sync/engines.js");
+Cu.import("resource://services-sync/main.js");
 Cu.import("resource://services-sync/engines/tabs.js");
 Cu.import("resource://services-sync/engines/history.js");
 Cu.import("resource://services-sync/record.js");
@@ -17,7 +18,7 @@ add_task(async function test_locally_changed_keys() {
 
   let hmacErrorCount = 0;
   function counting(f) {
-    return function() {
+    return async function() {
       hmacErrorCount++;
       return f.call(this);
     };
@@ -41,12 +42,12 @@ add_task(async function test_locally_changed_keys() {
     // We aren't doing a .login yet, so fudge the cluster URL.
     Service.clusterURL = Service.identity._token.endpoint;
 
-    Service.engineManager.register(HistoryEngine);
+    await Service.engineManager.register(HistoryEngine);
     Service.engineManager.unregister("addons");
 
     function corrupt_local_keys() {
-      Service.collectionKeys._default.keyPair = [Svc.Crypto.generateRandomKey(),
-                                                 Svc.Crypto.generateRandomKey()];
+      Service.collectionKeys._default.keyPair = [Weave.Crypto.generateRandomKey(),
+                                                 Weave.Crypto.generateRandomKey()];
     }
 
     _("Setting meta.");
@@ -66,7 +67,7 @@ add_task(async function test_locally_changed_keys() {
     do_check_true((await serverKeys.upload(Service.resource(Service.cryptoKeysURL))).success);
 
     // Check that login works.
-    do_check_true(Service.login());
+    do_check_true((await Service.login()));
     do_check_true(Service.isLoggedIn);
 
     // Sync should upload records.

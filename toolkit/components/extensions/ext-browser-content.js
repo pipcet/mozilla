@@ -9,17 +9,14 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "clearTimeout",
                                   "resource://gre/modules/Timer.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "require",
-                                  "resource://devtools/shared/Loader.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "ExtensionCommon",
+                                  "resource://gre/modules/ExtensionCommon.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "setTimeout",
                                   "resource://gre/modules/Timer.jsm");
 
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 const {
   getWinUtils,
-  stylesheetMap,
 } = ExtensionUtils;
 
 /* eslint-env mozilla/frame-script */
@@ -124,7 +121,7 @@ const BrowserListener = {
     let winUtils = getWinUtils(content);
 
     for (let url of this.stylesheets) {
-      winUtils.addSheet(stylesheetMap.get(url), winUtils.AGENT_SHEET);
+      winUtils.addSheet(ExtensionCommon.stylesheetMap.get(url), winUtils.AGENT_SHEET);
     }
   },
 

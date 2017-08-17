@@ -615,15 +615,11 @@ public:
     return !(*this == aOther);
   }
 
-  // Enum for AppendToString's aValueSerialization argument.
-  enum Serialization { eNormalized, eAuthorSpecified };
-
   /**
    * Serialize |this| as a specified value for |aProperty| and append
    * it to |aResult|.
    */
-  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                      Serialization aValueSerialization) const;
+  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
   nsCSSUnit GetUnit() const { return mUnit; }
   bool      IsLengthUnit() const
@@ -635,18 +631,18 @@ public:
    * which we try to match based on the physical characteristics of an
    * output device.
    */
-  bool      IsFixedLengthUnit() const  
+  bool      IsFixedLengthUnit() const
     { return mUnit == eCSSUnit_PhysicalMillimeter; }
   /**
    * What the spec calls relative length units is, for us, split
    * between relative length units and pixel length units.
-   * 
+   *
    * A "relative" length unit is a multiple of some derived metric,
    * such as a font em-size, which itself was controlled by an input CSS
    * length. Relative length units should not be scaled by zooming, since
    * the underlying CSS length would already have been scaled.
    */
-  bool      IsRelativeLengthUnit() const  
+  bool      IsRelativeLengthUnit() const
     { return eCSSUnit_EM <= mUnit && mUnit <= eCSSUnit_RootEM; }
   /**
    * A "pixel" length unit is a some multiple of CSS pixels.
@@ -661,11 +657,11 @@ public:
     { return IsPercentLengthUnit(mUnit); }
   static bool IsFloatUnit(nsCSSUnit aUnit)
     { return eCSSUnit_Number <= aUnit; }
-  bool      IsAngularUnit() const  
+  bool      IsAngularUnit() const
     { return eCSSUnit_Degree <= mUnit && mUnit <= eCSSUnit_Turn; }
-  bool      IsFrequencyUnit() const  
+  bool      IsFrequencyUnit() const
     { return eCSSUnit_Hertz <= mUnit && mUnit <= eCSSUnit_Kilohertz; }
-  bool      IsTimeUnit() const  
+  bool      IsTimeUnit() const
     { return eCSSUnit_Seconds <= mUnit && mUnit <= eCSSUnit_Milliseconds; }
   bool      IsCalcUnit() const
     { return eCSSUnit_Calc <= mUnit && mUnit <= eCSSUnit_Calc_Divided; }
@@ -975,13 +971,11 @@ public:
   static void
   AppendSidesShorthandToString(const nsCSSPropertyID aProperties[],
                                const nsCSSValue* aValues[],
-                               nsAString& aString,
-                               Serialization aSerialization);
+                               nsAString& aString);
   static void
   AppendBasicShapeRadiusToString(const nsCSSPropertyID aProperties[],
                                  const nsCSSValue* aValues[],
-                                 nsAString& aResult,
-                                 Serialization aValueSerialization);
+                                 nsAString& aResult);
   static void
   AppendAlignJustifyValueToString(int32_t aValue, nsAString& aResult);
 
@@ -990,21 +984,16 @@ private:
     return static_cast<char16_t*>(aBuffer->Data());
   }
 
-  void AppendPolygonToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                             Serialization aValueSerialization) const;
+  void AppendPolygonToString(nsCSSPropertyID aProperty,
+                             nsAString& aResult) const;
   void AppendPositionCoordinateToString(const nsCSSValue& aValue,
                                         nsCSSPropertyID aProperty,
-                                        nsAString& aResult,
-                                        Serialization aSerialization) const;
+                                        nsAString& aResult) const;
   void AppendCircleOrEllipseToString(
            nsCSSKeyword aFunctionId,
-           nsCSSPropertyID aProperty, nsAString& aResult,
-           Serialization aValueSerialization) const;
-  void AppendBasicShapePositionToString(
-           nsAString& aResult,
-           Serialization aValueSerialization) const;
-  void AppendInsetToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                           Serialization aValueSerialization) const;
+           nsCSSPropertyID aProperty, nsAString& aResult) const;
+  void AppendBasicShapePositionToString(nsAString& aResult) const;
+  void AppendInsetToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 protected:
   nsCSSUnit mUnit;
   union {
@@ -1128,8 +1117,7 @@ struct nsCSSValueList {
 
   nsCSSValueList* Clone() const;  // makes a deep copy. Infallible.
   void CloneInto(nsCSSValueList* aList) const; // makes a deep copy into aList
-  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                      nsCSSValue::Serialization aValueSerialization) const;
+  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
   static bool Equal(const nsCSSValueList* aList1,
                     const nsCSSValueList* aList2);
@@ -1191,8 +1179,7 @@ private:
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(nsCSSValueSharedList)
 
-  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                      nsCSSValue::Serialization aValueSerialization) const;
+  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
   bool operator==(nsCSSValueSharedList const& aOther) const;
   bool operator!=(const nsCSSValueSharedList& aOther) const
@@ -1232,8 +1219,7 @@ struct nsCSSRect {
   nsCSSRect(const nsCSSRect& aCopy);
   ~nsCSSRect();
 
-  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                      nsCSSValue::Serialization aValueSerialization) const;
+  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
   bool operator==(const nsCSSRect& aOther) const {
     return mTop == aOther.mTop &&
@@ -1374,8 +1360,7 @@ struct nsCSSValuePair {
            mYValue.GetUnit() != eCSSUnit_Null;
   }
 
-  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                      nsCSSValue::Serialization aValueSerialization) const;
+  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
@@ -1413,8 +1398,8 @@ struct nsCSSValueTriplet {
     {
         MOZ_COUNT_CTOR(nsCSSValueTriplet);
     }
-    nsCSSValueTriplet(const nsCSSValue& aXValue, 
-                      const nsCSSValue& aYValue, 
+    nsCSSValueTriplet(const nsCSSValue& aXValue,
+                      const nsCSSValue& aYValue,
                       const nsCSSValue& aZValue)
         : mXValue(aXValue), mYValue(aYValue), mZValue(aZValue)
     {
@@ -1466,8 +1451,7 @@ struct nsCSSValueTriplet {
                mZValue.GetUnit() != eCSSUnit_Null;
     }
 
-    void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                        nsCSSValue::Serialization aValueSerialization) const;
+    void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
     nsCSSValue mXValue;
     nsCSSValue mYValue;
@@ -1530,8 +1514,7 @@ struct nsCSSValuePairList {
   ~nsCSSValuePairList();
 
   nsCSSValuePairList* Clone() const; // makes a deep copy. Infallible.
-  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                      nsCSSValue::Serialization aValueSerialization) const;
+  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
   static bool Equal(const nsCSSValuePairList* aList1,
                     const nsCSSValuePairList* aList2);
@@ -1755,6 +1738,9 @@ private:
 public:
   bool operator==(const nsCSSValueTokenStream& aOther) const
   {
+    // This is not safe to call OMT, due to the URI/Principal Equals calls.
+    MOZ_ASSERT(NS_IsMainThread());
+
     bool eq;
     return mPropertyID == aOther.mPropertyID &&
            mShorthandPropertyID == aOther.mShorthandPropertyID &&
@@ -1823,7 +1809,16 @@ public:
     , mComponent2(aComponent2)
     , mComponent3(aComponent3)
     , mAlpha(aAlpha)
-  {}
+  {
+    // We may copy nsCSSValueFloatColor and do some comparisons on them.
+    // In order to get the correct result, we have to make sure each component
+    // is finite.
+    MOZ_ASSERT(mozilla::IsFinite(aComponent1) &&
+               mozilla::IsFinite(aComponent2) &&
+               mozilla::IsFinite(aComponent3) &&
+               mozilla::IsFinite(aAlpha),
+               "Caller must ensure color components are finite");
+  }
 
 private:
   // Private destructor, to discourage deletion outside of Release():

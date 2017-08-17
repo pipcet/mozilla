@@ -72,7 +72,7 @@ public:
   virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
 
-  /** 
+  /**
    * Update mUseSrcAttr from appropriate content attributes or from
    * style, throw away the current image, and load the appropriate
    * image.
@@ -86,12 +86,11 @@ public:
   void UpdateLoadFlags();
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual ~nsImageBoxFrame();
 
-  DrawResult PaintImage(nsRenderingContext& aRenderingContext,
+  DrawResult PaintImage(gfxContext& aRenderingContext,
                         const nsRect& aDirtyRect,
                         nsPoint aPt, uint32_t aFlags);
 
@@ -158,7 +157,7 @@ public:
   // Doesn't handle HitTest because nsLeafBoxFrame already creates an
   // event receiver for us
   virtual void Paint(nsDisplayListBuilder* aBuilder,
-                     nsRenderingContext* aCtx) override;
+                     gfxContext* aCtx) override;
   NS_DISPLAY_DECL_NAME("XULImage", TYPE_XUL_IMAGE)
 };
 

@@ -8,7 +8,7 @@ config = {
     "mozconfig": "src/browser/config/mozconfigs/macosx64/l10n-mozconfig",
     "bootstrap_env": {
         "NO_MERCURIAL_SETUP_CHECK": "1",
-        "MOZ_OBJDIR": "obj-l10n",
+        "MOZ_OBJDIR": "obj-firefox",
         "EN_US_BINARY_URL": os.environ.get("EN_US_BINARY_URL", EN_US_BINARY_URL),
         "LOCALE_MERGEDIR": "%(abs_merge_dir)s/",
         "MOZ_UPDATE_CHANNEL": "%(update_channel)s",
@@ -24,7 +24,7 @@ config = {
     },
 
     "tooltool_url": 'http://relengapi/tooltool/',
-    'tooltool_manifest_src': "browser/config/tooltool-manifests/macosx64/cross-releng.manifest",
+    'tooltool_manifest_src': "browser/config/tooltool-manifests/macosx64/cross-l10n.manifest",
     "mozilla_dir": "src/",
     "simple_name_move": True,
 }

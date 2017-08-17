@@ -1,7 +1,6 @@
-# -*- indent-tabs-mode: nil; js-indent-level: 2 -*-
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // Developer edition promo preferences
 pref("devtools.devedition.promo.shown", false);
@@ -19,7 +18,6 @@ pref("devtools.loader.hotreload", false);
 
 // Developer toolbar preferences
 pref("devtools.toolbar.enabled", true);
-pref("devtools.toolbar.visible", false);
 
 // Enable DevTools WebIDE by default
 pref("devtools.webide.enabled", true);
@@ -65,17 +63,33 @@ pref("devtools.inspector.showAllAnonymousContent", false);
 pref("devtools.inspector.mdnDocsTooltip.enabled", false);
 // Enable the new color widget
 pref("devtools.inspector.colorWidget.enabled", false);
+// Enable the CSS shapes highlighter
+pref("devtools.inspector.shapesHighlighter.enabled", false);
 
 // Enable the Font Inspector
 pref("devtools.fontinspector.enabled", true);
 
-// Enable the Layout View
-pref("devtools.layoutview.enabled", false);
+// Counter to promote the inspector layout view.
+// @remove after release 56 (See Bug 1355747)
+pref("devtools.promote.layoutview", 1);
+// Whether or not to show the promote bar in the layout view
+// @remove after release 56 (See Bug 1355747)
+pref("devtools.promote.layoutview.showPromoteBar", true);
 
 // Grid highlighter preferences
+pref("devtools.gridinspector.gridOutlineMaxColumns", 50);
+pref("devtools.gridinspector.gridOutlineMaxRows", 50);
+pref("devtools.gridinspector.showGridAreas", false);
 pref("devtools.gridinspector.showGridLineNumbers", false);
-pref("devtools.gridinspector.showGridOutline", false);
 pref("devtools.gridinspector.showInfiniteLines", false);
+pref("devtools.gridinspector.showNegativeLineNumbers", false);
+
+// Whether or not the box model panel is opened in the computed view
+pref("devtools.computed.boxmodel.opened", true);
+// Whether or not the box model panel is opened in the layout view
+pref("devtools.layout.boxmodel.opened", true);
+// Whether or not the grid inspector panel is opened in the layout view
+pref("devtools.layout.grid.opened", true);
 
 // By how many times eyedropper will magnify pixels
 pref("devtools.eyedropper.zoom", 6);
@@ -150,8 +164,8 @@ pref("devtools.netmonitor.enabled", true);
 pref("devtools.netmonitor.panes-network-details-width", 550);
 pref("devtools.netmonitor.panes-network-details-height", 450);
 pref("devtools.netmonitor.filters", "[\"all\"]");
-pref("devtools.netmonitor.hiddenColumns",
-  "[\"cookies\",\"duration\",\"endTime\",\"latency\",\"protocol\",\"remoteip\",\"responseTime\",\"scheme\",\"setCookies\",\"startTime\"]"
+pref("devtools.netmonitor.visibleColumns",
+  "[\"status\",\"method\",\"file\",\"domain\",\"cause\",\"type\",\"transferred\",\"contentSize\",\"waterfall\"]"
 );
 
 // The default Network monitor HAR export setting
@@ -215,13 +229,6 @@ pref("devtools.dom.enabled", false);
 
 // Web Audio Editor Inspector Width should be a preference
 pref("devtools.webaudioeditor.inspectorWidth", 300);
-
-// Default theme ("dark" or "light")
-#ifdef MOZ_DEV_EDITION
-sticky_pref("devtools.theme", "dark");
-#else
-sticky_pref("devtools.theme", "light");
-#endif
 
 // Web console filters
 pref("devtools.webconsole.filter.error", true);
@@ -297,8 +304,8 @@ pref("devtools.webconsole.timestampMessages", false);
 // to automatically trigger multiline editing (equivalent to shift + enter).
 pref("devtools.webconsole.autoMultiline", true);
 
-// Enable the experimental webconsole frontend
-#if defined(NIGHTLY_BUILD)
+// Enable the new webconsole frontend
+#if defined(NIGHTLY_BUILD) || defined(MOZ_DEV_EDITION)
 pref("devtools.webconsole.new-frontend-enabled", true);
 #else
 pref("devtools.webconsole.new-frontend-enabled", false);
@@ -337,9 +344,6 @@ pref("devtools.editor.autocomplete", true);
 // opened developer tool. This allows us to ping telemetry just once per browser
 // version for each user.
 pref("devtools.telemetry.tools.opened.version", "{}");
-
-// Enable the JSON View tool (an inspector for application/json documents).
-pref("devtools.jsonview.enabled", true);
 
 // Enable the HTML responsive design mode for all channels.
 pref("devtools.responsive.html.enabled", true);

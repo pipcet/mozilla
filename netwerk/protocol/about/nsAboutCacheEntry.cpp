@@ -87,6 +87,7 @@ NS_IMPL_ISUPPORTS(nsAboutCacheEntry::Channel,
                   nsICacheEntryOpenCallback,
                   nsICacheEntryMetaDataVisitor,
                   nsIStreamListener,
+                  nsIRequest,
                   nsIChannel)
 
 //-----------------------------------------------------------------------------
@@ -230,7 +231,7 @@ nsAboutCacheEntry::Channel::ParseURI(nsIURI *uri,
     nsresult rv;
 
     nsAutoCString path;
-    rv = uri->GetPath(path);
+    rv = uri->GetPathQueryRef(path);
     if (NS_FAILED(rv))
         return rv;
 

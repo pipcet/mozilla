@@ -171,19 +171,19 @@ var Authentication = {
   signIn: function signIn(account) {
     let cb = Async.makeSpinningCallback();
 
-    Logger.AssertTrue(account["username"], "Username has been found");
-    Logger.AssertTrue(account["password"], "Password has been found");
+    Logger.AssertTrue(account.username, "Username has been found");
+    Logger.AssertTrue(account.password, "Password has been found");
 
-    Logger.logInfo("Login user: " + account["username"]);
+    Logger.logInfo("Login user: " + account.username);
 
     // Required here since we don't go through the real login page
     Async.promiseSpinningly(FxAccountsConfig.ensureConfigured());
 
     let client = new FxAccountsClient();
-    client.signIn(account["username"], account["password"], true).then(credentials => {
+    client.signIn(account.username, account.password, true).then(credentials => {
       return fxAccounts.setSignedInUser(credentials);
     }).then(() => {
-      return this._completeVerification(account["username"])
+      return this._completeVerification(account.username)
     }).then(() => {
       cb(null, true);
     }, error => {
@@ -195,7 +195,7 @@ var Authentication = {
 
       if (Weave.Status.login !== Weave.LOGIN_SUCCEEDED) {
         Logger.logInfo("Logging into Weave.");
-        Weave.Service.login();
+        Async.promiseSpinningly(Weave.Service.login());
         Logger.AssertEqual(Weave.Status.login, Weave.LOGIN_SUCCEEDED,
                            "Weave logged in");
       }

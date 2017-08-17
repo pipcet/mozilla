@@ -62,6 +62,11 @@ public:
     // XXX: do we need this for ContentBridgeParent?
     return -1;
   }
+  virtual bool IsForJSPlugin() const override
+  {
+    return mIsForJSPlugin;
+  }
+
 
   virtual mozilla::ipc::PParentToChildStreamParent*
   SendPParentToChildStreamConstructor(mozilla::ipc::PParentToChildStreamParent*) override;
@@ -93,6 +98,10 @@ protected:
   void SetIsForBrowser(bool aIsForBrowser)
   {
     mIsForBrowser = aIsForBrowser;
+  }
+  void SetIsForJSPlugin(bool aIsForJSPlugin)
+  {
+    mIsForJSPlugin = aIsForJSPlugin;
   }
 
   void Close()
@@ -129,6 +138,15 @@ protected:
 
   virtual bool DeallocPBrowserParent(PBrowserParent*) override;
 
+  virtual mozilla::ipc::IPCResult
+  RecvPBrowserConstructor(PBrowserParent* actor,
+                          const TabId& tabId,
+                          const TabId& sameTabGroupAs,
+                          const IPCTabContext& context,
+                          const uint32_t& chromeFlags,
+                          const ContentParentId& cpId,
+                          const bool& isForBrowser) override;
+
   virtual PIPCBlobInputStreamParent*
   SendPIPCBlobInputStreamConstructor(PIPCBlobInputStreamParent* aActor,
                                      const nsID& aID,
@@ -164,6 +182,7 @@ protected: // members
   RefPtr<ContentBridgeParent> mSelfRef;
   ContentParentId mChildID;
   bool mIsForBrowser;
+  bool mIsForJSPlugin;
 
 private:
   friend class ContentParent;

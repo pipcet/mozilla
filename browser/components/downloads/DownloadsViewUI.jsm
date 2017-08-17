@@ -25,6 +25,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "DownloadsCommon",
                                   "resource:///modules/DownloadsCommon.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
                                   "resource://gre/modules/osfile.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
+                                  "resource://gre/modules/PlacesUtils.jsm");
 
 this.DownloadsViewUI = {
   /**
@@ -225,11 +227,12 @@ this.DownloadsViewUI.DownloadElementShell.prototype = {
           let [size, unit] =
             DownloadUtils.convertByteUnits(this.download.target.size);
           stateLabel = s.sizeWithUnits(size, unit);
+          status = s.statusSeparator(s.stateCompleted, stateLabel);
         } else {
           // History downloads may not have a size defined.
           stateLabel = s.sizeUnknown;
+          status = s.stateCompleted;
         }
-        status = s.stateCompleted;
         hoverStatus = status;
       } else if (this.download.canceled) {
         stateLabel = s.stateCanceled;
@@ -363,6 +366,8 @@ this.DownloadsViewUI.DownloadElementShell.prototype = {
       case "downloadsCmd_unblock":
       case "downloadsCmd_unblockAndOpen":
         return this.download.hasBlockedData;
+      case "downloadsCmd_cancel":
+        return this.download.hasPartialData || !this.download.stopped;
     }
     return false;
   },
@@ -388,5 +393,21 @@ this.DownloadsViewUI.DownloadElementShell.prototype = {
 
   downloadsCmd_confirmBlock() {
     this.download.confirmBlock().catch(Cu.reportError);
+  },
+
+  cmd_delete() {
+    (async () => {
+      // Remove the associated history element first, if any, so that the views
+      // that combine history and session downloads won't resurrect the history
+      // download into the view just before it is deleted permanently.
+      try {
+        await PlacesUtils.history.remove(this.download.source.url);
+      } catch (ex) {
+        Cu.reportError(ex);
+      }
+      let list = await Downloads.getList(Downloads.ALL);
+      await list.remove(this.download);
+      await this.download.finalize(true);
+    })().catch(Cu.reportError);
   },
 };

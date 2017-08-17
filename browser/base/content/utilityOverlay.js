@@ -5,14 +5,18 @@
 
 // Services = object with smart getters for common XPCOM services
 Components.utils.import("resource://gre/modules/AppConstants.jsm");
-Components.utils.import("resource://gre/modules/ContextualIdentityService.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
-Components.utils.import("resource:///modules/RecentWindow.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
+                                  "resource:///modules/RecentWindow.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "ShellService",
                                   "resource:///modules/ShellService.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "ContextualIdentityService",
+                                  "resource://gre/modules/ContextualIdentityService.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "aboutNewTabService",
                                    "@mozilla.org/browser/aboutnewtab-service;1",
@@ -59,17 +63,20 @@ function getTopWin(skipPopups) {
                                                   allowPopups: !skipPopups});
 }
 
-function openTopWin(url) {
-  /* deprecated */
-  openUILinkIn(url, "current");
-}
-
 function getBoolPref(prefname, def) {
   try {
     return Services.prefs.getBoolPref(prefname);
   } catch (er) {
     return def;
   }
+}
+
+function doGetProtocolFlags(aURI) {
+  let handler = Services.io.getProtocolHandler(aURI.scheme);
+  // see DoGetProtocolFlags in nsIProtocolHandler.idl
+  return handler instanceof Ci.nsIProtocolHandlerWithDynamicFlags ?
+         handler.QueryInterface(Ci.nsIProtocolHandlerWithDynamicFlags).getFlagsForURI(aURI) :
+         handler.protocolFlags;
 }
 
 /* openUILink handles clicks on UI elements that cause URLs to load.
@@ -425,7 +432,7 @@ function openLinkIn(url, where, params) {
     let {URI_INHERITS_SECURITY_CONTEXT} = Ci.nsIProtocolHandler;
     if (aForceAboutBlankViewerInCurrent &&
         (!uriObj ||
-         (Services.io.getProtocolFlags(uriObj.scheme) & URI_INHERITS_SECURITY_CONTEXT))) {
+         (doGetProtocolFlags(uriObj) & URI_INHERITS_SECURITY_CONTEXT))) {
       // Unless we know for sure we're not inheriting principals,
       // force the about:blank viewer to have the right principal:
       targetBrowser.createAboutBlankContentViewer(aPrincipal);
@@ -728,13 +735,13 @@ function openPreferences(paneID, extraArgs) {
     histogram.add("other");
   }
   function switchToAdvancedSubPane(doc) {
-    if (extraArgs && extraArgs["advancedTab"]) {
+    if (extraArgs && extraArgs.advancedTab) {
       // After the Preferences reorg works in Bug 1335907, no more advancedPrefs element.
       // The old Preference is pref-off behind `browser.preferences.useOldOrganization` on Nightly.
       // During the transition between the old and new Preferences, should do checking before proceeding.
       let advancedPaneTabs = doc.getElementById("advancedPrefs");
       if (advancedPaneTabs) {
-        advancedPaneTabs.selectedTab = doc.getElementById(extraArgs["advancedTab"]);
+        advancedPaneTabs.selectedTab = doc.getElementById(extraArgs.advancedTab);
       }
     }
   }
@@ -747,9 +754,9 @@ function openPreferences(paneID, extraArgs) {
   let win = Services.wm.getMostRecentWindow("navigator:browser");
   let friendlyCategoryName = internalPrefCategoryNameToFriendlyName(paneID);
   let params;
-  if (extraArgs && extraArgs["urlParams"]) {
+  if (extraArgs && extraArgs.urlParams) {
     params = new URLSearchParams();
-    let urlParams = extraArgs["urlParams"];
+    let urlParams = extraArgs.urlParams;
     for (let name in urlParams) {
       if (urlParams[name] !== undefined) {
         params.set(name, urlParams[name]);
@@ -774,7 +781,11 @@ function openPreferences(paneID, extraArgs) {
                                  "_blank", "chrome,dialog=no,all", windowArguments);
   } else {
     let shouldReplaceFragment = friendlyCategoryName ? "whenComparingAndReplace" : "whenComparing";
-    newLoad = !win.switchToTabHavingURI(preferencesURL, true, { ignoreFragment: shouldReplaceFragment, replaceQueryString: true });
+    newLoad = !win.switchToTabHavingURI(preferencesURL, true, {
+      ignoreFragment: shouldReplaceFragment,
+      replaceQueryString: true,
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+    });
     browser = win.gBrowser.selectedBrowser;
   }
 
@@ -960,11 +971,11 @@ function trimURL(aURL) {
   let fixedUpURL, expectedURLSpec;
   try {
     fixedUpURL = Services.uriFixup.createFixupURI(urlWithoutProtocol, flags);
-    expectedURLSpec = makeURI(aURL).spec;
+    expectedURLSpec = makeURI(aURL).displaySpec;
   } catch (ex) {
     return url;
   }
-  if (fixedUpURL.spec == expectedURLSpec) {
+  if (fixedUpURL.displaySpec == expectedURLSpec) {
     return urlWithoutProtocol;
   }
   return url;

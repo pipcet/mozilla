@@ -42,6 +42,7 @@ let webpackConfig = {
       "devtools/client/framework/menu": "devtools-modules/src/menu",
       "devtools/client/framework/menu-item": path.join(__dirname, "../../client/framework/menu-item"),
       "devtools/client/locales": path.join(__dirname, "../../client/locales/en-US"),
+      "devtools/client/netmonitor/src/utils/menu": "devtools-contextmenu",
       "devtools/client/shared/components/autocomplete-popup": path.join(__dirname, "../../client/shared/components/autocomplete-popup"),
       "devtools/client/shared/components/reps/reps": path.join(__dirname, "../../client/shared/components/reps/reps"),
       "devtools/client/shared/components/search-box": path.join(__dirname, "../../client/shared/components/search-box"),
@@ -73,7 +74,7 @@ let webpackConfig = {
       "devtools/client/sourceeditor/editor": "devtools-source-editor/src/source-editor",
       "devtools/shared/async-utils": path.join(__dirname, "../../shared/async-utils"),
       "devtools/shared/defer": path.join(__dirname, "../../shared/defer"),
-      "devtools/shared/event-emitter": "devtools-modules/src/utils/event-emitter",
+      "devtools/shared/old-event-emitter": "devtools-modules/src/utils/event-emitter",
       "devtools/shared/fronts/timeline": path.join(__dirname, "../../shared/shims/fronts/timeline"),
       "devtools/shared/l10n": path.join(__dirname, "../../shared/l10n"),
       "devtools/shared/locales": path.join(__dirname, "../../shared/locales/en-US"),
@@ -87,9 +88,6 @@ let webpackConfig = {
 };
 
 const mappings = [
-  [
-    /utils\/menu/, "devtools-launchpad/src/components/shared/menu"
-  ],
   [
     /chrome:\/\/devtools\/skin/,
     (result) => {

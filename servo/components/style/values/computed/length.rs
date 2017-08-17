@@ -9,9 +9,13 @@ use ordered_float::NotNaN;
 use std::fmt;
 use style_traits::ToCss;
 use style_traits::values::specified::AllowedLengthType;
-use super::{Number, ToComputedValue, Context};
+use super::{Number, ToComputedValue, Context, Percentage};
 use values::{Auto, CSSFloat, Either, ExtremumLength, None_, Normal, specified};
-use values::specified::length::{AbsoluteLength, FontBaseSize, FontRelativeLength, ViewportPercentageLength};
+use values::computed::{NonNegativeAu, NonNegativeNumber};
+use values::distance::{ComputeSquaredDistance, SquaredDistance};
+use values::generics::NonNegative;
+use values::specified::length::{AbsoluteLength, FontBaseSize, FontRelativeLength};
+use values::specified::length::ViewportPercentageLength;
 
 pub use super::image::Image;
 pub use values::specified::{Angle, BorderStyle, Time, UrlOrNone};
@@ -29,7 +33,7 @@ impl ToComputedValue for specified::NoCalcLength {
             specified::NoCalcLength::ViewportPercentage(length) =>
                 length.to_computed_value(context.viewport_size()),
             specified::NoCalcLength::ServoCharacterWidth(length) =>
-                length.to_computed_value(context.style().get_font().clone_font_size()),
+                length.to_computed_value(context.style().get_font().clone_font_size().0),
             #[cfg(feature = "gecko")]
             specified::NoCalcLength::Physical(length) =>
                 length.to_computed_value(context),
@@ -65,20 +69,32 @@ impl ToComputedValue for specified::Length {
 pub struct CalcLengthOrPercentage {
     pub clamping_mode: AllowedLengthType,
     length: Au,
-    pub percentage: Option<CSSFloat>,
+    pub percentage: Option<Percentage>,
+}
+
+impl ComputeSquaredDistance for CalcLengthOrPercentage {
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<SquaredDistance, ()> {
+        // FIXME(nox): This looks incorrect to me, to add a distance between lengths
+        // with a distance between percentages.
+        Ok(
+            self.unclamped_length().compute_squared_distance(&other.unclamped_length())? +
+            self.percentage().compute_squared_distance(&other.percentage())?,
+        )
+    }
 }
 
 impl CalcLengthOrPercentage {
     /// Returns a new `CalcLengthOrPercentage`.
     #[inline]
-    pub fn new(length: Au, percentage: Option<CSSFloat>) -> Self {
+    pub fn new(length: Au, percentage: Option<Percentage>) -> Self {
         Self::with_clamping_mode(length, percentage, AllowedLengthType::All)
     }
 
     /// Returns a new `CalcLengthOrPercentage` with a specific clamping mode.
     #[inline]
     pub fn with_clamping_mode(length: Au,
-                              percentage: Option<CSSFloat>,
+                              percentage: Option<Percentage>,
                               clamping_mode: AllowedLengthType)
                               -> Self {
         Self {
@@ -106,7 +122,7 @@ impl CalcLengthOrPercentage {
     #[inline]
     #[allow(missing_docs)]
     pub fn percentage(&self) -> CSSFloat {
-        self.percentage.unwrap_or(0.)
+        self.percentage.map_or(0., |p| p.0)
     }
 
     /// If there are special rules for computing percentages in a value (e.g. the height property),
@@ -114,7 +130,7 @@ impl CalcLengthOrPercentage {
     pub fn to_used_value(&self, container_len: Option<Au>) -> Option<Au> {
         match (container_len, self.percentage) {
             (Some(len), Some(percent)) => {
-                Some(self.clamping_mode.clamp(self.length + len.scale_by(percent)))
+                Some(self.clamping_mode.clamp(self.length + len.scale_by(percent.0)))
             },
             (_, None) => Some(self.length()),
             _ => None,
@@ -157,24 +173,43 @@ impl From<LengthOrPercentageOrAuto> for Option<CalcLengthOrPercentage> {
     }
 }
 
+impl From<LengthOrPercentageOrNone> for Option<CalcLengthOrPercentage> {
+    fn from(len: LengthOrPercentageOrNone) -> Option<CalcLengthOrPercentage> {
+        match len {
+            LengthOrPercentageOrNone::Percentage(this) => {
+                Some(CalcLengthOrPercentage::new(Au(0), Some(this)))
+            }
+            LengthOrPercentageOrNone::Length(this) => {
+                Some(CalcLengthOrPercentage::new(this, None))
+            }
+            LengthOrPercentageOrNone::Calc(this) => {
+                Some(this)
+            }
+            LengthOrPercentageOrNone::None => {
+                None
+            }
+        }
+    }
+}
+
 impl ToCss for CalcLengthOrPercentage {
     fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
         match (self.length, self.percentage) {
-            (l, Some(p)) if l == Au(0) => write!(dest, "{}%", p * 100.),
-            (l, Some(p)) => write!(dest, "calc({}px + {}%)", Au::to_px(l), p * 100.),
+            (l, Some(p)) if l == Au(0) => p.to_css(dest),
+            (l, Some(p)) => write!(dest, "calc({}px + {}%)", Au::to_px(l), p.0 * 100.),
             (l, None) => write!(dest, "{}px", Au::to_px(l)),
         }
     }
 }
 
-impl ToComputedValue for specified::CalcLengthOrPercentage {
-    type ComputedValue = CalcLengthOrPercentage;
-
-    fn to_computed_value(&self, context: &Context) -> CalcLengthOrPercentage {
+impl specified::CalcLengthOrPercentage {
+    /// Compute the value, zooming any absolute units by the zoom function.
+    fn to_computed_value_with_zoom<F>(&self, context: &Context, zoom_fn: F) -> CalcLengthOrPercentage
+        where F: Fn(Au) -> Au {
         let mut length = Au(0);
 
         if let Some(absolute) = self.absolute {
-            length += absolute;
+            length += zoom_fn(absolute);
         }
 
         for val in &[self.vw.map(ViewportPercentageLength::Vw),
@@ -202,6 +237,19 @@ impl ToComputedValue for specified::CalcLengthOrPercentage {
         }
     }
 
+    /// Compute font-size or line-height taking into account text-zoom if necessary.
+    pub fn to_computed_value_zoomed(&self, context: &Context) -> CalcLengthOrPercentage {
+        self.to_computed_value_with_zoom(context, |abs| context.maybe_zoom_text(abs.into()).0)
+    }
+}
+
+impl ToComputedValue for specified::CalcLengthOrPercentage {
+    type ComputedValue = CalcLengthOrPercentage;
+
+    fn to_computed_value(&self, context: &Context) -> CalcLengthOrPercentage {
+        self.to_computed_value_with_zoom(context, |abs| abs)
+    }
+
     #[inline]
     fn from_computed_value(computed: &CalcLengthOrPercentage) -> Self {
         specified::CalcLengthOrPercentage {
@@ -213,13 +261,37 @@ impl ToComputedValue for specified::CalcLengthOrPercentage {
     }
 }
 
-#[derive(PartialEq, Clone, Copy)]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 #[allow(missing_docs)]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[derive(Clone, Copy, PartialEq, ToCss)]
 pub enum LengthOrPercentage {
     Length(Au),
-    Percentage(CSSFloat),
+    Percentage(Percentage),
     Calc(CalcLengthOrPercentage),
+}
+
+impl ComputeSquaredDistance for LengthOrPercentage {
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<SquaredDistance, ()> {
+        match (self, other) {
+            (&LengthOrPercentage::Length(ref this), &LengthOrPercentage::Length(ref other)) => {
+                this.compute_squared_distance(other)
+            },
+            (&LengthOrPercentage::Percentage(ref this), &LengthOrPercentage::Percentage(ref other)) => {
+                this.compute_squared_distance(other)
+            },
+            (this, other) => {
+                CalcLengthOrPercentage::compute_squared_distance(&(*this).into(), &(*other).into())
+            }
+        }
+    }
+}
+
+impl From<Au> for LengthOrPercentage {
+    #[inline]
+    fn from(length: Au) -> Self {
+        LengthOrPercentage::Length(length)
+    }
 }
 
 impl LengthOrPercentage {
@@ -243,7 +315,7 @@ impl LengthOrPercentage {
         use self::LengthOrPercentage::*;
         match *self {
             Length(Au(0)) => true,
-            Percentage(p) => p == 0.0,
+            Percentage(p) => p.0 == 0.0,
             Length(_) | Calc(_) => false
         }
     }
@@ -253,7 +325,7 @@ impl LengthOrPercentage {
         use self::LengthOrPercentage::*;
         match *self {
             Length(l) => (l, NotNaN::new(0.0).unwrap()),
-            Percentage(p) => (Au(0), NotNaN::new(p).unwrap()),
+            Percentage(p) => (Au(0), NotNaN::new(p.0).unwrap()),
             Calc(c) => (c.unclamped_length(), NotNaN::new(c.percentage()).unwrap()),
         }
     }
@@ -262,10 +334,24 @@ impl LengthOrPercentage {
     pub fn to_used_value(&self, containing_length: Au) -> Au {
         match *self {
             LengthOrPercentage::Length(length) => length,
-            LengthOrPercentage::Percentage(p) => containing_length.scale_by(p),
+            LengthOrPercentage::Percentage(p) => containing_length.scale_by(p.0),
             LengthOrPercentage::Calc(ref calc) => {
                 calc.to_used_value(Some(containing_length)).unwrap()
             },
+        }
+    }
+
+    /// Returns the clamped non-negative values.
+    #[inline]
+    pub fn clamp_to_non_negative(self) -> Self {
+        match self {
+            LengthOrPercentage::Length(length) => {
+                LengthOrPercentage::Length(Au(::std::cmp::max(length.0, 0)))
+            },
+            LengthOrPercentage::Percentage(percentage) => {
+                LengthOrPercentage::Percentage(Percentage(percentage.0.max(0.)))
+            },
+            _ => self
         }
     }
 }
@@ -274,7 +360,7 @@ impl fmt::Debug for LengthOrPercentage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             LengthOrPercentage::Length(length) => write!(f, "{:?}", length),
-            LengthOrPercentage::Percentage(percentage) => write!(f, "{}%", percentage * 100.),
+            LengthOrPercentage::Percentage(percentage) => write!(f, "{}%", percentage.0 * 100.),
             LengthOrPercentage::Calc(calc) => write!(f, "{:?}", calc),
         }
     }
@@ -289,7 +375,7 @@ impl ToComputedValue for specified::LengthOrPercentage {
                 LengthOrPercentage::Length(value.to_computed_value(context))
             }
             specified::LengthOrPercentage::Percentage(value) => {
-                LengthOrPercentage::Percentage(value.0)
+                LengthOrPercentage::Percentage(value)
             }
             specified::LengthOrPercentage::Calc(ref calc) => {
                 LengthOrPercentage::Calc(calc.to_computed_value(context))
@@ -305,7 +391,7 @@ impl ToComputedValue for specified::LengthOrPercentage {
                 )
             }
             LengthOrPercentage::Percentage(value) => {
-                specified::LengthOrPercentage::Percentage(specified::Percentage(value))
+                specified::LengthOrPercentage::Percentage(value)
             }
             LengthOrPercentage::Calc(ref calc) => {
                 specified::LengthOrPercentage::Calc(
@@ -316,25 +402,31 @@ impl ToComputedValue for specified::LengthOrPercentage {
     }
 }
 
-impl ToCss for LengthOrPercentage {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        match *self {
-            LengthOrPercentage::Length(length) => length.to_css(dest),
-            LengthOrPercentage::Percentage(percentage)
-            => write!(dest, "{}%", percentage * 100.),
-            LengthOrPercentage::Calc(calc) => calc.to_css(dest),
-        }
-    }
-}
-
-#[derive(PartialEq, Clone, Copy)]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 #[allow(missing_docs)]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[derive(Clone, Copy, PartialEq, ToCss)]
 pub enum LengthOrPercentageOrAuto {
     Length(Au),
-    Percentage(CSSFloat),
+    Percentage(Percentage),
     Auto,
     Calc(CalcLengthOrPercentage),
+}
+
+impl ComputeSquaredDistance for LengthOrPercentageOrAuto {
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<SquaredDistance, ()> {
+        match (self, other) {
+            (&LengthOrPercentageOrAuto::Length(ref this), &LengthOrPercentageOrAuto::Length(ref other)) => {
+                this.compute_squared_distance(other)
+            },
+            (&LengthOrPercentageOrAuto::Percentage(ref this), &LengthOrPercentageOrAuto::Percentage(ref other)) => {
+                this.compute_squared_distance(other)
+            },
+            (this, other) => {
+                <Option<CalcLengthOrPercentage>>::compute_squared_distance(&(*this).into(), &(*other).into())
+            }
+        }
+    }
 }
 
 impl LengthOrPercentageOrAuto {
@@ -346,7 +438,7 @@ impl LengthOrPercentageOrAuto {
         use self::LengthOrPercentageOrAuto::*;
         match *self {
             Length(Au(0)) => true,
-            Percentage(p) => p == 0.0,
+            Percentage(p) => p.0 == 0.0,
             Length(_) | Calc(_) | Auto => false
         }
     }
@@ -356,7 +448,7 @@ impl fmt::Debug for LengthOrPercentageOrAuto {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             LengthOrPercentageOrAuto::Length(length) => write!(f, "{:?}", length),
-            LengthOrPercentageOrAuto::Percentage(percentage) => write!(f, "{}%", percentage * 100.),
+            LengthOrPercentageOrAuto::Percentage(percentage) => write!(f, "{}%", percentage.0 * 100.),
             LengthOrPercentageOrAuto::Auto => write!(f, "auto"),
             LengthOrPercentageOrAuto::Calc(calc) => write!(f, "{:?}", calc),
         }
@@ -373,7 +465,7 @@ impl ToComputedValue for specified::LengthOrPercentageOrAuto {
                 LengthOrPercentageOrAuto::Length(value.to_computed_value(context))
             }
             specified::LengthOrPercentageOrAuto::Percentage(value) => {
-                LengthOrPercentageOrAuto::Percentage(value.0)
+                LengthOrPercentageOrAuto::Percentage(value)
             }
             specified::LengthOrPercentageOrAuto::Auto => {
                 LengthOrPercentageOrAuto::Auto
@@ -394,7 +486,7 @@ impl ToComputedValue for specified::LengthOrPercentageOrAuto {
                 )
             }
             LengthOrPercentageOrAuto::Percentage(value) => {
-                specified::LengthOrPercentageOrAuto::Percentage(specified::Percentage(value))
+                specified::LengthOrPercentageOrAuto::Percentage(value)
             }
             LengthOrPercentageOrAuto::Calc(calc) => {
                 specified::LengthOrPercentageOrAuto::Calc(
@@ -405,113 +497,31 @@ impl ToComputedValue for specified::LengthOrPercentageOrAuto {
     }
 }
 
-impl ToCss for LengthOrPercentageOrAuto {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        match *self {
-            LengthOrPercentageOrAuto::Length(length) => length.to_css(dest),
-            LengthOrPercentageOrAuto::Percentage(percentage)
-            => write!(dest, "{}%", percentage * 100.),
-            LengthOrPercentageOrAuto::Auto => dest.write_str("auto"),
-            LengthOrPercentageOrAuto::Calc(calc) => calc.to_css(dest),
-        }
-    }
-}
-
-#[derive(PartialEq, Clone, Copy)]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 #[allow(missing_docs)]
-pub enum LengthOrPercentageOrAutoOrContent {
-    Length(Au),
-    Percentage(CSSFloat),
-    Calc(CalcLengthOrPercentage),
-    Auto,
-    Content
-}
-
-impl fmt::Debug for LengthOrPercentageOrAutoOrContent {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            LengthOrPercentageOrAutoOrContent::Length(length) => write!(f, "{:?}", length),
-            LengthOrPercentageOrAutoOrContent::Percentage(percentage) => write!(f, "{}%", percentage * 100.),
-            LengthOrPercentageOrAutoOrContent::Calc(calc) => write!(f, "{:?}", calc),
-            LengthOrPercentageOrAutoOrContent::Auto => write!(f, "auto"),
-            LengthOrPercentageOrAutoOrContent::Content => write!(f, "content")
-        }
-    }
-}
-
-impl ToComputedValue for specified::LengthOrPercentageOrAutoOrContent {
-    type ComputedValue = LengthOrPercentageOrAutoOrContent;
-
-    #[inline]
-    fn to_computed_value(&self, context: &Context) -> LengthOrPercentageOrAutoOrContent {
-        match *self {
-            specified::LengthOrPercentageOrAutoOrContent::Length(ref value) => {
-                LengthOrPercentageOrAutoOrContent::Length(value.to_computed_value(context))
-            },
-            specified::LengthOrPercentageOrAutoOrContent::Percentage(value) => {
-                LengthOrPercentageOrAutoOrContent::Percentage(value.0)
-            },
-            specified::LengthOrPercentageOrAutoOrContent::Calc(ref calc) => {
-                LengthOrPercentageOrAutoOrContent::Calc(calc.to_computed_value(context))
-            },
-            specified::LengthOrPercentageOrAutoOrContent::Auto => {
-                LengthOrPercentageOrAutoOrContent::Auto
-            },
-            specified::LengthOrPercentageOrAutoOrContent::Content => {
-                LengthOrPercentageOrAutoOrContent::Content
-            }
-        }
-    }
-
-
-    #[inline]
-    fn from_computed_value(computed: &LengthOrPercentageOrAutoOrContent) -> Self {
-        match *computed {
-            LengthOrPercentageOrAutoOrContent::Auto => {
-                specified::LengthOrPercentageOrAutoOrContent::Auto
-            }
-            LengthOrPercentageOrAutoOrContent::Content => {
-                specified::LengthOrPercentageOrAutoOrContent::Content
-            }
-            LengthOrPercentageOrAutoOrContent::Length(value) => {
-                specified::LengthOrPercentageOrAutoOrContent::Length(
-                    ToComputedValue::from_computed_value(&value)
-                )
-            }
-            LengthOrPercentageOrAutoOrContent::Percentage(value) => {
-                specified::LengthOrPercentageOrAutoOrContent::Percentage(specified::Percentage(value))
-            }
-            LengthOrPercentageOrAutoOrContent::Calc(calc) => {
-                specified::LengthOrPercentageOrAutoOrContent::Calc(
-                    Box::new(ToComputedValue::from_computed_value(&calc))
-                )
-            }
-        }
-    }
-}
-
-impl ToCss for LengthOrPercentageOrAutoOrContent {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        match *self {
-            LengthOrPercentageOrAutoOrContent::Length(length) => length.to_css(dest),
-            LengthOrPercentageOrAutoOrContent::Percentage(percentage)
-            => write!(dest, "{}%", percentage * 100.),
-            LengthOrPercentageOrAutoOrContent::Calc(calc) => calc.to_css(dest),
-            LengthOrPercentageOrAutoOrContent::Auto => dest.write_str("auto"),
-            LengthOrPercentageOrAutoOrContent::Content => dest.write_str("content")
-        }
-    }
-}
-
-#[derive(PartialEq, Clone, Copy)]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-#[allow(missing_docs)]
+#[derive(Clone, Copy, PartialEq, ToCss)]
 pub enum LengthOrPercentageOrNone {
     Length(Au),
-    Percentage(CSSFloat),
+    Percentage(Percentage),
     Calc(CalcLengthOrPercentage),
     None,
+}
+
+impl ComputeSquaredDistance for LengthOrPercentageOrNone {
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<SquaredDistance, ()> {
+        match (self, other) {
+            (&LengthOrPercentageOrNone::Length(ref this), &LengthOrPercentageOrNone::Length(ref other)) => {
+                this.compute_squared_distance(other)
+            },
+            (&LengthOrPercentageOrNone::Percentage(ref this), &LengthOrPercentageOrNone::Percentage(ref other)) => {
+                this.compute_squared_distance(other)
+            },
+            (this, other) => {
+                <Option<CalcLengthOrPercentage>>::compute_squared_distance(&(*this).into(), &(*other).into())
+            }
+        }
+    }
 }
 
 impl LengthOrPercentageOrNone {
@@ -520,7 +530,7 @@ impl LengthOrPercentageOrNone {
         match *self {
             LengthOrPercentageOrNone::None => None,
             LengthOrPercentageOrNone::Length(length) => Some(length),
-            LengthOrPercentageOrNone::Percentage(percent) => Some(containing_length.scale_by(percent)),
+            LengthOrPercentageOrNone::Percentage(percent) => Some(containing_length.scale_by(percent.0)),
             LengthOrPercentageOrNone::Calc(ref calc) => calc.to_used_value(Some(containing_length)),
         }
     }
@@ -530,7 +540,7 @@ impl fmt::Debug for LengthOrPercentageOrNone {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             LengthOrPercentageOrNone::Length(length) => write!(f, "{:?}", length),
-            LengthOrPercentageOrNone::Percentage(percentage) => write!(f, "{}%", percentage * 100.),
+            LengthOrPercentageOrNone::Percentage(percentage) => write!(f, "{}%", percentage.0 * 100.),
             LengthOrPercentageOrNone::Calc(calc) => write!(f, "{:?}", calc),
             LengthOrPercentageOrNone::None => write!(f, "none"),
         }
@@ -547,7 +557,7 @@ impl ToComputedValue for specified::LengthOrPercentageOrNone {
                 LengthOrPercentageOrNone::Length(value.to_computed_value(context))
             }
             specified::LengthOrPercentageOrNone::Percentage(value) => {
-                LengthOrPercentageOrNone::Percentage(value.0)
+                LengthOrPercentageOrNone::Percentage(value)
             }
             specified::LengthOrPercentageOrNone::Calc(ref calc) => {
                 LengthOrPercentageOrNone::Calc(calc.to_computed_value(context))
@@ -568,7 +578,7 @@ impl ToComputedValue for specified::LengthOrPercentageOrNone {
                 )
             }
             LengthOrPercentageOrNone::Percentage(value) => {
-                specified::LengthOrPercentageOrNone::Percentage(specified::Percentage(value))
+                specified::LengthOrPercentageOrNone::Percentage(value)
             }
             LengthOrPercentageOrNone::Calc(calc) => {
                 specified::LengthOrPercentageOrNone::Calc(
@@ -579,15 +589,40 @@ impl ToComputedValue for specified::LengthOrPercentageOrNone {
     }
 }
 
-impl ToCss for LengthOrPercentageOrNone {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        match *self {
-            LengthOrPercentageOrNone::Length(length) => length.to_css(dest),
-            LengthOrPercentageOrNone::Percentage(percentage) =>
-                write!(dest, "{}%", percentage * 100.),
-            LengthOrPercentageOrNone::Calc(calc) => calc.to_css(dest),
-            LengthOrPercentageOrNone::None => dest.write_str("none"),
-        }
+/// A wrapper of LengthOrPercentage, whose value must be >= 0.
+pub type NonNegativeLengthOrPercentage = NonNegative<LengthOrPercentage>;
+
+impl From<NonNegativeAu> for NonNegativeLengthOrPercentage {
+    #[inline]
+    fn from(length: NonNegativeAu) -> Self {
+        LengthOrPercentage::Length(length.0).into()
+    }
+}
+
+impl From<LengthOrPercentage> for NonNegativeLengthOrPercentage {
+    #[inline]
+    fn from(lop: LengthOrPercentage) -> Self {
+        NonNegative::<LengthOrPercentage>(lop)
+    }
+}
+
+impl NonNegativeLengthOrPercentage {
+    /// Get zero value.
+    #[inline]
+    pub fn zero() -> Self {
+        NonNegative::<LengthOrPercentage>(LengthOrPercentage::zero())
+    }
+
+    /// Returns true if the computed value is absolute 0 or 0%.
+    #[inline]
+    pub fn is_definitely_zero(&self) -> bool {
+        self.0.is_definitely_zero()
+    }
+
+    /// Returns the used value.
+    #[inline]
+    pub fn to_used_value(&self, containing_length: Au) -> Au {
+        self.0.to_used_value(containing_length)
     }
 }
 
@@ -614,14 +649,42 @@ impl LengthOrNumber {
 /// Either a computed `<length>` or the `normal` keyword.
 pub type LengthOrNormal = Either<Length, Normal>;
 
+/// A wrapper of Length, whose value must be >= 0.
+pub type NonNegativeLength = NonNegativeAu;
+
+/// Either a computed NonNegativeLength or the `auto` keyword.
+pub type NonNegativeLengthOrAuto = Either<NonNegativeLength, Auto>;
+
+/// Either a computed NonNegativeLength or the `normal` keyword.
+pub type NonNegativeLengthOrNormal = Either<NonNegativeLength, Normal>;
+
+/// Either a computed NonNegativeLength or a NonNegativeNumber value.
+pub type NonNegativeLengthOrNumber = Either<NonNegativeLength, NonNegativeNumber>;
+
 /// A value suitable for a `min-width`, `min-height`, `width` or `height` property.
-/// See specified/values/length.rs for more details.
-#[derive(Debug, Copy, Clone, PartialEq)]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+/// See values/specified/length.rs for more details.
 #[allow(missing_docs)]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[derive(Clone, Copy, Debug, PartialEq, ToCss)]
 pub enum MozLength {
     LengthOrPercentageOrAuto(LengthOrPercentageOrAuto),
     ExtremumLength(ExtremumLength),
+}
+
+impl ComputeSquaredDistance for MozLength {
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<SquaredDistance, ()> {
+        match (self, other) {
+            (&MozLength::LengthOrPercentageOrAuto(ref this), &MozLength::LengthOrPercentageOrAuto(ref other)) => {
+                this.compute_squared_distance(other)
+            },
+            _ => {
+                // FIXME(nox): Should this return `Ok(SquaredDistance::Value(1.))`
+                // when `self` and `other` are the same extremum value?
+                Err(())
+            },
+        }
+    }
 }
 
 impl MozLength {
@@ -658,25 +721,30 @@ impl ToComputedValue for specified::MozLength {
     }
 }
 
-impl ToCss for MozLength {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        match *self {
-            MozLength::LengthOrPercentageOrAuto(lopoa) =>
-                lopoa.to_css(dest),
-            MozLength::ExtremumLength(ext) =>
-                ext.to_css(dest),
-        }
-    }
-}
-
 /// A value suitable for a `max-width` or `max-height` property.
-/// See specified/values/length.rs for more details.
-#[derive(Debug, Copy, Clone, PartialEq)]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+/// See values/specified/length.rs for more details.
 #[allow(missing_docs)]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[derive(Clone, Copy, Debug, PartialEq, ToCss)]
 pub enum MaxLength {
     LengthOrPercentageOrNone(LengthOrPercentageOrNone),
     ExtremumLength(ExtremumLength),
+}
+
+impl ComputeSquaredDistance for MaxLength {
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<SquaredDistance, ()> {
+        match (self, other) {
+            (&MaxLength::LengthOrPercentageOrNone(ref this), &MaxLength::LengthOrPercentageOrNone(ref other)) => {
+                this.compute_squared_distance(other)
+            },
+            _ => {
+                // FIXME(nox): Should this return `Ok(SquaredDistance::Value(1.))`
+                // when `self` and `other` are the same extremum value?
+                Err(())
+            },
+        }
+    }
 }
 
 impl MaxLength {
@@ -708,17 +776,6 @@ impl ToComputedValue for specified::MaxLength {
                     specified::LengthOrPercentageOrNone::from_computed_value(&lopon)),
             MaxLength::ExtremumLength(ref ext) =>
                 specified::MaxLength::ExtremumLength(ext.clone()),
-        }
-    }
-}
-
-impl ToCss for MaxLength {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        match *self {
-            MaxLength::LengthOrPercentageOrNone(lopon) =>
-                lopon.to_css(dest),
-            MaxLength::ExtremumLength(ext) =>
-                ext.to_css(dest),
         }
     }
 }

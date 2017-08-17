@@ -25,6 +25,7 @@
 #include "nsStaticNameTable.h"
 
 #include "mozilla/Preferences.h"
+#include "mozilla/StylePrefs.h"
 
 using namespace mozilla;
 
@@ -612,8 +613,7 @@ nsCSSProps::LookupFontDesc(const nsACString& aFontDesc)
   MOZ_ASSERT(gFontDescTable, "no lookup table, needs addref");
   nsCSSFontDesc which = nsCSSFontDesc(gFontDescTable->Lookup(aFontDesc));
 
-  if (which == eCSSFontDesc_Display &&
-      !Preferences::GetBool("layout.css.font-display.enabled")) {
+  if (which == eCSSFontDesc_Display && !StylePrefs::sFontDisplayEnabled) {
     which = eCSSFontDesc_UNKNOWN;
   } else if (which == eCSSFontDesc_UNKNOWN) {
     // check for unprefixed font-feature-settings/font-language-override
@@ -631,8 +631,7 @@ nsCSSProps::LookupFontDesc(const nsAString& aFontDesc)
   MOZ_ASSERT(gFontDescTable, "no lookup table, needs addref");
   nsCSSFontDesc which = nsCSSFontDesc(gFontDescTable->Lookup(aFontDesc));
 
-  if (which == eCSSFontDesc_Display &&
-      !Preferences::GetBool("layout.css.font-display.enabled")) {
+  if (which == eCSSFontDesc_Display && !StylePrefs::sFontDisplayEnabled) {
     which = eCSSFontDesc_UNKNOWN;
   } else if (which == eCSSFontDesc_UNKNOWN) {
     // check for unprefixed font-feature-settings/font-language-override
@@ -676,7 +675,7 @@ nsCSSProps::IsPredefinedCounterStyle(const nsACString& aStyle)
     nsStaticCaseInsensitiveNameTable::NOT_FOUND;
 }
 
-const nsAFlatCString&
+const nsCString&
 nsCSSProps::GetStringValue(nsCSSPropertyID aProperty)
 {
   MOZ_ASSERT(gPropertyTable, "no lookup table, needs addref");
@@ -688,7 +687,7 @@ nsCSSProps::GetStringValue(nsCSSPropertyID aProperty)
   }
 }
 
-const nsAFlatCString&
+const nsCString&
 nsCSSProps::GetStringValue(nsCSSFontDesc aFontDescID)
 {
   MOZ_ASSERT(gFontDescTable, "no lookup table, needs addref");
@@ -700,7 +699,7 @@ nsCSSProps::GetStringValue(nsCSSFontDesc aFontDescID)
   }
 }
 
-const nsAFlatCString&
+const nsCString&
 nsCSSProps::GetStringValue(nsCSSCounterDesc aCounterDesc)
 {
   MOZ_ASSERT(gCounterDescTable, "no lookup table, needs addref");
@@ -936,20 +935,20 @@ const KTableEntry nsCSSProps::kImageLayerPositionKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kImageLayerRepeatKTable[] = {
-  { eCSSKeyword_no_repeat,  NS_STYLE_IMAGELAYER_REPEAT_NO_REPEAT },
-  { eCSSKeyword_repeat,     NS_STYLE_IMAGELAYER_REPEAT_REPEAT },
-  { eCSSKeyword_repeat_x,   NS_STYLE_IMAGELAYER_REPEAT_REPEAT_X },
-  { eCSSKeyword_repeat_y,   NS_STYLE_IMAGELAYER_REPEAT_REPEAT_Y },
-  { eCSSKeyword_round,      NS_STYLE_IMAGELAYER_REPEAT_ROUND},
-  { eCSSKeyword_space,      NS_STYLE_IMAGELAYER_REPEAT_SPACE},
+  { eCSSKeyword_no_repeat,  StyleImageLayerRepeat::NoRepeat },
+  { eCSSKeyword_repeat,     StyleImageLayerRepeat::Repeat },
+  { eCSSKeyword_repeat_x,   StyleImageLayerRepeat::RepeatX },
+  { eCSSKeyword_repeat_y,   StyleImageLayerRepeat::RepeatY },
+  { eCSSKeyword_round,      StyleImageLayerRepeat::Round},
+  { eCSSKeyword_space,      StyleImageLayerRepeat::Space},
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
 const KTableEntry nsCSSProps::kImageLayerRepeatPartKTable[] = {
-  { eCSSKeyword_no_repeat,  NS_STYLE_IMAGELAYER_REPEAT_NO_REPEAT },
-  { eCSSKeyword_repeat,     NS_STYLE_IMAGELAYER_REPEAT_REPEAT },
-  { eCSSKeyword_round,      NS_STYLE_IMAGELAYER_REPEAT_ROUND},
-  { eCSSKeyword_space,      NS_STYLE_IMAGELAYER_REPEAT_SPACE},
+  { eCSSKeyword_no_repeat,  StyleImageLayerRepeat::NoRepeat },
+  { eCSSKeyword_repeat,     StyleImageLayerRepeat::Repeat },
+  { eCSSKeyword_round,      StyleImageLayerRepeat::Round},
+  { eCSSKeyword_space,      StyleImageLayerRepeat::Space},
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -1137,6 +1136,8 @@ const KTableEntry nsCSSProps::kColorKTable[] = {
   { eCSSKeyword__moz_oddtreerow, LookAndFeel::eColorID__moz_oddtreerow },
   { eCSSKeyword__moz_visitedhyperlinktext, NS_COLOR_MOZ_VISITEDHYPERLINKTEXT },
   { eCSSKeyword_currentcolor, NS_COLOR_CURRENTCOLOR },
+  { eCSSKeyword__moz_win_accentcolor, LookAndFeel::eColorID__moz_win_accentcolor },
+  { eCSSKeyword__moz_win_accentcolortext, LookAndFeel::eColorID__moz_win_accentcolortext },
   { eCSSKeyword__moz_win_mediatext, LookAndFeel::eColorID__moz_win_mediatext },
   { eCSSKeyword__moz_win_communicationstext, LookAndFeel::eColorID__moz_win_communicationstext },
   { eCSSKeyword__moz_nativehyperlinktext, LookAndFeel::eColorID__moz_nativehyperlinktext },
@@ -1146,11 +1147,11 @@ const KTableEntry nsCSSProps::kColorKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kContentKTable[] = {
-  { eCSSKeyword_open_quote, NS_STYLE_CONTENT_OPEN_QUOTE },
-  { eCSSKeyword_close_quote, NS_STYLE_CONTENT_CLOSE_QUOTE },
-  { eCSSKeyword_no_open_quote, NS_STYLE_CONTENT_NO_OPEN_QUOTE },
-  { eCSSKeyword_no_close_quote, NS_STYLE_CONTENT_NO_CLOSE_QUOTE },
-  { eCSSKeyword__moz_alt_content, NS_STYLE_CONTENT_ALT_CONTENT },
+  { eCSSKeyword_open_quote, uint8_t(StyleContent::OpenQuote) },
+  { eCSSKeyword_close_quote, uint8_t(StyleContent::CloseQuote) },
+  { eCSSKeyword_no_open_quote, uint8_t(StyleContent::NoOpenQuote) },
+  { eCSSKeyword_no_close_quote, uint8_t(StyleContent::NoCloseQuote) },
+  { eCSSKeyword__moz_alt_content, uint8_t(StyleContent::AltContent) },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -1294,7 +1295,6 @@ KTableEntry nsCSSProps::kDisplayKTable[] = {
   { eCSSKeyword__webkit_flex,        StyleDisplay::Flex },
   { eCSSKeyword__webkit_inline_flex, StyleDisplay::InlineFlex },
   { eCSSKeyword_contents,            StyleDisplay::Contents },
-  // The next entry is controlled by the layout.css.display-flow-root.enabled pref.
   { eCSSKeyword_flow_root,           StyleDisplay::FlowRoot },
   { eCSSKeyword_UNKNOWN,             -1 }
 };
@@ -2193,13 +2193,13 @@ const KTableEntry nsCSSProps::kVisibilityKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kWhitespaceKTable[] = {
-  { eCSSKeyword_normal, NS_STYLE_WHITESPACE_NORMAL },
-  { eCSSKeyword_pre, NS_STYLE_WHITESPACE_PRE },
-  { eCSSKeyword_nowrap, NS_STYLE_WHITESPACE_NOWRAP },
-  { eCSSKeyword_pre_wrap, NS_STYLE_WHITESPACE_PRE_WRAP },
-  { eCSSKeyword_pre_line, NS_STYLE_WHITESPACE_PRE_LINE },
-  { eCSSKeyword__moz_pre_space, NS_STYLE_WHITESPACE_PRE_SPACE },
-  { eCSSKeyword_UNKNOWN, -1 }
+  { eCSSKeyword_normal,         StyleWhiteSpace::Normal },
+  { eCSSKeyword_pre,            StyleWhiteSpace::Pre },
+  { eCSSKeyword_nowrap,         StyleWhiteSpace::Nowrap },
+  { eCSSKeyword_pre_wrap,       StyleWhiteSpace::PreWrap },
+  { eCSSKeyword_pre_line,       StyleWhiteSpace::PreLine },
+  { eCSSKeyword__moz_pre_space, StyleWhiteSpace::PreSpace },
+  { eCSSKeyword_UNKNOWN,        -1 }
 };
 
 const KTableEntry nsCSSProps::kWidthKTable[] = {
@@ -2500,7 +2500,7 @@ nsCSSProps::ValueToKeywordEnum(int32_t aValue, const KTableEntry aTable[])
   return eCSSKeyword_UNKNOWN;
 }
 
-const nsAFlatCString&
+const nsCString&
 nsCSSProps::ValueToKeyword(int32_t aValue, const KTableEntry aTable[])
 {
   nsCSSKeyword keyword = ValueToKeywordEnum(aValue, aTable);
@@ -2523,7 +2523,7 @@ nsCSSProps::kKeywordTableTable[eCSSProperty_COUNT_no_shorthands] = {
   #undef CSS_PROP
 };
 
-const nsAFlatCString&
+const nsCString&
 nsCSSProps::LookupPropertyValue(nsCSSPropertyID aProp, int32_t aValue)
 {
   MOZ_ASSERT(aProp >= 0 && aProp < eCSSProperty_COUNT,

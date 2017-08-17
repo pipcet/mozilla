@@ -9,7 +9,6 @@ config = {
         'checkout-sources',
         # 'setup-mock', windows do not use mock
         'build',
-        # 'generate-build-stats',
         'update',  # decided by query_is_nightly()
     ],
     'stage_platform': 'win32-st-an-debug',
@@ -18,7 +17,7 @@ config = {
     'enable_talos_sendchange': False,
     'enable_unittest_sendchange': False,
     'tooltool_manifest_src': "browser/config/tooltool-manifests/win32/\
-clang.manifest",
+releng.manifest",
     'platform_supports_post_upload_to_latest': False,
     'objdir': MOZ_OBJDIR,
     'perfherder_extra_options': ['static-analysis'],

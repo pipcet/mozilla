@@ -64,6 +64,15 @@
   "selfScreenshotErrorTitle": {
     "message": "Firefox Screenshots sayfalarının ekran görüntüsünü alamazsınz."
   },
+  "emptySelectionErrorTitle": {
+    "message": "Seçiminiz çok küçük"
+  },
+  "privateWindowErrorTitle": {
+    "message": "Gizli Gezinti modunda Screenshosts özelliği kullanılamaz"
+  },
+  "privateWindowErrorDetails": {
+    "message": "Aksaklıktan dolayı özür dileriz. Gelecek sürümlerde bu özelliği devreye almak için çalışıyoruz."
+  },
   "genericErrorTitle": {
     "message": "Firefox Screenshosts kafayı yedi!"
   },
@@ -80,16 +89,16 @@
     "message": "Sayfanın belli bir kısmını yakalamak için işaretçiyi tıklayıp sürükleyin. Seçiminizi vurgulamak için fareyle üzerine gelebilirsiniz."
   },
   "tourHeaderThree": {
-    "message": "İstediğin gibi yakala"
-  },
-  "tourBodyThree": {
-    "message": "Ekran görüntülerinizi daha kolay paylaşmak veya bilgisayarınıza indirmek için web’e kaydedin. Kaydettiğiniz tüm görüntüleri bulmak için \"Ekran görüntülerim\" düğmesine tıklayabilirsiniz."
-  },
-  "tourHeaderFour": {
     "message": "Pencereleri veya sayfaların tamamını yakala"
   },
-  "tourBodyFour": {
+  "tourBodyThree": {
     "message": "Yalnızca pencerede gördüğünüz alanı veya sayfanın tamamını yakalamak için sağ üstteki düğmelerden uygun olanı seçin."
+  },
+  "tourHeaderFour": {
+    "message": "İstediğin gibi yakala"
+  },
+  "tourBodyFour": {
+    "message": "Ekran görüntülerinizi daha kolay paylaşmak veya bilgisayarınıza indirmek için web’e kaydedin. Kaydettiğiniz tüm görüntüleri bulmak için \"Ekran görüntülerim\" düğmesine tıklayabilirsiniz."
   },
   "tourSkip": {
     "message": "GEÇ"
@@ -115,9 +124,9 @@
     }
   },
   "termsAndPrivacyNoticeTermsLink": {
-    "message": "Koşullarını"
+    "message": "Koşullarımızı"
   },
   "termsAndPrivacyNoticyPrivacyLink": {
-    "message": "Gizlilik Bildirimini"
+    "message": "Gizlilik Bildirimimizi"
   }
 }

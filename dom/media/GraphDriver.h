@@ -278,7 +278,7 @@ public:
     return MEDIA_GRAPH_TARGET_PERIOD_MS;
   }
 
-  bool OnThread() override { return !mThread || NS_GetCurrentThread() == mThread; }
+  bool OnThread() override { return !mThread || mThread->EventTarget()->IsOnCurrentThread(); }
 
   /* When the graph wakes up to do an iteration, implementations return the
    * range of time that will be processed.  This is called only once per
@@ -525,8 +525,6 @@ private:
   nsCOMPtr<nsIThread> mInitShutdownThread;
   /* This must be accessed with the graph monitor held. */
   AutoTArray<StreamAndPromiseForOperation, 1> mPromisesForOperation;
-  /* This is set during initialization, and can be read safely afterwards. */
-  dom::AudioChannel mAudioChannel;
   /* Used to queue us to add the mixer callback on first run. */
   bool mAddedMixer;
 
@@ -536,7 +534,7 @@ private:
   /**
    * True if microphone is being used by this process. This is synchronized by
    * the graph's monitor. */
-  bool mMicrophoneActive;
+  Atomic<bool> mMicrophoneActive;
   /* True if this driver was created from a driver created because of a previous
    * AudioCallbackDriver failure. */
   bool mFromFallback;

@@ -6,18 +6,17 @@ package org.mozilla.gecko.fxa.sync;
 
 import android.accounts.Account;
 import android.content.AbstractThreadedSyncAdapter;
-import android.content.ContentProvider;
 import android.content.ContentProviderClient;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.SyncResult;
 import android.os.Bundle;
 import android.os.SystemClock;
-import android.text.TextUtils;
+import android.support.v4.content.LocalBroadcastManager;
 
 import org.mozilla.gecko.background.common.log.Logger;
-import org.mozilla.gecko.background.common.telemetry.TelemetryWrapper;
 import org.mozilla.gecko.background.fxa.FxAccountUtils;
 import org.mozilla.gecko.background.fxa.SkewHandler;
 import org.mozilla.gecko.browserid.JSONWebTokenUtils;
@@ -34,6 +33,7 @@ import org.mozilla.gecko.fxa.login.Married;
 import org.mozilla.gecko.fxa.login.State;
 import org.mozilla.gecko.fxa.login.State.StateLabel;
 import org.mozilla.gecko.fxa.sync.FxAccountSyncDelegate.Result;
+import org.mozilla.gecko.sync.BackoffException;
 import org.mozilla.gecko.sync.BackoffHandler;
 import org.mozilla.gecko.sync.GlobalSession;
 import org.mozilla.gecko.sync.PrefsBackoffHandler;
@@ -47,6 +47,7 @@ import org.mozilla.gecko.sync.delegates.ClientsDataDelegate;
 import org.mozilla.gecko.sync.net.AuthHeaderProvider;
 import org.mozilla.gecko.sync.net.HawkAuthHeaderProvider;
 import org.mozilla.gecko.sync.stage.GlobalSyncStage.Stage;
+import org.mozilla.gecko.sync.telemetry.TelemetryCollector;
 import org.mozilla.gecko.sync.telemetry.TelemetryContract;
 import org.mozilla.gecko.tokenserver.TokenServerClient;
 import org.mozilla.gecko.tokenserver.TokenServerClientDelegate;
@@ -97,14 +98,12 @@ public class FxAccountSyncAdapter extends AbstractThreadedSyncAdapter {
     public void handleSuccess() {
       Logger.info(LOG_TAG, "Sync succeeded.");
       super.handleSuccess();
-      TelemetryWrapper.addToHistogram(TelemetryContract.SYNC_COMPLETED, 1);
     }
 
     @Override
     public void handleError(Exception e) {
       Logger.error(LOG_TAG, "Got exception syncing.", e);
       super.handleError(e);
-      TelemetryWrapper.addToHistogram(TelemetryContract.SYNC_FAILED, 1);
     }
 
     @Override
@@ -143,6 +142,63 @@ public class FxAccountSyncAdapter extends AbstractThreadedSyncAdapter {
 
     public Collection<String> getStageNamesToSync() {
       return this.stageNamesToSync;
+    }
+  }
+
+  /**
+   * Locally broadcasts telemetry gathered by GlobalSession, so that it may be processed by
+   * Java Telemetry - specifically, {@link org.mozilla.gecko.telemetry.TelemetryBackgroundReceiver}.
+   * Due to how packages are built, we can not call into it directly from *.sync.
+   */
+  private static class InstrumentedSessionCallback extends SessionCallback {
+    private static final String ACTION_BACKGROUND_TELEMETRY = "org.mozilla.gecko.telemetry.BACKGROUND";
+
+    private final LocalBroadcastManager localBroadcastManager;
+    private final TelemetryCollector telemetryCollector;
+
+    InstrumentedSessionCallback(LocalBroadcastManager localBroadcastManager, SyncDelegate syncDelegate, SchedulePolicy schedulePolicy) {
+      super(syncDelegate, schedulePolicy);
+      this.localBroadcastManager = localBroadcastManager;
+      this.telemetryCollector = new TelemetryCollector();
+    }
+
+    TelemetryCollector getCollector() {
+      return telemetryCollector;
+    }
+
+    @Override
+    public void handleSuccess(GlobalSession globalSession) {
+      super.handleSuccess(globalSession);
+      recordTelemetry();
+    }
+
+    @Override
+    public void handleError(GlobalSession globalSession, Exception ex, String reason) {
+      super.handleError(globalSession, ex, reason);
+      // If an error hasn't been set downstream, record what we know at this point.
+      if (!telemetryCollector.hasError()) {
+        telemetryCollector.setError(TelemetryCollector.KEY_ERROR_INTERNAL, ex, reason);
+      }
+      recordTelemetry();
+    }
+
+    @Override
+    public void handleAborted(GlobalSession globalSession, String reason) {
+      super.handleAborted(globalSession, reason);
+      // Note to future maintainers: while there are reasons, other than 'backoff', this method
+      // might be called, in practice that _is_ the only reason it gets called at the moment of
+      // writing this. If this changes, please do expand this telemetry handling.
+      this.telemetryCollector.setError(TelemetryCollector.KEY_ERROR_INTERNAL, new BackoffException(), reason);
+      recordTelemetry();
+    }
+
+    private void recordTelemetry() {
+      telemetryCollector.setFinished(SystemClock.elapsedRealtime());
+      final Intent telemetryIntent = new Intent();
+      telemetryIntent.setAction(ACTION_BACKGROUND_TELEMETRY);
+      telemetryIntent.putExtra(TelemetryContract.KEY_TYPE, TelemetryContract.KEY_TYPE_SYNC);
+      telemetryIntent.putExtra(TelemetryContract.KEY_TELEMETRY, this.telemetryCollector.build());
+      localBroadcastManager.sendBroadcast(telemetryIntent);
     }
   }
 
@@ -227,9 +283,9 @@ public class FxAccountSyncAdapter extends AbstractThreadedSyncAdapter {
     }
 
     @Override
-    public void handleError(GlobalSession globalSession, Exception e) {
+    public void handleError(GlobalSession globalSession, Exception ex, String reason) {
       Logger.warn(LOG_TAG, "Global session failed."); // Exception will be dumped by delegate below.
-      syncDelegate.handleError(e);
+      syncDelegate.handleError(ex);
       // TODO: should we reduce the periodic sync interval?
     }
 
@@ -271,7 +327,7 @@ public class FxAccountSyncAdapter extends AbstractThreadedSyncAdapter {
                                    final SharedPreferences sharedPrefs,
                                    final KeyBundle syncKeyBundle,
                                    final String clientState,
-                                   final SessionCallback callback,
+                                   final InstrumentedSessionCallback callback,
                                    final Bundle extras,
                                    final AndroidFxAccount fxAccount,
                                    final long syncDeadline) {
@@ -354,11 +410,11 @@ public class FxAccountSyncAdapter extends AbstractThreadedSyncAdapter {
           syncConfig.stagesToSync = Utils.getStagesToSyncFromBundle(knownStageNames, extras);
           syncConfig.setClusterURL(storageServerURI);
 
-          globalSession = new GlobalSession(syncConfig, callback, context, clientsDataDelegate);
+          globalSession = new GlobalSession(syncConfig, callback, context, clientsDataDelegate, callback.getCollector());
+          callback.getCollector().setIDs(token.hashedFxaUid, clientsDataDelegate.getAccountGUID());
           globalSession.start(syncDeadline);
         } catch (Exception e) {
-          callback.handleError(globalSession, e);
-          return;
+          callback.handleError(globalSession, e, "Unexpected error while starting a sync");
         }
       }
 
@@ -375,14 +431,16 @@ public class FxAccountSyncAdapter extends AbstractThreadedSyncAdapter {
         } finally {
           fxAccount.releaseSharedAccountStateLock();
         }
-        callback.handleError(null, e);
+        callback.getCollector().setError(TelemetryCollector.KEY_ERROR_TOKEN, e);
+        callback.handleError(null, e, "Failure processing a token");
       }
 
       @Override
       public void handleError(Exception e) {
         Logger.error(LOG_TAG, "Failed to get token.", e);
         fxAccount.releaseSharedAccountStateLock();
-        callback.handleError(null, e);
+        callback.getCollector().setError(TelemetryCollector.KEY_ERROR_TOKEN, e);
+        callback.handleError(null, e, "Error getting a token");
       }
 
       @Override
@@ -400,7 +458,7 @@ public class FxAccountSyncAdapter extends AbstractThreadedSyncAdapter {
         return System.currentTimeMillis() + delay;
       }
     };
-
+    callback.getCollector().setStarted(SystemClock.elapsedRealtime());
     TokenServerClient tokenServerclient = new TokenServerClient(tokenServerEndpointURI, executor);
     tokenServerclient.getTokenFromBrowserIDAssertion(assertion, true, clientState, delegate);
   }
@@ -466,7 +524,6 @@ public class FxAccountSyncAdapter extends AbstractThreadedSyncAdapter {
             !extras.getBoolean(ContentResolver.SYNC_EXTRAS_IGNORE_BACKOFF, false)) {
       Logger.info(LOG_TAG, "Not syncing FxAccount " + Utils.obfuscateEmail(account.name) +
                            ": minimum interval not met.");
-      TelemetryWrapper.addToHistogram(TelemetryContract.SYNC_FAILED_BACKOFF, 1);
       return;
     }
 
@@ -546,8 +603,6 @@ public class FxAccountSyncAdapter extends AbstractThreadedSyncAdapter {
         return;
       }
 
-      TelemetryWrapper.addToHistogram(TelemetryContract.SYNC_STARTED, 1);
-
       final FxAccountLoginStateMachine stateMachine = new FxAccountLoginStateMachine();
       stateMachine.advance(state, StateLabel.Married, new FxADefaultLoginStateMachineDelegate(context, fxAccount) {
         @Override
@@ -601,7 +656,12 @@ public class FxAccountSyncAdapter extends AbstractThreadedSyncAdapter {
 
             onSessionTokenStateReached(context, fxAccount);
 
-            final SessionCallback sessionCallback = new SessionCallback(syncDelegate, schedulePolicy);
+            final InstrumentedSessionCallback sessionCallback = new InstrumentedSessionCallback(
+                    LocalBroadcastManager.getInstance(context),
+                    syncDelegate,
+                    schedulePolicy
+            );
+
             final KeyBundle syncKeyBundle = married.getSyncKeyBundle();
             final String clientState = married.getClientState();
             syncWithAssertion(

@@ -15,6 +15,7 @@ import os
 import time
 from copy import deepcopy
 
+from taskgraph.util.attributes import TRUNK_PROJECTS
 from taskgraph.util.treeherder import split_symbol
 from taskgraph.transforms.base import TransformSequence
 from taskgraph.util.schema import validate_schema, Schema
@@ -56,7 +57,9 @@ task_description_schema = Schema({
     Optional('routes'): [basestring],
 
     # custom scopes for this task; any scopes required for the worker will be
-    # added automatically
+    # added automatically. The following parameters will be substituted in each
+    # scope:
+    #  {level} -- the scm level of this push
     Optional('scopes'): [basestring],
 
     # Tags
@@ -214,7 +217,6 @@ task_description_schema = Schema({
 
         # the exit status code that indicates the task should be retried
         Optional('retry-exit-status'): int,
-
     }, {
         Required('implementation'): 'generic-worker',
         Required('os'): Any('windows', 'macosx'),
@@ -306,7 +308,7 @@ task_description_schema = Schema({
         },
         Required('properties'): {
             'product': basestring,
-            Extra: basestring,  # additional properties are allowed
+            Extra: taskref_or_string,  # additional properties are allowed
         },
     }, {
         Required('implementation'): 'native-engine',
@@ -428,6 +430,7 @@ task_description_schema = Schema({
 })
 
 GROUP_NAMES = {
+    'mocha': 'Mocha unit tests',
     'py': 'Python unit tests',
     'tc': 'Executed by TaskCluster',
     'tc-e10s': 'Executed by TaskCluster with e10s',
@@ -441,8 +444,14 @@ GROUP_NAMES = {
     'tc-R': 'Reftests executed by TaskCluster',
     'tc-R-e10s': 'Reftests executed by TaskCluster with e10s',
     'tc-T': 'Talos performance tests executed by TaskCluster',
+    'tc-Ts': 'Talos Stylo performance tests executed by TaskCluster',
     'tc-T-e10s': 'Talos performance tests executed by TaskCluster with e10s',
+    'tc-Ts-e10s': 'Talos Stylo performance tests executed by TaskCluster with e10s',
+    'tc-tt-c': 'Telemetry client marionette tests',
+    'tc-tt-c-e10s': 'Telemetry client marionette tests with e10s',
     'tc-SY-e10s': 'Are we slim yet tests by TaskCluster with e10s',
+    'tc-SY-stylo-e10s': 'Are we slim yet tests by TaskCluster with e10s, stylo',
+    'tc-SY-stylo-seq-e10s': 'Are we slim yet tests by TaskCluster with e10s, stylo sequential',
     'tc-VP': 'VideoPuppeteer tests executed by TaskCluster',
     'tc-W': 'Web platform tests executed by TaskCluster',
     'tc-W-e10s': 'Web platform tests executed by TaskCluster with e10s',
@@ -451,8 +460,10 @@ GROUP_NAMES = {
     'tc-L10n': 'Localised Repacks executed by Taskcluster',
     'tc-L10n-Rpk': 'Localized Repackaged Repacks executed by Taskcluster',
     'tc-BM-L10n': 'Beetmover for locales executed by Taskcluster',
+    'tc-BMR-L10n': 'Beetmover repackages for locales executed by Taskcluster',
     'tc-Up': 'Balrog submission of updates, executed by Taskcluster',
     'tc-cs': 'Checksum signing executed by Taskcluster',
+    'tc-rs': 'Repackage signing executed by Taskcluster',
     'tc-BMcs': 'Beetmover checksums, executed by Taskcluster',
     'Aries': 'Aries Device Image',
     'Nexus 5-L': 'Nexus 5-L Device Image',
@@ -469,7 +480,14 @@ UNKNOWN_GROUP_NAME = "Treeherder group {} has no name; add it to " + __file__
 V2_ROUTE_TEMPLATES = [
     "index.gecko.v2.{project}.latest.{product}.{job-name}",
     "index.gecko.v2.{project}.pushdate.{build_date_long}.{product}.{job-name}",
+    "index.gecko.v2.{project}.pushlog-id.{pushlog_id}.{product}.{job-name}",
     "index.gecko.v2.{project}.revision.{head_rev}.{product}.{job-name}",
+]
+
+# {central, inbound, autoland} write to a "trunk" index prefix. This facilitates
+# walking of tasks with similar configurations.
+V2_TRUNK_ROUTE_TEMPLATES = [
+    "index.gecko.v2.trunk.revision.{head_rev}.{product}.{job-name}",
 ]
 
 V2_NIGHTLY_TEMPLATES = [
@@ -504,7 +522,6 @@ BRANCH_PRIORITIES = {
     'comm-beta': 'high',
     'mozilla-central': 'medium',
     'comm-central': 'medium',
-    'mozilla-aurora': 'medium',
     'comm-aurora': 'medium',
     'autoland': 'low',
     'mozilla-inbound': 'low',
@@ -538,6 +555,7 @@ def payload_builder(name):
         payload_builders[name] = func
         return func
     return wrap
+
 
 # define a collection of index builders, depending on the type implementation
 index_builders = {}
@@ -816,8 +834,16 @@ def add_generic_index_routes(config, task):
                                             time.gmtime(config.params['build_date']))
     subs['product'] = index['product']
 
+    project = config.params.get('project')
+
     for tpl in V2_ROUTE_TEMPLATES:
         routes.append(tpl.format(**subs))
+
+    # Additionally alias all tasks for "trunk" repos into a common
+    # namespace.
+    if project and project in TRUNK_PROJECTS:
+        for tpl in V2_TRUNK_ROUTE_TEMPLATES:
+            routes.append(tpl.format(**subs))
 
     return task
 
@@ -872,6 +898,9 @@ def add_l10n_index_routes(config, task, force_locale=None):
 
     locales = task['attributes'].get('chunk_locales',
                                      task['attributes'].get('all_locales'))
+    # Some tasks has only one locale set
+    if task['attributes'].get('locale'):
+        locales = [task['attributes']['locale']]
 
     if force_locale:
         # Used for en-US and multi-locale
@@ -925,11 +954,12 @@ def add_index_routes(config, tasks):
 @transforms.add
 def build_task(config, tasks):
     for task in tasks:
-        worker_type = task['worker-type'].format(level=str(config.params['level']))
+        level = str(config.params['level'])
+        worker_type = task['worker-type'].format(level=level)
         provisioner_id, worker_type = worker_type.split('/', 1)
 
         routes = task.get('routes', [])
-        scopes = task.get('scopes', [])
+        scopes = [s.format(level=level) for s in task.get('scopes', [])]
 
         # set up extra
         extra = task.get('extra', {})
@@ -1060,6 +1090,7 @@ def check_v2_routes():
                 ('{build_product}', '{product}'),
                 ('{build_name}-{build_type}', '{job-name}'),
                 ('{year}.{month}.{day}.{pushdate}', '{build_date_long}'),
+                ('{pushid}', '{pushlog_id}'),
                 ('{year}.{month}.{day}', '{build_date}')]:
             routes = [r.replace(mh, tg) for r in routes]
 

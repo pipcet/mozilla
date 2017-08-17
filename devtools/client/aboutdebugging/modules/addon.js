@@ -7,6 +7,7 @@
 loader.lazyImporter(this, "BrowserToolboxProcess",
   "resource://devtools/client/framework/ToolboxProcess.jsm");
 loader.lazyImporter(this, "AddonManager", "resource://gre/modules/AddonManager.jsm");
+loader.lazyImporter(this, "AddonManagerPrivate", "resource://gre/modules/AddonManager.jsm");
 
 let toolbox = null;
 
@@ -26,4 +27,19 @@ exports.debugAddon = function (addonID) {
 exports.uninstallAddon = async function (addonID) {
   let addon = await AddonManager.getAddonByID(addonID);
   return addon && addon.uninstall();
+};
+
+exports.isTemporaryID = function (addonID) {
+  return AddonManagerPrivate.isTemporaryInstallID(addonID);
+};
+
+exports.parseFileUri = function (url) {
+  // Strip a leading slash from Windows drive letter URIs.
+  // file:///home/foo ~> /home/foo
+  // file:///C:/foo ~> C:/foo
+  const windowsRegex = /^file:\/\/\/([a-zA-Z]:\/.*)/;
+  if (windowsRegex.test(url)) {
+    return windowsRegex.exec(url)[1];
+  }
+  return url.slice("file://".length);
 };

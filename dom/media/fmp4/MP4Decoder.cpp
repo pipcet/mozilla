@@ -6,7 +6,7 @@
 
 #include "MP4Decoder.h"
 #include "MediaContainerType.h"
-#include "MediaDecoderStateMachine.h"
+#include "MediaFormatReader.h"
 #include "MP4Demuxer.h"
 #include "mozilla/Preferences.h"
 #include "nsCharSeparatedTokenizer.h"
@@ -25,19 +25,9 @@
 
 namespace mozilla {
 
-MP4Decoder::MP4Decoder(MediaDecoderOwner* aOwner)
-  : MediaDecoder(aOwner)
+MP4Decoder::MP4Decoder(MediaDecoderInit& aInit)
+  : ChannelMediaDecoder(aInit)
 {
-}
-
-MediaDecoderStateMachine* MP4Decoder::CreateStateMachine()
-{
-  mReader =
-    new MediaFormatReader(this,
-                          new MP4Demuxer(GetResource()),
-                          GetVideoFrameContainer());
-
-  return new MediaDecoderStateMachine(this, mReader);
 }
 
 static bool

@@ -25,5 +25,5 @@ private:
 
   mozilla::OriginAttributes mOpenerOriginAttributes;
   nsString mReferrer;
-  bool mIsPrivate;
+  nsCOMPtr<nsIPrincipal> mTriggeringPrincipal;
 };

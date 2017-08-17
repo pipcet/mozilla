@@ -8,10 +8,6 @@ project_flag('MOZ_ANDROID_EXCLUDE_FONTS',
              help='Whether to exclude font files from the build',
              default=True)
 
-project_flag('MOZ_LOCALE_SWITCHER',
-             help='Enable runtime locale switching',
-             default=True)
-
 project_flag('MOZ_ANDROID_GCM',
              help='Enable GCM (Google Cloud Messaging) registration',
              default=True,
@@ -48,6 +44,13 @@ option(env='MOZ_ANDROID_MMA',
 set_config('MOZ_ANDROID_MMA',
            depends_if('MOZ_ANDROID_MMA')(lambda _: True))
 
+option(env='MOZ_ANDROID_POCKET',
+       help='Enable Pocket Stories in Activity Stream.',
+       default=False)
+
+set_config('MOZ_ANDROID_POCKET',
+           depends_if('MOZ_ANDROID_POCKET')(lambda _: True))
+
 project_flag('MOZ_ANDROID_DOWNLOADS_INTEGRATION',
              help='Enable system download manager on Android',
              default=True)
@@ -72,6 +75,10 @@ project_flag('MOZ_ANDROID_CUSTOM_TABS',
              help='Enable support for Android custom tabs',
              default=milestone.is_nightly)
 
+project_flag('MOZ_ANDROID_PWA',
+             help='Enable support for Progressive Web Apps',
+             default=milestone.is_nightly)
+
 # Enable the Switchboard A/B framework code.
 # Note: The framework is always included in the app. This flag controls
 # usage of the framework.
@@ -81,7 +88,7 @@ project_flag('MOZ_SWITCHBOARD',
 
 project_flag('MOZ_ANDROID_HLS_SUPPORT',
              help='Enable HLS (HTTP Live Streaming) support (currently using the ExoPlayer library)',
-             default=milestone.is_nightly)
+             default=True)
 
 option(env='MOZ_ANDROID_ACTIVITY_STREAM',
        help='Enable Activity Stream on Android (replacing the default HomePager)',
@@ -89,6 +96,13 @@ option(env='MOZ_ANDROID_ACTIVITY_STREAM',
 
 set_config('MOZ_ANDROID_ACTIVITY_STREAM',
            depends_if('MOZ_ANDROID_ACTIVITY_STREAM')(lambda _: True))
+
+option(env='MOZ_ANDROID_MOZILLA_ONLINE',
+       help='Enable MozillaOnline (Mozilla China) specific Android code',
+       default=False)
+
+set_config('MOZ_ANDROID_MOZILLA_ONLINE',
+           depends_if('MOZ_ANDROID_MOZILLA_ONLINE')(lambda _: True))
 
 option(env='MOZ_ANDROID_PACKAGE_INSTALL_BOUNCER',
        help='Build and package the install bouncer APK',
@@ -152,3 +166,10 @@ def check_android_mma(android_mma,
         if not leanplum_sdk_keyfile:
             die('You must specify --with-leanplum-sdk-keyfile=/path/to/keyfile when'
                 ' building with MOZ_ANDROID_MMA=1')
+
+@depends('MOZ_ANDROID_POCKET',
+         '--with-pocket-api-keyfile')
+def check_android_pocket(android_pocket, pocket_api_keyfile):
+    if android_pocket and not pocket_api_keyfile:
+        die('You must specify --with-pocket-api-keyfile=/path/to/keyfile when'
+            ' building with MOZ_ANDROID_POCKET=1')

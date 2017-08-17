@@ -10,8 +10,8 @@ var Cu = Components.utils;
 
 this.EXPORTED_SYMBOLS = [ "AboutHomeUtils", "AboutHome" ];
 
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
-Components.utils.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
   "resource://gre/modules/AppConstants.jsm");
@@ -21,8 +21,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "fxAccounts",
   "resource://gre/modules/FxAccounts.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
   "resource://gre/modules/PrivateBrowsingUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-  "resource://gre/modules/Promise.jsm");
 
 // Url to fetch snippets, in the urlFormatter service format.
 const SNIPPETS_URL_PREF = "browser.aboutHomeSnippets.updateUrl";
@@ -149,8 +147,12 @@ var AboutHome = {
         this.sendAboutHomeData(aMessage.target);
         break;
 
-      case "AboutHome:MaybeShowAutoMigrationUndoNotification":
-        AutoMigrate.maybeShowUndoNotification(aMessage.target);
+      case "AboutHome:MaybeShowMigrateMessage":
+        AutoMigrate.shouldShowMigratePrompt(aMessage.target).then((prompt) => {
+          if (prompt) {
+            AutoMigrate.showUndoNotificationBar(aMessage.target);
+          }
+        });
         break;
     }
   },
@@ -183,7 +185,7 @@ var AboutHome = {
         let mm = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
         mm.broadcastAsyncMessage("AboutHome:Update", data);
       }
-    }).then(null, function onError(x) {
+    }).catch(function onError(x) {
       Cu.reportError("Error in AboutHome.sendAboutHomeData: " + x);
     });
   },

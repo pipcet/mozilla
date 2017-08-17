@@ -1,7 +1,7 @@
 use mozprofile::preferences::Pref;
 
 lazy_static! {
-    pub static ref DEFAULT: [(&'static str, Pref); 78] = [
+    pub static ref DEFAULT: [(&'static str, Pref); 80] = [
         // Disable automatic downloading of new releases
         ("app.update.auto", Pref::new(false)),
 
@@ -124,6 +124,9 @@ lazy_static! {
         // Disable popup-blocker
         ("dom.disable_open_during_load", Pref::new(false)),
 
+        // Enabling the support for File object creation in the content process
+        ("dom.file.createInChild", Pref::new(true)),
+
         // Disable the ProcessHangMonitor
         ("dom.ipc.reportProcessHangs", Pref::new(false)),
 
@@ -175,6 +178,9 @@ lazy_static! {
 
         // Make sure the disk cache does not get auto disabled
         ("network.http.bypass-cachelock-threshold", Pref::new(200000)),
+
+        // Do not prompt with long usernames or passwords in URLs
+        ("network.http.phishy-userpass-length", Pref::new(255)),
 
         // Do not prompt for temporary redirects
         ("network.http.prompt-temp-redirect", Pref::new(false)),

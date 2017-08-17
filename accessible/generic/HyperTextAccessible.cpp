@@ -37,6 +37,7 @@
 #include "mozilla/EventStates.h"
 #include "mozilla/dom/Selection.h"
 #include "mozilla/MathAlgorithms.h"
+#include "mozilla/TextEditor.h"
 #include "gfxSkipChars.h"
 #include <algorithm>
 
@@ -387,16 +388,12 @@ HyperTextAccessible::OffsetToDOMPoint(int32_t aOffset)
   // 0 offset is valid even if no children. In this case the associated editor
   // is empty so return a DOM point for editor root element.
   if (aOffset == 0) {
-    nsCOMPtr<nsIEditor> editor = GetEditor();
-    if (editor) {
+    RefPtr<TextEditor> textEditor = GetEditor();
+    if (textEditor) {
       bool isEmpty = false;
-      editor->GetDocumentIsEmpty(&isEmpty);
+      textEditor->GetDocumentIsEmpty(&isEmpty);
       if (isEmpty) {
-        nsCOMPtr<nsIDOMElement> editorRootElm;
-        editor->GetRootElement(getter_AddRefs(editorRootElm));
-
-        nsCOMPtr<nsINode> editorRoot(do_QueryInterface(editorRootElm));
-        return DOMPoint(editorRoot, 0);
+        return DOMPoint(textEditor->GetRoot(), 0);
       }
     }
   }
@@ -1293,7 +1290,7 @@ HyperTextAccessible::TextBounds(int32_t aStartOffset, int32_t aEndOffset,
   return bounds;
 }
 
-already_AddRefed<nsIEditor>
+already_AddRefed<TextEditor>
 HyperTextAccessible::GetEditor() const
 {
   if (!mContent->HasFlag(NODE_IS_EDITABLE)) {
@@ -1319,11 +1316,10 @@ HyperTextAccessible::GetEditor() const
   if (!editingSession)
     return nullptr; // No editing session interface
 
-  nsCOMPtr<nsIEditor> editor;
   nsIDocument* docNode = mDoc->DocumentNode();
-  editingSession->GetEditorForWindow(docNode->GetWindow(),
-                                     getter_AddRefs(editor));
-  return editor.forget();
+  RefPtr<HTMLEditor> htmlEditor =
+    editingSession->GetHTMLEditorForWindow(docNode->GetWindow());
+  return htmlEditor.forget();
 }
 
 /**
@@ -1339,7 +1335,7 @@ HyperTextAccessible::SetSelectionRange(int32_t aStartPos, int32_t aEndPos)
   // the selection we set here and leave the caret at the end of the text.
   // By calling GetEditor here, we ensure that editor initialization is
   // completed before we set the selection.
-  nsCOMPtr<nsIEditor> editor = GetEditor();
+  RefPtr<TextEditor> textEditor = GetEditor();
 
   bool isFocusable = InteractiveState() & states::FOCUSABLE;
 
@@ -1558,13 +1554,11 @@ HyperTextAccessible::GetSelectionDOMRanges(SelectionType aSelectionType,
   if (!domSel)
     return;
 
-  nsCOMPtr<nsINode> startNode = GetNode();
+  nsINode* startNode = GetNode();
 
-  nsCOMPtr<nsIEditor> editor = GetEditor();
-  if (editor) {
-    nsCOMPtr<nsIDOMElement> editorRoot;
-    editor->GetRootElement(getter_AddRefs(editorRoot));
-    startNode = do_QueryInterface(editorRoot);
+  RefPtr<TextEditor> textEditor = GetEditor();
+  if (textEditor) {
+    startNode = textEditor->GetRoot();
   }
 
   if (!startNode)
@@ -1611,8 +1605,8 @@ HyperTextAccessible::SelectionBoundsAt(int32_t aSelectionNum,
   nsRange* range = ranges[aSelectionNum];
 
   // Get start and end points.
-  nsINode* startNode = range->GetStartParent();
-  nsINode* endNode = range->GetEndParent();
+  nsINode* startNode = range->GetStartContainer();
+  nsINode* endNode = range->GetEndContainer();
   int32_t startOffset = range->StartOffset(), endOffset = range->EndOffset();
 
   // Make sure start is before end, by swapping DOM points.  This occurs when
@@ -1787,22 +1781,23 @@ HyperTextAccessible::SelectionRanges(nsTArray<a11y::TextRange>* aRanges) const
 
   for (uint32_t idx = 0; idx < sel->RangeCount(); idx++) {
     nsRange* DOMRange = sel->GetRangeAt(idx);
-    HyperTextAccessible* startParent =
-      nsAccUtils::GetTextContainer(DOMRange->GetStartParent());
-    HyperTextAccessible* endParent =
-      nsAccUtils::GetTextContainer(DOMRange->GetEndParent());
-    if (!startParent || !endParent)
+    HyperTextAccessible* startContainer =
+      nsAccUtils::GetTextContainer(DOMRange->GetStartContainer());
+    HyperTextAccessible* endContainer =
+      nsAccUtils::GetTextContainer(DOMRange->GetEndContainer());
+    if (!startContainer || !endContainer) {
       continue;
+    }
 
     int32_t startOffset =
-      startParent->DOMPointToOffset(DOMRange->GetStartParent(),
-                                    DOMRange->StartOffset(), false);
+      startContainer->DOMPointToOffset(DOMRange->GetStartContainer(),
+                                       DOMRange->StartOffset(), false);
     int32_t endOffset =
-      endParent->DOMPointToOffset(DOMRange->GetEndParent(),
-                                  DOMRange->EndOffset(), true);
+      endContainer->DOMPointToOffset(DOMRange->GetEndContainer(),
+                                     DOMRange->EndOffset(), true);
 
     TextRange tr(IsTextField() ? const_cast<HyperTextAccessible*>(this) : mDoc,
-                    startParent, startOffset, endParent, endOffset);
+                    startContainer, startOffset, endContainer, endOffset);
     *(aRanges->AppendElement()) = Move(tr);
   }
 }
@@ -2150,7 +2145,7 @@ HyperTextAccessible::GetSpellTextAttr(nsINode* aNode,
 
     // See if the point comes after the range in which case we must continue in
     // case there is another range after this one.
-    nsINode* endNode = range->GetEndParent();
+    nsINode* endNode = range->GetEndContainer();
     int32_t endNodeOffset = range->EndOffset();
     if (nsContentUtils::ComparePoints(aNode, aNodeOffset,
                                       endNode, endNodeOffset) >= 0)
@@ -2160,7 +2155,7 @@ HyperTextAccessible::GetSpellTextAttr(nsINode* aNode,
     // the previous range.  So we check to see if the range starts before the
     // point in which case the point is in the missspelled range, otherwise it
     // must be before the range and after the previous one if any.
-    nsINode* startNode = range->GetStartParent();
+    nsINode* startNode = range->GetStartContainer();
     int32_t startNodeOffset = range->StartOffset();
     if (nsContentUtils::ComparePoints(startNode, startNodeOffset, aNode,
                                       aNodeOffset) <= 0) {
@@ -2187,7 +2182,7 @@ HyperTextAccessible::GetSpellTextAttr(nsINode* aNode,
 
     if (idx > 0) {
       nsRange* prevRange = domSel->GetRangeAt(idx - 1);
-      startOffset = DOMPointToOffset(prevRange->GetEndParent(),
+      startOffset = DOMPointToOffset(prevRange->GetEndContainer(),
                                      prevRange->EndOffset());
     }
 
@@ -2205,7 +2200,7 @@ HyperTextAccessible::GetSpellTextAttr(nsINode* aNode,
   // and that we should use the end offset of the last range to compute the
   // start offset of the text attribute range.
   nsRange* prevRange = domSel->GetRangeAt(rangeCount - 1);
-  startOffset = DOMPointToOffset(prevRange->GetEndParent(),
+  startOffset = DOMPointToOffset(prevRange->GetEndContainer(),
                                  prevRange->EndOffset());
 
   if (startOffset > *aStartOffset)

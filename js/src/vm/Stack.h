@@ -8,6 +8,7 @@
 #define vm_Stack_h
 
 #include "mozilla/Atomics.h"
+#include "mozilla/HashFunctions.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Variant.h"
@@ -24,7 +25,7 @@
 #include "js/RootingAPI.h"
 #include "vm/ArgumentsObject.h"
 #include "vm/SavedFrame.h"
-#include "wasm/WasmFrameIterator.h"
+#include "wasm/WasmFrameIter.h"
 #include "wasm/WasmTypes.h"
 
 struct JSCompartment;
@@ -51,7 +52,7 @@ class CallObject;
 class FrameIter;
 class EnvironmentObject;
 class ScriptFrameIter;
-class GeckoProfiler;
+class GeckoProfilerRuntime;
 class InterpreterFrame;
 class LexicalEnvironmentObject;
 class EnvironmentIter;
@@ -1106,7 +1107,7 @@ struct DefaultHasher<AbstractFramePtr> {
     typedef AbstractFramePtr Lookup;
 
     static js::HashNumber hash(const Lookup& key) {
-        return size_t(key.raw());
+        return mozilla::HashGeneric(key.raw());
     }
 
     static bool match(const AbstractFramePtr& k, const Lookup& l) {
@@ -1455,8 +1456,6 @@ class InterpreterActivation : public Activation
 // Iterates over a thread's activation list.
 class ActivationIterator
 {
-    uint8_t* jitTop_;
-
   protected:
     Activation* activation_;
 
@@ -1479,10 +1478,6 @@ class ActivationIterator
     Activation* activation() const {
         return activation_;
     }
-    uint8_t* jitTop() const {
-        MOZ_ASSERT(activation_->isJit());
-        return jitTop_;
-    }
     bool done() const {
         return activation_ == nullptr;
     }
@@ -1495,12 +1490,15 @@ class BailoutFrameInfo;
 // A JitActivation is used for frames running in Baseline or Ion.
 class JitActivation : public Activation
 {
-    uint8_t* prevJitTop_;
+    // If Baseline or Ion code is on the stack, and has called into C++, this
+    // will be aligned to an ExitFrame.
+    uint8_t* exitFP_;
+
     JitActivation* prevJitActivation_;
     bool active_;
 
     // Rematerialized Ion frames which has info copied out of snapshots. Maps
-    // frame pointers (i.e. jitTop) to a vector of rematerializations of all
+    // frame pointers (i.e. exitFP_) to a vector of rematerializations of all
     // inline frames associated with that frame.
     //
     // This table is lazily initialized by calling getRematerializedFrame.
@@ -1552,20 +1550,28 @@ class JitActivation : public Activation
     }
     void setActive(JSContext* cx, bool active = true);
 
-    bool isProfiling() const;
-
-    uint8_t* prevJitTop() const {
-        return prevJitTop_;
+    bool isProfiling() const {
+        // All JitActivations can be profiled.
+        return true;
     }
+
     JitActivation* prevJitActivation() const {
         return prevJitActivation_;
-    }
-    static size_t offsetOfPrevJitTop() {
-        return offsetof(JitActivation, prevJitTop_);
     }
     static size_t offsetOfPrevJitActivation() {
         return offsetof(JitActivation, prevJitActivation_);
     }
+
+    void setExitFP(uint8_t* fp) {
+        exitFP_ = fp;
+    }
+    uint8_t* exitFP() const {
+        return exitFP_;
+    }
+    static size_t offsetOfExitFP() {
+        return offsetof(JitActivation, exitFP_);
+    }
+
     static size_t offsetOfActiveUint8() {
         MOZ_ASSERT(sizeof(bool) == 1);
         return offsetof(JitActivation, active_);
@@ -1678,6 +1684,11 @@ class JitActivationIterator : public ActivationIterator
         settle();
         return *this;
     }
+
+    uint8_t* exitFP() const {
+        MOZ_ASSERT(activation_->isJit());
+        return activation_->asJit()->exitFP();
+    }
 };
 
 } // namespace jit
@@ -1731,7 +1742,6 @@ class InterpreterFrameIterator
 class WasmActivation : public Activation
 {
     wasm::Frame* exitFP_;
-    wasm::ExitReason exitReason_;
 
   public:
     explicit WasmActivation(JSContext* cx);
@@ -1745,22 +1755,19 @@ class WasmActivation : public Activation
     // WasmActivation.
     wasm::Frame* exitFP() const { return exitFP_; }
 
-    // Returns the reason why wasm code called out of wasm code.
-    wasm::ExitReason exitReason() const { return exitReason_; }
-
     // Written by JIT code:
     static unsigned offsetOfExitFP() { return offsetof(WasmActivation, exitFP_); }
-    static unsigned offsetOfExitReason() { return offsetof(WasmActivation, exitReason_); }
 
     // Interrupts are started from the interrupt signal handler (or the ARM
     // simulator) and cleared by WasmHandleExecutionInterrupt or WasmHandleThrow
     // when the interrupt is handled.
-    void startInterrupt(void* pc, uint8_t* fp);
+    void startInterrupt(const JS::ProfilingFrameIterator::RegisterState& state);
     void finishInterrupt();
     bool interrupted() const;
+    void* unwindPC() const;
     void* resumePC() const;
 
-    // Used by wasm::FrameIterator during stack unwinding.
+    // Used by wasm::WasmFrameIter during stack unwinding.
     void unwindExitFP(wasm::Frame* exitFP);
 };
 
@@ -1805,14 +1812,16 @@ class FrameIter
 
         jit::JitFrameIterator jitFrames_;
         unsigned ionInlineFrameNo_;
-        wasm::FrameIterator wasmFrames_;
+        wasm::WasmFrameIter wasmFrames_;
 
         Data(JSContext* cx, DebuggerEvalOption debuggerEvalOption, JSPrincipals* principals);
+        Data(JSContext* cx, const CooperatingContext& target, DebuggerEvalOption debuggerEvalOption);
         Data(const Data& other);
     };
 
     explicit FrameIter(JSContext* cx,
                        DebuggerEvalOption = FOLLOW_DEBUGGER_EVAL_PREV_LINK);
+    FrameIter(JSContext* cx, const CooperatingContext&, DebuggerEvalOption);
     FrameIter(JSContext* cx, DebuggerEvalOption, JSPrincipals*);
     FrameIter(const FrameIter& iter);
     MOZ_IMPLICIT FrameIter(const Data& data);
@@ -1968,6 +1977,14 @@ class ScriptFrameIter : public FrameIter
     }
 
     ScriptFrameIter(JSContext* cx,
+                     const CooperatingContext& target,
+                     DebuggerEvalOption debuggerEvalOption)
+       : FrameIter(cx, target, debuggerEvalOption)
+    {
+        settle();
+    }
+
+    ScriptFrameIter(JSContext* cx,
                     DebuggerEvalOption debuggerEvalOption,
                     JSPrincipals* prin)
       : FrameIter(cx, debuggerEvalOption, prin)
@@ -2088,6 +2105,10 @@ class AllScriptFramesIter : public ScriptFrameIter
   public:
     explicit AllScriptFramesIter(JSContext* cx)
       : ScriptFrameIter(cx, ScriptFrameIter::IGNORE_DEBUGGER_EVAL_PREV_LINK)
+    {}
+
+    explicit AllScriptFramesIter(JSContext* cx, const CooperatingContext& target)
+      : ScriptFrameIter(cx, target, ScriptFrameIter::IGNORE_DEBUGGER_EVAL_PREV_LINK)
     {}
 };
 

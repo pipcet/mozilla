@@ -547,6 +547,7 @@ static const dom::ConstantSpec gLibcProperties[] =
   INT_CONSTANT(EFAULT),
   INT_CONSTANT(EFBIG),
   INT_CONSTANT(EINVAL),
+  INT_CONSTANT(EINTR),
   INT_CONSTANT(EIO),
   INT_CONSTANT(EISDIR),
 #if defined(ELOOP) // not defined with VC9
@@ -924,16 +925,6 @@ bool DefineOSFileConstants(JSContext *cx, JS::Handle<JSObject*> global)
     return false;
   }
 
-#if defined(MOZ_WIDGET_GONK)
-    JSString* strVersion = JS_NewStringCopyZ(cx, "Gonk");
-    if (!strVersion){
-      return false;
-    }
-    JS::Rooted<JS::Value> valVersion(cx, JS::StringValue(strVersion));
-    if (!JS_SetProperty(cx, objSys, "Name", valVersion)) {
-      return false;
-  }
-#else
   nsCOMPtr<nsIXULRuntime> runtime = do_GetService(XULRUNTIME_SERVICE_CONTRACTID);
   if (runtime) {
     nsAutoCString os;
@@ -950,7 +941,6 @@ bool DefineOSFileConstants(JSContext *cx, JS::Handle<JSObject*> global)
       return false;
     }
   }
-#endif // defined(MOZ_WIDGET_GONK)
 
 #if defined(DEBUG)
   JS::Rooted<JS::Value> valDebug(cx, JS::TrueValue());

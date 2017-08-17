@@ -9,7 +9,6 @@
 
 #include "nsArrayUtils.h"
 #include "nsClipboard.h"
-#include "HeadlessClipboard.h"
 #include "nsSupportsPrimitives.h"
 #include "nsString.h"
 #include "nsReadableUtils.h"
@@ -21,7 +20,6 @@
 #include "nsIObserverService.h"
 #include "mozilla/Services.h"
 #include "mozilla/RefPtr.h"
-#include "mozilla/ClearOnShutdown.h"
 #include "mozilla/TimeStamp.h"
 
 #include "imgIContainer.h"
@@ -37,12 +35,9 @@
 #include <unistd.h>
 #include "X11UndefineNone.h"
 
-#include "mozilla/dom/EncodingUtils.h"
-#include "nsIUnicodeDecoder.h"
+#include "mozilla/Encoding.h"
 
-#include "gfxPlatform.h"
 
-using mozilla::dom::EncodingUtils;
 using namespace mozilla;
 
 // Callback when someone asks us for the data
@@ -82,34 +77,6 @@ static GdkFilterReturn
 selection_request_filter   (GdkXEvent *gdk_xevent,
                             GdkEvent *event,
                             gpointer data);
-
-namespace mozilla {
-namespace clipboard {
-StaticRefPtr<nsIClipboard> sInstance;
-}
-}
-/* static */ already_AddRefed<nsIClipboard>
-nsClipboard::GetInstance()
-{
-    using namespace mozilla::clipboard;
-
-    if (!sInstance) {
-        if (gfxPlatform::IsHeadless()) {
-            sInstance = new widget::HeadlessClipboard();
-        } else {
-            RefPtr<nsClipboard> clipboard = new nsClipboard();
-            nsresult rv = clipboard->Init();
-            if (NS_FAILED(rv)) {
-                return nullptr;
-            }
-            sInstance = clipboard.forget();
-        }
-        ClearOnShutdown(&sInstance);
-    }
-
-    RefPtr<nsIClipboard> service = sInstance.get();
-    return service.forget();
-}
 
 nsClipboard::nsClipboard()
 {
@@ -246,7 +213,8 @@ nsClipboard::SetData(nsITransferable *aTransferable,
     GtkTargetEntry *gtkTargets = gtk_target_table_new_from_list(list, &numTargets);
           
     // Set getcallback and request to store data after an application exit
-    if (gtk_clipboard_set_with_data(gtkClipboard, gtkTargets, numTargets, 
+    if (gtkTargets &&
+        gtk_clipboard_set_with_data(gtkClipboard, gtkTargets, numTargets,
                                     clipboard_get_cb, clipboard_clear_cb, this))
     {
         // We managed to set-up the clipboard so update internal state
@@ -743,41 +711,46 @@ void ConvertHTMLtoUCS2(guchar * data, int32_t dataLength,
         return;
     } else {
         // app which use "text/html" to copy&paste
-        nsCOMPtr<nsIUnicodeDecoder> decoder;
         // get the decoder
-        nsAutoCString encoding;
-        if (!EncodingUtils::FindEncodingForLabelNoReplacement(charset,
-                                                              encoding)) {
+        auto encoding = Encoding::ForLabelNoReplacement(charset);
+        if (!encoding) {
 #ifdef DEBUG_CLIPBOARD
             g_print("        get unicode decoder error\n");
 #endif
             outUnicodeLen = 0;
             return;
         }
-        decoder = EncodingUtils::DecoderForEncoding(encoding);
-        // converting
-        nsresult rv = decoder->GetMaxLength((const char *)data, dataLength,
-                                            &outUnicodeLen);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
+        auto decoder = encoding->NewDecoder();
+        CheckedInt<size_t> needed = decoder->MaxUTF16BufferLength(dataLength);
+        if (!needed.isValid() || needed.value() > INT32_MAX) {
           outUnicodeLen = 0;
           return;
         }
 
-        // |outUnicodeLen| is number of chars
-        if (outUnicodeLen) {
-            *unicodeData = reinterpret_cast<char16_t*>
-                                           (moz_xmalloc((outUnicodeLen + sizeof('\0')) *
-                           sizeof(char16_t)));
-            if (*unicodeData) {
-                int32_t numberTmp = dataLength;
-                decoder->Convert((const char *)data, &numberTmp,
-                                 *unicodeData, &outUnicodeLen);
+        outUnicodeLen = 0;
+        if (needed.value()) {
+          *unicodeData = reinterpret_cast<char16_t*>(
+            moz_xmalloc((needed.value() + 1) * sizeof(char16_t)));
+          if (*unicodeData) {
+            uint32_t result;
+            size_t read;
+            size_t written;
+            bool hadErrors;
+            Tie(result, read, written, hadErrors) =
+              decoder->DecodeToUTF16(AsBytes(MakeSpan(data, dataLength)),
+                                     MakeSpan(*unicodeData, needed.value()),
+                                     true);
+            MOZ_ASSERT(result == kInputEmpty);
+            MOZ_ASSERT(read == size_t(dataLength));
+            MOZ_ASSERT(written <= needed.value());
+            Unused << hadErrors;
 #ifdef DEBUG_CLIPBOARD
-                if (numberTmp != dataLength)
-                    printf("didn't consume all the bytes\n");
+            if (read != dataLength)
+              printf("didn't consume all the bytes\n");
 #endif
-                // null terminate. Convert() doesn't do it for us
-                (*unicodeData)[outUnicodeLen] = '\0';
+            outUnicodeLen = written;
+            // null terminate.
+            (*unicodeData)[outUnicodeLen] = '\0';
             }
         } // if valid length
     }

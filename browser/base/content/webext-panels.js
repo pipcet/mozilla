@@ -9,10 +9,10 @@
 
 XPCOMUtils.defineLazyModuleGetter(this, "ExtensionParent",
                                   "resource://gre/modules/ExtensionParent.jsm");
+
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 
 var {
-  extensionStylesheets,
   promiseEvent,
 } = ExtensionUtils;
 
@@ -24,6 +24,9 @@ function getBrowser(sidebar) {
     return Promise.resolve(browser);
   }
 
+  let stack = document.createElementNS(XUL_NS, "stack");
+  stack.setAttribute("flex", "1");
+
   browser = document.createElementNS(XUL_NS, "browser");
   browser.setAttribute("id", "webext-panels-browser");
   browser.setAttribute("type", "content");
@@ -32,6 +35,8 @@ function getBrowser(sidebar) {
   browser.setAttribute("webextension-view-type", "sidebar");
   browser.setAttribute("context", "contentAreaContextMenu");
   browser.setAttribute("tooltip", "aHTMLTooltip");
+  browser.setAttribute("autocompletepopup", "PopupAutoComplete");
+  browser.setAttribute("selectmenulist", "ContentSelectDropdown");
   browser.setAttribute("onclick", "window.parent.contentAreaClick(event, true);");
 
   let readyPromise;
@@ -49,7 +54,9 @@ function getBrowser(sidebar) {
   } else {
     readyPromise = Promise.resolve();
   }
-  document.documentElement.appendChild(browser);
+
+  stack.appendChild(browser);
+  document.documentElement.appendChild(stack);
 
   return readyPromise.then(() => {
     browser.messageManager.loadFrameScript("chrome://browser/content/content.js", false);
@@ -60,12 +67,26 @@ function getBrowser(sidebar) {
         "chrome://extensions/content/ext-browser-content.js", false);
 
       browser.messageManager.sendAsyncMessage("Extension:InitBrowser", {
-        stylesheets: extensionStylesheets,
+        stylesheets: ExtensionParent.extensionStylesheets,
       });
     }
     return browser;
   });
 }
+
+// Stub tabbrowser implementation for use by the tab-modal alert code.
+var gBrowser = {
+  getTabForBrowser(browser) {
+    return null;
+  },
+
+  getTabModalPromptBox(browser) {
+    if (!browser.tabModalPromptBox) {
+      browser.tabModalPromptBox = new TabModalPromptBox(browser);
+    }
+    return browser.tabModalPromptBox;
+  },
+};
 
 function loadWebPanel() {
   let sidebarURI = new URL(location);

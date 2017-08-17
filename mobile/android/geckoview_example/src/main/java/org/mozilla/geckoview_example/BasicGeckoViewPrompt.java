@@ -36,7 +36,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.ScrollView;
-import android.widget.SeekBar;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.TimePicker;
 
@@ -171,10 +171,11 @@ final class BasicGeckoViewPrompt implements GeckoView.PromptDelegate {
                                            final AlertCallback callback) {
         final ScrollView scrollView = new ScrollView(builder.getContext());
         final LinearLayout container = new LinearLayout(builder.getContext());
-        final int padding = getViewPadding(builder);
+        final int horizontalPadding = getViewPadding(builder);
+        final int verticalPadding = (msg == null || msg.isEmpty()) ? horizontalPadding : 0;
         container.setOrientation(LinearLayout.VERTICAL);
-        container.setPadding(/* left */ padding, /* top */ 0,
-                             /* right */ padding, /* bottom */ 0);
+        container.setPadding(/* left */ horizontalPadding, /* top */ verticalPadding,
+                             /* right */ horizontalPadding, /* bottom */ verticalPadding);
         scrollView.addView(container);
         builder.setTitle(title)
                .setMessage(msg)
@@ -304,6 +305,11 @@ final class BasicGeckoViewPrompt implements GeckoView.PromptDelegate {
         final AlertDialog.Builder builder = new AlertDialog.Builder(activity);
         addStandardLayout(builder, title, msg, callback);
 
+        final ListView list = new ListView(builder.getContext());
+        if (type == CHOICE_TYPE_MULTIPLE) {
+            list.setChoiceMode(ListView.CHOICE_MODE_MULTIPLE);
+        }
+
         final ArrayAdapter<GeckoBundle> adapter = new ArrayAdapter<GeckoBundle>(
                 builder.getContext(), android.R.layout.simple_list_item_1) {
             private static final int TYPE_MENU_ITEM = 0;
@@ -390,22 +396,24 @@ final class BasicGeckoViewPrompt implements GeckoView.PromptDelegate {
                 text.setEnabled(!item.getBoolean("disabled"));
                 text.setText(item.getString("label"));
                 if (view instanceof CheckedTextView) {
-                    ((CheckedTextView) view).setChecked(item.getBoolean("selected"));
+                    final boolean selected = item.getBoolean("selected");
+                    if (itemType == TYPE_MULTIPLE) {
+                        list.setItemChecked(position, selected);
+                    } else {
+                        ((CheckedTextView) view).setChecked(selected);
+                    }
                 }
                 return view;
             }
         };
         addChoiceItems(type, adapter, choices, /* indent */ null);
 
-        final ListView list = new ListView(builder.getContext());
         list.setAdapter(adapter);
-        if (type == CHOICE_TYPE_MULTIPLE) {
-            list.setChoiceMode(ListView.CHOICE_MODE_MULTIPLE);
-        }
         builder.setView(list);
 
-        final AlertDialog dialog = builder.create();
+        final AlertDialog dialog;
         if (type == CHOICE_TYPE_SINGLE || type == CHOICE_TYPE_MENU) {
+            dialog = builder.create();
             list.setOnItemClickListener(new AdapterView.OnItemClickListener() {
                 @Override
                 public void onItemClick(final AdapterView<?> parent, final View v,
@@ -449,9 +457,10 @@ final class BasicGeckoViewPrompt implements GeckoView.PromptDelegate {
                             items.add(item.getString("id"));
                         }
                     }
-                    callback.confirm(items.toArray(new GeckoBundle[items.size()]));
+                    callback.confirm(items.toArray(new String[items.size()]));
                 }
             });
+            dialog = builder.create();
         } else {
             throw new UnsupportedOperationException();
         }
@@ -779,5 +788,111 @@ final class BasicGeckoViewPrompt implements GeckoView.PromptDelegate {
             }
             callback.confirm(uris.toArray(new Uri[uris.size()]));
         }
+    }
+
+    public void promptForPermission(final GeckoView view, final String title,
+                                    final GeckoView.PermissionDelegate.Callback callback) {
+        final Activity activity = getActivity(view);
+        if (activity == null) {
+            callback.reject();
+            return;
+        }
+        final AlertDialog.Builder builder = new AlertDialog.Builder(activity);
+        builder.setTitle(title)
+               .setOnDismissListener(new DialogInterface.OnDismissListener() {
+                   @Override
+                   public void onDismiss(final DialogInterface dialog) {
+                       callback.reject();
+                   }
+               })
+               .setNegativeButton(android.R.string.cancel, /* onClickListener */ null)
+               .setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+                   @Override
+                   public void onClick(final DialogInterface dialog, final int which) {
+                       callback.grant();
+                   }
+               })
+               .show();
+    }
+
+    private Spinner addMediaSpinner(final Context context, final ViewGroup container,
+                                    final GeckoBundle[] sources) {
+        final ArrayAdapter<GeckoBundle> adapter = new ArrayAdapter<GeckoBundle>(
+                context, android.R.layout.simple_spinner_item) {
+            private View convertView(final int position, final View view) {
+                if (view != null) {
+                    final GeckoBundle item = getItem(position);
+                    ((TextView) view).setText(item.getString("name"));
+                }
+                return view;
+            }
+
+            @Override
+            public View getView(final int position, View view,
+                                final ViewGroup parent) {
+                return convertView(position, super.getView(position, view, parent));
+            }
+
+            @Override
+            public View getDropDownView(final int position, final View view,
+                                        final ViewGroup parent) {
+                return convertView(position, super.getDropDownView(position, view, parent));
+            }
+        };
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        adapter.addAll(sources);
+
+        final Spinner spinner = new Spinner(context);
+        spinner.setAdapter(adapter);
+        spinner.setSelection(0);
+        container.addView(spinner);
+        return spinner;
+    }
+
+    public void promptForMedia(final GeckoView view, final String title,
+                               final GeckoBundle[] video, final GeckoBundle[] audio,
+                               final GeckoView.PermissionDelegate.MediaCallback callback) {
+        final Activity activity = getActivity(view);
+        if (activity == null || (video == null && audio == null)) {
+            callback.reject();
+            return;
+        }
+        final AlertDialog.Builder builder = new AlertDialog.Builder(activity);
+        final LinearLayout container = addStandardLayout(builder, title, /* msg */ null,
+                                                         /* callback */ null);
+
+        final Spinner videoSpinner;
+        if (video != null) {
+            videoSpinner = addMediaSpinner(builder.getContext(), container, video);
+        } else {
+            videoSpinner = null;
+        }
+
+        final Spinner audioSpinner;
+        if (audio != null) {
+            audioSpinner = addMediaSpinner(builder.getContext(), container, audio);
+        } else {
+            audioSpinner = null;
+        }
+
+        builder.setOnDismissListener(new DialogInterface.OnDismissListener() {
+                    @Override
+                    public void onDismiss(final DialogInterface dialog) {
+                        callback.reject();
+                    }
+                })
+               .setNegativeButton(android.R.string.cancel, /* listener */ null)
+               .setPositiveButton(android.R.string.ok,
+                                  new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(final DialogInterface dialog, final int which) {
+                        final GeckoBundle video = (videoSpinner != null)
+                                ? (GeckoBundle) videoSpinner.getSelectedItem() : null;
+                        final GeckoBundle audio = (audioSpinner != null)
+                                ? (GeckoBundle) audioSpinner.getSelectedItem() : null;
+                        callback.grant(video, audio);
+                    }
+                })
+               .show();
     }
 }

@@ -7,14 +7,14 @@
 #include "ServiceWorkerEvents.h"
 
 #include "nsAutoPtr.h"
+#include "nsContentUtils.h"
 #include "nsIConsoleReportCollector.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsINetworkInterceptController.h"
 #include "nsIOutputStream.h"
 #include "nsIScriptError.h"
 #include "nsITimedChannel.h"
-#include "nsIUnicodeDecoder.h"
-#include "nsIUnicodeEncoder.h"
+#include "mozilla/Encoding.h"
 #include "nsContentPolicyUtils.h"
 #include "nsContentUtils.h"
 #include "nsComponentManagerUtils.h"
@@ -28,11 +28,9 @@
 #include "ServiceWorkerManager.h"
 
 #include "mozilla/ErrorResult.h"
+#include "mozilla/LoadInfo.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/BodyUtil.h"
-#include "mozilla/dom/DOMException.h"
-#include "mozilla/dom/DOMExceptionBinding.h"
-#include "mozilla/dom/EncodingUtils.h"
 #include "mozilla/dom/FetchEventBinding.h"
 #include "mozilla/dom/MessagePort.h"
 #include "mozilla/dom/PromiseNativeHandler.h"
@@ -96,10 +94,12 @@ AsyncLog(nsIInterceptedChannel* aInterceptedChannel,
 
 BEGIN_WORKERS_NAMESPACE
 
-CancelChannelRunnable::CancelChannelRunnable(nsMainThreadPtrHandle<nsIInterceptedChannel>& aChannel,
-                                             nsMainThreadPtrHandle<ServiceWorkerRegistrationInfo>& aRegistration,
-                                             nsresult aStatus)
-  : mChannel(aChannel)
+CancelChannelRunnable::CancelChannelRunnable(
+  nsMainThreadPtrHandle<nsIInterceptedChannel>& aChannel,
+  nsMainThreadPtrHandle<ServiceWorkerRegistrationInfo>& aRegistration,
+  nsresult aStatus)
+  : Runnable("dom::workers::CancelChannelRunnable")
+  , mChannel(aChannel)
   , mRegistration(aRegistration)
   , mStatus(aStatus)
 {
@@ -178,7 +178,8 @@ public:
                  const ChannelInfo& aWorkerChannelInfo,
                  const nsACString& aScriptSpec,
                  const nsACString& aResponseURLSpec)
-    : mChannel(aChannel)
+    : Runnable("dom::workers::FinishResponse")
+    , mChannel(aChannel)
     , mInternalResponse(aInternalResponse)
     , mWorkerChannelInfo(aWorkerChannelInfo)
     , mScriptSpec(aScriptSpec)
@@ -229,7 +230,8 @@ public:
        mChannel->SynthesizeHeader(entries[i].mName, entries[i].mValue);
     }
 
-    loadInfo->MaybeIncreaseTainting(mInternalResponse->GetTainting());
+    auto castLoadInfo = static_cast<LoadInfo*>(loadInfo.get());
+    castLoadInfo->SynthesizeServiceWorkerTainting(mInternalResponse->GetTainting());
 
     rv = mChannel->FinishSynthesizedResponse(mResponseURLSpec);
     if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -411,76 +413,6 @@ void RespondWithCopyComplete(void* aClosure, nsresult aStatus)
   }
 }
 
-namespace {
-
-void
-ExtractErrorValues(JSContext* aCx, JS::Handle<JS::Value> aValue,
-                  nsACString& aSourceSpecOut, uint32_t *aLineOut,
-                  uint32_t *aColumnOut, nsString& aMessageOut)
-{
-  MOZ_ASSERT(aLineOut);
-  MOZ_ASSERT(aColumnOut);
-
-  if (aValue.isObject()) {
-    JS::Rooted<JSObject*> obj(aCx, &aValue.toObject());
-    RefPtr<DOMException> domException;
-
-    // Try to process as an Error object.  Use the file/line/column values
-    // from the Error as they will be more specific to the root cause of
-    // the problem.
-    JSErrorReport* err = obj ? JS_ErrorFromException(aCx, obj) : nullptr;
-    if (err) {
-      // Use xpc to extract the error message only.  We don't actually send
-      // this report anywhere.
-      RefPtr<xpc::ErrorReport> report = new xpc::ErrorReport();
-      report->Init(err,
-                   "<unknown>", // toString result
-                   false,       // chrome
-                   0);          // window ID
-
-      if (!report->mFileName.IsEmpty()) {
-        CopyUTF16toUTF8(report->mFileName, aSourceSpecOut);
-        *aLineOut = report->mLineNumber;
-        *aColumnOut = report->mColumn;
-      }
-      aMessageOut.Assign(report->mErrorMsg);
-    }
-
-    // Next, try to unwrap the rejection value as a DOMException.
-    else if(NS_SUCCEEDED(UNWRAP_OBJECT(DOMException, obj, domException))) {
-
-      nsAutoString filename;
-      domException->GetFilename(aCx, filename);
-      if (!filename.IsEmpty()) {
-        CopyUTF16toUTF8(filename, aSourceSpecOut);
-        *aLineOut = domException->LineNumber(aCx);
-        *aColumnOut = domException->ColumnNumber();
-      }
-
-      domException->GetName(aMessageOut);
-      aMessageOut.AppendLiteral(": ");
-
-      nsAutoString message;
-      domException->GetMessageMoz(message);
-      aMessageOut.Append(message);
-    }
-  }
-
-  // If we could not unwrap a specific error type, then perform default safe
-  // string conversions on primitives.  Objects will result in "[Object]"
-  // unfortunately.
-  if (aMessageOut.IsEmpty()) {
-    nsAutoJSString jsString;
-    if (jsString.init(aCx, aValue)) {
-      aMessageOut = jsString;
-    } else {
-      JS_ClearPendingException(aCx);
-    }
-  }
-}
-
-} // anonymous namespace
-
 class MOZ_STACK_CLASS AutoCancel
 {
   RefPtr<RespondWithHandler> mOwner;
@@ -510,6 +442,44 @@ public:
       }
       mOwner->CancelRequest(NS_ERROR_INTERCEPTION_FAILED);
     }
+  }
+
+  // This function steals the error message from a ErrorResult.
+  void
+  SetCancelErrorResult(JSContext* aCx, ErrorResult& aRv)
+  {
+    MOZ_DIAGNOSTIC_ASSERT(aRv.Failed());
+    MOZ_DIAGNOSTIC_ASSERT(!JS_IsExceptionPending(aCx));
+
+    // Storing the error as exception in the JSContext.
+    if (!aRv.MaybeSetPendingException(aCx)) {
+      return;
+    }
+
+    MOZ_ASSERT(!aRv.Failed());
+
+    // Let's take the pending exception.
+    JS::Rooted<JS::Value> exn(aCx);
+    if (!JS_GetPendingException(aCx, &exn)) {
+      return;
+    }
+
+    JS_ClearPendingException(aCx);
+
+    // Converting the exception in a js::ErrorReport.
+    js::ErrorReport report(aCx);
+    if (!report.init(aCx, exn, js::ErrorReport::WithSideEffects)) {
+      JS_ClearPendingException(aCx);
+      return;
+    }
+
+    MOZ_ASSERT(mOwner);
+    MOZ_ASSERT(mMessageName.EqualsLiteral("InterceptionFailedWithURL"));
+    MOZ_ASSERT(mParams.Length() == 1);
+
+    // Let's store the error message here.
+    mMessageName.Assign(report.toStringResult().c_str());
+    mParams.Clear();
   }
 
   template<typename... Params>
@@ -565,7 +535,8 @@ RespondWithHandler::ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValu
     uint32_t line = 0;
     uint32_t column = 0;
     nsString valueString;
-    ExtractErrorValues(aCx, aValue, sourceSpec, &line, &column, valueString);
+    nsContentUtils::ExtractErrorValues(aCx, aValue, sourceSpec, &line, &column,
+                                       valueString);
 
     autoCancel.SetCancelMessageAndLocation(sourceSpec, line, column,
                                            NS_LITERAL_CSTRING("InterceptedNonResponseWithURL"),
@@ -580,7 +551,8 @@ RespondWithHandler::ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValu
     uint32_t line = 0;
     uint32_t column = 0;
     nsString valueString;
-    ExtractErrorValues(aCx, aValue, sourceSpec, &line, &column, valueString);
+    nsContentUtils::ExtractErrorValues(aCx, aValue, sourceSpec, &line, &column,
+                                       valueString);
 
     autoCancel.SetCancelMessageAndLocation(sourceSpec, line, column,
                                            NS_LITERAL_CSTRING("InterceptedNonResponseWithURL"),
@@ -667,7 +639,12 @@ RespondWithHandler::ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValu
   ir->GetUnfilteredBody(getter_AddRefs(body));
   // Errors and redirects may not have a body.
   if (body) {
-    response->SetBodyUsed();
+    IgnoredErrorResult error;
+    response->SetBodyUsed(aCx, error);
+    if (NS_WARN_IF(error.Failed())) {
+      autoCancel.SetCancelErrorResult(aCx, error);
+      return;
+    }
 
     nsCOMPtr<nsIOutputStream> responseBody;
     rv = mInterceptedChannel->GetResponseBody(getter_AddRefs(responseBody));
@@ -725,7 +702,8 @@ RespondWithHandler::RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValu
 
   mInterceptedChannel->SetFinishResponseStart(TimeStamp::Now());
 
-  ExtractErrorValues(aCx, aValue, sourceSpec, &line, &column, valueString);
+  nsContentUtils::ExtractErrorValues(aCx, aValue, sourceSpec, &line, &column,
+                                     valueString);
 
   ::AsyncLog(mInterceptedChannel, sourceSpec, line, column,
              NS_LITERAL_CSTRING("InterceptionRejectedResponseWithURL"),
@@ -871,7 +849,8 @@ public:
     nsCString spec;
     uint32_t line = 0;
     uint32_t column = 0;
-    ExtractErrorValues(aCx, aValue, spec, &line, &column, mRejectValue);
+    nsContentUtils::ExtractErrorValues(aCx, aValue, spec, &line, &column,
+                                       mRejectValue);
 
     // only use the extracted location if we found one
     if (!spec.IsEmpty()) {
@@ -881,7 +860,8 @@ public:
     }
 
     MOZ_ALWAYS_SUCCEEDS(mWorkerPrivate->DispatchToMainThread(
-        NewRunnableMethod(this, &WaitUntilHandler::ReportOnMainThread)));
+                          NewRunnableMethod("WaitUntilHandler::ReportOnMainThread",
+                                            this, &WaitUntilHandler::ReportOnMainThread)));
   }
 
   void
@@ -978,32 +958,21 @@ nsresult
 ExtractBytesFromUSVString(const nsAString& aStr, nsTArray<uint8_t>& aBytes)
 {
   MOZ_ASSERT(aBytes.IsEmpty());
-  nsCOMPtr<nsIUnicodeEncoder> encoder = EncodingUtils::EncoderForEncoding("UTF-8");
-  if (NS_WARN_IF(!encoder)) {
+  auto encoder = UTF_8_ENCODING->NewEncoder();
+  CheckedInt<size_t> needed =
+    encoder->MaxBufferLengthFromUTF16WithoutReplacement(aStr.Length());
+  if (NS_WARN_IF(!needed.isValid() ||
+                 !aBytes.SetLength(needed.value(), fallible))) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
-
-  int32_t srcLen = aStr.Length();
-  int32_t destBufferLen;
-  nsresult rv = encoder->GetMaxLength(aStr.BeginReading(), srcLen, &destBufferLen);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  if (NS_WARN_IF(!aBytes.SetLength(destBufferLen, fallible))) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
-
-  char* destBuffer = reinterpret_cast<char*>(aBytes.Elements());
-  int32_t outLen = destBufferLen;
-  rv = encoder->Convert(aStr.BeginReading(), &srcLen, destBuffer, &outLen);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    aBytes.Clear();
-    return rv;
-  }
-
-  aBytes.TruncateLength(outLen);
-
+  uint32_t result;
+  size_t read;
+  size_t written;
+  Tie(result, read, written) =
+    encoder->EncodeFromUTF16WithoutReplacement(aStr, aBytes, true);
+  MOZ_ASSERT(result == kInputEmpty);
+  MOZ_ASSERT(read == aStr.Length());
+  aBytes.TruncateLength(written);
   return NS_OK;
 }
 

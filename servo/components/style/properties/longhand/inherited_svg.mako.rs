@@ -35,12 +35,12 @@ ${helpers.predefined_type(
     "fill", "SVGPaint",
     "::values::computed::SVGPaint::black()",
     products="gecko",
-    animation_value_type="none",
+    animation_value_type="IntermediateSVGPaint",
     boxed=True,
     spec="https://www.w3.org/TR/SVG2/painting.html#SpecifyingFillPaint")}
 
-${helpers.predefined_type("fill-opacity", "Opacity", "1.0",
-                          products="gecko", animation_value_type="none",
+${helpers.predefined_type("fill-opacity", "SVGOpacity", "Default::default()",
+                          products="gecko", animation_value_type="ComputedValue",
                           spec="https://www.w3.org/TR/SVG11/painting.html#FillOpacityProperty")}
 
 ${helpers.single_keyword("fill-rule", "nonzero evenodd",
@@ -59,16 +59,16 @@ ${helpers.predefined_type(
     "stroke", "SVGPaint",
     "Default::default()",
     products="gecko",
-    animation_value_type="none",
+    animation_value_type="IntermediateSVGPaint",
     boxed=True,
     spec="https://www.w3.org/TR/SVG2/painting.html#SpecifyingStrokePaint")}
 
 ${helpers.predefined_type(
-    "stroke-width", "LengthOrPercentageOrNumber",
-    "Either::First(1.0)",
-    "parse_non_negative",
+    "stroke-width", "SVGWidth",
+    "::values::computed::NonNegativeAu::from_px(1).into()",
     products="gecko",
-    animation_value_type="ComputedValue",
+    boxed="True",
+    animation_value_type="::values::computed::SVGWidth",
     spec="https://www.w3.org/TR/SVG2/painting.html#StrokeWidth")}
 
 ${helpers.single_keyword("stroke-linecap", "butt round square",
@@ -79,31 +79,30 @@ ${helpers.single_keyword("stroke-linejoin", "miter round bevel",
                          products="gecko", animation_value_type="discrete",
                          spec="https://www.w3.org/TR/SVG11/painting.html#StrokeLinejoinProperty")}
 
-${helpers.predefined_type("stroke-miterlimit", "Number", "4.0",
-                          "parse_at_least_one", products="gecko",
-                          animation_value_type="ComputedValue",
+${helpers.predefined_type("stroke-miterlimit", "GreaterThanOrEqualToOneNumber",
+                          "From::from(4.0)",
+                          products="gecko",
+                          animation_value_type="::values::computed::GreaterThanOrEqualToOneNumber",
                           spec="https://www.w3.org/TR/SVG11/painting.html#StrokeMiterlimitProperty")}
 
-${helpers.predefined_type("stroke-opacity", "Opacity", "1.0",
+${helpers.predefined_type("stroke-opacity", "SVGOpacity", "Default::default()",
                           products="gecko", animation_value_type="ComputedValue",
                           spec="https://www.w3.org/TR/SVG11/painting.html#StrokeOpacityProperty")}
 
-${helpers.predefined_type("stroke-dasharray",
-                          "LengthOrPercentageOrNumber",
-                          "Either::First(0.0)",
-                          "parse_non_negative",
-                          vector="True",
-                          delegate_animate="True",
-                          allow_empty="True",
-                          products="gecko",
-                          animation_value_type="ComputedValue",
-                          space_separated_allowed="True",
-                          spec="https://www.w3.org/TR/SVG2/painting.html#StrokeDashing")}
+${helpers.predefined_type(
+    "stroke-dasharray",
+    "SVGStrokeDashArray",
+    "Default::default()",
+    products="gecko",
+    animation_value_type="::values::computed::SVGStrokeDashArray",
+    spec="https://www.w3.org/TR/SVG2/painting.html#StrokeDashing",
+)}
 
 ${helpers.predefined_type(
-    "stroke-dashoffset", "LengthOrPercentageOrNumber",
-    "Either::First(0.0)",
+    "stroke-dashoffset", "SVGLength",
+    "Au(0).into()",
     products="gecko",
+    boxed="True",
     animation_value_type="ComputedValue",
     spec="https://www.w3.org/TR/SVG2/painting.html#StrokeDashing")}
 
@@ -118,23 +117,23 @@ ${helpers.single_keyword("clip-rule", "nonzero evenodd",
 ${helpers.predefined_type("marker-start", "UrlOrNone", "Either::Second(None_)",
                           products="gecko",
                           boxed="True" if product == "gecko" else "False",
-                          animation_value_type="none",
+                          animation_value_type="discrete",
                           spec="https://www.w3.org/TR/SVG2/painting.html#VertexMarkerProperties")}
 
 ${helpers.predefined_type("marker-mid", "UrlOrNone", "Either::Second(None_)",
                           products="gecko",
                           boxed="True" if product == "gecko" else "False",
-                          animation_value_type="none",
+                          animation_value_type="discrete",
                           spec="https://www.w3.org/TR/SVG2/painting.html#VertexMarkerProperties")}
 
 ${helpers.predefined_type("marker-end", "UrlOrNone", "Either::Second(None_)",
                           products="gecko",
                           boxed="True" if product == "gecko" else "False",
-                          animation_value_type="none",
+                          animation_value_type="discrete",
                           spec="https://www.w3.org/TR/SVG2/painting.html#VertexMarkerProperties")}
 
 <%helpers:longhand name="paint-order"
-                   animation_value_type="none"
+                   animation_value_type="discrete"
                    products="gecko"
                    spec="https://www.w3.org/TR/SVG2/painting.html#PaintOrder">
 
@@ -183,7 +182,8 @@ ${helpers.predefined_type("marker-end", "UrlOrNone", "Either::Second(None_)",
         }
     }
 
-    pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue,()> {
+    pub fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
+                         -> Result<SpecifiedValue,ParseError<'i>> {
         if let Ok(()) = input.try(|i| i.expect_ident_matching("normal")) {
             Ok(SpecifiedValue(0))
         } else {
@@ -194,13 +194,11 @@ ${helpers.predefined_type("marker-end", "UrlOrNone", "Either::Second(None_)",
             let mut pos = 0;
 
             loop {
-
-                let result = input.try(|i| {
-                    match_ignore_ascii_case! { &i.expect_ident()?,
+                let result: Result<_, ParseError> = input.try(|i| {
+                    try_match_ident_ignore_ascii_case! { i.expect_ident()?,
                         "fill" => Ok(FILL),
                         "stroke" => Ok(STROKE),
                         "markers" => Ok(MARKERS),
-                        _ => Err(())
                     }
                 });
 
@@ -208,20 +206,20 @@ ${helpers.predefined_type("marker-end", "UrlOrNone", "Either::Second(None_)",
                     Ok(val) => {
                         if (seen & (1 << val)) != 0 {
                             // don't parse the same ident twice
-                            return Err(())
+                            return Err(StyleParseError::UnspecifiedError.into())
                         } else {
                             value |= val << (pos * SHIFT);
                             seen |= 1 << val;
                             pos += 1;
                         }
                     }
-                    Err(()) => break,
+                    Err(_) => break,
                 }
             }
 
             if value == 0 {
                 // couldn't find any keyword
-                Err(())
+                Err(StyleParseError::UnspecifiedError.into())
             } else {
                 // fill in rest
                 for i in pos..COUNT {
@@ -269,7 +267,6 @@ ${helpers.predefined_type("marker-end", "UrlOrNone", "Either::Second(None_)",
                    animation_value_type="none"
                    products="gecko"
                    spec="Nonstandard (Internal-only)"
-                   internal="True"
                    allow_empty="True">
     use values::CustomIdent;
     use values::computed::ComputedValueAsSpecified;
@@ -285,7 +282,8 @@ ${helpers.predefined_type("marker-end", "UrlOrNone", "Either::Second(None_)",
     }
 
 
-    pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+    pub fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
+                         -> Result<SpecifiedValue, ParseError<'i>> {
         let i = input.expect_ident()?;
         CustomIdent::from_ident(i, &["all", "none", "auto"])
     }

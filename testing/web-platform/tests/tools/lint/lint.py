@@ -13,8 +13,9 @@ import sys
 from collections import defaultdict
 
 from . import fnmatch
-from ..localpaths import repo_root
+from .. import localpaths
 from ..gitignore.gitignore import PathFilter
+from ..wpt import testfiles
 
 from manifest.sourcefile import SourceFile, js_meta_re, python_meta_re
 from six import binary_type, iteritems, itervalues
@@ -636,6 +637,7 @@ def output_errors_text(errors):
             pos_string += ":%s" % line_number
         logger.error("%s: %s (%s)" % (pos_string, description, error_type))
 
+
 def output_errors_markdown(errors):
     if not errors:
         return
@@ -650,6 +652,7 @@ def output_errors_markdown(errors):
         if line_number:
             pos_string += ":%s" % line_number
         logger.error("%s | %s | %s |" % (error_type, pos_string, description))
+
 
 def output_errors_json(errors):
     for error_type, error, path, line_number in errors:
@@ -669,7 +672,14 @@ def output_error_count(error_count):
     else:
         logger.info("There were %d errors (%s)" % (count, by_type))
 
-def parse_args():
+
+def changed_files(wpt_root):
+    revish = testfiles.get_revish(revish=None)
+    changed, _ = testfiles.files_changed(revish, set(), include_uncommitted=True, include_new=True)
+    return [os.path.relpath(item, wpt_root) for item in changed]
+
+
+def create_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("paths", nargs="*",
                         help="List of paths to lint")
@@ -679,7 +689,11 @@ def parse_args():
                         help="Output markdown")
     parser.add_argument("--css-mode", action="store_true",
                         help="Run CSS testsuite specific lints")
-    return parser.parse_args()
+    parser.add_argument("--repo-root", help="The WPT directory. Use this"
+                        "option if the lint script exists outside the repository")
+    parser.add_argument("--all", action="store_true", help="If no paths are passed, try to lint the whole "
+                        "working directory, not just files that changed")
+    return parser
 
 
 def main(**kwargs):
@@ -687,12 +701,16 @@ def main(**kwargs):
         logger.critical("Cannot specify --json and --markdown")
         sys.exit(2)
 
+    repo_root = kwargs.get('repo_root') or localpaths.repo_root
     output_format = {(True, False): "json",
                      (False, True): "markdown",
                      (False, False): "normal"}[(kwargs.get("json", False),
                                                 kwargs.get("markdown", False))]
 
-    paths = list(kwargs.get("paths") if kwargs.get("paths") else all_filesystem_paths(repo_root))
+    paths = list(kwargs.get("paths") if kwargs.get("paths") else
+                 changed_files(repo_root) if not kwargs.get("all") else
+                 all_filesystem_paths(repo_root))
+
     if output_format == "markdown":
         setup_logging(True)
     return lint(repo_root, paths, output_format, kwargs.get("css_mode", False))
@@ -762,7 +780,7 @@ all_paths_lints = [check_css_globally_unique]
 file_lints = [check_regexp_line, check_parsed, check_python_ast, check_script_metadata]
 
 if __name__ == "__main__":
-    args = parse_args()
+    args = create_parser().parse_args()
     error_count = main(**vars(args))
     if error_count > 0:
         sys.exit(1)

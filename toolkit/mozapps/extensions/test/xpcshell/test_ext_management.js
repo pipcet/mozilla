@@ -9,6 +9,8 @@ add_task(async function setup() {
 // Shared background function for getSelf tests
 function backgroundGetSelf() {
   browser.management.getSelf().then(extInfo => {
+    let url = browser.extension.getURL("*");
+    extInfo.hostPermissions = extInfo.hostPermissions.filter(i => i != url);
     browser.test.sendMessage("management-getSelf", extInfo);
   }, error => {
     browser.test.notifyFail(`getSelf rejected with error: ${error}`);
@@ -19,7 +21,7 @@ function backgroundGetSelf() {
 add_task(async function test_management_get_self_complete() {
   const id = "get_self_test_complete@tests.mozilla.com";
   const permissions = ["management", "cookies"];
-  const hostPermissions = ["*://example.org/", "https://foo.example.org/"];
+  const hostPermissions = ["*://example.org/*", "https://foo.example.org/*"];
 
   let manifest = {
     applications: {

@@ -1,17 +1,13 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
- /* globals Services, XPCOMUtils */
 "use strict";
 
 const {utils: Cu} = Components;
-const {actionTypes: at, actionCreators: ac} = Cu.import("resource://activity-stream/common/Actions.jsm", {});
-
+Cu.import("resource://gre/modules/Services.jsm");
 Cu.importGlobalProperties(["fetch"]);
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-  "resource://gre/modules/Services.jsm");
+const {actionCreators: ac, actionTypes: at} = Cu.import("resource://activity-stream/common/Actions.jsm", {});
 
 // What is our default locale for the app?
 const DEFAULT_LOCALE = "en-US";
@@ -34,7 +30,14 @@ this.LocalizationFeed = class LocalizationFeed {
   }
 
   updateLocale() {
-    let locale = Services.locale.getRequestedLocale() || DEFAULT_LOCALE;
+    // Just take the first element in the result array, as it should be
+    // the best locale
+    let locale = Services.locale.negotiateLanguages(
+      Services.locale.getAppLocalesAsLangTags(), // desired locales
+      Object.keys(this.allStrings), // available locales
+      DEFAULT_LOCALE // fallback
+    )[0];
+
     let strings = this.allStrings[locale];
 
     // Use the default strings for any that are missing

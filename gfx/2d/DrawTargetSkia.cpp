@@ -193,8 +193,8 @@ VerifyRGBXCorners(uint8_t* aData, const IntSize &aSize, const int32_t aStride, S
     return true;
   }
 
-  const int height = bounds.height;
-  const int width = bounds.width;
+  const int height = bounds.Height();
+  const int width = bounds.Width();
   const int pixelSize = 4;
   MOZ_ASSERT(aSize.width * pixelSize <= aStride);
 
@@ -848,16 +848,16 @@ ShrinkClippedStrokedRect(const Rect &aStrokedRect, const IntRect &aDeviceClip,
   Rect userSpaceStrokeClip =
     UserSpaceStrokeClip(aDeviceClip, aTransform, aStrokeOptions);
   RectDouble strokedRectDouble(
-    aStrokedRect.x, aStrokedRect.y, aStrokedRect.width, aStrokedRect.height);
+    aStrokedRect.x, aStrokedRect.y, aStrokedRect.Width(), aStrokedRect.Height());
   RectDouble intersection =
     strokedRectDouble.Intersect(RectDouble(userSpaceStrokeClip.x,
                                            userSpaceStrokeClip.y,
-                                           userSpaceStrokeClip.width,
-                                           userSpaceStrokeClip.height));
+                                           userSpaceStrokeClip.Width(),
+                                           userSpaceStrokeClip.Height()));
   Double dashPeriodLength = DashPeriodLength(aStrokeOptions);
   if (intersection.IsEmpty() || dashPeriodLength == 0.0f) {
     return Rect(
-      intersection.x, intersection.y, intersection.width, intersection.height);
+      intersection.x, intersection.y, intersection.Width(), intersection.Height());
   }
 
   // Reduce the rectangle side lengths in multiples of the dash period length
@@ -871,8 +871,8 @@ ShrinkClippedStrokedRect(const Rect &aStrokedRect, const IntRect &aDeviceClip,
   strokedRectDouble.Deflate(insetBy);
   return Rect(strokedRectDouble.x,
               strokedRectDouble.y,
-              strokedRectDouble.width,
-              strokedRectDouble.height);
+              strokedRectDouble.Width(),
+              strokedRectDouble.Height());
 }
 
 void
@@ -1040,7 +1040,8 @@ SetupCGContext(DrawTargetSkia* aDT,
                CGContextRef aCGContext,
                SkCanvas* aCanvas,
                const IntPoint& aOrigin,
-               const IntSize& aSize)
+               const IntSize& aSize,
+               bool aClipped)
 {
   // DrawTarget expects the origin to be at the top left, but CG
   // expects it to be at the bottom left. Transform to set the origin to
@@ -1053,15 +1054,20 @@ SetupCGContext(DrawTargetSkia* aDT,
 
   // Want to apply clips BEFORE the transform since the transform
   // will apply to the clips we apply.
-  SkIRect clipBounds;
-  if (!aCanvas->getDeviceClipBounds(&clipBounds)) {
-    clipBounds = SkIRect::MakeXYWH(aOrigin.x, aOrigin.y,
-                                   aSize.width, aSize.height);
+  if (aClipped) {
+    SkRegion clipRegion;
+    aCanvas->temporary_internal_getRgnClip(&clipRegion);
+    Vector<CGRect, 8> rects;
+    for (SkRegion::Iterator it(clipRegion); !it.done(); it.next()) {
+      const SkIRect& rect = it.rect();
+      if (!rects.append(CGRectMake(rect.x(), rect.y(), rect.width(), rect.height()))) {
+        break;
+      }
+    }
+    if (rects.length()) {
+      CGContextClipToRects(aCGContext, rects.begin(), rects.length());
+    }
   }
-
-  CGContextClipToRect(aCGContext,
-                      CGRectMake(clipBounds.x(), clipBounds.y(),
-                                 clipBounds.width(), clipBounds.height()));
 
   CGContextConcatCTM(aCGContext, GfxMatrixToCGAffineTransform(aDT->GetTransform()));
   return true;
@@ -1127,9 +1133,10 @@ DrawTargetSkia::BorrowCGContext(const DrawOptions &aOptions)
   if (!mNeedLayer && (data == mCanvasData) && mCG && (mCGSize == size)) {
     // If our canvas data still points to the same data,
     // we can reuse the CG Context
-    CGContextSaveGState(mCG);
     CGContextSetAlpha(mCG, aOptions.mAlpha);
-    SetupCGContext(this, mCG, mCanvas, origin, size);
+    CGContextSetShouldAntialias(mCG, aOptions.mAntialiasMode != AntialiasMode::NONE);
+    CGContextSaveGState(mCG);
+    SetupCGContext(this, mCG, mCanvas, origin, size, true);
     return mCG;
   }
 
@@ -1173,7 +1180,7 @@ DrawTargetSkia::BorrowCGContext(const DrawOptions &aOptions)
   CGContextSetShouldSmoothFonts(mCG, true);
   CGContextSetTextDrawingMode(mCG, kCGTextFill);
   CGContextSaveGState(mCG);
-  SetupCGContext(this, mCG, mCanvas, origin, size);
+  SetupCGContext(this, mCG, mCanvas, origin, size, !mNeedLayer);
   return mCG;
 }
 
@@ -1254,7 +1261,13 @@ DrawTargetSkia::FillGlyphsWithCG(ScaledFont *aFont,
     return false;
   }
 
-  SetFontSmoothingBackgroundColor(cgContext, mColorSpace, aRenderingOptions);
+  if (mPushedLayers.empty()) {
+    // Respect the font smoothing background color, but only if no layer is
+    // currently pushed, because this color usually describes what's under this
+    // DrawTarget, and not what's within this DrawTarget under the currently
+    // pushed layer.
+    SetFontSmoothingBackgroundColor(cgContext, mColorSpace, aRenderingOptions);
+  }
   SetFontColor(cgContext, mColorSpace, aPattern);
 
   ScaledFontMac* macFont = static_cast<ScaledFontMac*>(aFont);
@@ -1436,10 +1449,21 @@ DrawTargetSkia::DrawGlyphs(ScaledFont* aFont,
 
   paint.mPaint.setSubpixelText(useSubpixelText);
 
-  std::vector<uint16_t> indices;
-  std::vector<SkPoint> offsets;
-  indices.resize(aBuffer.mNumGlyphs);
-  offsets.resize(aBuffer.mNumGlyphs);
+  const uint32_t heapSize = 64;
+  uint16_t indicesOnStack[heapSize];
+  SkPoint offsetsOnStack[heapSize];
+  std::vector<uint16_t> indicesOnHeap;
+  std::vector<SkPoint> offsetsOnHeap;
+  uint16_t* indices = indicesOnStack;
+  SkPoint* offsets = offsetsOnStack;
+  if (aBuffer.mNumGlyphs > heapSize) {
+    // Heap allocation/ deallocation is slow, use it only if we need a
+    // bigger(>heapSize) buffer.
+    indicesOnHeap.resize(aBuffer.mNumGlyphs);
+    offsetsOnHeap.resize(aBuffer.mNumGlyphs);
+    indices = (uint16_t*)&indicesOnHeap.front();
+    offsets = (SkPoint*)&offsetsOnHeap.front();
+  }
 
   for (unsigned int i = 0; i < aBuffer.mNumGlyphs; i++) {
     indices[i] = aBuffer.mGlyphs[i].mIndex;
@@ -1447,7 +1471,7 @@ DrawTargetSkia::DrawGlyphs(ScaledFont* aFont,
     offsets[i].fY = SkFloatToScalar(aBuffer.mGlyphs[i].mPosition.y);
   }
 
-  mCanvas->drawPosText(&indices.front(), aBuffer.mNumGlyphs*2, &offsets.front(), paint.mPaint);
+  mCanvas->drawPosText(indices, aBuffer.mNumGlyphs*2, offsets, paint.mPaint);
 }
 
 void
@@ -1545,7 +1569,7 @@ DrawTarget::Draw3DTransformedSurface(SourceSurface* aSurface, const Matrix4x4& a
   }
   std::unique_ptr<SkCanvas> dstCanvas(
     SkCanvas::MakeRasterDirect(
-      SkImageInfo::Make(xformBounds.width, xformBounds.height,
+                        SkImageInfo::Make(xformBounds.Width(), xformBounds.Height(),
                         GfxFormatToSkiaColorType(dstSurf->GetFormat()),
                         kPremul_SkAlphaType),
       dstSurf->GetData(), dstSurf->Stride()));
@@ -1795,7 +1819,7 @@ DrawTargetSkia::CopySurface(SourceSurface *aSurface,
 
   mCanvas->save();
   mCanvas->setMatrix(SkMatrix::MakeTrans(SkIntToScalar(aDestination.x), SkIntToScalar(aDestination.y)));
-  mCanvas->clipRect(SkRect::MakeIWH(aSourceRect.width, aSourceRect.height), SkClipOp::kReplace_deprecated);
+  mCanvas->clipRect(SkRect::MakeIWH(aSourceRect.Width(), aSourceRect.Height()), SkClipOp::kReplace_deprecated);
 
   SkPaint paint;
   if (!image->isOpaque()) {

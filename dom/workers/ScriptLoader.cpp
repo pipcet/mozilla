@@ -242,12 +242,6 @@ struct ScriptLoadInfo
     }
   }
 
-  bool
-  ReadyToExecute()
-  {
-    return !mChannel && NS_SUCCEEDED(mLoadResult) && !mExecutionScheduled;
-  }
-
   nsString mURL;
 
   // This full URL string is populated only if this object is used in a
@@ -442,7 +436,10 @@ public:
     , mIsWorkerScript(aIsWorkerScript)
     , mFailed(false)
   {
+    MOZ_ASSERT(aWorkerPrivate);
     MOZ_ASSERT(aWorkerPrivate->IsServiceWorker());
+    mMainThreadEventTarget = aWorkerPrivate->MainThreadEventTarget();
+    MOZ_ASSERT(mMainThreadEventTarget);
     mBaseURI = GetBaseURI(mIsWorkerScript, aWorkerPrivate);
     AssertIsOnMainThread();
   }
@@ -477,6 +474,7 @@ private:
   nsCString mCSPHeaderValue;
   nsCString mCSPReportOnlyHeaderValue;
   nsCString mReferrerPolicyHeaderValue;
+  nsCOMPtr<nsIEventTarget> mMainThreadEventTarget;
 };
 
 NS_IMPL_ISUPPORTS(CacheScriptLoader, nsIStreamLoaderObserver)
@@ -619,12 +617,6 @@ private:
     return NS_OK;
   }
 
-  NS_IMETHOD
-  SetName(const char* aName) override
-  {
-    return NS_ERROR_NOT_IMPLEMENTED;
-  }
-
   void
   LoadingFinished(uint32_t aIndex, nsresult aRv)
   {
@@ -734,9 +726,14 @@ private:
     request.SetAsUSVString().Rebind(loadInfo.mFullURL.Data(),
                                     loadInfo.mFullURL.Length());
 
+    // This JSContext will not end up executing JS code because here there are
+    // no ReadableStreams involved.
+    AutoJSAPI jsapi;
+    jsapi.Init();
+
     ErrorResult error;
     RefPtr<Promise> cachePromise =
-      mCacheCreator->Cache_()->Put(request, *response, error);
+      mCacheCreator->Cache_()->Put(jsapi.cx(), request, *response, error);
     if (NS_WARN_IF(error.Failed())) {
       nsresult rv = error.StealNSResult();
       channel->Cancel(rv);
@@ -762,7 +759,8 @@ private:
       mCanceled = true;
 
       MOZ_ALWAYS_SUCCEEDS(
-        NS_DispatchToMainThread(NewRunnableMethod(this,
+        NS_DispatchToMainThread(NewRunnableMethod("ScriptLoaderRunnable::CancelMainThreadWithBindingAborted",
+                                                  this,
                                                   &ScriptLoaderRunnable::CancelMainThreadWithBindingAborted)));
     }
 
@@ -1526,7 +1524,7 @@ CacheCreator::ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue)
 
   JS::Rooted<JSObject*> obj(aCx, &aValue.toObject());
   Cache* cache = nullptr;
-  nsresult rv = UNWRAP_OBJECT(Cache, obj, cache);
+  nsresult rv = UNWRAP_OBJECT(Cache, &obj, cache);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     FailLoaders(NS_ERROR_FAILURE);
     return;
@@ -1626,8 +1624,13 @@ CacheScriptLoader::Load(Cache* aCache)
 
   mozilla::dom::CacheQueryOptions params;
 
+  // This JSContext will not end up executing JS code because here there are
+  // no ReadableStreams involved.
+  AutoJSAPI jsapi;
+  jsapi.Init();
+
   ErrorResult error;
-  RefPtr<Promise> promise = aCache->Match(request, params, error);
+  RefPtr<Promise> promise = aCache->Match(jsapi.cx(), request, params, error);
   if (NS_WARN_IF(error.Failed())) {
     Fail(error.StealNSResult());
     return;
@@ -1672,7 +1675,7 @@ CacheScriptLoader::ResolvedCallback(JSContext* aCx,
 
   JS::Rooted<JSObject*> obj(aCx, &aValue.toObject());
   mozilla::dom::Response* response = nullptr;
-  rv = UNWRAP_OBJECT(Response, obj, response);
+  rv = UNWRAP_OBJECT(Response, &obj, response);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     Fail(rv);
     return;
@@ -1706,7 +1709,14 @@ CacheScriptLoader::ResolvedCallback(JSContext* aCx,
   }
 
   MOZ_ASSERT(!mPump);
-  rv = NS_NewInputStreamPump(getter_AddRefs(mPump), inputStream);
+  rv = NS_NewInputStreamPump(getter_AddRefs(mPump),
+                             inputStream,
+                             -1, /* default streamPos */
+                             -1, /* default streamLen */
+                             0, /* default segsize */
+                             0, /* default segcount */
+                             false, /* default closeWhenDone */
+                             mMainThreadEventTarget);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     Fail(rv);
     return;
@@ -1951,7 +1961,7 @@ ScriptExecutorRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
            .setNoScriptRval(true);
 
     if (mScriptLoader.mWorkerScriptType == DebuggerScript) {
-      options.setVersion(JSVERSION_LATEST);
+      options.setVersion(JSVERSION_DEFAULT);
     }
 
     MOZ_ASSERT(loadInfo.mMutedErrorFlag.isSome());

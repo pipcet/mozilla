@@ -17,6 +17,8 @@
 #include "nsDataHashtable.h"
 #include "nsDeque.h"
 #include "nsHashKeys.h"
+#include "nsHttpRequestHead.h"
+#include "nsICacheEntryOpenCallback.h"
 
 #include "Http2Compression.h"
 
@@ -169,11 +171,12 @@ public:
     kFrameTypeBytes + kFrameStreamIDBytes;
 
   enum {
-    kLeaderGroupID =     0x3,
+    kLeaderGroupID =      0x3,
     kOtherGroupID =       0x5,
     kBackgroundGroupID =  0x7,
     kSpeculativeGroupID = 0x9,
-    kFollowerGroupID =    0xB
+    kFollowerGroupID =    0xB,
+    kUrgentStartGroupID = 0xD
     // Hey, you! YES YOU! If you add/remove any groups here, you almost
     // certainly need to change the lookup of the stream/ID hash in
     // Http2Session::OnTransportStatus. Yeah, that's right. YOU!
@@ -527,6 +530,22 @@ private:
   nsDataHashtable<nsCStringHashKey, bool> mOriginFrame;
 
   nsDataHashtable<nsCStringHashKey, bool> mJoinConnectionCache;
+
+  class CachePushCheckCallback final : public nsICacheEntryOpenCallback
+  {
+  public:
+    CachePushCheckCallback(Http2Session *session, uint32_t promisedID, const nsACString &requestString);
+
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSICACHEENTRYOPENCALLBACK
+
+  private:
+    ~CachePushCheckCallback() { }
+
+    RefPtr<Http2Session> mSession;
+    uint32_t mPromisedID;
+    nsHttpRequestHead mRequestHead;
+  };
 
 private:
 /// connect tunnels

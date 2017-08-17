@@ -21,7 +21,6 @@ Cu.import("resource://gre/modules/AppConstants.jsm", this);
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
 Cu.import("resource://gre/modules/ClientID.jsm");
 Cu.import("resource://gre/modules/Log.jsm", this);
-Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/PromiseUtils.jsm");
 Cu.import("resource://gre/modules/ServiceRequest.jsm", this);
 Cu.import("resource://gre/modules/Services.jsm", this);
@@ -39,28 +38,25 @@ XPCOMUtils.defineLazyModuleGetter(this, "OS",
 XPCOMUtils.defineLazyServiceGetter(this, "Telemetry",
                                    "@mozilla.org/base/telemetry;1",
                                    "nsITelemetry");
+XPCOMUtils.defineLazyModuleGetter(this, "TelemetryHealthPing",
+                                  "resource://gre/modules/TelemetryHealthPing.jsm");
+
 
 const Utils = TelemetryUtils;
 
 const LOGGER_NAME = "Toolkit.Telemetry";
 const LOGGER_PREFIX = "TelemetrySend::";
 
-const PREF_BRANCH = "toolkit.telemetry.";
-const PREF_SERVER = PREF_BRANCH + "server";
-const PREF_UNIFIED = PREF_BRANCH + "unified";
-const PREF_ENABLED = PREF_BRANCH + "enabled";
-const PREF_FHR_UPLOAD_ENABLED = "datareporting.healthreport.uploadEnabled";
-const PREF_OVERRIDE_OFFICIAL_CHECK = PREF_BRANCH + "send.overrideOfficialCheck";
-
 const TOPIC_IDLE_DAILY = "idle-daily";
 // The following topics are notified when Firefox is closing
 // because the OS is shutting down.
 const TOPIC_QUIT_APPLICATION_GRANTED = "quit-application-granted";
 const TOPIC_QUIT_APPLICATION_FORCED = "quit-application-forced";
+const PREF_CHANGED_TOPIC = "nsPref:changed";
 
 // Whether the FHR/Telemetry unification features are enabled.
 // Changing this pref requires a restart.
-const IS_UNIFIED_TELEMETRY = Preferences.get(PREF_UNIFIED, false);
+const IS_UNIFIED_TELEMETRY = Services.prefs.getBoolPref(TelemetryUtils.Preferences.Unified, false);
 
 const PING_FORMAT_VERSION = 4;
 
@@ -92,14 +88,15 @@ const SEND_MAXIMUM_BACKOFF_DELAY_MS = 120 * MS_IN_A_MINUTE;
 // The age of a pending ping to be considered overdue (in milliseconds).
 const OVERDUE_PING_FILE_AGE = 7 * 24 * 60 * MS_IN_A_MINUTE; // 1 week
 
-function monotonicNow() {
-  try {
-    return Telemetry.msSinceProcessStart();
-  } catch (ex) {
-    // If this fails fall back to the (non-monotonic) Date value.
-    return Date.now();
-  }
-}
+// Strings to map from XHR.errorCode to TELEMETRY_SEND_FAILURE_TYPE.
+// Echoes XMLHttpRequestMainThread's ErrorType enum.
+const XHR_ERROR_TYPE = [
+  "eOK",
+  "eRequest",
+  "eUnreachable",
+  "eChannelOpen",
+  "eRedirect",
+];
 
 /**
  * This is a policy object used to override behavior within this module.
@@ -109,6 +106,7 @@ function monotonicNow() {
 var Policy = {
   now: () => new Date(),
   midnightPingFuzzingDelay: () => MIDNIGHT_FUZZING_DELAY_MS,
+  pingSubmissionTimeout: () => PING_SUBMIT_TIMEOUT_MS,
   setSchedulerTickTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
   clearSchedulerTickTimeout: (id) => clearTimeout(id),
 };
@@ -596,13 +594,13 @@ var TelemetrySendImpl = {
   ],
 
   OBSERVED_PREFERENCES: [
-    PREF_ENABLED,
-    PREF_FHR_UPLOAD_ENABLED,
+    TelemetryUtils.Preferences.TelemetryEnabled,
+    TelemetryUtils.Preferences.FhrUploadEnabled,
   ],
 
   // Whether sending pings has been overridden.
   get _overrideOfficialCheck() {
-    return Preferences.get(PREF_OVERRIDE_OFFICIAL_CHECK, false);
+    return Services.prefs.getBoolPref(TelemetryUtils.Preferences.OverrideOfficialCheck, false);
   },
 
   get _log() {
@@ -638,6 +636,8 @@ var TelemetrySendImpl = {
     Services.obs.addObserver(this, TOPIC_QUIT_APPLICATION_GRANTED);
   },
 
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsISupportsWeakReference]),
+
   async setup(testing) {
     this._log.trace("setup");
 
@@ -646,12 +646,12 @@ var TelemetrySendImpl = {
 
     Services.obs.addObserver(this, TOPIC_IDLE_DAILY);
 
-    this._server = Preferences.get(PREF_SERVER, undefined);
+    this._server = Services.prefs.getStringPref(TelemetryUtils.Preferences.Server, undefined);
 
     // Annotate crash reports so that crash pings are sent correctly and listen
     // to pref changes to adjust the annotations accordingly.
     for (let pref of this.OBSERVED_PREFERENCES) {
-      Preferences.observe(pref, this._annotateCrashReport, this);
+      Services.prefs.addObserver(pref, this, true);
     }
     this._annotateCrashReport();
 
@@ -683,7 +683,7 @@ var TelemetrySendImpl = {
         const crs = cr.getService(Ci.nsICrashReporter);
 
         let clientId = ClientID.getCachedClientID();
-        let server = this._server || Preferences.get(PREF_SERVER, undefined);
+        let server = this._server || Services.prefs.getStringPref(TelemetryUtils.Preferences.Server, undefined);
 
         if (!this.sendingEnabled() || !TelemetryReportingPolicy.canUpload()) {
           // If we cannot send pings then clear the crash annotations
@@ -734,7 +734,7 @@ var TelemetrySendImpl = {
       // FIXME: When running tests this causes errors to be printed out if
       // TelemetrySend.shutdown() is called twice in a row without calling
       // TelemetrySend.setup() in-between.
-      Preferences.ignore(pref, this._annotateCrashReport, this);
+      Services.prefs.removeObserver(pref, this);
     }
 
     for (let topic of this.OBSERVER_TOPICS) {
@@ -809,6 +809,11 @@ var TelemetrySendImpl = {
     case TOPIC_QUIT_APPLICATION_GRANTED:
       if (data == "syncShutdown") {
         setOSShutdown();
+      }
+      break;
+    case PREF_CHANGED_TOPIC:
+      if (this.OBSERVED_PREFERENCES.includes(data)) {
+        this._annotateCrashReport();
       }
       break;
     }
@@ -933,6 +938,12 @@ var TelemetrySendImpl = {
   sendPings(currentPings, persistedPingIds) {
     let pingSends = [];
 
+    // Prioritize health pings to enable low-latency monitoring.
+    currentPings = [
+      ...currentPings.filter(ping => ping.type === "health"),
+      ...currentPings.filter(ping => ping.type !== "health"),
+    ];
+
     for (let current of currentPings) {
       let ping = current;
       let p = (async () => {
@@ -1004,7 +1015,7 @@ var TelemetrySendImpl = {
     let hsend = Telemetry.getHistogramById(sendId);
     let hsuccess = Telemetry.getHistogramById("TELEMETRY_SUCCESS");
 
-    hsend.add(monotonicNow() - startTime);
+    hsend.add(Utils.monotonicNow() - startTime);
     hsuccess.add(success);
 
     if (!success) {
@@ -1073,7 +1084,7 @@ var TelemetrySendImpl = {
 
     let request = new ServiceRequest();
     request.mozBackgroundRequest = true;
-    request.timeout = PING_SUBMIT_TIMEOUT_MS;
+    request.timeout = Policy.pingSubmissionTimeout();
 
     request.open("POST", url, true);
     request.overrideMimeType("text/plain");
@@ -1085,14 +1096,18 @@ var TelemetrySendImpl = {
     // Prevent the request channel from running though URLClassifier (bug 1296802)
     request.channel.loadFlags &= ~Ci.nsIChannel.LOAD_CLASSIFY_URI;
 
-    const monotonicStartTime = monotonicNow();
+    const monotonicStartTime = Utils.monotonicNow();
     let deferred = PromiseUtils.defer();
 
     let onRequestFinished = (success, event) => {
       let onCompletion = () => {
         if (success) {
+          let histogram = Telemetry.getHistogramById("TELEMETRY_SUCCESSFUL_SEND_PINGS_SIZE_KB");
+          histogram.add(compressedPingSizeKB);
           deferred.resolve();
         } else {
+          let histogram = Telemetry.getHistogramById("TELEMETRY_FAILED_SEND_PINGS_SIZE_KB");
+          histogram.add(compressedPingSizeKB);
           deferred.reject(event);
         }
       };
@@ -1107,7 +1122,15 @@ var TelemetrySendImpl = {
     };
 
     let errorhandler = (event) => {
-      this._log.error("_doPing - error making request to " + url + ": " + event.type);
+      let failure = event.type;
+      if (failure === "error") {
+        failure = XHR_ERROR_TYPE[request.errorCode];
+      }
+
+      TelemetryHealthPing.recordSendFailure(failure);
+      Telemetry.getHistogramById("TELEMETRY_SEND_FAILURE_TYPE").add(failure);
+
+      this._log.error("_doPing - error making request to " + url + ": " + failure);
       onRequestFinished(false, event);
     };
     request.onerror = errorhandler;
@@ -1150,10 +1173,10 @@ var TelemetrySendImpl = {
     let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
                     .createInstance(Ci.nsIScriptableUnicodeConverter);
     converter.charset = "UTF-8";
-    let startTime = new Date();
+    let startTime = Utils.monotonicNow();
     let utf8Payload = converter.ConvertFromUnicode(JSON.stringify(networkPayload));
     utf8Payload += converter.Finish();
-    Telemetry.getHistogramById("TELEMETRY_STRINGIFY").add(new Date() - startTime);
+    Telemetry.getHistogramById("TELEMETRY_STRINGIFY").add(Utils.monotonicNow() - startTime);
 
     // Check the size and drop pings which are too big.
     const pingSizeBytes = utf8Payload.length;
@@ -1164,15 +1187,18 @@ var TelemetrySendImpl = {
                .add(Math.floor(pingSizeBytes / 1024 / 1024));
       // We don't need to call |request.abort()| as it was not sent yet.
       this._pendingPingRequests.delete(id);
+
+      TelemetryHealthPing.recordDiscardedPing(ping.type);
       return TelemetryStorage.removePendingPing(id);
     }
 
     let payloadStream = Cc["@mozilla.org/io/string-input-stream;1"]
                         .createInstance(Ci.nsIStringInputStream);
-    startTime = new Date();
+    startTime = Utils.monotonicNow();
     payloadStream.data = gzipCompressString(utf8Payload);
-    Telemetry.getHistogramById("TELEMETRY_COMPRESS").add(new Date() - startTime);
-    startTime = new Date();
+
+    const compressedPingSizeKB = Math.floor(payloadStream.data.length / 1024);
+    Telemetry.getHistogramById("TELEMETRY_COMPRESS").add(Utils.monotonicNow() - startTime);
     request.send(payloadStream);
 
     return deferred.promise;
@@ -1216,7 +1242,7 @@ var TelemetrySendImpl = {
       if (ping && isDeletionPing(ping)) {
         return true;
       }
-      return Preferences.get(PREF_FHR_UPLOAD_ENABLED, false);
+      return Services.prefs.getBoolPref(TelemetryUtils.Preferences.FhrUploadEnabled, false);
     }
 
     // Without unified Telemetry, the Telemetry enabled pref controls ping sending.

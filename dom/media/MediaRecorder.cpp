@@ -17,7 +17,7 @@
 #include "mozilla/dom/AudioStreamTrack.h"
 #include "mozilla/dom/BlobEvent.h"
 #include "mozilla/dom/File.h"
-#include "mozilla/dom/RecordErrorEvent.h"
+#include "mozilla/dom/MediaRecorderErrorEvent.h"
 #include "mozilla/dom/VideoStreamTrack.h"
 #include "nsAutoPtr.h"
 #include "nsContentUtils.h"
@@ -109,6 +109,8 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(MediaRecorder,
                                                   DOMEventTargetHelper)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDOMStream)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAudioNode)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSecurityDomException)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mUnknownDomException)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocument)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -116,6 +118,8 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(MediaRecorder,
                                                 DOMEventTargetHelper)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDOMStream)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mAudioNode)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mSecurityDomException)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mUnknownDomException)
   tmp->UnRegisterActivityObserver();
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocument)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
@@ -177,7 +181,8 @@ class MediaRecorder::Session: public nsIObserver,
   {
   public:
     explicit PushBlobRunnable(Session* aSession)
-      : mSession(aSession)
+      : Runnable("dom::MediaRecorder::Session::PushBlobRunnable")
+      , mSession(aSession)
     { }
 
     NS_IMETHOD Run() override
@@ -207,7 +212,8 @@ class MediaRecorder::Session: public nsIObserver,
   {
   public:
     explicit EncoderErrorNotifierRunnable(Session* aSession)
-      : mSession(aSession)
+      : Runnable("dom::MediaRecorder::Session::EncoderErrorNotifierRunnable")
+      , mSession(aSession)
     { }
 
     NS_IMETHOD Run() override
@@ -234,8 +240,9 @@ class MediaRecorder::Session: public nsIObserver,
   class DispatchStartEventRunnable : public Runnable
   {
   public:
-    DispatchStartEventRunnable(Session* aSession, const nsAString & aEventName)
-      : mSession(aSession)
+    DispatchStartEventRunnable(Session* aSession, const nsAString& aEventName)
+      : Runnable("dom::MediaRecorder::Session::DispatchStartEventRunnable")
+      , mSession(aSession)
       , mEventName(aEventName)
     { }
 
@@ -264,14 +271,17 @@ class MediaRecorder::Session: public nsIObserver,
   {
   public:
     explicit ExtractRunnable(Session* aSession)
-      : mSession(aSession) {}
+      : Runnable("dom::MediaRecorder::Session::ExtractRunnable")
+      , mSession(aSession)
+    {
+    }
 
     ~ExtractRunnable()
     {}
 
     NS_IMETHOD Run() override
     {
-      MOZ_ASSERT(NS_GetCurrentThread() == mSession->mReadThread);
+      MOZ_ASSERT(mSession->mReadThread->EventTarget()->IsOnCurrentThread());
 
       LOG(LogLevel::Debug, ("Session.ExtractRunnable shutdown = %d", mSession->mEncoder->IsShutdown()));
       if (!mSession->mEncoder->IsShutdown()) {
@@ -364,10 +374,16 @@ class MediaRecorder::Session: public nsIObserver,
   {
   public:
     explicit DestroyRunnable(Session* aSession)
-      : mSession(aSession) {}
+      : Runnable("dom::MediaRecorder::Session::DestroyRunnable")
+      , mSession(aSession)
+    {
+    }
 
     explicit DestroyRunnable(already_AddRefed<Session> aSession)
-      : mSession(aSession) {}
+      : Runnable("dom::MediaRecorder::Session::DestroyRunnable")
+      , mSession(aSession)
+    {
+    }
 
     NS_IMETHOD Run() override
     {
@@ -421,7 +437,6 @@ public:
     , mIsStartEventFired(false)
     , mNeedSessionEndTask(true)
     , mSelectedVideoTrackID(TRACK_NONE)
-    , mAbstractMainThread(aRecorder->mAbstractMainThread)
   {
     MOZ_ASSERT(NS_IsMainThread());
 
@@ -448,6 +463,14 @@ public:
 
   void NotifyTrackRemoved(const RefPtr<MediaStreamTrack>& aTrack) override
   {
+    // Handle possible early removal of direct video listener
+    if (mEncoder) {
+      RefPtr<VideoStreamTrack> videoTrack = aTrack->AsVideoStreamTrack();
+      if (videoTrack) {
+        videoTrack->RemoveDirectListener(mEncoder->GetVideoSink());
+      }
+    }
+
     RefPtr<MediaInputPort> foundInputPort;
     for (RefPtr<MediaInputPort> inputPort : mInputPorts) {
       if (aTrack->IsForwardedThrough(inputPort)) {
@@ -477,7 +500,7 @@ public:
     // Create a Track Union Stream
     MediaStreamGraph* gm = mRecorder->GetSourceMediaStream()->Graph();
     TrackRate trackRate = gm->GraphRate();
-    mTrackUnionStream = gm->CreateTrackUnionStream(mAbstractMainThread);
+    mTrackUnionStream = gm->CreateTrackUnionStream();
     MOZ_ASSERT(mTrackUnionStream, "CreateTrackUnionStream failed");
 
     mTrackUnionStream->SetAutofinish(true);
@@ -609,11 +632,10 @@ private:
   // PushBlobRunnable to main thread.
   void Extract(bool aForceFlush)
   {
-    MOZ_ASSERT(NS_GetCurrentThread() == mReadThread);
+    MOZ_ASSERT(mReadThread->EventTarget()->IsOnCurrentThread());
     LOG(LogLevel::Debug, ("Session.Extract %p", this));
 
-    PROFILER_LABEL("MediaRecorder", "Session Extract",
-      js::ProfileEntry::Category::OTHER);
+    AUTO_PROFILER_LABEL("MediaRecorder::Session::Extract", OTHER);
 
     // Pull encoded media data from MediaEncoder
     nsTArray<nsTArray<uint8_t> > encodedBuf;
@@ -781,7 +803,7 @@ private:
     nsContentUtils::RegisterShutdownObserver(this);
 
     nsCOMPtr<nsIRunnable> event = new ExtractRunnable(this);
-    if (NS_FAILED(mReadThread->Dispatch(event, NS_DISPATCH_NORMAL))) {
+    if (NS_FAILED(mReadThread->EventTarget()->Dispatch(event.forget(), NS_DISPATCH_NORMAL))) {
       NS_WARNING("Failed to dispatch ExtractRunnable at beginning");
       LOG(LogLevel::Debug, ("Session.InitEncoder !ReadThread->Dispatch %p", this));
       DoSessionEndTask(NS_ERROR_ABORT);
@@ -800,8 +822,11 @@ private:
       new DispatchStartEventRunnable(this, NS_LITERAL_STRING("start")));
 
     if (NS_FAILED(rv)) {
-      NS_DispatchToMainThread(NewRunnableMethod<nsresult>(mRecorder,
-                                                          &MediaRecorder::NotifyError, rv));
+      NS_DispatchToMainThread(
+        NewRunnableMethod<nsresult>("dom::MediaRecorder::NotifyError",
+                                    mRecorder,
+                                    &MediaRecorder::NotifyError,
+                                    rv));
     }
     if (NS_FAILED(NS_DispatchToMainThread(new EncoderErrorNotifierRunnable(this)))) {
       MOZ_ASSERT(false, "NS_DispatchToMainThread EncoderErrorNotifierRunnable failed");
@@ -938,7 +963,6 @@ private:
   // Main thread only.
   bool mNeedSessionEndTask;
   TrackID mSelectedVideoTrackID;
-  const RefPtr<AbstractThread> mAbstractMainThread;
 };
 
 NS_IMPL_ISUPPORTS(MediaRecorder::Session, nsIObserver)
@@ -957,7 +981,6 @@ MediaRecorder::MediaRecorder(DOMMediaStream& aSourceMediaStream,
                              nsPIDOMWindowInner* aOwnerWindow)
   : DOMEventTargetHelper(aOwnerWindow)
   , mState(RecordingState::Inactive)
-  , mAbstractMainThread(aSourceMediaStream.AbstractMainThread())
 {
   MOZ_ASSERT(aOwnerWindow);
   MOZ_ASSERT(aOwnerWindow->IsInnerWindow());
@@ -971,7 +994,6 @@ MediaRecorder::MediaRecorder(AudioNode& aSrcAudioNode,
                              nsPIDOMWindowInner* aOwnerWindow)
   : DOMEventTargetHelper(aOwnerWindow)
   , mState(RecordingState::Inactive)
-  , mAbstractMainThread(aSrcAudioNode.AbstractMainThread())
 {
   MOZ_ASSERT(aOwnerWindow);
   MOZ_ASSERT(aOwnerWindow->IsInnerWindow());
@@ -1037,6 +1059,9 @@ void
 MediaRecorder::Start(const Optional<int32_t>& aTimeSlice, ErrorResult& aResult)
 {
   LOG(LogLevel::Debug, ("MediaRecorder.Start %p", this));
+
+  InitializeDomExceptions();
+
   if (mState != RecordingState::Inactive) {
     aResult.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
@@ -1345,7 +1370,8 @@ MediaRecorder::CreateAndDispatchBlobEvent(already_AddRefed<nsIDOMBlob>&& aBlob)
                            NS_LITERAL_STRING("dataavailable"),
                            init);
   event->SetTrusted(true);
-  return DispatchDOMEvent(nullptr, event, nullptr, nullptr);
+  bool dummy;
+  return DispatchEvent(event, &dummy);
 }
 
 void
@@ -1361,7 +1387,8 @@ MediaRecorder::DispatchSimpleEvent(const nsAString & aStr)
   event->InitEvent(aStr, false, false);
   event->SetTrusted(true);
 
-  rv = DispatchDOMEvent(nullptr, event, nullptr, nullptr);
+  bool dummy;
+  rv = DispatchEvent(event, &dummy);
   if (NS_FAILED(rv)) {
     NS_ERROR("Failed to dispatch the event!!!");
     return;
@@ -1376,33 +1403,41 @@ MediaRecorder::NotifyError(nsresult aRv)
   if (NS_FAILED(rv)) {
     return;
   }
-  nsString errorMsg;
-  switch (aRv) {
-  case NS_ERROR_DOM_SECURITY_ERR:
-    errorMsg = NS_LITERAL_STRING("SecurityError");
-    break;
-  case NS_ERROR_OUT_OF_MEMORY:
-    errorMsg = NS_LITERAL_STRING("OutOfMemoryError");
-    break;
-  default:
-    errorMsg = NS_LITERAL_STRING("GenericError");
-  }
-
-  RecordErrorEventInit init;
+  MediaRecorderErrorEventInit init;
   init.mBubbles = false;
   init.mCancelable = false;
-  init.mName = errorMsg;
+  // These DOMExceptions have been created earlier so they can contain stack
+  // traces. We attach the appropriate one here to be fired. We should have
+  // exceptions here, but defensively check.
+  switch (aRv) {
+    case NS_ERROR_DOM_SECURITY_ERR:
+      if (!mSecurityDomException) {
+        LOG(LogLevel::Debug, ("MediaRecorder.NotifyError: "
+          "mSecurityDomException was not initialized"));
+        mSecurityDomException = DOMException::Create(NS_ERROR_DOM_SECURITY_ERR);
+      }
+      init.mError = mSecurityDomException.forget();
+      break;
+    default:
+      if (!mUnknownDomException) {
+        LOG(LogLevel::Debug, ("MediaRecorder.NotifyError: "
+          "mUnknownDomException was not initialized"));
+        mUnknownDomException = DOMException::Create(NS_ERROR_DOM_UNKNOWN_ERR);
+      }
+      LOG(LogLevel::Debug, ("MediaRecorder.NotifyError: "
+        "mUnknownDomException being fired for aRv: %X", uint32_t(aRv)));
+      init.mError = mUnknownDomException.forget();
+  }
 
-  RefPtr<RecordErrorEvent> event =
-    RecordErrorEvent::Constructor(this, NS_LITERAL_STRING("error"), init);
+  RefPtr<MediaRecorderErrorEvent> event = MediaRecorderErrorEvent::Constructor(
+    this, NS_LITERAL_STRING("error"), init);
   event->SetTrusted(true);
 
-  rv = DispatchDOMEvent(nullptr, event, nullptr, nullptr);
+  bool dummy;
+  rv = DispatchEvent(event, &dummy);
   if (NS_FAILED(rv)) {
     NS_ERROR("Failed to dispatch the error event!!!");
-    return;
   }
-  return;
 }
 
 void
@@ -1438,6 +1473,13 @@ MediaRecorder::GetSourceMediaStream()
   }
   MOZ_ASSERT(mAudioNode != nullptr);
   return mPipeStream ? mPipeStream.get() : mAudioNode->GetStream();
+}
+
+void
+MediaRecorder::InitializeDomExceptions()
+{
+  mSecurityDomException = DOMException::Create(NS_ERROR_DOM_SECURITY_ERR);
+  mUnknownDomException = DOMException::Create(NS_ERROR_DOM_UNKNOWN_ERR);
 }
 
 size_t

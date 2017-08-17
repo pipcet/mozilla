@@ -33,8 +33,8 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Telemetry.h"
 #include "BatteryManager.h"
+#include "mozilla/dom/CredentialsContainer.h"
 #include "mozilla/dom/GamepadServiceTest.h"
-#include "mozilla/dom/PowerManager.h"
 #include "mozilla/dom/WakeLock.h"
 #include "mozilla/dom/power/PowerManagerService.h"
 #include "mozilla/dom/FlyWebPublishedServer.h"
@@ -46,8 +46,8 @@
 #include "mozilla/dom/TCPSocket.h"
 #include "mozilla/dom/URLSearchParams.h"
 #include "mozilla/dom/VRDisplay.h"
+#include "mozilla/dom/VRDisplayEvent.h"
 #include "mozilla/dom/VRServiceTest.h"
-#include "mozilla/dom/WebAuthentication.h"
 #include "mozilla/dom/workers/RuntimeService.h"
 #include "mozilla/Hal.h"
 #include "mozilla/ClearOnShutdown.h"
@@ -60,6 +60,7 @@
 #include "nsIPermissionManager.h"
 #include "nsMimeTypes.h"
 #include "nsNetUtil.h"
+#include "nsRFPService.h"
 #include "nsStringStream.h"
 #include "nsComponentManagerUtils.h"
 #include "nsIStringStream.h"
@@ -201,10 +202,9 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mNotification)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mBatteryManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mBatteryPromise)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPowerManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mConnection)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mStorageManager)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAuthentication)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCredentials)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMediaDevices)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTimeManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mServiceWorkerContainer)
@@ -253,11 +253,6 @@ Navigator::Invalidate()
   }
 
   mBatteryPromise = nullptr;
-
-  if (mPowerManager) {
-    mPowerManager->Shutdown();
-    mPowerManager = nullptr;
-  }
 
   if (mConnection) {
     mConnection->Shutdown();
@@ -377,8 +372,8 @@ Navigator::GetAcceptLanguages(nsTArray<nsString>& aLanguages)
   aLanguages.Clear();
 
   // E.g. "de-de, en-us,en".
-  const nsAdoptingString& acceptLang =
-    Preferences::GetLocalizedString("intl.accept_languages");
+  nsAutoString acceptLang;
+  Preferences::GetLocalizedString("intl.accept_languages", acceptLang);
 
   // Split values on commas.
   nsCharSeparatedTokenizer langTokenizer(acceptLang, ',');
@@ -399,7 +394,7 @@ Navigator::GetAcceptLanguages(nsTArray<nsString>& aLanguages)
       int32_t pos = 0;
       bool first = true;
       while (localeTokenizer.hasMoreTokens()) {
-        const nsSubstring& code = localeTokenizer.nextToken();
+        const nsAString& code = localeTokenizer.nextToken();
 
         if (code.Length() == 2 && !first) {
           nsAutoString upper(code);
@@ -464,10 +459,16 @@ Navigator::GetOscpu(nsAString& aOSCPU, CallerType aCallerType,
                     ErrorResult& aRv) const
 {
   if (aCallerType != CallerType::System) {
-    const nsAdoptingString& override =
-      Preferences::GetString("general.oscpu.override");
+    // If fingerprinting resistance is on, we will spoof this value. See nsRFPService.h
+    // for details about spoofed values.
+    if (nsContentUtils::ShouldResistFingerprinting()) {
+      aOSCPU.AssignLiteral(SPOOFED_OSCPU);
+      return;
+    }
 
-    if (override) {
+    nsAutoString override;
+    nsresult rv = Preferences::GetString("general.oscpu.override", override);
+    if (NS_SUCCEEDED(rv)) {
       aOSCPU = override;
       return;
     }
@@ -516,7 +517,7 @@ NS_IMETHODIMP
 Navigator::GetProductSub(nsAString& aProductSub)
 {
   // Legacy build ID hardcoded for backward compatibility (bug 776376)
-  aProductSub.AssignLiteral("20100101");
+  aProductSub.AssignLiteral(LEGACY_BUILD_ID);
   return NS_OK;
 }
 
@@ -638,10 +639,15 @@ Navigator::GetBuildID(nsAString& aBuildID, CallerType aCallerType,
                       ErrorResult& aRv) const
 {
   if (aCallerType != CallerType::System) {
-    const nsAdoptingString& override =
-      Preferences::GetString("general.buildID.override");
-
-    if (override) {
+    // If fingerprinting resistance is on, we will spoof this value. See nsRFPService.h
+    // for details about spoofed values.
+    if (nsContentUtils::ShouldResistFingerprinting()) {
+      aBuildID.AssignLiteral(LEGACY_BUILD_ID);
+      return;
+    }
+    nsAutoString override;
+    nsresult rv = Preferences::GetString("general.buildID.override", override);
+    if (NS_SUCCEEDED(rv)) {
       aBuildID = override;
       return;
     }
@@ -689,7 +695,8 @@ Navigator::JavaEnabled(CallerType aCallerType, ErrorResult& aRv)
   Telemetry::AutoTimer<Telemetry::CHECK_JAVA_ENABLED> telemetryTimer;
 
   // Return true if we have a handler for the java mime
-  nsAdoptingString javaMIME = Preferences::GetString("plugin.java.mime");
+  nsAutoString javaMIME;
+  Preferences::GetString("plugin.java.mime", javaMIME);
   NS_ENSURE_TRUE(!javaMIME.IsEmpty(), false);
 
   if (!mMimeTypes) {
@@ -769,12 +776,6 @@ StaticRefPtr<VibrateWindowListener> gVibrateWindowListener;
 
 static bool
 MayVibrate(nsIDocument* doc) {
-#if MOZ_WIDGET_GONK
-  if (XRE_IsParentProcess()) {
-    return true; // The system app can always vibrate
-  }
-#endif // MOZ_WIDGET_GONK
-
   // Hidden documents cannot start or stop a vibration.
   return (doc && !doc->Hidden());
 }
@@ -1409,24 +1410,6 @@ Navigator::PublishServer(const nsAString& aName,
   return domPromise.forget();
 }
 
-PowerManager*
-Navigator::GetMozPower(ErrorResult& aRv)
-{
-  if (!mPowerManager) {
-    if (!mWindow) {
-      aRv.Throw(NS_ERROR_UNEXPECTED);
-      return nullptr;
-    }
-    mPowerManager = PowerManager::CreateInstance(mWindow);
-    if (!mPowerManager) {
-      // We failed to get the power manager service?
-      aRv.Throw(NS_ERROR_UNEXPECTED);
-    }
-  }
-
-  return mPowerManager;
-}
-
 already_AddRefed<WakeLock>
 Navigator::RequestWakeLock(const nsAString &aTopic, ErrorResult& aRv)
 {
@@ -1565,6 +1548,27 @@ Navigator::RequestVRServiceTest()
     mVRServiceTest = VRServiceTest::CreateTestService(mWindow);
   }
   return mVRServiceTest;
+}
+
+bool
+Navigator::IsWebVRContentDetected() const
+{
+  nsGlobalWindow* win = nsGlobalWindow::Cast(mWindow);
+  return win->IsVRContentDetected();
+}
+
+bool
+Navigator::IsWebVRContentPresenting() const
+{
+  nsGlobalWindow* win = nsGlobalWindow::Cast(mWindow);
+  return win->IsVRContentPresenting();
+}
+
+void
+Navigator::RequestVRPresentation(VRDisplay& aDisplay)
+{
+  nsGlobalWindow* win = nsGlobalWindow::Cast(mWindow);
+  win->DispatchVRDisplayActivate(aDisplay.DisplayId(), VRDisplayEventReason::Requested);
 }
 
 //*****************************************************************************
@@ -1747,10 +1751,17 @@ Navigator::GetPlatform(nsAString& aPlatform, bool aUsePrefOverriddenValue)
   MOZ_ASSERT(NS_IsMainThread());
 
   if (aUsePrefOverriddenValue) {
-    const nsAdoptingString& override =
-      mozilla::Preferences::GetString("general.platform.override");
+    // If fingerprinting resistance is on, we will spoof this value. See nsRFPService.h
+    // for details about spoofed values.
+    if (nsContentUtils::ShouldResistFingerprinting()) {
+      aPlatform.AssignLiteral(SPOOFED_PLATFORM);
+      return NS_OK;
+    }
+    nsAutoString override;
+    nsresult rv =
+      mozilla::Preferences::GetString("general.platform.override", override);
 
-    if (override) {
+    if (NS_SUCCEEDED(rv)) {
       aPlatform = override;
       return NS_OK;
     }
@@ -1792,10 +1803,17 @@ Navigator::GetAppVersion(nsAString& aAppVersion, bool aUsePrefOverriddenValue)
   MOZ_ASSERT(NS_IsMainThread());
 
   if (aUsePrefOverriddenValue) {
-    const nsAdoptingString& override =
-      mozilla::Preferences::GetString("general.appversion.override");
+    // If fingerprinting resistance is on, we will spoof this value. See nsRFPService.h
+    // for details about spoofed values.
+    if (nsContentUtils::ShouldResistFingerprinting()) {
+      aAppVersion.AssignLiteral(SPOOFED_APPVERSION);
+      return NS_OK;
+    }
+    nsAutoString override;
+    nsresult rv =
+      mozilla::Preferences::GetString("general.appversion.override", override);
 
-    if (override) {
+    if (NS_SUCCEEDED(rv)) {
       aAppVersion = override;
       return NS_OK;
     }
@@ -1829,10 +1847,18 @@ Navigator::AppName(nsAString& aAppName, bool aUsePrefOverriddenValue)
   MOZ_ASSERT(NS_IsMainThread());
 
   if (aUsePrefOverriddenValue) {
-    const nsAdoptingString& override =
-      mozilla::Preferences::GetString("general.appname.override");
+    // If fingerprinting resistance is on, we will spoof this value. See nsRFPService.h
+    // for details about spoofed values.
+    if (nsContentUtils::ShouldResistFingerprinting()) {
+      aAppName.AssignLiteral(SPOOFED_APPNAME);
+      return;
+    }
 
-    if (override) {
+    nsAutoString override;
+    nsresult rv =
+      mozilla::Preferences::GetString("general.appname.override", override);
+
+    if (NS_SUCCEEDED(rv)) {
       aAppName = override;
       return;
     }
@@ -1854,11 +1880,15 @@ Navigator::GetUserAgent(nsPIDOMWindowInner* aWindow,
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  if (!aIsCallerChrome) {
-    const nsAdoptingString& override =
-      mozilla::Preferences::GetString("general.useragent.override");
+  // We will skip the override and pass to httpHandler to get spoofed userAgent
+  // when 'privacy.resistFingerprinting' is true.
+  if (!aIsCallerChrome &&
+      !nsContentUtils::ShouldResistFingerprinting()) {
+    nsAutoString override;
+    nsresult rv =
+      mozilla::Preferences::GetString("general.useragent.override", override);
 
-    if (override) {
+    if (NS_SUCCEEDED(rv)) {
       aUserAgent = override;
       return NS_OK;
     }
@@ -1879,7 +1909,11 @@ Navigator::GetUserAgent(nsPIDOMWindowInner* aWindow,
 
   CopyASCIItoUTF16(ua, aUserAgent);
 
-  if (!aWindow) {
+  // When the caller is content, we will always return spoofed userAgent and
+  // ignore the User-Agent header from the document channel when
+  // 'privacy.resistFingerprinting' is true.
+  if (!aWindow ||
+      (nsContentUtils::ShouldResistFingerprinting() && !aIsCallerChrome)) {
     return NS_OK;
   }
 
@@ -1979,13 +2013,13 @@ Navigator::GetPresentation(ErrorResult& aRv)
   return mPresentation;
 }
 
-WebAuthentication*
-Navigator::Authentication()
+CredentialsContainer*
+Navigator::Credentials()
 {
-  if (!mAuthentication) {
-    mAuthentication = new WebAuthentication(GetWindow());
+  if (!mCredentials) {
+    mCredentials = new CredentialsContainer(GetWindow());
   }
-  return mAuthentication;
+  return mCredentials;
 }
 
 } // namespace dom

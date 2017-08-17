@@ -12,6 +12,7 @@
 #include "mozilla/UniquePtr.h"
 #include "nsFrame.h"
 #include "nsFrameSelection.h"
+#include "nsGenericDOMDataNode.h"
 #include "nsSplittableFrame.h"
 #include "nsLineBox.h"
 #include "gfxSkipChars.h"
@@ -69,7 +70,6 @@ public:
 
   // nsIFrame
   void BuildDisplayList(nsDisplayListBuilder* aBuilder,
-                        const nsRect& aDirtyRect,
                         const nsDisplayListSet& aLists) override;
 
   void Init(nsIContent* aContent,
@@ -96,7 +96,10 @@ public:
       aNextContinuation->RemoveStateBits(NS_FRAME_IS_FLUID_CONTINUATION);
     // Setting a non-fluid continuation might affect our flow length (they're
     // quite rare so we assume it always does) so we delete our cached value:
-    GetContent()->DeleteProperty(nsGkAtoms::flowlength);
+    if (GetContent()->HasFlag(NS_HAS_FLOWLENGTH_PROPERTY)) {
+      GetContent()->DeleteProperty(nsGkAtoms::flowlength);
+      GetContent()->UnsetFlags(NS_HAS_FLOWLENGTH_PROPERTY);
+    }
   }
   nsIFrame* GetNextInFlowVirtual() const override { return GetNextInFlow(); }
   nsTextFrame* GetNextInFlow() const
@@ -119,7 +122,10 @@ public:
         !mNextContinuation->HasAnyStateBits(NS_FRAME_IS_FLUID_CONTINUATION)) {
       // Changing from non-fluid to fluid continuation might affect our flow
       // length, so we delete our cached value:
-      GetContent()->DeleteProperty(nsGkAtoms::flowlength);
+      if (GetContent()->HasFlag(NS_HAS_FLOWLENGTH_PROPERTY)) {
+        GetContent()->DeleteProperty(nsGkAtoms::flowlength);
+        GetContent()->UnsetFlags(NS_HAS_FLOWLENGTH_PROPERTY);
+      }
     }
     if (aNextInFlow) {
       aNextInFlow->AddStateBits(NS_FRAME_IS_FLUID_CONTINUATION);
@@ -188,9 +194,11 @@ public:
 
   FrameSearchResult PeekOffsetNoAmount(bool aForward,
                                        int32_t* aOffset) override;
-  FrameSearchResult PeekOffsetCharacter(bool aForward,
-                                        int32_t* aOffset,
-                                        bool aRespectClusters = true) override;
+  FrameSearchResult
+  PeekOffsetCharacter(bool aForward,
+                      int32_t* aOffset,
+                      PeekOffsetCharacterOptions aOptions =
+                        PeekOffsetCharacterOptions()) override;
   FrameSearchResult PeekOffsetWord(bool aForward,
                                    bool aWordSelectEatSpace,
                                    bool aIsKeyboardSelect,
@@ -265,13 +273,13 @@ public:
   void SetFontSizeInflation(float aInflation);
 
   void MarkIntrinsicISizesDirty() override;
-  nscoord GetMinISize(nsRenderingContext* aRenderingContext) override;
-  nscoord GetPrefISize(nsRenderingContext* aRenderingContext) override;
-  void AddInlineMinISize(nsRenderingContext* aRenderingContext,
+  nscoord GetMinISize(gfxContext* aRenderingContext) override;
+  nscoord GetPrefISize(gfxContext* aRenderingContext) override;
+  void AddInlineMinISize(gfxContext* aRenderingContext,
                          InlineMinISizeData* aData) override;
-  void AddInlinePrefISize(nsRenderingContext* aRenderingContext,
+  void AddInlinePrefISize(gfxContext* aRenderingContext,
                           InlinePrefISizeData* aData) override;
-  mozilla::LogicalSize ComputeSize(nsRenderingContext* aRenderingContext,
+  mozilla::LogicalSize ComputeSize(gfxContext* aRenderingContext,
                                    mozilla::WritingMode aWritingMode,
                                    const mozilla::LogicalSize& aCBSize,
                                    nscoord aAvailableISize,
@@ -280,7 +288,7 @@ public:
                                    const mozilla::LogicalSize& aPadding,
                                    ComputeSizeFlags aFlags) override;
   nsRect ComputeTightBounds(DrawTarget* aDrawTarget) const override;
-  nsresult GetPrefWidthTightBounds(nsRenderingContext* aContext,
+  nsresult GetPrefWidthTightBounds(gfxContext* aContext,
                                    nscoord* aX,
                                    nscoord* aXMost) override;
   void Reflow(nsPresContext* aPresContext,
@@ -320,10 +328,10 @@ public:
     eNotInflated
   };
 
-  void AddInlineMinISizeForFlow(nsRenderingContext* aRenderingContext,
+  void AddInlineMinISizeForFlow(gfxContext* aRenderingContext,
                                 nsIFrame::InlineMinISizeData* aData,
                                 TextRunType aTextRunType);
-  void AddInlinePrefISizeForFlow(nsRenderingContext* aRenderingContext,
+  void AddInlinePrefISizeForFlow(gfxContext* aRenderingContext,
                                  InlinePrefISizeData* aData,
                                  TextRunType aTextRunType);
 

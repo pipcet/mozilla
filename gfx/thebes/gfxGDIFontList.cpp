@@ -140,7 +140,7 @@ GDIFontEntry::GDIFontEntry(const nsAString& aFaceName,
 nsresult
 GDIFontEntry::ReadCMAP(FontInfoData *aFontInfoData)
 {
-    PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
+    AUTO_PROFILER_LABEL("GDIFontEntry::ReadCMAP", OTHER);
 
     // attempt this once, if errors occur leave a blank cmap
     if (mCharacterMap) {
@@ -912,6 +912,7 @@ gfxGDIFontList::MakePlatformFont(const nsAString& aFontName,
 bool
 gfxGDIFontList::FindAndAddFamilies(const nsAString& aFamily,
                                    nsTArray<gfxFontFamily*>* aOutput,
+                                   bool aDeferOtherFamilyNamesLoading,
                                    gfxFontStyle* aStyle,
                                    gfxFloat aDevToCssSize)
 {
@@ -928,7 +929,10 @@ gfxGDIFontList::FindAndAddFamilies(const nsAString& aFamily,
         return false;
     }
 
-    return gfxPlatformFontList::FindAndAddFamilies(aFamily, aOutput, aStyle,
+    return gfxPlatformFontList::FindAndAddFamilies(aFamily,
+                                                   aOutput,
+                                                   aDeferOtherFamilyNamesLoading,
+                                                   aStyle,
                                                    aDevToCssSize);
 }
 

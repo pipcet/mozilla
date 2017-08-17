@@ -23,7 +23,6 @@
 #include "mozilla/EffectSet.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/ServoBindings.h"
-#include "mozilla/ServoComputedValuesWithParent.h"
 #include "mozilla/StyleAnimationValue.h"
 #include "mozilla/dom/DocumentTimeline.h"
 #include "mozilla/dom/Element.h"
@@ -71,7 +70,7 @@ ElementPropertyTransition::CurrentValuePortion() const
   // case, we override the fill mode to 'both' to ensure the progress
   // is never null.
   TimingParams timingToUse = SpecifiedTiming();
-  timingToUse.mFill = dom::FillMode::Both;
+  timingToUse.SetFill(dom::FillMode::Both);
   ComputedTiming computedTiming = GetComputedTiming(&timingToUse);
 
   MOZ_ASSERT(!computedTiming.mProgress.IsNull(),
@@ -227,10 +226,10 @@ CSSTransition::QueueEvents(StickyTimeDuration aActiveTime)
 
     currentPhase = static_cast<TransitionPhase>(computedTiming.mPhase);
     intervalStartTime =
-      std::max(std::min(StickyTimeDuration(-mEffect->SpecifiedTiming().mDelay),
+      std::max(std::min(StickyTimeDuration(-mEffect->SpecifiedTiming().Delay()),
                         computedTiming.mActiveDuration), zeroDuration);
     intervalEndTime =
-      std::max(std::min((EffectEnd() - mEffect->SpecifiedTiming().mDelay),
+      std::max(std::min((EffectEnd() - mEffect->SpecifiedTiming().Delay()),
                         computedTiming.mActiveDuration), zeroDuration);
   }
 
@@ -435,7 +434,7 @@ NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(nsTransitionManager, Release)
 
 static inline bool
 ExtractNonDiscreteComputedValue(nsCSSPropertyID aProperty,
-                                nsStyleContext* aStyleContext,
+                                GeckoStyleContext* aStyleContext,
                                 AnimationValue& aAnimationValue)
 {
   return (nsCSSProps::kAnimTypeTable[aProperty] != eStyleAnimType_Discrete ||
@@ -446,8 +445,7 @@ ExtractNonDiscreteComputedValue(nsCSSPropertyID aProperty,
 
 static inline bool
 ExtractNonDiscreteComputedValue(nsCSSPropertyID aProperty,
-                                const ServoComputedValuesWithParent&
-                                  aComputedStyle,
+                                const ServoStyleContext* aComputedStyle,
                                 AnimationValue& aAnimationValue)
 {
   if (Servo_Property_IsDiscreteAnimatable(aProperty) &&
@@ -456,17 +454,17 @@ ExtractNonDiscreteComputedValue(nsCSSPropertyID aProperty,
   }
 
   aAnimationValue.mServo =
-    Servo_ComputedValues_ExtractAnimationValue(aComputedStyle.mCurrentStyle,
+    Servo_ComputedValues_ExtractAnimationValue(aComputedStyle,
                                                aProperty).Consume();
   return !!aAnimationValue.mServo;
 }
 
 void
 nsTransitionManager::StyleContextChanged(dom::Element *aElement,
-                                         nsStyleContext *aOldStyleContext,
-                                         RefPtr<nsStyleContext>* aNewStyleContext /* inout */)
+                                         GeckoStyleContext* aOldStyleContext,
+                                         RefPtr<GeckoStyleContext>* aNewStyleContext /* inout */)
 {
-  nsStyleContext* newStyleContext = *aNewStyleContext;
+  GeckoStyleContext* newStyleContext = *aNewStyleContext;
 
   NS_PRECONDITION(aOldStyleContext->GetPseudo() == newStyleContext->GetPseudo(),
                   "pseudo type mismatch");
@@ -568,7 +566,7 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
   // style", which is the new style without any data from transitions,
   // but still inheriting from data that contains transitions that are
   // not stopping or starting right now.
-  RefPtr<nsStyleContext> afterChangeStyle;
+  RefPtr<GeckoStyleContext> afterChangeStyle;
   if (collection) {
     MOZ_ASSERT(mPresContext->StyleSet()->IsGecko(),
                "ServoStyleSets should not use nsTransitionManager "
@@ -591,8 +589,8 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
                                      aElement,
                                      afterChangeStyle->GetPseudoType(),
                                      collection,
-                                     aOldStyleContext,
-                                     afterChangeStyle.get());
+                                     aOldStyleContext->AsGecko(),
+                                     afterChangeStyle->AsGecko());
   }
 
   MOZ_ASSERT(!startedAny || collection,
@@ -626,8 +624,8 @@ bool
 nsTransitionManager::UpdateTransitions(
   dom::Element *aElement,
   CSSPseudoElementType aPseudoType,
-  const ServoComputedValuesWithParent& aOldStyle,
-  const ServoComputedValuesWithParent& aNewStyle)
+  const ServoStyleContext* aOldStyle,
+  const ServoStyleContext* aNewStyle)
 {
   if (!mPresContext->IsDynamic()) {
     // For print or print preview, ignore transitions.
@@ -636,7 +634,8 @@ nsTransitionManager::UpdateTransitions(
 
   CSSTransitionCollection* collection =
     CSSTransitionCollection::GetAnimationCollection(aElement, aPseudoType);
-  const nsStyleDisplay *disp = Servo_GetStyleDisplay(aNewStyle.mCurrentStyle);
+  const nsStyleDisplay *disp =
+      aNewStyle->ComputedData()->GetStyleDisplay();
   return DoUpdateTransitions(disp,
                              aElement, aPseudoType,
                              collection,
@@ -793,18 +792,21 @@ AppendKeyframe(double aOffset,
 {
   Keyframe& frame = *aKeyframes.AppendElement();
   frame.mOffset.emplace(aOffset);
-  PropertyValuePair& pv = *frame.mPropertyValues.AppendElement();
-  pv.mProperty = aProperty;
 
   if (aValue.mServo) {
-    pv.mServoDeclarationBlock =
+    RefPtr<RawServoDeclarationBlock> decl =
       Servo_AnimationValue_Uncompute(aValue.mServo).Consume();
+    frame.mPropertyValues.AppendElement(
+      Move(PropertyValuePair(aProperty, Move(decl))));
   } else {
+    nsCSSValue propertyValue;
     DebugOnly<bool> uncomputeResult =
       StyleAnimationValue::UncomputeValue(aProperty, Move(aValue.mGecko),
-                                          pv.mValue);
+                                          propertyValue);
     MOZ_ASSERT(uncomputeResult,
                "Unable to get specified value from computed value");
+    frame.mPropertyValues.AppendElement(
+      Move(PropertyValuePair(aProperty, Move(propertyValue))));
   }
   return frame;
 }
@@ -830,12 +832,13 @@ GetTransitionKeyframes(nsCSSPropertyID aProperty,
 }
 
 static bool
-IsAnimatable(nsCSSPropertyID aProperty, bool aIsServo)
+IsTransitionable(nsCSSPropertyID aProperty, bool aIsServo)
 {
   if (aIsServo) {
-    return Servo_Property_IsAnimatable(aProperty);
+    return Servo_Property_IsTransitionable(aProperty);
   }
 
+  // FIXME: This should also exclude discretely-animated properties.
   return nsCSSProps::kAnimTypeTable[aProperty] != eStyleAnimType_None;
 }
 
@@ -873,7 +876,7 @@ nsTransitionManager::ConsiderInitiatingTransition(
     return;
   }
 
-  if (!IsAnimatable(aProperty, aElement->IsStyledByServo())) {
+  if (!IsTransitionable(aProperty, aElement->IsStyledByServo())) {
     return;
   }
 
@@ -1109,7 +1112,7 @@ nsTransitionManager::ConsiderInitiatingTransition(
 void
 nsTransitionManager::PruneCompletedTransitions(mozilla::dom::Element* aElement,
                                                CSSPseudoElementType aPseudoType,
-                                               nsStyleContext* aNewStyleContext)
+                                               GeckoStyleContext* aNewStyleContext)
 {
   MOZ_ASSERT(!aElement->IsGeneratedContentContainerForBefore() &&
              !aElement->IsGeneratedContentContainerForAfter());

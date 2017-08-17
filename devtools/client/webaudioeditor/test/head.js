@@ -13,7 +13,9 @@ const { PromiseTestUtils } = Cu.import("resource://testing-common/PromiseTestUti
 PromiseTestUtils.whitelistRejectionsGlobally(/Component not initialized/);
 PromiseTestUtils.whitelistRejectionsGlobally(/Connection closed/);
 PromiseTestUtils.whitelistRejectionsGlobally(/destroy/);
+PromiseTestUtils.whitelistRejectionsGlobally(/File closed/);
 PromiseTestUtils.whitelistRejectionsGlobally(/is no longer, usable/);
+PromiseTestUtils.whitelistRejectionsGlobally(/NS_ERROR_FAILURE/);
 PromiseTestUtils.whitelistRejectionsGlobally(/this\._urls is null/);
 PromiseTestUtils.whitelistRejectionsGlobally(/this\.tabTarget is null/);
 PromiseTestUtils.whitelistRejectionsGlobally(/this\.toolbox is null/);
@@ -361,7 +363,7 @@ function mouseOver(win, element) {
 
 function command(button) {
   let ev = button.ownerDocument.createEvent("XULCommandEvent");
-  ev.initCommandEvent("command", true, true, button.ownerDocument.defaultView, 0, false, false, false, false, null);
+  ev.initCommandEvent("command", true, true, button.ownerDocument.defaultView, 0, false, false, false, false, null, 0);
   button.dispatchEvent(ev);
 }
 

@@ -9,7 +9,7 @@
 #include "TextEditUtils.h"
 #include "gfxFontUtils.h"
 #include "mozilla/Assertions.h"
-#include "mozilla/EditorUtils.h" // AutoEditBatch, AutoRules
+#include "mozilla/EditorUtils.h" // AutoPlaceholderBatch, AutoRules
 #include "mozilla/HTMLEditor.h"
 #include "mozilla/mozalloc.h"
 #include "mozilla/Preferences.h"
@@ -76,18 +76,6 @@ TextEditor::TextEditor()
   // check the "single line editor newline handling"
   // and "caret behaviour in selection" prefs
   GetDefaultEditorPrefs(mNewlineHandling, mCaretStyle);
-}
-
-HTMLEditor*
-TextEditor::AsHTMLEditor()
-{
-  return nullptr;
-}
-
-const HTMLEditor*
-TextEditor::AsHTMLEditor() const
-{
-  return nullptr;
 }
 
 TextEditor::~TextEditor()
@@ -412,7 +400,7 @@ TextEditor::HandleKeyPressEvent(WidgetKeyboardEvent* aKeyboardEvent)
 NS_IMETHODIMP
 TextEditor::TypedText(const nsAString& aString, ETypingAction aAction)
 {
-  AutoPlaceHolderBatch batch(this, nsGkAtoms::TypingTxnName);
+  AutoPlaceholderBatch batch(this, nsGkAtoms::TypingTxnName);
 
   switch (aAction) {
     case eTypedText:
@@ -608,7 +596,7 @@ TextEditor::DeleteSelection(EDirection aAction,
   nsCOMPtr<nsIEditRules> rules(mRules);
 
   // delete placeholder txns merge.
-  AutoPlaceHolderBatch batch(this, nsGkAtoms::DeleteTxnName);
+  AutoPlaceholderBatch batch(this, nsGkAtoms::DeleteTxnName);
   AutoRules beginRulesSniffing(this, EditAction::deleteSelection, aAction);
 
   // pre-process
@@ -661,7 +649,7 @@ TextEditor::InsertText(const nsAString& aStringToInsert)
   if (ShouldHandleIMEComposition()) {
     opID = EditAction::insertIMEText;
   }
-  AutoPlaceHolderBatch batch(this, nullptr);
+  AutoPlaceholderBatch batch(this, nullptr);
   AutoRules beginRulesSniffing(this, opID, nsIEditor::eNext);
 
   // pre-process
@@ -699,7 +687,7 @@ TextEditor::InsertLineBreak()
   // Protect the edit rules object from dying
   nsCOMPtr<nsIEditRules> rules(mRules);
 
-  AutoEditBatch beginBatching(this);
+  AutoPlaceholderBatch beginBatching(this);
   AutoRules beginRulesSniffing(this, EditAction::insertBreak, nsIEditor::eNext);
 
   // pre-process
@@ -714,7 +702,7 @@ TextEditor::InsertLineBreak()
   if (!cancel && !handled) {
     // get the (collapsed) selection location
     NS_ENSURE_STATE(selection->GetRangeAt(0));
-    nsCOMPtr<nsINode> selNode = selection->GetRangeAt(0)->GetStartParent();
+    nsCOMPtr<nsINode> selNode = selection->GetRangeAt(0)->GetStartContainer();
     int32_t selOffset = selection->GetRangeAt(0)->StartOffset();
     NS_ENSURE_STATE(selNode);
 
@@ -728,8 +716,8 @@ TextEditor::InsertLineBreak()
     nsCOMPtr<nsIDocument> doc = GetDocument();
     NS_ENSURE_TRUE(doc, NS_ERROR_NOT_INITIALIZED);
 
-    // don't spaz my selection in subtransactions
-    AutoTransactionsConserveSelection dontSpazMySelection(this);
+    // don't change my selection in subtransactions
+    AutoTransactionsConserveSelection dontChangeMySelection(this);
 
     // insert a linefeed character
     rv = InsertTextImpl(NS_LITERAL_STRING("\n"), address_of(selNode),
@@ -777,7 +765,7 @@ TextEditor::SetText(const nsAString& aString)
   nsCOMPtr<nsIEditRules> rules(mRules);
 
   // delete placeholder txns merge.
-  AutoPlaceHolderBatch batch(this, nullptr);
+  AutoPlaceholderBatch batch(this, nullptr);
   AutoRules beginRulesSniffing(this, EditAction::setText, nsIEditor::eNext);
 
   // pre-process
@@ -872,19 +860,19 @@ TextEditor::UpdateIMEComposition(WidgetCompositionEvent* aCompsitionChangeEvent)
   //       of NotifiyEditorObservers(eNotifyEditorObserversOfEnd) or
   //       NotifiyEditorObservers(eNotifyEditorObserversOfCancel) which notifies
   //       TextComposition of a selection change.
-  MOZ_ASSERT(!mPlaceHolderBatch,
+  MOZ_ASSERT(!mPlaceholderBatch,
     "UpdateIMEComposition() must be called without place holder batch");
   TextComposition::CompositionChangeEventHandlingMarker
     compositionChangeEventHandlingMarker(mComposition, aCompsitionChangeEvent);
-
-  NotifyEditorObservers(eNotifyEditorObserversOfBefore);
 
   RefPtr<nsCaret> caretP = ps->GetCaret();
 
   nsresult rv;
   {
-    AutoPlaceHolderBatch batch(this, nsGkAtoms::IMETxnName);
+    AutoPlaceholderBatch batch(this, nsGkAtoms::IMETxnName);
 
+    MOZ_ASSERT(mIsInEditAction,
+      "AutoPlaceholderBatch should've notified the observes of before-edit");
     rv = InsertText(aCompsitionChangeEvent->mData);
 
     if (caretP) {
@@ -970,8 +958,12 @@ TextEditor::SetMaxTextLength(int32_t aMaxTextLength)
 NS_IMETHODIMP
 TextEditor::GetMaxTextLength(int32_t* aMaxTextLength)
 {
-  NS_ENSURE_TRUE(aMaxTextLength, NS_ERROR_INVALID_POINTER);
-  *aMaxTextLength = mMaxTextLength;
+  // NOTE: If you need to override this method, you need to make
+  //       MaxTextLength() virtual.
+  if (NS_WARN_IF(!aMaxTextLength)) {
+    return NS_ERROR_INVALID_POINTER;
+  }
+  *aMaxTextLength = MaxTextLength();
   return NS_OK;
 }
 
@@ -1088,7 +1080,7 @@ TextEditor::Undo(uint32_t aCount)
 
   AutoUpdateViewBatch beginViewBatching(this);
 
-  ForceCompositionEnd();
+  CommitComposition();
 
   NotifyEditorObservers(eNotifyEditorObserversOfBefore);
 
@@ -1116,7 +1108,7 @@ TextEditor::Redo(uint32_t aCount)
 
   AutoUpdateViewBatch beginViewBatching(this);
 
-  ForceCompositionEnd();
+  CommitComposition();
 
   NotifyEditorObservers(eNotifyEditorObserversOfBefore);
 
@@ -1158,7 +1150,7 @@ TextEditor::FireClipboardEvent(EventMessage aEventMessage,
                                bool* aActionTaken)
 {
   if (aEventMessage == ePaste) {
-    ForceCompositionEnd();
+    CommitComposition();
   }
 
   nsCOMPtr<nsIPresShell> presShell = GetPresShell();
@@ -1313,6 +1305,7 @@ TextEditor::OutputToString(const nsAString& aFormatType,
   nsString resultString;
   TextRulesInfo ruleInfo(EditAction::outputText);
   ruleInfo.outString = &resultString;
+  ruleInfo.flags = aFlags;
   // XXX Struct should store a nsAReadable*
   nsAutoString str(aFormatType);
   ruleInfo.outputFormat = &str;
@@ -1330,7 +1323,7 @@ TextEditor::OutputToString(const nsAString& aFormatType,
   nsAutoCString charsetStr;
   rv = GetDocumentCharacterSet(charsetStr);
   if (NS_FAILED(rv) || charsetStr.IsEmpty()) {
-    charsetStr.AssignLiteral("ISO-8859-1");
+    charsetStr.AssignLiteral("windows-1252");
   }
 
   nsCOMPtr<nsIDocumentEncoder> encoder =
@@ -1411,7 +1404,7 @@ TextEditor::PasteAsQuotation(int32_t aSelectionType)
       if (textDataObj && len > 0) {
         nsAutoString stuffToPaste;
         textDataObj->GetData ( stuffToPaste );
-        AutoEditBatch beginBatching(this);
+        AutoPlaceholderBatch beginBatching(this);
         rv = InsertAsQuotation(stuffToPaste, 0);
       }
     }
@@ -1442,7 +1435,7 @@ TextEditor::InsertAsQuotation(const nsAString& aQuotedText,
   RefPtr<Selection> selection = GetSelection();
   NS_ENSURE_TRUE(selection, NS_ERROR_NULL_POINTER);
 
-  AutoEditBatch beginBatching(this);
+  AutoPlaceholderBatch beginBatching(this);
   AutoRules beginRulesSniffing(this, EditAction::insertText, nsIEditor::eNext);
 
   // give rules a chance to handle or cancel

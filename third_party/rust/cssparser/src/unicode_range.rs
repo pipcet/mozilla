@@ -4,7 +4,7 @@
 
 //! https://drafts.csswg.org/css-syntax/#urange
 
-use {Parser, ToCss};
+use {Parser, ToCss, BasicParseError};
 use std::char;
 use std::cmp;
 use std::fmt;
@@ -24,7 +24,7 @@ pub struct UnicodeRange {
 
 impl UnicodeRange {
     /// https://drafts.csswg.org/css-syntax/#urange-syntax
-    pub fn parse(input: &mut Parser) -> Result<Self, ()> {
+    pub fn parse<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Self, BasicParseError<'i>> {
         // <urange> =
         //   u '+' <ident-token> '?'* |
         //   u <dimension-token> '?'* |
@@ -42,38 +42,41 @@ impl UnicodeRange {
         // but oh well…
         let concatenated_tokens = input.slice_from(after_u);
 
-        let range = parse_concatenated(concatenated_tokens.as_bytes())?;
+        let range = match parse_concatenated(concatenated_tokens.as_bytes()) {
+            Ok(range) => range,
+            Err(()) => return Err(BasicParseError::UnexpectedToken(Token::Ident(concatenated_tokens.into()))),
+        };
         if range.end > char::MAX as u32 || range.start > range.end {
-            Err(())
+            Err(BasicParseError::UnexpectedToken(Token::Ident(concatenated_tokens.into())))
         } else {
             Ok(range)
         }
     }
 }
 
-fn parse_tokens(input: &mut Parser) -> Result<(), ()> {
-    match input.next_including_whitespace()? {
+fn parse_tokens<'i, 't>(input: &mut Parser<'i, 't>) -> Result<(), BasicParseError<'i>> {
+    match input.next_including_whitespace()?.clone() {
         Token::Delim('+') => {
-            match input.next_including_whitespace()? {
+            match *input.next_including_whitespace()? {
                 Token::Ident(_) => {}
                 Token::Delim('?') => {}
-                _ => return Err(())
+                ref t => return Err(BasicParseError::UnexpectedToken(t.clone()))
             }
             parse_question_marks(input)
         }
-        Token::Dimension(..) => {
+        Token::Dimension { .. } => {
             parse_question_marks(input)
         }
-        Token::Number(_) => {
-            let after_number = input.position();
+        Token::Number { .. } => {
+            let after_number = input.state();
             match input.next_including_whitespace() {
-                Ok(Token::Delim('?')) => parse_question_marks(input),
-                Ok(Token::Dimension(..)) => {}
-                Ok(Token::Number(_)) => {}
-                _ => input.reset(after_number)
+                Ok(&Token::Delim('?')) => parse_question_marks(input),
+                Ok(&Token::Dimension { .. }) => {}
+                Ok(&Token::Number { .. }) => {}
+                _ => input.reset(&after_number)
             }
         }
-        _ => return Err(())
+        t => return Err(BasicParseError::UnexpectedToken(t))
     }
     Ok(())
 }
@@ -81,11 +84,11 @@ fn parse_tokens(input: &mut Parser) -> Result<(), ()> {
 /// Consume as many '?' as possible
 fn parse_question_marks(input: &mut Parser) {
     loop {
-        let position = input.position();
+        let start = input.state();
         match input.next_including_whitespace() {
-            Ok(Token::Delim('?')) => {}
+            Ok(&Token::Delim('?')) => {}
             _ => {
-                input.reset(position);
+                input.reset(&start);
                 return
             }
         }

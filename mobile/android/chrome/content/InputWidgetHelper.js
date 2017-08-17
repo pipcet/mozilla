@@ -6,6 +6,14 @@
 var InputWidgetHelper = {
   _uiBusy: false,
 
+  strings: function() {
+    if (!this._strings) {
+      this._strings = Services.strings.createBundle(
+          "chrome://browser/locale/browser.properties");
+    }
+    return this._strings;
+  },
+
   handleEvent: function(aEvent) {
     this.handleClick(aEvent.target);
   },
@@ -22,14 +30,14 @@ var InputWidgetHelper = {
   },
 
   show: function(aElement) {
-    let type = aElement.getAttribute('type');
+    let type = aElement.getAttribute("type");
     let p = new Prompt({
       window: aElement.ownerGlobal,
-      title: Strings.browser.GetStringFromName("inputWidgetHelper." + aElement.getAttribute('type')),
+      title: this.strings().GetStringFromName("inputWidgetHelper." + aElement.getAttribute("type")),
       buttons: [
-        Strings.browser.GetStringFromName("inputWidgetHelper.set"),
-        Strings.browser.GetStringFromName("inputWidgetHelper.clear"),
-        Strings.browser.GetStringFromName("inputWidgetHelper.cancel")
+        this.strings().GetStringFromName("inputWidgetHelper.set"),
+        this.strings().GetStringFromName("inputWidgetHelper.clear"),
+        this.strings().GetStringFromName("inputWidgetHelper.cancel")
       ],
     }).addDatePicker({
       value: aElement.value,
@@ -63,10 +71,11 @@ var InputWidgetHelper = {
   },
 
   hasInputWidget: function(aElement) {
-    if (!(aElement instanceof HTMLInputElement))
+    let win = aElement.ownerGlobal;
+    if (!(aElement instanceof win.HTMLInputElement))
       return false;
 
-    let type = aElement.getAttribute('type');
+    let type = aElement.getAttribute("type");
     if (type == "date" || type == "datetime" || type == "datetime-local" ||
         type == "week" || type == "month" || type == "time") {
       return true;
@@ -76,20 +85,18 @@ var InputWidgetHelper = {
   },
 
   fireOnChange: function(aElement) {
-    let evt = aElement.ownerDocument.createEvent("Events");
-    evt.initEvent("change", true, true, aElement.defaultView, 0,
-                  false, false,
-                  false, false, null);
-    setTimeout(function() {
-      aElement.dispatchEvent(evt);
+    let win = aElement.ownerGlobal;
+    win.setTimeout(function() {
+      aElement.dispatchEvent(new win.Event("input", { bubbles: true }));
+      aElement.dispatchEvent(new win.Event("change", { bubbles: true }));
     }, 0);
   },
 
-  _isDisabledElement : function(aElement) {
+  _isDisabledElement: function(aElement) {
     let currentElement = aElement;
     while (currentElement) {
       if (currentElement.disabled)
-	return true;
+        return true;
 
       currentElement = currentElement.parentElement;
     }

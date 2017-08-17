@@ -4,26 +4,6 @@
 
 <!ENTITY aboutTelemetry.pageTitle "Telemetry Data">
 
-<!ENTITY aboutTelemetry.changeDataChoices "
-  Change
-">
-
-<!ENTITY aboutTelemetry.uploadEnabled "
-  FHR data upload is <span>enabled</span>.
-">
-
-<!ENTITY aboutTelemetry.uploadDisabled "
-  FHR data upload is <span>disabled</span>.
-">
-
-<!ENTITY aboutTelemetry.extendedRecordingEnabled "
-  Extended Telemetry recording is <span>enabled</span>.
-">
-
-<!ENTITY aboutTelemetry.extendedRecordingDisabled "
-  Extended Telemetry recording is <span>disabled</span>.
-">
-
 <!ENTITY aboutTelemetry.pingDataSource "
 Ping data source:
 ">
@@ -36,16 +16,12 @@ Current ping data
 Archived ping data
 ">
 
-<!ENTITY aboutTelemetry.pingDataDisplay "
-Ping data display:
-">
-
-<!ENTITY aboutTelemetry.structured "
-Structured
-">
-
 <!ENTITY aboutTelemetry.raw "
 Raw JSON
+">
+
+<!ENTITY aboutTelemetry.showInFirefoxJsonViewer "
+Open in the JSON viewer
 ">
 
 <!ENTITY aboutTelemetry.showSubsessionData "
@@ -64,16 +40,28 @@ Choose ping:
 Older ping &gt;&gt;
 ">
 
-<!ENTITY aboutTelemetry.rawPingData "
-Raw ping data…
-">
-
 <!ENTITY aboutTelemetry.archiveWeekHeader "
 Week
 ">
 
+<!ENTITY aboutTelemetry.archivePingType "
+Ping Type
+">
+
 <!ENTITY aboutTelemetry.archivePingHeader "
 Ping
+">
+
+<!ENTITY aboutTelemetry.optionGroupToday "
+Today
+">
+
+<!ENTITY aboutTelemetry.optionGroupYesterday "
+Yesterday
+">
+
+<!ENTITY aboutTelemetry.optionGroupOlder "
+Older
 ">
 
 <!ENTITY aboutTelemetry.generalDataSection "
@@ -94,10 +82,6 @@ Ping
 
 <!ENTITY aboutTelemetry.chromeHangsSection "
   Browser Hangs
-">
-
-<!ENTITY aboutTelemetry.threadHangStatsSection "
-  Thread Hangs
 ">
 
 <!ENTITY aboutTelemetry.capturedStacksSection "
@@ -136,20 +120,12 @@ Ping
   Late Writes
 ">
 
+<!ENTITY aboutTelemetry.rawPayloadSection "
+Raw Payload
+">
+
 <!ENTITY aboutTelemetry.sessionInfoSection "
   Session Information
-">
-
-<!ENTITY aboutTelemetry.addonHistogramsSection "
-  Histograms Collected by Add-ons
-">
-
-<!ENTITY aboutTelemetry.toggle "
-  Click to toggle section
-">
-
-<!ENTITY aboutTelemetry.emptySection "
-  (No data collected)
 ">
 
 <!ENTITY aboutTelemetry.fullSqlWarning "
@@ -170,8 +146,4 @@ Ping
 
 <!ENTITY aboutTelemetry.payloadChoiceHeader "
   Payload
-">
-
-<!ENTITY aboutTelemetry.rawPayload "
-  Raw Payload
 ">

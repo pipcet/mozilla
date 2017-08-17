@@ -488,14 +488,13 @@ LogConsoleMessage(const char16_t* fmt, ...)
 {
   va_list args;
   va_start(args, fmt);
-  char16_t* msg = nsTextFormatter::vsmprintf(fmt, args);
+  nsString msg;
+  nsTextFormatter::vssprintf(msg, fmt, args);
   va_end(args);
 
   nsCOMPtr<nsIConsoleService> cs = do_GetService("@mozilla.org/consoleservice;1");
   if (cs)
-    cs->LogStringMessage(msg);
-
-  free(msg);
+    cs->LogStringMessage(msg.get());
 }
 
 nsresult
@@ -591,13 +590,13 @@ static nsresult
 EnumValidate(nsICommandLineValidator* aValidator, nsICommandLine* aThis, void*)
 {
   return aValidator->Validate(aThis);
-}  
+}
 
 static nsresult
 EnumRun(nsICommandLineHandler* aHandler, nsICommandLine* aThis, void*)
 {
   return aHandler->Handle(aThis);
-}  
+}
 
 NS_IMETHODIMP
 nsCommandLine::Run()
@@ -631,7 +630,7 @@ EnumHelp(nsICommandLineHandler* aHandler, nsICommandLine* aThis, void* aClosure)
   }
 
   return NS_OK;
-}  
+}
 
 NS_IMETHODIMP
 nsCommandLine::GetHelpText(nsACString& aResult)

@@ -148,13 +148,19 @@ var TabsInTitlebar = {
       document.documentElement.setAttribute("tabsintitlebar", "true");
       updateTitlebarDisplay();
 
+      // Reset the custom titlebar height if the menubar is shown,
+      // because we will want to calculate its original height.
+      if (AppConstants.isPlatformAndVersionAtLeast("win", "10.0") &&
+          (menubar.getAttribute("inactive") != "true" ||
+          menubar.getAttribute("autohide") != "true")) {
+        $("titlebar-buttonbox").style.removeProperty("height");
+      }
+
       // Try to avoid reflows in this code by calculating dimensions first and
       // then later set the properties affecting layout together in a batch.
 
-      // Get the full height of the tabs toolbar:
-      let tabsToolbar = $("TabsToolbar");
-      let tabsStyles = window.getComputedStyle(tabsToolbar);
-      let fullTabsHeight = rect(tabsToolbar).height + verticalMargins(tabsStyles);
+      // Get the height of the tabs toolbar:
+      let tabsHeight = rect($("TabsToolbar")).height;
       // Buttons first:
       let captionButtonsBoxWidth = rect($("titlebar-buttonbox-container")).width;
 
@@ -175,6 +181,15 @@ var TabsInTitlebar = {
       let titlebarContentHeight = rect(titlebarContent).height;
 
       // Begin setting CSS properties which will cause a reflow
+
+      // On Windows 10, adjust the window controls to span the entire
+      // tab strip height if we're not showing a menu bar.
+      if (AppConstants.isPlatformAndVersionAtLeast("win", "10.0")) {
+        if (!menuHeight) {
+          titlebarContentHeight = tabsHeight;
+          $("titlebar-buttonbox").style.height = titlebarContentHeight + "px";
+        }
+      }
 
       // If the menubar is around (menuHeight is non-zero), try to adjust
       // its full height (i.e. including margins) to match the titlebar,
@@ -205,7 +220,7 @@ var TabsInTitlebar = {
 
       // Next, we calculate how much we need to stretch the titlebar down to
       // go all the way to the bottom of the tab strip, if necessary.
-      let tabAndMenuHeight = fullTabsHeight + fullMenuHeight;
+      let tabAndMenuHeight = tabsHeight + fullMenuHeight;
 
       if (tabAndMenuHeight > titlebarContentHeight) {
         // We need to increase the titlebar content's outer height (ie including margins)
@@ -221,9 +236,9 @@ var TabsInTitlebar = {
       }
 
       // Then add a negative margin to the titlebar, so that the following elements
-      // will overlap it by the lesser of the titlebar height or the tabstrip+menu.
-      let minTitlebarOrTabsHeight = Math.min(titlebarContentHeight, tabAndMenuHeight);
-      titlebar.style.marginBottom = "-" + minTitlebarOrTabsHeight + "px";
+      // will overlap it by the greater of the titlebar height or the tabstrip+menu.
+      let maxTitlebarOrTabsHeight = Math.max(titlebarContentHeight, tabAndMenuHeight);
+      titlebar.style.marginBottom = "-" + maxTitlebarOrTabsHeight + "px";
 
       // Finally, size the placeholders:
       if (AppConstants.platform == "macosx") {
@@ -249,7 +264,7 @@ var TabsInTitlebar = {
 
     ToolbarIconColor.inferFromText("tabsintitlebar", TabsInTitlebar.enabled);
 
-    if (CustomizationHandler.isCustomizing()) {
+    if (document.documentElement.hasAttribute("customizing")) {
       gCustomizeMode.updateLWTStyling();
     }
   },

@@ -9,7 +9,6 @@
 #include "AndroidRect.h"
 #include "KeyEvent.h"
 #include "PuppetWidget.h"
-#include "android_npapi.h"
 #include "nsIContent.h"
 #include "nsISelection.h"
 
@@ -301,24 +300,6 @@ InitKeyEvent(WidgetKeyboardEvent& aEvent, int32_t aAction, int32_t aKeyCode,
 
     aEvent.mModifiers = nsWindow::GetModifiers(aMetaState);
     aEvent.mKeyCode = domKeyCode;
-
-    if (aEvent.mMessage != eKeyPress) {
-        ANPEvent pluginEvent;
-        pluginEvent.inSize = sizeof(pluginEvent);
-        pluginEvent.eventType = kKey_ANPEventType;
-        pluginEvent.data.key.action = (aEvent.mMessage == eKeyDown) ?
-                kDown_ANPKeyAction : kUp_ANPKeyAction;
-        pluginEvent.data.key.nativeCode = aKeyCode;
-        pluginEvent.data.key.virtualCode = domKeyCode;
-        pluginEvent.data.key.unichar = aDomPrintableKeyValue;
-        pluginEvent.data.key.modifiers =
-                (aMetaState & sdk::KeyEvent::META_SHIFT_MASK
-                        ? kShift_ANPKeyModifier : 0) |
-                (aMetaState & sdk::KeyEvent::META_ALT_MASK
-                        ? kAlt_ANPKeyModifier : 0);
-        pluginEvent.data.key.repeatCount = aRepeatCount;
-        aEvent.mPluginEvent.Copy(pluginEvent);
-    }
 
     aEvent.mIsRepeat =
         (aEvent.mMessage == eKeyDown || aEvent.mMessage == eKeyPress) &&
@@ -664,7 +645,11 @@ GeckoEditableSupport::FlushIMEChanges(FlushChangesFlag aFlags)
             FlushIMEText(FLUSH_FLAG_RECOVER);
         } else {
             // Give up because we've already tried.
+#ifdef RELEASE_OR_BETA
+            env->ExceptionClear();
+#else
             MOZ_CATCH_JNI_EXCEPTION(env);
+#endif
         }
         return true;
     };
@@ -1212,7 +1197,8 @@ GeckoEditableSupport::SetInputContext(const InputContext& aContext,
         mEditable->NotifyIMEContext(mInputContext.mIMEState.mEnabled,
                                     mInputContext.mHTMLInputType,
                                     mInputContext.mHTMLInputInputmode,
-                                    mInputContext.mActionHint);
+                                    mInputContext.mActionHint,
+                                    mInputContext.mInPrivateBrowsing);
     });
 }
 

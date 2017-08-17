@@ -226,8 +226,6 @@ interface nsIXPCComponents_Utils : nsISupports
      * pointing to the same file will not cause the module to be re-evaluated,
      * but the symbols in EXPORTED_SYMBOLS will be exported into the
      * specified target object and the global object returned as above.
-     *
-     * (This comment is duplicated from xpcIJSModuleLoader.)
      */
     [implicit_jscontext,optional_argc]
     jsval import(in AUTF8String aResourceURI, [optional] in jsval targetObj);
@@ -732,7 +730,4 @@ interface nsIXPCComponents : nsIXPCComponentsBase
     // A javascript component can set |returnCode| to specify an nsresult to
     // be returned without throwing an exception.
     attribute jsval                                     returnCode;
-
-    /* @deprecated Use Components.utils.reportError instead. */
-    [deprecated, implicit_jscontext] void reportError(in jsval error);
 };

@@ -118,14 +118,6 @@ function isInDevEdition() {
   return AppConstants.MOZ_DEV_EDITION;
 }
 
-function isInNightly() {
-  return AppConstants.NIGHTLY_BUILD && !AppConstants.MOZ_DEV_EDITION;
-}
-
-function isNotReleaseOrBeta() {
-  return !AppConstants.RELEASE_OR_BETA;
-}
-
 function removeNonReleaseButtons(areaPanelPlacements) {
   if (isInDevEdition() && areaPanelPlacements.includes("developer-button")) {
     areaPanelPlacements.splice(areaPanelPlacements.indexOf("developer-button"), 1);
@@ -134,16 +126,10 @@ function removeNonReleaseButtons(areaPanelPlacements) {
 
 function removeNonOriginalButtons() {
   CustomizableUI.removeWidgetFromArea("sync-button");
-  if (isNotReleaseOrBeta()) {
-    CustomizableUI.removeWidgetFromArea("webcompat-reporter-button");
-  }
 }
 
 function restoreNonOriginalButtons() {
   CustomizableUI.addWidgetToArea("sync-button", CustomizableUI.AREA_PANEL);
-  if (isNotReleaseOrBeta()) {
-    CustomizableUI.addWidgetToArea("webcompat-reporter-button", CustomizableUI.AREA_PANEL);
-  }
 }
 
 function assertAreaPlacements(areaId, expectedPlacements) {
@@ -299,7 +285,7 @@ function promisePanelHidden(win) {
 }
 
 function promiseOverflowHidden(win) {
-  let panelEl = document.getElementById("widget-overflow");
+  let panelEl = win.PanelUI.overflowPanel;
   return promisePanelElementHidden(win, panelEl);
 }
 
@@ -319,6 +305,11 @@ function promisePanelElementHidden(win, aPanel) {
 
 function isPanelUIOpen() {
   return PanelUI.panel.state == "open" || PanelUI.panel.state == "showing";
+}
+
+function isOverflowOpen() {
+  let panel = document.getElementById("widget-overflow");
+  return panel.state == "open" || panel.state == "showing";
 }
 
 function subviewShown(aSubview) {

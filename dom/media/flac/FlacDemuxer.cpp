@@ -7,7 +7,6 @@
 #include "FlacDemuxer.h"
 
 #include "mozilla/Maybe.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mp4_demuxer/BitReader.h"
 #include "nsAutoPtr.h"
 #include "prenv.h"
@@ -28,14 +27,6 @@ namespace flac {
 
 // flac::FrameHeader - Holds the flac frame header and its parsing
 // state.
-
-#define FLAC_MAX_CHANNELS           8
-#define FLAC_MIN_BLOCKSIZE         16
-#define FLAC_MAX_BLOCKSIZE      65535
-#define FLAC_MIN_FRAME_SIZE        11
-#define FLAC_MAX_FRAME_HEADER_SIZE 16
-#define FLAC_MAX_FRAME_SIZE (FLAC_MAX_FRAME_HEADER_SIZE \
-                             +FLAC_MAX_BLOCKSIZE*FLAC_MAX_CHANNELS*3)
 
 class FrameHeader
 {
@@ -868,7 +859,7 @@ FlacTrackDemuxer::GetSamples(int32_t aNumSamples)
     frames->mSamples.AppendElement(frame);
   }
 
-  LOGV("GetSamples() End mSamples.Length=%" PRIuSIZE " aNumSamples=%d offset=%" PRId64
+  LOGV("GetSamples() End mSamples.Length=%zu aNumSamples=%d offset=%" PRId64
        " mParsedFramesDuration=%f mTotalFrameLen=%" PRIu64,
        frames->mSamples.Length(), aNumSamples, GetResourceOffset(),
        mParsedFramesDuration.ToSeconds(), mTotalFrameLen);
@@ -976,7 +967,7 @@ FlacTrackDemuxer::GetNextFrame(const flac::Frame& aFrame)
 
   const uint32_t read = Read(frameWriter->Data(), offset, size);
   if (read != size) {
-    LOG("GetNextFrame() Exit read=%u frame->Size=%" PRIuSIZE, read, frame->Size());
+    LOG("GetNextFrame() Exit read=%u frame->Size=%zu", read, frame->Size());
     return nullptr;
   }
 

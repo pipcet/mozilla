@@ -39,7 +39,6 @@ public:
 #endif
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   // nsSVGDisplayableFrame interface:
@@ -61,7 +60,7 @@ private:
 
 nsIFrame*
 NS_NewSVGSwitchFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
-{  
+{
   return new (aPresShell) nsSVGSwitchFrame(aContext);
 }
 
@@ -82,12 +81,11 @@ nsSVGSwitchFrame::Init(nsIContent*       aContent,
 
 void
 nsSVGSwitchFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                   const nsRect&           aDirtyRect,
                                    const nsDisplayListSet& aLists)
 {
   nsIFrame* kid = GetActiveChildFrame();
   if (kid) {
-    BuildDisplayListForChild(aBuilder, kid, aDirtyRect, aLists);
+    BuildDisplayListForChild(aBuilder, kid, aLists);
   }
 }
 
@@ -140,7 +138,7 @@ nsSVGSwitchFrame::GetFrameForPoint(const gfxPoint& aPoint)
       if (!m.Invert()) {
         return nullptr;
       }
-      point = m.Transform(point);
+      point = m.TransformPoint(point);
     }
     return svgFrame->GetFrameForPoint(point);
   }

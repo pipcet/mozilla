@@ -12,6 +12,7 @@
 #include "mozilla/OwningNonNull.h"
 #include "mozilla/PseudoElementHashEntry.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/ServoTypes.h"
 #include "nsCSSPropertyID.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsDataHashtable.h"
@@ -121,7 +122,7 @@ public:
   // animation effects (e.g. em-based endpoints used in keyframe effects)
   // can be re-resolved to computed values.
   template<typename StyleType>
-  void UpdateEffectProperties(StyleType&& aStyleType,
+  void UpdateEffectProperties(StyleType* aStyleType,
                               dom::Element* aElement,
                               CSSPseudoElementType aPseudoType);
 
@@ -227,27 +228,28 @@ public:
     nsCSSPropertyID aProperty,
     const AnimationPerformanceWarning& aWarning);
 
-  // The type which represents what kind of animation restyle we want.
-  enum class AnimationRestyleType {
-    Throttled, // Restyle elements that have posted animation restyles.
-    Full       // Restyle all elements with animations (i.e. even if the
-               // animations are throttled).
-  };
-
   // Do a bunch of stuff that we should avoid doing during the parallel
   // traversal (e.g. changing member variables) for all elements that we expect
   // to restyle on the next traversal.
   //
   // Returns true if there are elements needing a restyle for animation.
-  bool PreTraverse(AnimationRestyleType aRestyleType);
+  bool PreTraverse(ServoTraversalFlags aFlags);
 
   // Similar to the above but only for the (pseudo-)element.
   bool PreTraverse(dom::Element* aElement, CSSPseudoElementType aPseudoType);
 
   // Similar to the above but for all elements in the subtree rooted
   // at aElement.
-  bool PreTraverseInSubtree(dom::Element* aElement,
-                            AnimationRestyleType aRestyleType);
+  bool PreTraverseInSubtree(ServoTraversalFlags aFlags, dom::Element* aElement);
+
+  // Returns the target element for restyling.
+  //
+  // If |aPseudoType| is ::after or ::before, returns the generated content
+  // element of which |aElement| is the parent. If |aPseudoType| is any other
+  // pseudo type (other thant CSSPseudoElementType::NotPseudo) returns nullptr.
+  // Otherwise, returns |aElement|.
+  static dom::Element* GetElementToRestyle(dom::Element* aElement,
+                                           CSSPseudoElementType aPseudoType);
 
 private:
   ~EffectCompositor() = default;
@@ -257,10 +259,6 @@ private:
   static void ComposeAnimationRule(dom::Element* aElement,
                                    CSSPseudoElementType aPseudoType,
                                    CascadeLevel aCascadeLevel);
-
-  static dom::Element* GetElementToRestyle(dom::Element* aElement,
-                                           CSSPseudoElementType
-                                             aPseudoType);
 
   // Get the properties in |aEffectSet| that we are able to animate on the
   // compositor but which are also specified at a higher level in the cascade

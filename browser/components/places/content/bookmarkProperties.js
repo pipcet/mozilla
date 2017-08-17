@@ -164,9 +164,10 @@ var BookmarkPropertiesPanel = {
         this._defaultInsertionPoint = dialogInfo.defaultInsertionPoint;
       } else {
         this._defaultInsertionPoint =
-          new InsertionPoint(PlacesUtils.bookmarksMenuFolderId,
-                             PlacesUtils.bookmarks.DEFAULT_INDEX,
-                             Ci.nsITreeView.DROP_ON);
+          new InsertionPoint({
+            parentId: PlacesUtils.bookmarksMenuFolderId,
+            parentGuid: PlacesUtils.bookmarks.menuGuid
+          });
       }
 
       switch (dialogInfo.type) {
@@ -309,18 +310,18 @@ var BookmarkPropertiesPanel = {
 
     switch (this._action) {
       case ACTION_EDIT:
-        gEditItemOverlay.initPanel({ node: this._node
-                                   , hiddenRows: this._hiddenRows
-                                   , focusedElement: "first" });
+        gEditItemOverlay.initPanel({ node: this._node,
+                                     hiddenRows: this._hiddenRows,
+                                     focusedElement: "first" });
         acceptButton.disabled = gEditItemOverlay.readOnly;
         break;
       case ACTION_ADD:
         this._node = await this._promiseNewItem();
         // Edit the new item
-        gEditItemOverlay.initPanel({ node: this._node
-                                   , hiddenRows: this._hiddenRows
-                                   , postData: this._postData
-                                   , focusedElement: "first" });
+        gEditItemOverlay.initPanel({ node: this._node,
+                                     hiddenRows: this._hiddenRows,
+                                     postData: this._postData,
+                                     focusedElement: "first" });
 
         // Empty location field if the uri is about:blank, this way inserting a new
         // url will be easier for the user, Accept button will be automatically
@@ -371,9 +372,9 @@ var BookmarkPropertiesPanel = {
     }
   },
 
-	// Hack for implementing batched-Undo around the editBookmarkOverlay
-	// instant-apply code. For all the details see the comment above beginBatch
-	// in browser-places.js
+  // Hack for implementing batched-Undo around the editBookmarkOverlay
+  // instant-apply code. For all the details see the comment above beginBatch
+  // in browser-places.js
   _batchBlockingDeferred: null,
   _beginBatch() {
     if (this._batching)
@@ -493,11 +494,12 @@ var BookmarkPropertiesPanel = {
    * The container-identifier and insertion-index are returned separately in
    * the form of [containerIdentifier, insertionIndex]
    */
-  _getInsertionPointDetails: function BPP__getInsertionPointDetails() {
-    var containerId = this._defaultInsertionPoint.itemId;
-    var indexInContainer = this._defaultInsertionPoint.index;
-
-    return [containerId, indexInContainer];
+  async _getInsertionPointDetails() {
+    return [
+      this._defaultInsertionPoint.itemId,
+      await this._defaultInsertionPoint.getIndex(),
+      this._defaultInsertionPoint.guid,
+    ]
   },
 
   /**
@@ -550,15 +552,10 @@ var BookmarkPropertiesPanel = {
   _getTransactionsForURIList: function BPP__getTransactionsForURIList() {
     var transactions = [];
     for (let uri of this._URIs) {
-      // uri should be an object in the form { url, title }. Though add-ons
-      // could still use the legacy form, where it's an nsIURI.
-      let [_uri, _title] = uri instanceof Ci.nsIURI ?
-        [uri, this._getURITitleFromHistory(uri)] : [uri.uri, uri.title];
-
       let createTxn =
-        new PlacesCreateBookmarkTransaction(_uri, -1,
+        new PlacesCreateBookmarkTransaction(uri.uri, -1,
                                             PlacesUtils.bookmarks.DEFAULT_INDEX,
-                                            _title);
+                                            uri.title);
       transactions.push(createTxn);
     }
     return transactions;
@@ -584,7 +581,7 @@ var BookmarkPropertiesPanel = {
   },
 
   async _createNewItem() {
-    let [container, index] = this._getInsertionPointDetails();
+    let [container, index] = await this._getInsertionPointDetails();
     let txn;
     switch (this._itemType) {
       case BOOKMARK_FOLDER:
@@ -618,7 +615,12 @@ var BookmarkPropertiesPanel = {
       uri: this._uri ? this._uri.spec : "",
       type: this._itemType == BOOKMARK_ITEM ?
               Ci.nsINavHistoryResultNode.RESULT_TYPE_URI :
-              Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER
+              Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER,
+      parent: {
+        itemId: container,
+        bookmarkGuid: await PlacesUtils.promiseItemGuid(container),
+        type: Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER
+      }
     });
   },
 
@@ -626,16 +628,15 @@ var BookmarkPropertiesPanel = {
     if (!PlacesUIUtils.useAsyncTransactions)
       return this._createNewItem();
 
-    let [containerId, index] = this._getInsertionPointDetails();
-    let parentGuid = await PlacesUtils.promiseItemGuid(containerId);
+    let [containerId, index, parentGuid] = await this._getInsertionPointDetails();
     let annotations = [];
     if (this._description) {
-      annotations.push({ name: PlacesUIUtils.DESCRIPTION_ANNO
-                       , value: this._description });
+      annotations.push({ name: PlacesUIUtils.DESCRIPTION_ANNO,
+                         value: this._description });
     }
     if (this._loadInSidebar) {
-      annotations.push({ name: PlacesUIUtils.LOAD_IN_SIDEBAR_ANNO
-                       , value: true });
+      annotations.push({ name: PlacesUIUtils.LOAD_IN_SIDEBAR_ANNO,
+                         value: true });
     }
 
     let itemGuid;
@@ -658,12 +659,11 @@ var BookmarkPropertiesPanel = {
 
       itemGuid = await PlacesTransactions.NewLivemark(info).transact();
     } else if (this._itemType == BOOKMARK_FOLDER) {
+      // NewFolder requires a url rather than uri.
+      info.children = this._URIs.map(item => {
+        return { url: item.uri, title: item.title };
+      });
       itemGuid = await PlacesTransactions.NewFolder(info).transact();
-      for (let uri of this._URIs) {
-        let placeInfo = await PlacesUtils.history.fetch(uri);
-        let title = placeInfo ? placeInfo.title : "";
-        await PlacesTransactions.transact({ parentGuid: itemGuid, uri, title });
-      }
     } else {
       throw new Error(`unexpected value for _itemType:  ${this._itemType}`);
     }
@@ -677,7 +677,12 @@ var BookmarkPropertiesPanel = {
       uri: this._uri ? this._uri.spec : "",
       type: this._itemType == BOOKMARK_ITEM ?
               Ci.nsINavHistoryResultNode.RESULT_TYPE_URI :
-              Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER
+              Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER,
+      parent: {
+        itemId: containerId,
+        bookmarkGuid: parentGuid,
+        type: Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER
+      }
     });
   }
 };

@@ -270,19 +270,20 @@ gfxFontEntry::RealFaceName()
     return Name();
 }
 
-already_AddRefed<gfxFont>
+gfxFont*
 gfxFontEntry::FindOrMakeFont(const gfxFontStyle *aStyle,
                              bool aNeedsBold,
                              gfxCharacterMap* aUnicodeRangeMap)
 {
     // the font entry name is the psname, not the family name
-    RefPtr<gfxFont> font =
+    gfxFont* font =
         gfxFontCache::GetCache()->Lookup(this, aStyle, aUnicodeRangeMap);
 
     if (!font) {
         gfxFont *newFont = CreateFontInstance(aStyle, aNeedsBold);
-        if (!newFont)
+        if (!newFont) {
             return nullptr;
+        }
         if (!newFont->Valid()) {
             delete newFont;
             return nullptr;
@@ -291,7 +292,7 @@ gfxFontEntry::FindOrMakeFont(const gfxFontStyle *aStyle,
         font->SetUnicodeRangeMap(aUnicodeRangeMap);
         gfxFontCache::GetCache()->AddNew(font);
     }
-    return font.forget();
+    return font;
 }
 
 uint16_t
@@ -340,7 +341,7 @@ gfxFontEntry::GetSVGGlyphExtents(DrawTarget* aDrawTarget, uint32_t aGlyphId,
     gfxMatrix svgToAppSpace(fontMatrix.xx, fontMatrix.yx,
                             fontMatrix.xy, fontMatrix.yy,
                             fontMatrix.x0, fontMatrix.y0);
-    svgToAppSpace.Scale(1.0f / mUnitsPerEm, 1.0f / mUnitsPerEm);
+    svgToAppSpace.PreScale(1.0f / mUnitsPerEm, 1.0f / mUnitsPerEm);
 
     return mSVGGlyphs->GetGlyphExtents(aGlyphId, svgToAppSpace, aResult);
 }
@@ -697,10 +698,9 @@ gfxFontEntry::GrReleaseTable(const void *aAppFaceHandle,
 {
     gfxFontEntry *fontEntry =
         static_cast<gfxFontEntry*>(const_cast<void*>(aAppFaceHandle));
-    void *data;
-    if (fontEntry->mGrTableMap->Get(aTableBuffer, &data)) {
-        fontEntry->mGrTableMap->Remove(aTableBuffer);
-        hb_blob_destroy(static_cast<hb_blob_t*>(data));
+    void* value;
+    if (fontEntry->mGrTableMap->Remove(aTableBuffer, &value)) {
+        hb_blob_destroy(static_cast<hb_blob_t*>(value));
     }
 }
 
@@ -1101,10 +1101,12 @@ gfxFontFamily::HasOtherFamilyNames()
 
 gfxFontEntry*
 gfxFontFamily::FindFontForStyle(const gfxFontStyle& aFontStyle, 
-                                bool& aNeedsSyntheticBold)
+                                bool& aNeedsSyntheticBold,
+                                bool aIgnoreSizeTolerance)
 {
     AutoTArray<gfxFontEntry*,4> matched;
-    FindAllFontsForStyle(aFontStyle, matched, aNeedsSyntheticBold);
+    FindAllFontsForStyle(aFontStyle, matched, aNeedsSyntheticBold,
+                         aIgnoreSizeTolerance);
     if (!matched.IsEmpty()) {
         return matched[0];
     }
@@ -1234,7 +1236,8 @@ WeightStyleStretchDistance(gfxFontEntry* aFontEntry,
 void
 gfxFontFamily::FindAllFontsForStyle(const gfxFontStyle& aFontStyle,
                                     nsTArray<gfxFontEntry*>& aFontEntryList,
-                                    bool& aNeedsSyntheticBold)
+                                    bool& aNeedsSyntheticBold,
+                                    bool aIgnoreSizeTolerance)
 {
     if (!mHasStyles) {
         FindStyleVariations(); // collect faces for the family, if not already done
@@ -1469,7 +1472,7 @@ gfxFontFamily::FindFontForChar(GlobalFontMatch *aMatchData)
     gfxFontEntry *fe =
         FindFontForStyle(aMatchData->mStyle ? *aMatchData->mStyle
                                             : gfxFontStyle(),
-                         needsBold);
+                         needsBold, true);
 
     if (fe && !fe->SkipDuringSystemFallback()) {
         int32_t rank = 0;

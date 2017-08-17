@@ -18,26 +18,21 @@ this.EXPORTED_SYMBOLS = ["ExtensionParent"];
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
-                                  "resource://gre/modules/AddonManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
-                                  "resource://gre/modules/AppConstants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "E10SUtils",
-                                  "resource:///modules/E10SUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "MessageChannel",
-                                  "resource://gre/modules/MessageChannel.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NativeApp",
-                                  "resource://gre/modules/NativeMessaging.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
-                                  "resource://gre/modules/PrivateBrowsingUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Schemas",
-                                  "resource://gre/modules/Schemas.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AppConstants: "resource://gre/modules/AppConstants.jsm",
+  DeferredSave: "resource://gre/modules/DeferredSave.jsm",
+  E10SUtils: "resource:///modules/E10SUtils.jsm",
+  MessageChannel: "resource://gre/modules/MessageChannel.jsm",
+  OS: "resource://gre/modules/osfile.jsm",
+  NativeApp: "resource://gre/modules/NativeMessaging.jsm",
+  PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
+  Schemas: "resource://gre/modules/Schemas.jsm",
+});
 
-XPCOMUtils.defineLazyServiceGetter(this, "gAddonPolicyService",
-                                   "@mozilla.org/addons/policy-service;1",
-                                   "nsIAddonPolicyService");
+XPCOMUtils.defineLazyServiceGetters(this, {
+  gAddonPolicyService: ["@mozilla.org/addons/policy-service;1", "nsIAddonPolicyService"],
+  aomStartup: ["@mozilla.org/addons/addon-manager-startup;1", "amIAddonManagerStartup"],
+});
 
 Cu.import("resource://gre/modules/ExtensionCommon.jsm");
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
@@ -46,35 +41,33 @@ var {
   BaseContext,
   CanOfAPIs,
   SchemaAPIManager,
+  SpreadArgs,
 } = ExtensionCommon;
 
 var {
   DefaultWeakMap,
+  ExtensionError,
   MessageManagerProxy,
-  SpreadArgs,
   defineLazyGetter,
   promiseDocumentLoaded,
   promiseEvent,
+  promiseFileContents,
   promiseObserved,
 } = ExtensionUtils;
 
 const BASE_SCHEMA = "chrome://extensions/content/schemas/manifest.json";
+const CATEGORY_EXTENSION_MODULES = "webextension-modules";
 const CATEGORY_EXTENSION_SCHEMAS = "webextension-schemas";
 const CATEGORY_EXTENSION_SCRIPTS = "webextension-scripts";
 
-const XUL_URL = "data:application/vnd.mozilla.xul+xml;charset=utf-8," + encodeURI(
-  `<?xml version="1.0"?>
-  <window id="documentElement"/>`);
-
 let schemaURLs = new Set();
 
-if (!AppConstants.RELEASE_OR_BETA) {
-  schemaURLs.add("chrome://extensions/content/schemas/experiments.json");
-}
+schemaURLs.add("chrome://extensions/content/schemas/experiments.json");
 
 let GlobalManager;
 let ParentAPIManager;
 let ProxyMessenger;
+let StartupCache;
 
 // This object loads the ext-*.js scripts that define the extension API.
 let apiManager = new class extends SchemaAPIManager {
@@ -94,38 +87,51 @@ let apiManager = new class extends SchemaAPIManager {
     });
   }
 
+  getModuleJSONURLs() {
+    return Array.from(XPCOMUtils.enumerateCategoryEntries(CATEGORY_EXTENSION_MODULES),
+                      ([name, url]) => url);
+  }
+
   // Loads all the ext-*.js scripts currently registered.
   lazyInit() {
     if (this.initialized) {
       return this.initialized;
     }
 
-    let scripts = [];
+    let modulesPromise = StartupCache.other.get(
+      ["parentModules"],
+      () => this.loadModuleJSON(this.getModuleJSONURLs()));
+
+    let scriptURLs = [];
     for (let [/* name */, value] of XPCOMUtils.enumerateCategoryEntries(CATEGORY_EXTENSION_SCRIPTS)) {
-      scripts.push(value);
+      scriptURLs.push(value);
     }
 
-    let promise = Promise.all(scripts.map(url => ChromeUtils.compileScript(url))).then(scripts => {
+    let promise = (async () => {
+      let scripts = await Promise.all(scriptURLs.map(url => ChromeUtils.compileScript(url)));
+
+      this.initModuleData(await modulesPromise);
+
       for (let script of scripts) {
         script.executeInGlobal(this.global);
       }
 
       // Load order matters here. The base manifest defines types which are
       // extended by other schemas, so needs to be loaded first.
-      return Schemas.load(BASE_SCHEMA).then(() => {
+      return Schemas.load(BASE_SCHEMA, AppConstants.DEBUG).then(() => {
         let promises = [];
         for (let [/* name */, url] of XPCOMUtils.enumerateCategoryEntries(CATEGORY_EXTENSION_SCHEMAS)) {
           promises.push(Schemas.load(url));
         }
-        for (let url of this.schemaURLs) {
-          promises.push(Schemas.load(url));
+        for (let [url, {content}] of this.schemaURLs) {
+          promises.push(Schemas.load(url, content));
         }
         for (let url of schemaURLs) {
           promises.push(Schemas.load(url));
         }
         return Promise.all(promises);
       });
-    });
+    })();
 
     /* eslint-disable mozilla/balanced-listeners */
     Services.mm.addMessageListener("Extension:GetTabAndWindowId", this);
@@ -143,7 +149,7 @@ let apiManager = new class extends SchemaAPIManager {
         if (sync) {
           return result;
         }
-        target.messageManager.sendAsyncMessage("Extension:SetTabAndWindowId", result);
+        target.messageManager.sendAsyncMessage("Extension:SetFrameData", result);
       }
     }
   }
@@ -176,7 +182,7 @@ ProxyMessenger = {
     MessageChannel.addListener(messageManagers, "Extension:Port:PostMessage", this);
   },
 
-  receiveMessage({target, messageName, channelId, sender, recipient, data, responseType}) {
+  async receiveMessage({target, messageName, channelId, sender, recipient, data, responseType}) {
     if (recipient.toNativeApp) {
       let {childId, toNativeApp} = recipient;
       if (messageName == "Extension:Message") {
@@ -193,13 +199,15 @@ ProxyMessenger = {
       return;
     }
 
+    const noHandlerError = {
+      result: MessageChannel.RESULT_NO_HANDLER,
+      message: "No matching message handler for the given recipient.",
+    };
+
     let extension = GlobalManager.extensionMap.get(sender.extensionId);
     let receiverMM = this.getMessageManagerForRecipient(recipient);
     if (!extension || !receiverMM) {
-      return Promise.reject({
-        result: MessageChannel.RESULT_NO_HANDLER,
-        message: "No matching message handler for the given recipient.",
-      });
+      return Promise.reject(noHandlerError);
     }
 
     if ((messageName == "Extension:Message" ||
@@ -208,11 +216,51 @@ ProxyMessenger = {
       // From ext-tabs.js, undefined on Android.
       apiManager.global.tabGetSender(extension, target, sender);
     }
-    return MessageChannel.sendMessage(receiverMM, messageName, data, {
+
+    let promise1 = MessageChannel.sendMessage(receiverMM, messageName, data, {
       sender,
       recipient,
       responseType,
     });
+
+    if (!extension.isEmbedded || !extension.remote) {
+      return promise1;
+    }
+
+    // If we have a remote, embedded extension, the legacy side is
+    // running in a different process than the WebExtension side.
+    // As a result, we need to dispatch the message to both the parent
+    // and extension processes, and manually merge the results.
+    let promise2 = MessageChannel.sendMessage(Services.ppmm.getChildAt(0), messageName, data, {
+      sender,
+      recipient,
+      responseType,
+    });
+
+    let result = undefined;
+    let failures = 0;
+    let tryPromise = async promise => {
+      try {
+        let res = await promise;
+        if (result === undefined) {
+          result = res;
+        }
+      } catch (e) {
+        if (e.result === MessageChannel.RESULT_NO_RESPONSE) {
+          // Ignore.
+        } else if (e.result === MessageChannel.RESULT_NO_HANDLER) {
+          failures++;
+        } else {
+          throw e;
+        }
+      }
+    };
+
+    await Promise.all([tryPromise(promise1), tryPromise(promise2)]);
+    if (failures == 2) {
+      return Promise.reject(noHandlerError);
+    }
+    return result;
   },
 
   /**
@@ -222,13 +270,37 @@ ProxyMessenger = {
    * @returns {object|null} The message manager matching the recipient if found.
    */
   getMessageManagerForRecipient(recipient) {
-    let {tabId} = recipient;
     // tabs.sendMessage / tabs.connect
-    if (tabId) {
+    if ("tabId" in recipient) {
       // `tabId` being set implies that the tabs API is supported, so we don't
       // need to check whether `tabTracker` exists.
-      let tab = apiManager.global.tabTracker.getTab(tabId, null);
-      return tab && (tab.linkedBrowser || tab.browser).messageManager;
+      let tab = apiManager.global.tabTracker.getTab(recipient.tabId, null);
+      if (!tab) {
+        return null;
+      }
+
+      // There can be no recipients in a tab pending restore,
+      // So we bail early to avoid instantiating the lazy browser.
+      let node = tab.browser || tab;
+      if (node.getAttribute("pending") === "true") {
+        return null;
+      }
+
+      let browser = tab.linkedBrowser || tab.browser;
+
+      // Options panels in the add-on manager currently require
+      // special-casing, since their message managers aren't currently
+      // connected to the tab's top-level message manager. To deal with
+      // this, we find the options <browser> for the tab, and use that
+      // directly, insteead.
+      if (browser.currentURI.cloneIgnoringRef().spec === "about:addons") {
+        let optionsBrowser = browser.contentDocument.querySelector(".inline-options-browser");
+        if (optionsBrowser) {
+          browser = optionsBrowser;
+        }
+      }
+
+      return browser.messageManager;
     }
 
     // runtime.sendMessage / runtime.connect
@@ -281,7 +353,7 @@ GlobalManager = {
       let {tabTracker} = apiManager.global;
       Object.assign(data, tabTracker.getBrowserData(browser), additionalData);
 
-      browser.messageManager.sendAsyncMessage("Extension:InitExtensionView",
+      browser.messageManager.sendAsyncMessage("Extension:SetFrameData",
                                               data);
     }
   },
@@ -303,7 +375,7 @@ class ProxyContextParent extends BaseContext {
   constructor(envType, extension, params, xulBrowser, principal) {
     super(envType, extension);
 
-    this.uri = NetUtil.newURI(params.url);
+    this.uri = Services.io.newURI(params.url);
 
     this.incognito = params.incognito;
 
@@ -321,7 +393,20 @@ class ProxyContextParent extends BaseContext {
 
     this.listenerProxies = new Map();
 
+    this.pendingEventBrowser = null;
+
     apiManager.emit("proxy-context-load", this);
+  }
+
+  async withPendingBrowser(browser, callable) {
+    let savedBrowser = this.pendingEventBrowser;
+    this.pendingEventBrowser = browser;
+    try {
+      let result = await callable();
+      return result;
+    } finally {
+      this.pendingEventBrowser = savedBrowser;
+    }
   }
 
   get cloneScope() {
@@ -362,7 +447,7 @@ defineLazyGetter(ProxyContextParent.prototype, "apiObj", function() {
 });
 
 defineLazyGetter(ProxyContextParent.prototype, "sandbox", function() {
-  return Cu.Sandbox(this.principal);
+  return Cu.Sandbox(this.principal, {sandboxName: this.uri.spec});
 });
 
 /**
@@ -382,6 +467,8 @@ class ExtensionPageContextParent extends ProxyContextParent {
     super(envType, extension, params, xulBrowser, extension.principal);
 
     this.viewType = params.viewType;
+
+    this.extension.views.add(this);
 
     extension.emit("extension-proxy-context-load", this);
   }
@@ -424,6 +511,7 @@ class ExtensionPageContextParent extends ProxyContextParent {
 
   shutdown() {
     apiManager.emit("page-shutdown", this);
+    this.extension.views.delete(this);
     super.shutdown();
   }
 }
@@ -476,17 +564,26 @@ class DevToolsExtensionPageContextParent extends ExtensionPageContextParent {
 ParentAPIManager = {
   proxyContexts: new Map(),
 
+  parentMessageManagers: new Set(),
+
   init() {
     Services.obs.addObserver(this, "message-manager-close");
+    Services.obs.addObserver(this, "ipc:content-created");
 
     Services.mm.addMessageListener("API:CreateProxyContext", this);
     Services.mm.addMessageListener("API:CloseProxyContext", this, true);
     Services.mm.addMessageListener("API:Call", this);
     Services.mm.addMessageListener("API:AddListener", this);
     Services.mm.addMessageListener("API:RemoveListener", this);
+
+    this.schemaHook = this.schemaHook.bind(this);
   },
 
-  observe(subject, topic, data) {
+  attachMessageManager(extension, processMessageManager) {
+    extension.parentMessageManager = processMessageManager;
+  },
+
+  async observe(subject, topic, data) {
     if (topic === "message-manager-close") {
       let mm = subject;
       for (let [childId, context] of this.proxyContexts) {
@@ -501,6 +598,23 @@ ParentAPIManager = {
           extension.parentMessageManager = null;
         }
       }
+
+      this.parentMessageManagers.delete(mm);
+    } else if (topic === "ipc:content-created") {
+      let mm = subject.QueryInterface(Ci.nsIInterfaceRequestor)
+                      .getInterface(Ci.nsIMessageSender);
+      if (mm.remoteType === E10SUtils.EXTENSION_REMOTE_TYPE) {
+        this.parentMessageManagers.add(mm);
+        mm.sendAsyncMessage("Schema:Add", Schemas.schemaJSON);
+
+        Schemas.schemaHook = this.schemaHook;
+      }
+    }
+  },
+
+  schemaHook(schemas) {
+    for (let mm of this.parentMessageManagers) {
+      mm.sendAsyncMessage("Schema:Add", schemas);
     }
   },
 
@@ -560,7 +674,7 @@ ParentAPIManager = {
       if (!extension.parentMessageManager) {
         let expectedRemoteType = extension.remote ? E10SUtils.EXTENSION_REMOTE_TYPE : null;
         if (target.remoteType === expectedRemoteType) {
-          extension.parentMessageManager = processMessageManager;
+          this.attachMessageManager(extension, processMessageManager);
         }
       }
 
@@ -611,17 +725,20 @@ ParentAPIManager = {
     };
 
     try {
-      let args = Cu.cloneInto(data.args, context.sandbox);
+      let args = data.noClone ? data.args : Cu.cloneInto(data.args, context.sandbox);
+      let pendingBrowser = context.pendingEventBrowser;
       let fun = await context.apiCan.asyncFindAPIPath(data.path);
-      let result = fun(...args);
-
+      let result = context.withPendingBrowser(pendingBrowser,
+                                              () => fun(...args));
       if (data.callId) {
         result = result || Promise.resolve();
 
         result.then(result => {
           result = result instanceof SpreadArgs ? [...result] : [result];
 
-          reply({result});
+          let holder = new StructuredCloneHolder(result);
+
+          reply({result: holder});
         }, error => {
           error = context.normalizeError(error);
           reply({error: {message: error.message, fileName: error.fileName}});
@@ -644,6 +761,7 @@ ParentAPIManager = {
     }
 
     let {childId} = data;
+    let handlingUserInput = false;
 
     function listener(...listenerArgs) {
       return context.sendMessage(
@@ -651,9 +769,10 @@ ParentAPIManager = {
         "API:RunListener",
         {
           childId,
+          handlingUserInput,
           listenerId: data.listenerId,
           path: data.path,
-          args: listenerArgs,
+          args: new StructuredCloneHolder(listenerArgs),
         },
         {
           recipient: {childId},
@@ -675,6 +794,9 @@ ParentAPIManager = {
     }
 
     let handler = await promise;
+    if (handler.setUserInput) {
+      handlingUserInput = true;
+    }
     handler.addListener(listener, ...args);
   },
 
@@ -767,7 +889,7 @@ class HiddenXULWindow {
     let system = Services.scriptSecurityManager.getSystemPrincipal();
     this.chromeShell.createAboutBlankContentViewer(system);
     this.chromeShell.useGlobalHistory = false;
-    this.chromeShell.loadURI(XUL_URL, 0, null, null, null);
+    this.chromeShell.loadURI("chrome://extensions/content/dummy.xul", 0, null, null, null);
 
     await promiseObserved("chrome-document-global-created",
                           win => win.document == this.chromeShell.document);
@@ -780,11 +902,14 @@ class HiddenXULWindow {
    * @param {Object} xulAttributes
    *        An object that contains the xul attributes to set of the newly
    *        created browser XUL element.
+   * @param {nsIFrameLoader} [groupFrameLoader]
+   *        The frame loader to load this browser into the same process
+   *        and tab group as.
    *
    * @returns {Promise<XULElement>}
    *          A Promise which resolves to the newly created browser XUL element.
    */
-  async createBrowserElement(xulAttributes) {
+  async createBrowserElement(xulAttributes, groupFrameLoader = null) {
     if (!xulAttributes || Object.keys(xulAttributes).length === 0) {
       throw new Error("missing mandatory xulAttributes parameter");
     }
@@ -796,6 +921,7 @@ class HiddenXULWindow {
     const browser = chromeDoc.createElement("browser");
     browser.setAttribute("type", "content");
     browser.setAttribute("disableglobalhistory", "true");
+    browser.sameProcessAsFrameLoader = groupFrameLoader;
 
     for (const [name, value] of Object.entries(xulAttributes)) {
       if (value != null) {
@@ -875,7 +1001,7 @@ class HiddenExtensionPage extends HiddenXULWindow {
       "remote": this.extension.remote ? "true" : null,
       "remoteType": this.extension.remote ?
         E10SUtils.EXTENSION_REMOTE_TYPE : null,
-    });
+    }, this.extension.groupFrameLoader);
 
     return this.browser;
   }
@@ -925,6 +1051,14 @@ const DebugUtils = {
     }
   },
 
+  getExtensionManifestWarnings(id) {
+    const addon = GlobalManager.extensionMap.get(id);
+    if (addon) {
+      return addon.warnings;
+    }
+    return [];
+  },
+
 
   /**
    * Retrieve a XUL browser element which has been configured to be able to connect
@@ -954,7 +1088,7 @@ const DebugUtils = {
         "remote": extension.remote ? "true" : null,
         "remoteType": extension.remote ?
           E10SUtils.EXTENSION_REMOTE_TYPE : null,
-      });
+      }, extension.groupFrameLoader);
     };
 
     let browserPromise = this.debugBrowserPromises.get(extensionId);
@@ -963,7 +1097,11 @@ const DebugUtils = {
     if (!browserPromise) {
       browserPromise = createBrowser();
       this.debugBrowserPromises.set(extensionId, browserPromise);
-      browserPromise.catch(() => {
+      browserPromise.then(browser => {
+        browserPromise.browser = browser;
+      });
+      browserPromise.catch(e => {
+        Cu.reportError(e);
         this.debugBrowserPromises.delete(extensionId);
       });
     }
@@ -973,6 +1111,10 @@ const DebugUtils = {
     return browserPromise;
   },
 
+  getFrameLoader(extensionId) {
+    let promise = this.debugBrowserPromises.get(extensionId);
+    return promise && promise.browser && promise.browser.frameLoader;
+  },
 
   /**
    * Given the devtools actor that has retrieved an addon debug browser element,
@@ -1072,18 +1214,356 @@ function extensionNameFromURI(uri) {
   return GlobalManager.getExtension(id).name;
 }
 
-const ExtensionParent = {
+const INTEGER = /^[1-9]\d*$/;
+
+// Manages icon details for toolbar buttons in the |pageAction| and
+// |browserAction| APIs.
+let IconDetails = {
+  // WeakMap<Extension -> Map<url-string -> object>>
+  iconCache: new DefaultWeakMap(() => new Map()),
+
+  // Normalizes the various acceptable input formats into an object
+  // with icon size as key and icon URL as value.
+  //
+  // If a context is specified (function is called from an extension):
+  // Throws an error if an invalid icon size was provided or the
+  // extension is not allowed to load the specified resources.
+  //
+  // If no context is specified, instead of throwing an error, this
+  // function simply logs a warning message.
+  normalize(details, extension, context = null) {
+    if (!details.imageData && typeof details.path === "string") {
+      let icons = this.iconCache.get(extension);
+
+      let baseURI = context ? context.uri : extension.baseURI;
+      let url = baseURI.resolve(details.path);
+
+      let icon = icons.get(url);
+      if (!icon) {
+        icon = this._normalize(details, extension, context);
+        icons.set(url, icon);
+      }
+      return icon;
+    }
+
+    return this._normalize(details, extension, context);
+  },
+
+  _normalize(details, extension, context = null) {
+    let result = {};
+
+    try {
+      let {imageData, path, themeIcons} = details;
+
+      if (imageData) {
+        if (typeof imageData == "string") {
+          imageData = {"19": imageData};
+        }
+
+        for (let size of Object.keys(imageData)) {
+          if (!INTEGER.test(size)) {
+            throw new ExtensionError(`Invalid icon size ${size}, must be an integer`);
+          }
+          result[size] = imageData[size];
+        }
+      }
+
+      let baseURI = context ? context.uri : extension.baseURI;
+
+      if (path) {
+        if (typeof path != "object") {
+          path = {"19": path};
+        }
+
+        for (let size of Object.keys(path)) {
+          if (!INTEGER.test(size)) {
+            throw new ExtensionError(`Invalid icon size ${size}, must be an integer`);
+          }
+
+          let url = baseURI.resolve(path[size]);
+
+          // The Chrome documentation specifies these parameters as
+          // relative paths. We currently accept absolute URLs as well,
+          // which means we need to check that the extension is allowed
+          // to load them. This will throw an error if it's not allowed.
+          this._checkURL(url, extension.principal);
+
+          result[size] = url;
+        }
+      }
+
+      if (themeIcons) {
+        themeIcons.forEach(({size, light, dark}) => {
+          let lightURL = baseURI.resolve(light);
+          let darkURL = baseURI.resolve(dark);
+
+          this._checkURL(lightURL, extension.principal);
+          this._checkURL(darkURL, extension.principal);
+
+          let defaultURL = result[size];
+          result[size] = {
+            "default": defaultURL || lightURL, // Fallback to the light url if no default is specified.
+            "light": lightURL,
+            "dark": darkURL,
+          };
+        });
+      }
+    } catch (e) {
+      // Function is called from extension code, delegate error.
+      if (context) {
+        throw e;
+      }
+      // If there's no context, it's because we're handling this
+      // as a manifest directive. Log a warning rather than
+      // raising an error.
+      extension.manifestError(`Invalid icon data: ${e}`);
+    }
+
+    return result;
+  },
+
+  // Checks if the extension is allowed to load the given URL with the specified principal.
+  // This will throw an error if the URL is not allowed.
+  _checkURL(url, principal) {
+    try {
+      Services.scriptSecurityManager.checkLoadURIStrWithPrincipal(
+        principal, url,
+        Services.scriptSecurityManager.DISALLOW_SCRIPT);
+    } catch (e) {
+      throw new ExtensionError(`Illegal URL ${url}`);
+    }
+  },
+
+  // Returns the appropriate icon URL for the given icons object and the
+  // screen resolution of the given window.
+  getPreferredIcon(icons, extension = null, size = 16) {
+    const DEFAULT = "chrome://browser/content/extension.svg";
+
+    let bestSize = null;
+    if (icons[size]) {
+      bestSize = size;
+    } else if (icons[2 * size]) {
+      bestSize = 2 * size;
+    } else {
+      let sizes = Object.keys(icons)
+                        .map(key => parseInt(key, 10))
+                        .sort((a, b) => a - b);
+
+      bestSize = sizes.find(candidate => candidate > size) || sizes.pop();
+    }
+
+    if (bestSize) {
+      return {size: bestSize, icon: icons[bestSize]};
+    }
+
+    return {size, icon: DEFAULT};
+  },
+
+  convertImageURLToDataURL(imageURL, contentWindow, browserWindow, size = 18) {
+    return new Promise((resolve, reject) => {
+      let image = new contentWindow.Image();
+      image.onload = function() {
+        let canvas = contentWindow.document.createElement("canvas");
+        let ctx = canvas.getContext("2d");
+        let dSize = size * browserWindow.devicePixelRatio;
+
+        // Scales the image while maintaing width to height ratio.
+        // If the width and height differ, the image is centered using the
+        // smaller of the two dimensions.
+        let dWidth, dHeight, dx, dy;
+        if (this.width > this.height) {
+          dWidth = dSize;
+          dHeight = image.height * (dSize / image.width);
+          dx = 0;
+          dy = (dSize - dHeight) / 2;
+        } else {
+          dWidth = image.width * (dSize / image.height);
+          dHeight = dSize;
+          dx = (dSize - dWidth) / 2;
+          dy = 0;
+        }
+
+        canvas.width = dSize;
+        canvas.height = dSize;
+        ctx.drawImage(this, 0, 0, this.width, this.height, dx, dy, dWidth, dHeight);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      image.onerror = reject;
+      image.src = imageURL;
+    });
+  },
+
+  // These URLs should already be properly escaped, but make doubly sure CSS
+  // string escape characters are escaped here, since they could lead to a
+  // sandbox break.
+  escapeUrl(url) {
+    return url.replace(/[\\\s"]/g, encodeURIComponent);
+  },
+};
+
+StartupCache = {
+  DB_NAME: "ExtensionStartupCache",
+
+  STORE_NAMES: Object.freeze(["general", "locales", "manifests", "other", "permissions", "schemas"]),
+
+  file: OS.Path.join(OS.Constants.Path.localProfileDir, "startupCache", "webext.sc.lz4"),
+
+  get saver() {
+    if (!this._saver) {
+      OS.File.makeDir(OS.Path.dirname(this.file), {
+        ignoreExisting: true,
+        from: OS.Constants.Path.localProfileDir,
+      });
+
+      this._saver = new DeferredSave(this.file,
+                                     () => this.getBlob(),
+                                     {delay: 5000});
+    }
+    return this._saver;
+  },
+
+  async save() {
+    return this.saver.saveChanges();
+  },
+
+  getBlob() {
+    return new Uint8Array(aomStartup.encodeBlob(this._data));
+  },
+
+  _data: null,
+  async _readData() {
+    let result = new Map();
+    try {
+      let data = await promiseFileContents(this.file);
+
+      result = aomStartup.decodeBlob(data);
+    } catch (e) {
+      if (!e.becauseNoSuchFile) {
+        Cu.reportError(e);
+      }
+    }
+
+    this._data = result;
+    return result;
+  },
+
+  get dataPromise() {
+    if (!this._dataPromise) {
+      this._dataPromise = this._readData();
+    }
+    return this._dataPromise;
+  },
+
+  clearAddonData(id) {
+    return Promise.all([
+      this.general.delete(id),
+      this.locales.delete(id),
+      this.manifests.delete(id),
+      this.permissions.delete(id),
+    ]).catch(e => {
+      // Ignore the error. It happens when we try to flush the add-on
+      // data after the AddonManager has flushed the entire startup cache.
+    });
+  },
+
+  observe(subject, topic, data) {
+    if (topic === "startupcache-invalidate") {
+      this._data = new Map();
+      this._dataPromise = Promise.resolve(this._data);
+    }
+  },
+
+  get(extension, path, createFunc) {
+    return this.general.get([extension.id, extension.version, ...path],
+                            createFunc);
+  },
+
+  delete(extension, path) {
+    return this.general.delete([extension.id, extension.version, ...path]);
+  },
+};
+
+// void StartupCache.dataPromise;
+
+Services.obs.addObserver(StartupCache, "startupcache-invalidate");
+
+class CacheStore {
+  constructor(storeName) {
+    this.storeName = storeName;
+  }
+
+  async getStore(path = null) {
+    let data = await StartupCache.dataPromise;
+
+    let store = data.get(this.storeName);
+    if (!store) {
+      store = new Map();
+      data.set(this.storeName, store);
+    }
+
+    let key = path;
+    if (Array.isArray(path)) {
+      for (let elem of path.slice(0, -1)) {
+        let next = store.get(elem);
+        if (!next) {
+          next = new Map();
+          store.set(elem, next);
+        }
+        store = next;
+      }
+      key = path[path.length - 1];
+    }
+
+    return [store, key];
+  }
+
+  async get(path, createFunc) {
+    let [store, key] = await this.getStore(path);
+
+    let result = store.get(key);
+
+    if (result === undefined) {
+      result = await createFunc(path);
+      store.set(key, result);
+      StartupCache.save();
+    }
+
+    return result;
+  }
+
+  async getAll() {
+    let [store] = await this.getStore();
+
+    return new Map(store);
+  }
+
+  async delete(path) {
+    let [store, key] = await this.getStore(path);
+
+    store.delete(key);
+    StartupCache.save();
+  }
+}
+
+for (let name of StartupCache.STORE_NAMES) {
+  StartupCache[name] = new CacheStore(name);
+}
+
+var ExtensionParent = {
   extensionNameFromURI,
   GlobalManager,
   HiddenExtensionPage,
+  IconDetails,
   ParentAPIManager,
+  StartupCache,
+  WebExtensionPolicy,
   apiManager,
   get baseManifestProperties() {
     if (gBaseManifestProperties) {
       return gBaseManifestProperties;
     }
 
-    let types = Schemas.schemaJSON.get(BASE_SCHEMA)[0].types;
+    let types = Schemas.schemaJSON.get(BASE_SCHEMA).deserialize({})[0].types;
     let manifest = types.find(type => type.id === "WebExtensionManifest");
     if (!manifest) {
       throw new Error("Unable to find base manifest properties");
@@ -1096,3 +1576,39 @@ const ExtensionParent = {
   watchExtensionProxyContextLoad,
   DebugUtils,
 };
+
+XPCOMUtils.defineLazyGetter(ExtensionParent, "PlatformInfo", () => {
+  return Object.freeze({
+    os: (function() {
+      let os = AppConstants.platform;
+      if (os == "macosx") {
+        os = "mac";
+      }
+      return os;
+    })(),
+    arch: (function() {
+      let abi = Services.appinfo.XPCOMABI;
+      let [arch] = abi.split("-");
+      if (arch == "x86") {
+        arch = "x86-32";
+      } else if (arch == "x86_64") {
+        arch = "x86-64";
+      }
+      return arch;
+    })(),
+  });
+});
+
+/**
+ * Retreives the browser_style stylesheets needed for extension popups and sidebars.
+ * @returns {Array<string>} an array of stylesheets needed for the current platform.
+ */
+XPCOMUtils.defineLazyGetter(ExtensionParent, "extensionStylesheets", () => {
+  let stylesheets = ["chrome://browser/content/extension.css"];
+
+  if (AppConstants.platform === "macosx") {
+    stylesheets.push("chrome://browser/content/extension-mac.css");
+  }
+
+  return stylesheets;
+});

@@ -6,7 +6,7 @@
 
 const { Ci } = require("chrome");
 const defer = require("devtools/shared/defer");
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 const Services = require("Services");
 const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
 
@@ -456,6 +456,10 @@ TabTarget.prototype = {
         return;
       }
       this.activeConsole = consoleClient;
+
+      this._onInspectObject = (event, packet) => this.emit("inspect-object", packet);
+      this.activeConsole.on("inspectObject", this._onInspectObject);
+
       this._remote.resolve(null);
     };
 
@@ -576,6 +580,9 @@ TabTarget.prototype = {
     this.client.removeListener("frameUpdate", this._onFrameUpdate);
     this.client.removeListener("newSource", this._onSourceUpdated);
     this.client.removeListener("updatedSource", this._onSourceUpdated);
+    if (this.activeConsole && this._onInspectObject) {
+      this.activeConsole.off("inspectObject", this._onInspectObject);
+    }
   },
 
   /**
@@ -705,6 +712,26 @@ TabTarget.prototype = {
     let id = this._tab ? this._tab : (this._form && this._form.actor);
     return `TabTarget:${id}`;
   },
+
+  /**
+   * Log an error of some kind to the tab's console.
+   *
+   * @param {String} text
+   *                 The text to log.
+   * @param {String} category
+   *                 The category of the message.  @see nsIScriptError.
+   */
+  logErrorInPage: function (text, category) {
+    if (this.activeTab && this.activeTab.traits.logErrorInPage) {
+      let packet = {
+        to: this.form.actor,
+        type: "logErrorInPage",
+        text,
+        category,
+      };
+      this.client.request(packet);
+    }
+  },
 };
 
 /**
@@ -829,6 +856,10 @@ WorkerTarget.prototype = {
     return this._workerClient;
   },
 
+  get activeConsole() {
+    return this.client._clients.get(this.form.consoleActor);
+  },
+
   get client() {
     return this._workerClient.client;
   },
@@ -851,5 +882,9 @@ WorkerTarget.prototype = {
 
   makeRemote: function () {
     return Promise.resolve();
-  }
+  },
+
+  logErrorInPage: function () {
+    // No-op.  See bug 1368680.
+  },
 };

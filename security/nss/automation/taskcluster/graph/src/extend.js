@@ -24,6 +24,10 @@ const WINDOWS_CHECKOUT_CMD =
   "bash -c \"hg clone -r $NSS_HEAD_REVISION $NSS_HEAD_REPOSITORY nss || " +
     "(sleep 2; hg clone -r $NSS_HEAD_REVISION $NSS_HEAD_REPOSITORY nss) || " +
     "(sleep 5; hg clone -r $NSS_HEAD_REVISION $NSS_HEAD_REPOSITORY nss)\"";
+const MAC_CHECKOUT_CMD = ["bash", "-c",
+            "hg clone -r $NSS_HEAD_REVISION $NSS_HEAD_REPOSITORY nss || " +
+            "(sleep 2; hg clone -r $NSS_HEAD_REVISION $NSS_HEAD_REPOSITORY nss) || " +
+            "(sleep 5; hg clone -r $NSS_HEAD_REVISION $NSS_HEAD_REPOSITORY nss)"];
 
 /*****************************************************************************/
 
@@ -42,7 +46,8 @@ queue.filter(task => {
 
   if (task.tests == "bogo" || task.tests == "interop") {
     // No windows
-    if (task.platform == "windows2012-64") {
+    if (task.platform == "windows2012-64" ||
+        task.platform == "windows2012-32") {
       return false;
     }
 
@@ -50,11 +55,19 @@ queue.filter(task => {
     if (task.platform == "aarch64") {
       return false;
     }
+
+    // No mac
+    if (task.platform == "mac") {
+      return false;
+    }
+  }
+
+  if (task.tests == "fips" && task.platform == "mac") {
+    return false;
   }
 
   // Only old make builds have -Ddisable_libpkix=0 and can run chain tests.
-  if (task.tests == "chains" && task.collection != "make" &&
-      task.platform != "windows2012-64") {
+  if (task.tests == "chains" && task.collection != "make") {
     return false;
   }
 
@@ -64,7 +77,6 @@ queue.filter(task => {
       return false;
     }
   }
-
 
   // Don't run additional hardware tests on ARM (we don't have anything there).
   if (task.group == "Cipher" && task.platform == "aarch64" && task.env &&
@@ -154,13 +166,34 @@ export default async function main() {
     features: ["allowPtrace"],
   }, "--ubsan --asan");
 
+  await scheduleWindows("Windows 2012 64 (debug, make)", {
+    platform: "windows2012-64",
+    collection: "make",
+    env: {USE_64: "1"}
+  }, "build.sh");
+
+  await scheduleWindows("Windows 2012 32 (debug, make)", {
+    platform: "windows2012-32",
+    collection: "make"
+  }, "build.sh");
+
   await scheduleWindows("Windows 2012 64 (opt)", {
-    env: {BUILD_OPT: "1"}
-  });
+    platform: "windows2012-64",
+  }, "build_gyp.sh --opt");
 
   await scheduleWindows("Windows 2012 64 (debug)", {
+    platform: "windows2012-64",
     collection: "debug"
-  });
+  }, "build_gyp.sh");
+
+  await scheduleWindows("Windows 2012 32 (opt)", {
+    platform: "windows2012-32",
+  }, "build_gyp.sh --opt -m32");
+
+  await scheduleWindows("Windows 2012 32 (debug)", {
+    platform: "windows2012-32",
+    collection: "debug"
+  }, "build_gyp.sh -m32");
 
   await scheduleFuzzing();
   await scheduleFuzzing32();
@@ -196,6 +229,71 @@ export default async function main() {
       collection: "opt",
     }, aarch64_base)
   );
+
+  await scheduleMac("Mac (opt)", {collection: "opt"}, "--opt");
+  await scheduleMac("Mac (debug)", {collection: "debug"});
+}
+
+
+async function scheduleMac(name, base, args = "") {
+  let mac_base = merge(base, {
+    env: {
+      PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      NSS_TASKCLUSTER_MAC: "1",
+      DOMSUF: "localdomain",
+      HOST: "localhost",
+    },
+    provisioner: "localprovisioner",
+    workerType: "nss-macos-10-12",
+    platform: "mac",
+    tier: 3
+  });
+
+  // Build base definition.
+  let build_base = merge({
+    command: [
+      MAC_CHECKOUT_CMD,
+      ["bash", "-c",
+       "nss/automation/taskcluster/scripts/build_gyp.sh", args]
+    ],
+    provisioner: "localprovisioner",
+    workerType: "nss-macos-10-12",
+    platform: "mac",
+    maxRunTime: 7200,
+    artifacts: [{
+      expires: 24 * 7,
+      type: "directory",
+      path: "public"
+    }],
+    kind: "build",
+    symbol: "B"
+  }, mac_base);
+
+  // The task that builds NSPR+NSS.
+  let task_build = queue.scheduleTask(merge(build_base, {name}));
+
+  // The task that generates certificates.
+  let task_cert = queue.scheduleTask(merge(build_base, {
+    name: "Certificates",
+    command: [
+      MAC_CHECKOUT_CMD,
+      ["bash", "-c",
+       "nss/automation/taskcluster/scripts/gen_certs.sh"]
+    ],
+    parent: task_build,
+    symbol: "Certs"
+  }));
+
+  // Schedule tests.
+  scheduleTests(task_build, task_cert, merge(mac_base, {
+    command: [
+      MAC_CHECKOUT_CMD,
+      ["bash", "-c",
+       "nss/automation/taskcluster/scripts/run_tests.sh"]
+    ]
+  }));
+
+  return queue.submit();
 }
 
 /*****************************************************************************/
@@ -575,10 +673,9 @@ async function scheduleTestBuilds(base, args = "") {
 
 /*****************************************************************************/
 
-async function scheduleWindows(name, base) {
+async function scheduleWindows(name, base, build_script) {
   base = merge(base, {
     workerType: "nss-win2012r2",
-    platform: "windows2012-64",
     env: {
       PATH: "c:\\mozilla-build\\python;c:\\mozilla-build\\msys\\local\\bin;" +
             "c:\\mozilla-build\\7zip;c:\\mozilla-build\\info-zip;" +
@@ -588,7 +685,6 @@ async function scheduleWindows(name, base) {
             "c:\\mozilla-build\\wget",
       DOMSUF: "localdomain",
       HOST: "localhost",
-      USE_64: "1"
     }
   });
 
@@ -596,7 +692,7 @@ async function scheduleWindows(name, base) {
   let build_base = merge(base, {
     command: [
       WINDOWS_CHECKOUT_CMD,
-      "bash -c nss/automation/taskcluster/windows/build.sh"
+      `bash -c 'nss/automation/taskcluster/windows/${build_script}'`
     ],
     artifacts: [{
       expires: 24 * 7,
@@ -728,7 +824,7 @@ async function scheduleTools() {
     command: [
       "/bin/bash",
       "-c",
-      "bin/checkout.sh && nss/automation/taskcluster/scripts/run_clang_format.sh"
+      "bin/checkout.sh && nss/automation/clang-format/run_clang_format.sh"
     ]
   }));
 

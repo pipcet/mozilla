@@ -15,31 +15,18 @@ namespace mozilla
 class MockMediaResource : public MediaResource
 {
 public:
-  explicit MockMediaResource(const char* aFileName,
-                             const MediaContainerType& aMimeType =
-                               MediaContainerType(MEDIAMIMETYPE("video/mp4")));
-  nsIURI* URI() const override { return nullptr; }
-  nsresult Close() override { return NS_OK; }
-  void Suspend(bool aCloseImmediately) override {}
-  void Resume() override {}
+  explicit MockMediaResource(const char* aFileName);
   already_AddRefed<nsIPrincipal> GetCurrentPrincipal() override
   {
     return nullptr;
   }
-  bool CanClone() override { return false; }
-  already_AddRefed<MediaResource> CloneData(MediaResourceCallback*)
-    override
-  {
-    return nullptr;
-  }
-  void SetReadMode(MediaCacheStream::ReadMode aMode) override {}
-  void SetPlaybackRate(uint32_t aBytesPerSecond) override {}
   nsresult ReadAt(int64_t aOffset, char* aBuffer, uint32_t aCount,
                   uint32_t* aBytes) override;
+  // Data stored in file, caching recommended.
+  bool ShouldCacheReads() override { return true; }
   int64_t Tell() override { return 0; }
   void Pin() override {}
   void Unpin() override {}
-  double GetDownloadRate(bool* aIsReliable) override { return 0; }
   int64_t GetLength() override;
   int64_t GetNextCachedData(int64_t aOffset) override;
   int64_t GetCachedDataEnd(int64_t aOffset) override;
@@ -59,12 +46,8 @@ public:
   }
 
   bool IsTransportSeekable() override { return true; }
-  nsresult Open(nsIStreamListener** aStreamListener) override;
+  nsresult Open();
   nsresult GetCachedRanges(MediaByteRangeSet& aRanges) override;
-  const MediaContainerType& GetContentType() const override
-  {
-    return mContainerType;
-  }
 
   void MockClearBufferedRanges();
   void MockAddBufferedRange(int64_t aStart, int64_t aEnd);
@@ -77,7 +60,6 @@ private:
   const char* mFileName;
   MediaByteRangeSet mRanges;
   Atomic<int> mEntry;
-  const MediaContainerType mContainerType;
 };
 
 } // namespace mozilla

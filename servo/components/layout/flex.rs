@@ -23,10 +23,11 @@ use std::ops::Range;
 use style::computed_values::{align_content, align_self, flex_direction, flex_wrap, justify_content};
 use style::computed_values::border_collapse;
 use style::logical_geometry::{Direction, LogicalSize};
-use style::properties::ServoComputedValues;
+use style::properties::ComputedValues;
 use style::servo::restyle_damage::{REFLOW, REFLOW_OUT_OF_FLOW};
-use style::values::computed::{LengthOrPercentage, LengthOrPercentageOrAuto};
-use style::values::computed::{LengthOrPercentageOrAutoOrContent, LengthOrPercentageOrNone};
+use style::values::computed::{LengthOrPercentage, LengthOrPercentageOrAuto, LengthOrPercentageOrNone};
+use style::values::computed::flex::FlexBasis;
+use style::values::generics::flex::FlexBasis as GenericFlexBasis;
 
 /// The size of an axis. May be a specified size, a min/max
 /// constraint, or an unlimited size
@@ -46,7 +47,7 @@ impl AxisSize {
             LengthOrPercentageOrAuto::Length(length) => AxisSize::Definite(length),
             LengthOrPercentageOrAuto::Percentage(percent) => {
                 match content_size {
-                    Some(size) => AxisSize::Definite(size.scale_by(percent)),
+                    Some(size) => AxisSize::Definite(size.scale_by(percent.0)),
                     None => AxisSize::Infinite
                 }
             }
@@ -67,23 +68,25 @@ impl AxisSize {
 /// and the container size, then return the used value of flex basis. it can be used to help
 /// determining the flex base size and to indicate whether the main size of the item
 /// is definite after flex size resolving.
-fn from_flex_basis(flex_basis: LengthOrPercentageOrAutoOrContent,
-                   main_length: LengthOrPercentageOrAuto,
-                   containing_length: Option<Au>) -> MaybeAuto {
+fn from_flex_basis(
+    flex_basis: FlexBasis,
+    main_length: LengthOrPercentageOrAuto,
+    containing_length: Option<Au>
+) -> MaybeAuto {
     match (flex_basis, containing_length) {
-        (LengthOrPercentageOrAutoOrContent::Length(length), _) =>
+        (GenericFlexBasis::Length(LengthOrPercentage::Length(length)), _) =>
             MaybeAuto::Specified(length),
-        (LengthOrPercentageOrAutoOrContent::Percentage(percent), Some(size)) =>
-            MaybeAuto::Specified(size.scale_by(percent)),
-        (LengthOrPercentageOrAutoOrContent::Percentage(_), None) =>
+        (GenericFlexBasis::Length(LengthOrPercentage::Percentage(percent)), Some(size)) =>
+            MaybeAuto::Specified(size.scale_by(percent.0)),
+        (GenericFlexBasis::Length(LengthOrPercentage::Percentage(_)), None) =>
             MaybeAuto::Auto,
-        (LengthOrPercentageOrAutoOrContent::Calc(calc), _) =>
+        (GenericFlexBasis::Length(LengthOrPercentage::Calc(calc)), _) =>
             MaybeAuto::from_option(calc.to_used_value(containing_length)),
-        (LengthOrPercentageOrAutoOrContent::Content, _) =>
+        (GenericFlexBasis::Content, _) =>
             MaybeAuto::Auto,
-        (LengthOrPercentageOrAutoOrContent::Auto, Some(size)) =>
+        (GenericFlexBasis::Auto, Some(size)) =>
             MaybeAuto::from_style(main_length, size),
-        (LengthOrPercentageOrAutoOrContent::Auto, None) => {
+        (GenericFlexBasis::Auto, None) => {
             if let LengthOrPercentageOrAuto::Length(length) = main_length {
                 MaybeAuto::Specified(length)
             } else {
@@ -134,8 +137,8 @@ impl FlexItem {
             min_size: Au(0),
             max_size: MAX_AU,
             index: index,
-            flex_grow: flex_grow,
-            flex_shrink: flex_shrink,
+            flex_grow: flex_grow.into(),
+            flex_shrink: flex_shrink.into(),
             order: order,
             is_frozen: false,
             is_strut: false
@@ -412,7 +415,7 @@ impl FlexFlow {
 
         let items = &mut self.items[start..];
         let mut children = self.block_flow.base.children.random_access_mut();
-        for mut item in items {
+        for item in items {
             let kid = children.get(item.index);
             item.init_sizes(kid, container_size, self.main_mode);
             let outer_main_size = item.outer_main_size(kid, self.main_mode);
@@ -604,7 +607,7 @@ impl FlexFlow {
 
             let mut children = self.block_flow.base.children.random_access_mut();
             for item in items.iter_mut() {
-                let mut block = children.get(item.index).as_mut_block();
+                let block = children.get(item.index).as_mut_block();
 
                 block.base.block_container_writing_mode = container_mode;
                 block.base.block_container_inline_size = inline_size;
@@ -656,7 +659,7 @@ impl FlexFlow {
 
         let mut children = self.block_flow.base.children.random_access_mut();
         for item in &mut self.items {
-            let mut base = flow::mut_base(children.get(item.index));
+            let base = flow::mut_base(children.get(item.index));
             if !self.main_reverse {
                 base.position.start.b = cur_b;
                 cur_b = cur_b + base.position.size.block;
@@ -946,8 +949,8 @@ impl Flow for FlexFlow {
         }
     }
 
-    fn compute_absolute_position(&mut self, layout_context: &LayoutContext) {
-        self.block_flow.compute_absolute_position(layout_context)
+    fn compute_stacking_relative_position(&mut self, layout_context: &LayoutContext) {
+        self.block_flow.compute_stacking_relative_position(layout_context)
     }
 
     fn place_float_if_applicable<'a>(&mut self) {
@@ -970,7 +973,7 @@ impl Flow for FlexFlow {
         self.block_flow.collect_stacking_contexts(state);
     }
 
-    fn repair_style(&mut self, new_style: &::StyleArc<ServoComputedValues>) {
+    fn repair_style(&mut self, new_style: &::ServoArc<ComputedValues>) {
         self.block_flow.repair_style(new_style)
     }
 

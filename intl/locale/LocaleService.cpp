@@ -95,7 +95,7 @@ ReadRequestedLocales(nsTArray<nsCString>& aRetVal)
   }
 
   // Otherwise, we'll try to get the requested locale from the prefs.
-  if (!NS_SUCCEEDED(Preferences::GetCString(SELECTED_LOCALE_PREF, &locale))) {
+  if (!NS_SUCCEEDED(Preferences::GetCString(SELECTED_LOCALE_PREF, locale))) {
     return false;
   }
 
@@ -217,6 +217,18 @@ LocaleService::GetAppLocalesAsBCP47(nsTArray<nsCString>& aRetVal)
     SanitizeForBCP47(locale);
     aRetVal.AppendElement(locale);
   }
+}
+
+void
+LocaleService::GetRegionalPrefsLocales(nsTArray<nsCString>& aRetVal)
+{
+  bool useOSLocales = Preferences::GetBool("intl.regional_prefs.use_os_locales", false);
+
+  if (useOSLocales && OSPreferences::GetInstance()->GetRegionalPrefsLocales(aRetVal)) {
+    return;
+  }
+
+  GetAppLocalesAsBCP47(aRetVal);
 }
 
 void
@@ -500,12 +512,12 @@ LocaleService::IsAppLocaleRTL()
   // the locale. If that isn't set, default to left-to-right.
   nsAutoCString prefString = NS_LITERAL_CSTRING("intl.uidirection.") + locale;
   nsAutoCString dir;
-  Preferences::GetCString(prefString.get(), &dir);
+  Preferences::GetCString(prefString.get(), dir);
   if (dir.IsEmpty()) {
     int32_t hyphen = prefString.FindChar('-');
     if (hyphen >= 1) {
       prefString.Truncate(hyphen);
-      Preferences::GetCString(prefString.get(), &dir);
+      Preferences::GetCString(prefString.get(), dir);
     }
   }
   return dir.EqualsLiteral("rtl");
@@ -612,6 +624,23 @@ LocaleService::GetAppLocaleAsBCP47(nsACString& aRetVal)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+LocaleService::GetRegionalPrefsLocales(uint32_t* aCount, char*** aOutArray)
+{
+  AutoTArray<nsCString,10> rgLocales;
+
+  GetRegionalPrefsLocales(rgLocales);
+
+  *aCount = rgLocales.Length();
+  *aOutArray = static_cast<char**>(moz_xmalloc(*aCount * sizeof(char*)));
+
+  for (uint32_t i = 0; i < *aCount; i++) {
+    (*aOutArray)[i] = moz_xstrdup(rgLocales[i].get());
+  }
+
+  return NS_OK;
+}
+
 static LocaleService::LangNegStrategy
 ToLangNegStrategy(int32_t aStrategy)
 {
@@ -701,7 +730,7 @@ LocaleService::Locale::Locale(const nsCString& aLocale, bool aRange)
   nsAutoCString normLocale(aLocale);
   normLocale.ReplaceChar('_', '-');
 
-  for (const nsCSubstring& part : normLocale.Split('-')) {
+  for (const nsACString& part : normLocale.Split('-')) {
     switch (partNum) {
       case 0:
         if (part.EqualsLiteral("*") ||

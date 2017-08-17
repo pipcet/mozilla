@@ -26,7 +26,7 @@ use std::thread;
 use std::u32;
 use style::font_face::{EffectiveSources, Source};
 use style::properties::longhands::font_family::computed_value::{FontFamily, FamilyName};
-use webrender_traits;
+use webrender_api;
 
 /// A list of font templates that make up a given font family.
 struct FontTemplates {
@@ -36,7 +36,7 @@ struct FontTemplates {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FontTemplateInfo {
     pub font_template: Arc<FontTemplateData>,
-    pub font_key: Option<webrender_traits::FontKey>,
+    pub font_key: Option<webrender_api::FontKey>,
 }
 
 impl FontTemplates {
@@ -127,8 +127,8 @@ struct FontCache {
     web_families: HashMap<LowercaseString, FontTemplates>,
     font_context: FontContextHandle,
     core_resource_thread: CoreResourceThread,
-    webrender_api: Option<webrender_traits::RenderApi>,
-    webrender_fonts: HashMap<Atom, webrender_traits::FontKey>,
+    webrender_api: Option<webrender_api::RenderApi>,
+    webrender_fonts: HashMap<Atom, webrender_api::FontKey>,
 }
 
 fn populate_generic_fonts() -> HashMap<FontFamily, LowercaseString> {
@@ -216,7 +216,8 @@ impl FontCache {
                     url: url.clone(),
                     type_: RequestType::Font,
                     destination: Destination::Font,
-                    origin: url.clone(),
+                    // TODO: Add a proper origin - Can't import GlobalScope from gfx
+                    // We can leave origin to be set by default
                     .. RequestInit::default()
                 };
 
@@ -347,11 +348,13 @@ impl FontCache {
             let webrender_fonts = &mut self.webrender_fonts;
             font_key = Some(*webrender_fonts.entry(template.identifier.clone()).or_insert_with(|| {
                 let font_key = webrender_api.generate_font_key();
+                let mut updates = webrender_api::ResourceUpdates::new();
                 match (template.bytes_if_in_memory(), template.native_font()) {
-                    (Some(bytes), _) => webrender_api.add_raw_font(font_key, bytes, 0),
-                    (None, Some(native_font)) => webrender_api.add_native_font(font_key, native_font),
-                    (None, None) => webrender_api.add_raw_font(font_key, template.bytes().clone(), 0),
+                    (Some(bytes), _) => updates.add_raw_font(font_key, bytes, 0),
+                    (None, Some(native_font)) => updates.add_native_font(font_key, native_font),
+                    (None, None) => updates.add_raw_font(font_key, template.bytes().clone(), 0),
                 }
+                webrender_api.update_resources(updates);
                 font_key
             }));
         }
@@ -400,7 +403,7 @@ pub struct FontCacheThread {
 
 impl FontCacheThread {
     pub fn new(core_resource_thread: CoreResourceThread,
-               webrender_api: Option<webrender_traits::RenderApi>) -> FontCacheThread {
+               webrender_api: Option<webrender_api::RenderApi>) -> FontCacheThread {
         let (chan, port) = ipc::channel().unwrap();
 
         let channel_to_self = chan.clone();

@@ -67,6 +67,18 @@ private:
   CustomElementData* mOwnerData;
 };
 
+class CustomElementConstructor final : public CallbackFunction
+{
+public:
+  explicit CustomElementConstructor(CallbackFunction* aOther)
+    : CallbackFunction(aOther)
+  {
+    MOZ_ASSERT(JS::IsConstructor(mCallback));
+  }
+
+  already_AddRefed<Element> Construct(const char* aExecutionReason, ErrorResult& aRv);
+};
+
 // Each custom element has an associated callback queue and an element is
 // being created flag.
 struct CustomElementData
@@ -85,23 +97,14 @@ struct CustomElementData
 
   explicit CustomElementData(nsIAtom* aType);
   CustomElementData(nsIAtom* aType, State aState);
-  // Objects in this array are transient and empty after each microtask
-  // checkpoint.
-  nsTArray<nsAutoPtr<CustomElementCallback>> mCallbackQueue;
   // Custom element type, for <button is="x-button"> or <x-button>
   // this would be x-button.
   nsCOMPtr<nsIAtom> mType;
-  // The callback that is next to be processed upon calling RunCallbackQueue.
-  int32_t mCurrentCallback;
   // Element is being created flag as described in the custom elements spec.
   bool mElementIsBeingCreated;
   // Flag to determine if the created callback has been invoked, thus it
   // determines if other callbacks can be enqueued.
   bool mCreatedCallbackInvoked;
-  // The microtask level associated with the callbacks in the callback queue,
-  // it is used to determine if a new queue needs to be pushed onto the
-  // processing stack.
-  int32_t mAssociatedMicroTask;
   // Custom element state as described in the custom element spec.
   State mState;
   // custom element reaction queue as described in the custom element spec.
@@ -110,14 +113,13 @@ struct CustomElementData
   // appended, removed, or replaced.
   // There are 3 reactions in reaction queue when doing upgrade operation,
   // e.g., create an element, insert a node.
-  AutoTArray<nsAutoPtr<CustomElementReaction>, 3> mReactionQueue;
-
-  // Empties the callback queue.
-  void RunCallbackQueue();
+  AutoTArray<UniquePtr<CustomElementReaction>, 3> mReactionQueue;
 
 private:
   virtual ~CustomElementData() {}
 };
+
+#define ALEADY_CONSTRUCTED_MARKER nullptr
 
 // The required information for a custom element as defined in:
 // https://html.spec.whatwg.org/multipage/scripting.html#custom-element-definition
@@ -125,7 +127,7 @@ struct CustomElementDefinition
 {
   CustomElementDefinition(nsIAtom* aType,
                           nsIAtom* aLocalName,
-                          JSObject* aConstructor,
+                          Function* aConstructor,
                           JSObject* aPrototype,
                           mozilla::dom::LifecycleCallbacks* aCallbacks,
                           uint32_t aDocOrder);
@@ -137,16 +139,16 @@ struct CustomElementDefinition
   nsCOMPtr<nsIAtom> mLocalName;
 
   // The custom element constructor.
-  JS::Heap<JSObject *> mConstructor;
+  RefPtr<CustomElementConstructor> mConstructor;
 
   // The prototype to use for new custom elements of this type.
   JS::Heap<JSObject *> mPrototype;
 
   // The lifecycle callbacks to call for this custom element.
-  nsAutoPtr<mozilla::dom::LifecycleCallbacks> mCallbacks;
+  UniquePtr<mozilla::dom::LifecycleCallbacks> mCallbacks;
 
-  // A construction stack.
-  // TODO: Bug 1287348 - Implement construction stack for upgrading an element
+  // A construction stack. Use nullptr to represent an "already constructed marker".
+  nsTArray<RefPtr<nsGenericHTMLElement>> mConstructionStack;
 
   // The document custom element order.
   uint32_t mDocOrder;
@@ -164,10 +166,13 @@ public:
     : mRegistry(aRegistry)
     , mDefinition(aDefinition)
   {
-  };
+  }
 
   virtual ~CustomElementReaction() = default;
-  virtual void Invoke(Element* aElement) = 0;
+  virtual void Invoke(Element* aElement, ErrorResult& aRv) = 0;
+  virtual void Traverse(nsCycleCollectionTraversalCallback& aCb) const
+  {
+  }
 
 protected:
   CustomElementRegistry* mRegistry;
@@ -184,7 +189,28 @@ public:
   }
 
 private:
-   virtual void Invoke(Element* aElement) override;
+   virtual void Invoke(Element* aElement, ErrorResult& aRv) override;
+};
+
+class CustomElementCallbackReaction final : public CustomElementReaction
+{
+  public:
+    CustomElementCallbackReaction(CustomElementRegistry* aRegistry,
+                                  CustomElementDefinition* aDefinition,
+                                  UniquePtr<CustomElementCallback> aCustomElementCallback)
+      : CustomElementReaction(aRegistry, aDefinition)
+      , mCustomElementCallback(Move(aCustomElementCallback))
+    {
+    }
+
+    virtual void Traverse(nsCycleCollectionTraversalCallback& aCb) const override
+    {
+      mCustomElementCallback->Traverse(aCb);
+    }
+
+  private:
+    virtual void Invoke(Element* aElement, ErrorResult& aRv) override;
+    UniquePtr<CustomElementCallback> mCustomElementCallback;
 };
 
 // https://html.spec.whatwg.org/multipage/scripting.html#custom-element-reactions-stack
@@ -212,6 +238,15 @@ public:
                               Element* aElement,
                               CustomElementDefinition* aDefinition);
 
+  /**
+   * Enqueue a custom element callback reaction
+   * https://html.spec.whatwg.org/multipage/scripting.html#enqueue-a-custom-element-callback-reaction
+   */
+  void EnqueueCallbackReaction(CustomElementRegistry* aRegistry,
+                               Element* aElement,
+                               CustomElementDefinition* aDefinition,
+                               UniquePtr<CustomElementCallback> aCustomElementCallback);
+
   // [CEReactions] Before executing the algorithm's steps
   // Push a new element queue onto the custom element reactions stack.
   void CreateAndPushElementQueue();
@@ -225,7 +260,7 @@ private:
   ~CustomElementReactionsStack() {};
 
   // The choice of 8 for the auto size here is based on gut feeling.
-  AutoTArray<ElementQueue, 8> mReactionsStack;
+  AutoTArray<UniquePtr<ElementQueue>, 8> mReactionsStack;
   ElementQueue mBackupQueue;
   // https://html.spec.whatwg.org/#enqueue-an-element-on-the-appropriate-element-queue
   bool mIsBackupQueueProcessing;
@@ -236,15 +271,18 @@ private:
    * Invoke custom element reactions
    * https://html.spec.whatwg.org/multipage/scripting.html#invoke-custom-element-reactions
    */
-  void InvokeReactions(ElementQueue& aElementQueue);
+  void InvokeReactions(ElementQueue* aElementQueue, nsIGlobalObject* aGlobal);
 
   void Enqueue(Element* aElement, CustomElementReaction* aReaction);
 
 private:
   class ProcessBackupQueueRunnable : public mozilla::Runnable {
     public:
-      explicit ProcessBackupQueueRunnable(CustomElementReactionsStack* aReactionStack)
-        : mReactionStack(aReactionStack)
+      explicit ProcessBackupQueueRunnable(
+        CustomElementReactionsStack* aReactionStack)
+        : Runnable(
+            "dom::CustomElementReactionsStack::ProcessBackupQueueRunnable")
+        , mReactionStack(aReactionStack)
       {
         MOZ_ASSERT(!mReactionStack->mIsBackupQueueProcessing,
                    "mIsBackupQueueProcessing should be initially false");
@@ -277,10 +315,6 @@ public:
   static bool IsCustomElementEnabled(JSContext* aCx = nullptr,
                                      JSObject* aObject = nullptr);
 
-  static void ProcessTopElementQueue();
-
-  static void XPCOMShutdown();
-
   explicit CustomElementRegistry(nsPIDOMWindowInner* aWindow);
 
   /**
@@ -308,11 +342,22 @@ public:
   void GetCustomPrototype(nsIAtom* aAtom,
                           JS::MutableHandle<JSObject*> aPrototype);
 
-  void Upgrade(Element* aElement, CustomElementDefinition* aDefinition);
+  /**
+   * Upgrade an element.
+   * https://html.spec.whatwg.org/multipage/scripting.html#upgrades
+   */
+  void Upgrade(Element* aElement, CustomElementDefinition* aDefinition, ErrorResult& aRv);
 
 private:
   ~CustomElementRegistry();
 
+  UniquePtr<CustomElementCallback> CreateCustomElementCallback(
+    nsIDocument::ElementCallbackType aType, Element* aCustomElement,
+    LifecycleCallbackArgs* aArgs, CustomElementDefinition* aDefinition);
+
+  void SyncInvokeReactions(nsIDocument::ElementCallbackType aType,
+                           Element* aCustomElement,
+                           CustomElementDefinition* aDefinition);
   /**
    * Registers an unresolved custom element that is a candidate for
    * upgrade when the definition is registered via registerElement.
@@ -324,8 +369,7 @@ private:
   void RegisterUnresolvedElement(Element* aElement,
                                  nsIAtom* aTypeName = nullptr);
 
-  void UpgradeCandidates(JSContext* aCx,
-                         nsIAtom* aKey,
+  void UpgradeCandidates(nsIAtom* aKey,
                          CustomElementDefinition* aDefinition,
                          ErrorResult& aRv);
 
@@ -359,14 +403,6 @@ private:
 
   nsCOMPtr<nsPIDOMWindowInner> mWindow;
 
-  // Array representing the processing stack in the custom elements
-  // specification. The processing stack is conceptually a stack of
-  // element queues. Each queue is represented by a sequence of
-  // CustomElementData in this array, separated by nullptr that
-  // represent the boundaries of the items in the stack. The first
-  // queue in the stack is the base element queue.
-  static mozilla::Maybe<nsTArray<RefPtr<CustomElementData>>> sProcessingStack;
-
   // It is used to prevent reentrant invocations of element definition.
   bool mIsCustomDefinitionRunning;
 
@@ -387,6 +423,31 @@ private:
 
     private:
       CustomElementRegistry* mRegistry;
+  };
+
+  class SyncInvokeReactionRunnable : public mozilla::Runnable {
+    public:
+      SyncInvokeReactionRunnable(
+        UniquePtr<CustomElementReaction> aReaction, Element* aCustomElement)
+        : Runnable(
+            "dom::CustomElementRegistry::SyncInvokeReactionRunnable")
+        , mReaction(Move(aReaction))
+        , mCustomElement(aCustomElement)
+      {
+      }
+
+      NS_IMETHOD Run() override
+      {
+        // It'll never throw exceptions, because all the exceptions are handled
+        // by Lifecycle*Callback::Call function.
+        ErrorResult rv;
+        mReaction->Invoke(mCustomElement, rv);
+        return NS_OK;
+      }
+
+    private:
+      UniquePtr<CustomElementReaction> mReaction;
+      Element* mCustomElement;
   };
 
 public:

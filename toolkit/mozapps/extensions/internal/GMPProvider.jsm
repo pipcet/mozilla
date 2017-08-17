@@ -14,7 +14,6 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/AddonManager.jsm");
 /* globals AddonManagerPrivate*/
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/osfile.jsm");
 /* globals OS*/
 Cu.import("resource://gre/modules/Log.jsm");
@@ -83,9 +82,9 @@ function configureLogging() {
     gLogger = Log.repository.getLogger("Toolkit.GMP");
     gLogger.addAppender(new Log.ConsoleAppender(new Log.BasicFormatter()));
   }
-  gLogger.level = GMPPrefs.get(GMPPrefs.KEY_LOGGING_LEVEL, Log.Level.Warn);
+  gLogger.level = GMPPrefs.getInt(GMPPrefs.KEY_LOGGING_LEVEL, Log.Level.Warn);
 
-  let logDumping = GMPPrefs.get(GMPPrefs.KEY_LOGGING_DUMP, false);
+  let logDumping = GMPPrefs.getBool(GMPPrefs.KEY_LOGGING_DUMP, false);
   if (logDumping != !!gLogAppenderDump) {
     if (logDumping) {
       gLogAppenderDump = new Log.DumpAppender(new Log.BasicFormatter());
@@ -109,20 +108,21 @@ function GMPWrapper(aPluginInfo) {
     Log.repository.getLoggerWithMessagePrefix("Toolkit.GMP",
                                               "GMPWrapper(" +
                                               this._plugin.id + ") ");
-  Preferences.observe(GMPPrefs.getPrefKey(GMPPrefs.KEY_PLUGIN_ENABLED,
+  Services.prefs.addObserver(GMPPrefs.getPrefKey(GMPPrefs.KEY_PLUGIN_ENABLED,
+                                                 this._plugin.id),
+                             this, true);
+  Services.prefs.addObserver(GMPPrefs.getPrefKey(GMPPrefs.KEY_PLUGIN_VERSION,
                                           this._plugin.id),
-                      this.onPrefEnabledChanged, this);
-  Preferences.observe(GMPPrefs.getPrefKey(GMPPrefs.KEY_PLUGIN_VERSION,
-                                          this._plugin.id),
-                      this.onPrefVersionChanged, this);
+                             this, true);
   if (this._plugin.isEME) {
-    Preferences.observe(GMPPrefs.KEY_EME_ENABLED,
-                        this.onPrefEMEGlobalEnabledChanged, this);
+    Services.prefs.addObserver(GMPPrefs.KEY_EME_ENABLED, this, true);
     messageManager.addMessageListener("EMEVideo:ContentMediaKeysRequest", this);
   }
 }
 
 GMPWrapper.prototype = {
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver, Ci.nsISupportsWeakReference]),
+
   // An active task that checks for plugin updates and installs them.
   _updateTask: null,
   _gmpPath: null,
@@ -136,8 +136,8 @@ GMPWrapper.prototype = {
     if (!this._gmpPath && this.isInstalled) {
       this._gmpPath = OS.Path.join(OS.Constants.Path.profileDir,
                                    this._plugin.id,
-                                   GMPPrefs.get(GMPPrefs.KEY_PLUGIN_VERSION,
-                                                null, this._plugin.id));
+                                   GMPPrefs.getString(GMPPrefs.KEY_PLUGIN_VERSION,
+                                                      null, this._plugin.id));
     }
     return this._gmpPath;
   },
@@ -153,9 +153,8 @@ GMPWrapper.prototype = {
   get fullDescription() { return this._plugin.fullDescription; },
 
   get version() {
- return GMPPrefs.get(GMPPrefs.KEY_PLUGIN_VERSION, null,
-                                      this._plugin.id);
-},
+    return GMPPrefs.getString(GMPPrefs.KEY_PLUGIN_VERSION, null, this._plugin.id);
+  },
 
   get isActive() {
     return !this.appDisabled &&
@@ -163,7 +162,7 @@ GMPWrapper.prototype = {
            !GMPUtils.isPluginHidden(this._plugin);
   },
   get appDisabled() {
-    if (this._plugin.isEME && !GMPPrefs.get(GMPPrefs.KEY_EME_ENABLED, true)) {
+    if (this._plugin.isEME && !GMPPrefs.getBool(GMPPrefs.KEY_EME_ENABLED, true)) {
       // If "media.eme.enabled" is false, all EME plugins are disabled.
       return true;
     }
@@ -171,13 +170,11 @@ GMPWrapper.prototype = {
   },
 
   get userDisabled() {
-    return !GMPPrefs.get(GMPPrefs.KEY_PLUGIN_ENABLED, true, this._plugin.id);
+    return !GMPPrefs.getBool(GMPPrefs.KEY_PLUGIN_ENABLED, true, this._plugin.id);
   },
   set userDisabled(aVal) {
- GMPPrefs.set(GMPPrefs.KEY_PLUGIN_ENABLED,
-                                        aVal === false,
-                                        this._plugin.id);
-},
+    GMPPrefs.setBool(GMPPrefs.KEY_PLUGIN_ENABLED, aVal === false, this._plugin.id);
+  },
 
   get blocklistState() { return Ci.nsIBlocklistService.STATE_NOT_BLOCKED; },
   get size() { return 0; },
@@ -197,9 +194,9 @@ GMPWrapper.prototype = {
   },
 
   get updateDate() {
-    let time = Number(GMPPrefs.get(GMPPrefs.KEY_PLUGIN_LAST_UPDATE, null,
-                                   this._plugin.id));
-    if (!isNaN(time) && this.isInstalled) {
+    let time = Number(GMPPrefs.getInt(GMPPrefs.KEY_PLUGIN_LAST_UPDATE, 0,
+                                      this._plugin.id));
+    if (this.isInstalled) {
       return new Date(time * 1000)
     }
     return null;
@@ -230,7 +227,7 @@ GMPWrapper.prototype = {
       return AddonManager.AUTOUPDATE_DEFAULT;
     }
 
-    return GMPPrefs.get(GMPPrefs.KEY_PLUGIN_AUTOUPDATE, true, this._plugin.id) ?
+    return GMPPrefs.getBool(GMPPrefs.KEY_PLUGIN_AUTOUPDATE, true, this._plugin.id) ?
       AddonManager.AUTOUPDATE_ENABLE : AddonManager.AUTOUPDATE_DISABLE;
   },
 
@@ -238,9 +235,9 @@ GMPWrapper.prototype = {
     if (aVal == AddonManager.AUTOUPDATE_DEFAULT) {
       GMPPrefs.reset(GMPPrefs.KEY_PLUGIN_AUTOUPDATE, this._plugin.id);
     } else if (aVal == AddonManager.AUTOUPDATE_ENABLE) {
-      GMPPrefs.set(GMPPrefs.KEY_PLUGIN_AUTOUPDATE, true, this._plugin.id);
+      GMPPrefs.setBool(GMPPrefs.KEY_PLUGIN_AUTOUPDATE, true, this._plugin.id);
     } else if (aVal == AddonManager.AUTOUPDATE_DISABLE) {
-      GMPPrefs.set(GMPPrefs.KEY_PLUGIN_AUTOUPDATE, false, this._plugin.id);
+      GMPPrefs.setBool(GMPPrefs.KEY_PLUGIN_AUTOUPDATE, false, this._plugin.id);
     }
   },
 
@@ -258,7 +255,7 @@ GMPWrapper.prototype = {
       }
 
       let secSinceLastCheck =
-        Date.now() / 1000 - Preferences.get(GMPPrefs.KEY_UPDATE_LAST_CHECK, 0);
+        Date.now() / 1000 - Services.prefs.getIntPref(GMPPrefs.KEY_UPDATE_LAST_CHECK, 0);
       if (secSinceLastCheck <= SEC_IN_A_DAY) {
         this._log.trace("findUpdates() - " + this._plugin.id +
                         " - last check was less then a day ago");
@@ -385,7 +382,7 @@ GMPWrapper.prototype = {
         let gmpInstallManager = new GMPInstallManager();
         // We don't really care about the results, if someone is interested
         // they can check the log.
-        gmpInstallManager.simpleCheckAndInstall().then(null, () => {});
+        gmpInstallManager.simpleCheckAndInstall().catch(() => {});
       }
       this._isUpdateCheckPending = false;
     }, delay);
@@ -428,8 +425,8 @@ GMPWrapper.prototype = {
     if (this.isInstalled) {
       this._gmpPath = OS.Path.join(OS.Constants.Path.profileDir,
                                    this._plugin.id,
-                                   GMPPrefs.get(GMPPrefs.KEY_PLUGIN_VERSION,
-                                                null, this._plugin.id));
+                                   GMPPrefs.getString(GMPPrefs.KEY_PLUGIN_VERSION,
+                                                      null, this._plugin.id));
     }
     if (this._gmpPath && this.isActive) {
       this._log.info("onPrefVersionChanged() - registering gmp directory " +
@@ -437,6 +434,18 @@ GMPWrapper.prototype = {
       gmpService.addPluginDirectory(this._gmpPath);
     }
     AddonManagerPrivate.callAddonListeners("onInstalled", this);
+  },
+
+  observe(subject, topic, pref) {
+    if (topic == "nsPref:changed") {
+      if (pref == GMPPrefs.getPrefKey(GMPPrefs.KEY_PLUGIN_ENABLED, this._plugin.id)) {
+        this.onPrefEnabledChanged();
+      } else if (pref == GMPPrefs.getPrefKey(GMPPrefs.KEY_PLUGIN_VERSION, this._plugin.id)) {
+        this.onPrefVersionChanged();
+      } else if (pref == GMPPrefs.KEY_EME_ENABLED) {
+        this.onPrefEMEGlobalEnabledChanged();
+      }
+    }
   },
 
   uninstallPlugin() {
@@ -453,15 +462,12 @@ GMPWrapper.prototype = {
   },
 
   shutdown() {
-    Preferences.ignore(GMPPrefs.getPrefKey(GMPPrefs.KEY_PLUGIN_ENABLED,
-                                           this._plugin.id),
-                       this.onPrefEnabledChanged, this);
-    Preferences.ignore(GMPPrefs.getPrefKey(GMPPrefs.KEY_PLUGIN_VERSION,
-                                           this._plugin.id),
-                       this.onPrefVersionChanged, this);
+    Services.prefs.removeObserver(GMPPrefs.getPrefKey(GMPPrefs.KEY_PLUGIN_ENABLED,
+                                                      this._plugin.id), this);
+    Services.prefs.removeObserver(GMPPrefs.getPrefKey(GMPPrefs.KEY_PLUGIN_VERSION,
+                                                      this._plugin.id), this);
     if (this._plugin.isEME) {
-      Preferences.ignore(GMPPrefs.KEY_EME_ENABLED,
-                         this.onPrefEMEGlobalEnabledChanged, this);
+      Services.prefs.removeObserver(GMPPrefs.KEY_EME_ENABLED, this);
       messageManager.removeMessageListener("EMEVideo:ContentMediaKeysRequest", this);
     }
     return this._updateTask;
@@ -497,7 +503,8 @@ GMPWrapper.prototype = {
       };
     }
 
-    let abi = GMPPrefs.get(GMPPrefs.KEY_PLUGIN_ABI, UpdateUtils.ABI, this._plugin.id);
+    let abi = GMPPrefs.getString(GMPPrefs.KEY_PLUGIN_ABI, UpdateUtils.ABI,
+                                 this._plugin.id);
     if (abi != UpdateUtils.ABI) {
       // ABI doesn't match. Possibly this is a profile migrated across platforms
       // or from 32 -> 64 bit.
@@ -566,7 +573,7 @@ var GMPProvider = {
 
     try {
       let greDir = Services.dirsvc.get(NS_GRE_DIR,
-                                       Ci.nsILocalFile);
+                                       Ci.nsIFile);
       let clearkeyPath = OS.Path.join(greDir.path,
                                       CLEARKEY_PLUGIN_ID,
                                       CLEARKEY_VERSION);
@@ -633,7 +640,7 @@ var GMPProvider = {
   },
 
   get isEnabled() {
-    return GMPPrefs.get(GMPPrefs.KEY_PROVIDER_ENABLED, false);
+    return GMPPrefs.getBool(GMPPrefs.KEY_PROVIDER_ENABLED, false);
   },
 
   generateFullDescription(aPlugin) {
@@ -668,7 +675,7 @@ var GMPProvider = {
   },
 
   ensureProperCDMInstallState() {
-    if (!GMPPrefs.get(GMPPrefs.KEY_EME_ENABLED, true)) {
+    if (!GMPPrefs.getBool(GMPPrefs.KEY_EME_ENABLED, true)) {
       for (let plugin of this._plugins.values()) {
         if (plugin.isEME && plugin.wrapper.isInstalled) {
           gmpService.addPluginDirectory(plugin.wrapper.gmpPath);

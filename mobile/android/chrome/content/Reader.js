@@ -7,7 +7,7 @@
 
 XPCOMUtils.defineLazyModuleGetter(this, "Snackbars", "resource://gre/modules/Snackbars.jsm");
 
-/*globals MAX_URI_LENGTH, MAX_TITLE_LENGTH */
+/* globals MAX_URI_LENGTH, MAX_TITLE_LENGTH */
 
 var Reader = {
   // These values should match those defined in BrowserContract.java.
@@ -179,7 +179,7 @@ var Reader = {
 
     let browser = tab.browser;
     if (browser.currentURI.spec.startsWith("about:reader")) {
-      showPageAction("drawable://reader_active", Strings.reader.GetStringFromName("readerView.close"));
+      showPageAction("drawable://ic_readermode_on", Strings.reader.GetStringFromName("readerView.close"));
       // Only start a reader session if the viewer is in the foreground. We do
       // not track background reader viewers.
       UITelemetry.startSession("reader.1", null);
@@ -193,7 +193,7 @@ var Reader = {
     UITelemetry.stopSession("reader.1", "", null);
 
     if (browser.isArticle) {
-      showPageAction("drawable://reader", Strings.reader.GetStringFromName("readerView.enter"));
+      showPageAction("drawable://ic_readermode", Strings.reader.GetStringFromName("readerView.enter"));
       UITelemetry.addEvent("show.1", "button", null, "reader_available");
       this._sendMmaEvent("reader_available");
     } else {
@@ -203,7 +203,7 @@ var Reader = {
 
   _sendMmaEvent: function(event) {
       WindowEventDispatcher.sendRequest({
-          type: "Mma:"+event,
+          type: "Mma:" + event,
       });
   },
 

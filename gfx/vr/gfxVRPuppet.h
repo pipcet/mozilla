@@ -10,7 +10,11 @@
 #include "mozilla/RefPtr.h"
 
 #include "gfxVR.h"
+#include "VRDisplayHost.h"
 
+#if defined(XP_MACOSX)
+class MacIOSurface;
+#endif
 namespace mozilla {
 namespace gfx {
 namespace impl {
@@ -20,26 +24,24 @@ class VRDisplayPuppet : public VRDisplayHost
 public:
   void SetDisplayInfo(const VRDisplayInfo& aDisplayInfo);
   virtual void NotifyVSync() override;
-  virtual VRHMDSensorState GetSensorState() override;
   void SetSensorState(const VRHMDSensorState& aSensorState);
   void ZeroSensor() override;
 
 protected:
+  virtual VRHMDSensorState GetSensorState() override;
   virtual void StartPresentation() override;
   virtual void StopPresentation() override;
 #if defined(XP_WIN)
-  virtual void SubmitFrame(mozilla::layers::TextureSourceD3D11* aSource,
+  virtual bool SubmitFrame(mozilla::layers::TextureSourceD3D11* aSource,
                            const IntSize& aSize,
-                           const VRHMDSensorState& aSensorState,
                            const gfx::Rect& aLeftEyeRect,
                            const gfx::Rect& aRightEyeRect) override;
-#else
-  virtual void SubmitFrame(mozilla::layers::TextureSourceOGL* aSource,
+#elif defined(XP_MACOSX)
+  virtual bool SubmitFrame(MacIOSurface* aMacIOSurface,
                            const IntSize& aSize,
-                           const VRHMDSensorState& aSensorState,
                            const gfx::Rect& aLeftEyeRect,
-                           const gfx::Rect& aRightEyeRect);
-#endif // XP_WIN
+                           const gfx::Rect& aRightEyeRect) override;
+#endif
 
 public:
   explicit VRDisplayPuppet();
@@ -47,8 +49,6 @@ public:
 protected:
   virtual ~VRDisplayPuppet();
   void Destroy();
-
-  VRHMDSensorState GetSensorState(double timeOffset);
 
   bool mIsPresenting;
 
@@ -70,13 +70,12 @@ private:
 #endif
 
   VRHMDSensorState mSensorState;
-  uint32_t mFrameNum;
 };
 
 class VRControllerPuppet : public VRControllerHost
 {
 public:
-  explicit VRControllerPuppet(dom::GamepadHand aHand);
+  explicit VRControllerPuppet(dom::GamepadHand aHand, uint32_t aDisplayID);
   void SetButtonPressState(uint32_t aButton, bool aPressed);
   uint64_t GetButtonPressState();
   void SetButtonTouchState(uint32_t aButton, bool aTouched);
@@ -108,7 +107,7 @@ public:
 
   virtual void Destroy() override;
   virtual void Shutdown() override;
-  virtual void GetHMDs(nsTArray<RefPtr<VRDisplayHost>>& aHMDResult) override;
+  virtual bool GetHMDs(nsTArray<RefPtr<VRDisplayHost>>& aHMDResult) override;
   virtual bool GetIsPresenting() override;
   virtual void HandleInput() override;
   virtual void GetControllers(nsTArray<RefPtr<VRControllerHost>>&

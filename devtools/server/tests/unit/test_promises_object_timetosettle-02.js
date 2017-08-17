@@ -1,5 +1,6 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
+/* eslint-disable mozilla/no-arbitrary-setTimeout */
 
 /**
  * Test that we get the expected settlement time for promise time to settle.
@@ -8,7 +9,7 @@
 "use strict";
 
 const { PromisesFront } = require("devtools/shared/fronts/promises");
-const { setTimeout } = require("sdk/timers");
+const { setTimeout } = Cu.import("resource://gre/modules/Timer.jsm", {});
 
 var events = require("sdk/event/core");
 

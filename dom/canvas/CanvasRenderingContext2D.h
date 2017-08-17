@@ -40,8 +40,8 @@ class SourceSurface;
 } // namespace gl
 
 namespace dom {
-class HTMLImageElementOrHTMLCanvasElementOrHTMLVideoElementOrImageBitmap;
-typedef HTMLImageElementOrHTMLCanvasElementOrHTMLVideoElementOrImageBitmap CanvasImageSource;
+class HTMLImageElementOrSVGImageElementOrHTMLCanvasElementOrHTMLVideoElementOrImageBitmap;
+typedef HTMLImageElementOrSVGImageElementOrHTMLCanvasElementOrHTMLVideoElementOrImageBitmap CanvasImageSource;
 class ImageData;
 class StringOrCanvasGradientOrCanvasPattern;
 class OwningStringOrCanvasGradientOrCanvasPattern;
@@ -461,13 +461,16 @@ public:
     return mTarget->Snapshot();
   }
 
-  NS_IMETHOD SetIsOpaque(bool aIsOpaque) override;
+  virtual void SetIsOpaque(bool aIsOpaque) override;
   bool GetIsOpaque() override { return mOpaque; }
   NS_IMETHOD Reset() override;
   already_AddRefed<Layer> GetCanvasLayer(nsDisplayListBuilder* aBuilder,
                                          Layer* aOldLayer,
                                          LayerManager* aManager,
                                          bool aMirror = false) override;
+  void InitializeCanvasRenderer(nsDisplayListBuilder* aBuilder,
+                                CanvasRenderer* aRenderer,
+                                bool aMirror = false) override;
   virtual bool ShouldForceInactiveLayer(LayerManager* aManager) override;
   void MarkContextClean() override;
   void MarkContextCleanForFrameCapture() override;

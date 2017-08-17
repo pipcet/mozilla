@@ -5,50 +5,48 @@
 
 package org.mozilla.gecko.activitystream.homepanel.stream;
 
+import android.content.Context;
 import android.graphics.Color;
+import android.support.annotation.UiThread;
 import android.text.TextUtils;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.TextView;
-
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
-import org.mozilla.gecko.activitystream.ActivityStream;
 import org.mozilla.gecko.activitystream.ActivityStreamTelemetry;
 import org.mozilla.gecko.activitystream.Utils;
-import org.mozilla.gecko.home.HomePager;
 import org.mozilla.gecko.activitystream.homepanel.menu.ActivityStreamContextMenu;
 import org.mozilla.gecko.activitystream.homepanel.model.Highlight;
-import org.mozilla.gecko.icons.IconCallback;
-import org.mozilla.gecko.icons.IconResponse;
-import org.mozilla.gecko.icons.Icons;
+import org.mozilla.gecko.home.HomePager;
 import org.mozilla.gecko.util.DrawableUtil;
 import org.mozilla.gecko.util.TouchTargetUtil;
+import org.mozilla.gecko.util.URIUtils;
 import org.mozilla.gecko.util.ViewUtil;
 import org.mozilla.gecko.widget.FaviconView;
 
-import java.util.concurrent.Future;
+import java.lang.ref.WeakReference;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.UUID;
 
-import static org.mozilla.gecko.activitystream.ActivityStream.extractLabel;
-
-public class HighlightItem extends StreamItem implements IconCallback {
+public class HighlightItem extends StreamItem {
     private static final String LOGTAG = "GeckoHighlightItem";
 
     public static final int LAYOUT_ID = R.layout.activity_stream_card_history_item;
+    private static final double SIZE_RATIO = 0.75;
 
     private Highlight highlight;
     private int position;
 
-    private final FaviconView vIconView;
-    private final TextView vLabel;
-    private final TextView vTimeSince;
-    private final TextView vSourceView;
-    private final TextView vPageView;
-    private final ImageView vSourceIconView;
+    private final StreamPageIconLayout pageIconLayout;
+    private final TextView pageTitleView;
+    private final TextView pageSourceView;
+    private final TextView pageDomainView;
+    private final ImageView pageSourceIconView;
 
-    private Future<IconResponse> ongoingIconLoad;
     private int tilesMargin;
 
     public HighlightItem(final View itemView,
@@ -58,12 +56,11 @@ public class HighlightItem extends StreamItem implements IconCallback {
 
         tilesMargin = itemView.getResources().getDimensionPixelSize(R.dimen.activity_stream_base_margin);
 
-        vLabel = (TextView) itemView.findViewById(R.id.card_history_label);
-        vTimeSince = (TextView) itemView.findViewById(R.id.card_history_time_since);
-        vIconView = (FaviconView) itemView.findViewById(R.id.icon);
-        vSourceView = (TextView) itemView.findViewById(R.id.card_history_source);
-        vPageView = (TextView) itemView.findViewById(R.id.page);
-        vSourceIconView = (ImageView) itemView.findViewById(R.id.source_icon);
+        pageTitleView = (TextView) itemView.findViewById(R.id.card_history_label);
+        pageIconLayout = (StreamPageIconLayout) itemView.findViewById(R.id.icon);
+        pageSourceView = (TextView) itemView.findViewById(R.id.card_history_source);
+        pageDomainView = (TextView) itemView.findViewById(R.id.page);
+        pageSourceIconView = (ImageView) itemView.findViewById(R.id.source_icon);
 
         final ImageView menuButton = (ImageView) itemView.findViewById(R.id.menu);
 
@@ -86,7 +83,7 @@ public class HighlightItem extends StreamItem implements IconCallback {
                         ActivityStreamContextMenu.MenuMode.HIGHLIGHT,
                         highlight,
                         onUrlOpenListener, onUrlOpenInBackgroundListener,
-                        vIconView.getWidth(), vIconView.getHeight());
+                        pageIconLayout.getWidth(), pageIconLayout.getHeight());
 
                 Telemetry.sendUIEvent(
                         TelemetryContract.Event.SHOW,
@@ -99,69 +96,95 @@ public class HighlightItem extends StreamItem implements IconCallback {
         ViewUtil.enableTouchRipple(menuButton);
     }
 
-    public void bind(Highlight highlight, int position, int tilesWidth, int tilesHeight) {
+    public void bind(Highlight highlight, int position, int tilesWidth) {
         this.highlight = highlight;
         this.position = position;
 
-        vLabel.setText(highlight.getTitle());
-        vTimeSince.setText(highlight.getRelativeTimeSpan());
+        final String backendHightlightTitle = highlight.getTitle();
+        final String uiHighlightTitle = !TextUtils.isEmpty(backendHightlightTitle) ? backendHightlightTitle : highlight.getUrl();
+        pageTitleView.setText(uiHighlightTitle);
 
-        ViewGroup.LayoutParams layoutParams = vIconView.getLayoutParams();
-        layoutParams.width = tilesWidth - tilesMargin;
-        layoutParams.height = tilesHeight;
-        vIconView.setLayoutParams(layoutParams);
+        ViewGroup.LayoutParams layoutParams = pageIconLayout.getLayoutParams();
+        layoutParams.width = tilesWidth;
+        layoutParams.height = (int) Math.floor(tilesWidth * SIZE_RATIO);
+        pageIconLayout.setLayoutParams(layoutParams);
 
         updateUiForSource(highlight.getSource());
-        updatePage();
-
-        if (ongoingIconLoad != null) {
-            ongoingIconLoad.cancel(true);
-        }
-
-        ongoingIconLoad = Icons.with(itemView.getContext())
-                .pageUrl(highlight.getUrl())
-                .skipNetwork()
-                .build()
-                .execute(this);
+        updatePageDomain();
+        pageIconLayout.updateIcon(highlight.getUrl(), highlight.getMetadataSlow().getImageUrl());
     }
 
     private void updateUiForSource(Utils.HighlightSource source) {
         switch (source) {
             case BOOKMARKED:
-                vSourceView.setText(R.string.activity_stream_highlight_label_bookmarked);
-                vSourceView.setVisibility(View.VISIBLE);
-                vSourceIconView.setImageResource(R.drawable.ic_as_bookmarked);
+                pageSourceView.setText(R.string.activity_stream_highlight_label_bookmarked);
+                pageSourceView.setVisibility(View.VISIBLE);
+                pageSourceIconView.setImageResource(R.drawable.ic_as_bookmarked);
                 break;
             case VISITED:
-                vSourceView.setText(R.string.activity_stream_highlight_label_visited);
-                vSourceView.setVisibility(View.VISIBLE);
-                vSourceIconView.setImageResource(R.drawable.ic_as_visited);
+                pageSourceView.setText(R.string.activity_stream_highlight_label_visited);
+                pageSourceView.setVisibility(View.VISIBLE);
+                pageSourceIconView.setImageResource(R.drawable.ic_as_visited);
                 break;
             default:
-                vSourceView.setVisibility(View.INVISIBLE);
-                vSourceIconView.setImageResource(0);
+                pageSourceView.setVisibility(View.INVISIBLE);
+                pageSourceIconView.setImageResource(0);
                 break;
         }
     }
 
-    private void updatePage() {
-        // First try to set the provider name from the page's metadata.
-        if (highlight.getMetadata().hasProvider()) {
-            vPageView.setText(highlight.getMetadata().getProvider());
+    private void updatePageDomain() {
+        final URI highlightURI;
+        try {
+            highlightURI = new URI(highlight.getUrl());
+        } catch (final URISyntaxException e) {
+            // If the URL is invalid, there's not much extra processing we can do on it.
+            pageDomainView.setText(highlight.getUrl());
             return;
         }
 
-        // If there's no provider name available then let's try to extract one from the URL.
-        extractLabel(itemView.getContext(), highlight.getUrl(), false, new ActivityStream.LabelCallback() {
-            @Override
-            public void onLabelExtracted(String label) {
-                vPageView.setText(TextUtils.isEmpty(label) ? highlight.getUrl() : label);
-            }
-        });
+        final UpdatePageDomainAsyncTask updatePageDomainTask = new UpdatePageDomainAsyncTask(itemView.getContext(),
+                highlightURI, pageDomainView);
+        updatePageDomainTask.execute();
     }
 
-    @Override
-    public void onIconResponse(IconResponse response) {
-        vIconView.updateImage(response);
+    /** Updates the text of the given view to the host second level domain. */
+    private static class UpdatePageDomainAsyncTask extends URIUtils.GetFormattedDomainAsyncTask {
+        private static final int VIEW_TAG_ID = R.id.page; // same as the view.
+
+        private final WeakReference<TextView> pageDomainViewWeakReference;
+        private final UUID viewTagAtStart;
+
+        UpdatePageDomainAsyncTask(final Context contextReference, final URI uri, final TextView pageDomainView) {
+            super(contextReference, uri, false, 0); // hostSLD.
+            this.pageDomainViewWeakReference = new WeakReference<>(pageDomainView);
+
+            // See isTagSameAsStartTag for details.
+            viewTagAtStart = UUID.randomUUID();
+            pageDomainView.setTag(VIEW_TAG_ID, viewTagAtStart);
+        }
+
+        @Override
+        protected void onPostExecute(final String hostSLD) {
+            super.onPostExecute(hostSLD);
+            final TextView viewToUpdate = pageDomainViewWeakReference.get();
+
+            if (viewToUpdate == null || !isTagSameAsStartTag(viewToUpdate)) {
+                return;
+            }
+
+            // hostSLD will be the empty String if the host cannot be determined. This is fine: it's very unlikely
+            // and the page title will be URL if there's an error there so we wouldn't want to write the URL again here.
+            viewToUpdate.setText(hostSLD);
+        }
+
+        /**
+         * Returns true if the tag on the given view matches the tag from the constructor. We do this to ensure
+         * the View we're making this request for hasn't been re-used by the time this request completes.
+         */
+        @UiThread
+        private boolean isTagSameAsStartTag(final View viewToCheck) {
+            return viewTagAtStart.equals(viewToCheck.getTag(VIEW_TAG_ID));
+        }
     }
 }

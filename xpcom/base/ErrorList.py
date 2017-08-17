@@ -465,7 +465,6 @@ with modules["PLUGINS"]:
     errors["NS_ERROR_PLUGIN_BLOCKLISTED"] = FAILURE(1002)
     errors["NS_ERROR_PLUGIN_TIME_RANGE_NOT_SUPPORTED"] = FAILURE(1003)
     errors["NS_ERROR_PLUGIN_CLICKTOPLAY"] = FAILURE(1004)
-    errors["NS_PLUGIN_INIT_PENDING"] = SUCCESS(1005)
 
 
 
@@ -546,6 +545,7 @@ with modules["UCONV"]:
     errors["NS_ERROR_UCONV_NOCONV"] = FAILURE(1)
     errors["NS_ERROR_UDEC_ILLEGALINPUT"] = FAILURE(14)
 
+    errors["NS_OK_HAD_REPLACEMENTS"] = SUCCESS(3)
     errors["NS_SUCCESS_USING_FALLBACK_LOCALE"] = SUCCESS(2)
     errors["NS_OK_UDEC_EXACTLENGTH"] = SUCCESS(11)
     errors["NS_OK_UDEC_MOREINPUT"] = SUCCESS(12)
@@ -844,6 +844,7 @@ with modules["URILOADER"]:
     errors["NS_ERROR_TRACKING_URI"] = FAILURE(34)
     errors["NS_ERROR_UNWANTED_URI"] = FAILURE(35)
     errors["NS_ERROR_BLOCKED_URI"] = FAILURE(37)
+    errors["NS_ERROR_HARMFUL_URI"] = FAILURE(38)
     # Used when "Save Link As..." doesn't see the headers quickly enough to
     # choose a filename.  See nsContextMenu.js.
     errors["NS_ERROR_SAVE_LINK_AS_TIMEOUT"] = FAILURE(32)

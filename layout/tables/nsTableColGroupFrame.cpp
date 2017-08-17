@@ -13,6 +13,7 @@
 #include "nsCOMPtr.h"
 #include "nsCSSRendering.h"
 #include "nsIPresShell.h"
+#include "mozilla/GeckoStyleContext.h"
 
 using namespace mozilla;
 
@@ -20,13 +21,13 @@ using namespace mozilla;
                                       NS_FRAME_STATE_BIT(31))
 #define COL_GROUP_TYPE_OFFSET        30
 
-nsTableColGroupType 
-nsTableColGroupFrame::GetColType() const 
+nsTableColGroupType
+nsTableColGroupFrame::GetColType() const
 {
   return (nsTableColGroupType)((mState & COL_GROUP_TYPE_BITS) >> COL_GROUP_TYPE_OFFSET);
 }
 
-void nsTableColGroupFrame::SetColType(nsTableColGroupType aType) 
+void nsTableColGroupFrame::SetColType(nsTableColGroupType aType)
 {
   NS_ASSERTION(GetColType() == eColGroupContent,
                "should only call nsTableColGroupFrame::SetColType with aType "
@@ -52,7 +53,7 @@ void nsTableColGroupFrame::ResetColIndices(nsIFrame*       aFirstColGroup,
           !aStartColFrame) {
         colGroupFrame->SetStartColumnIndex(colIndex);
       }
-      nsIFrame* colFrame = aStartColFrame; 
+      nsIFrame* colFrame = aStartColFrame;
       if (!colFrame || (colIndex != aFirstColIndex)) {
         colFrame = colGroupFrame->PrincipalChildList().FirstChild();
       }
@@ -122,13 +123,13 @@ nsTableColGroupFrame::GetLastRealColGroup(nsTableFrame* aTableFrame)
   if (!link.PrevFrame()) {
     return nullptr; // there are no col group frames
   }
- 
+
   nsTableColGroupType lastColGroupType =
     static_cast<nsTableColGroupFrame*>(link.PrevFrame())->GetColType();
   if (eColGroupAnonymousCell == lastColGroupType) {
     return static_cast<nsTableColGroupFrame*>(nextToLastColGroup);
   }
- 
+
   return static_cast<nsTableColGroupFrame*>(link.PrevFrame());
 }
 
@@ -140,10 +141,10 @@ nsTableColGroupFrame::SetInitialChildList(ChildListID     aListID,
   MOZ_ASSERT(mFrames.IsEmpty(),
              "unexpected second call to SetInitialChildList");
   MOZ_ASSERT(aListID == kPrincipalList, "unexpected child list");
-  if (aChildList.IsEmpty()) { 
+  if (aChildList.IsEmpty()) {
     GetTableFrame()->AppendAnonymousColFrames(this, GetSpan(),
                                               eColAnonymousColGroup, false);
-    return; 
+    return;
   }
 
   mFrames.AppendFrames(this, aChildList);
@@ -156,13 +157,13 @@ nsTableColGroupFrame::DidSetStyleContext(nsStyleContext* aOldStyleContext)
 
   if (!aOldStyleContext) //avoid this on init
     return;
-     
+
   nsTableFrame* tableFrame = GetTableFrame();
   if (tableFrame->IsBorderCollapse() &&
       tableFrame->BCRecalcNeeded(aOldStyleContext, StyleContext())) {
     int32_t colCount = GetColCount();
     if (!colCount)
-      return; // this is a degenerated colgroup 
+      return; // this is a degenerated colgroup
     TableArea damageArea(GetFirstColumn()->GetColIndex(), 0, colCount,
                          tableFrame->GetRowCount());
     tableFrame->AddBCDamageArea(damageArea);
@@ -186,6 +187,15 @@ nsTableColGroupFrame::AppendFrames(ChildListID     aListID,
     RemoveFrame(kPrincipalList, col);
     col = nextCol;
   }
+
+  // Our next colframe should be an eColContent.  We've removed all the
+  // eColAnonymousColGroup colframes, eColAnonymousCol colframes always follow
+  // eColContent ones, and eColAnonymousCell colframes only appear in an
+  // eColGroupAnonymousCell colgroup, which never gets AppendFrames() called on
+  // it.
+  MOZ_ASSERT(!col || col->GetColType() == eColContent,
+             "What's going on with our columns?");
+  RemoveStateBits(NS_FRAME_OWNS_ANON_BOXES);
 
   const nsFrameList::Slice& newFrames =
     mFrames.AppendFrames(this, aFrameList);
@@ -219,6 +229,15 @@ nsTableColGroupFrame::InsertFrames(ChildListID     aListID,
     RemoveFrame(kPrincipalList, col);
     col = nextCol;
   }
+
+  // Our next colframe should be an eColContent.  We've removed all the
+  // eColAnonymousColGroup colframes, eColAnonymousCol colframes always follow
+  // eColContent ones, and eColAnonymousCell colframes only appear in an
+  // eColGroupAnonymousCell colgroup, which never gets InsertFrames() called on
+  // it.
+  MOZ_ASSERT(!col || col->GetColType() == eColContent,
+             "What's going on with our columns?");
+  RemoveStateBits(NS_FRAME_OWNS_ANON_BOXES);
 
   NS_ASSERTION(!aPrevFrame || aPrevFrame == aPrevFrame->LastContinuation(),
                "Prev frame should be last in continuation chain");
@@ -296,9 +315,9 @@ nsTableColGroupFrame::RemoveFrame(ChildListID     aListID,
 #ifdef DEBUG
         nsIFrame* providerFrame;
         nsStyleContext* psc = colFrame->GetParentStyleContext(&providerFrame);
-        if (psc->StyleSource().IsGeckoRuleNodeOrNull()) {
+        if (psc->IsGecko()) {
           // This check code is useful only in Gecko-backed style system.
-          if (colFrame->StyleContext()->GetParent() == psc) {
+          if (colFrame->StyleContext()->AsGecko()->GetParent() == psc->AsGecko()) {
             NS_ASSERTION(col->StyleContext() == colFrame->StyleContext() &&
                          col->GetContent() == colFrame->GetContent(),
                          "How did that happen??");
@@ -314,14 +333,14 @@ nsTableColGroupFrame::RemoveFrame(ChildListID     aListID,
         col = nextCol;
       }
     }
-    
+
     int32_t colIndex = colFrame->GetColIndex();
     // The RemoveChild call handles calling FrameNeedsReflow on us.
     RemoveChild(*colFrame, true);
-    
+
     nsTableFrame* tableFrame = GetTableFrame();
     tableFrame->RemoveCol(this, colIndex, true, true);
-    if (mFrames.IsEmpty() && contentRemoval && 
+    if (mFrames.IsEmpty() && contentRemoval &&
         GetColType() == eColGroupContent) {
       tableFrame->AppendAnonymousColFrames(this, GetSpan(),
                                            eColAnonymousColGroup, true);
@@ -360,7 +379,7 @@ nsTableColGroupFrame::Reflow(nsPresContext*          aPresContext,
   DO_GLOBAL_REFLOW_COUNT("nsTableColGroupFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
   NS_ASSERTION(nullptr!=mContent, "bad state -- null content for frame");
-  
+
   const nsStyleVisibility* groupVis = StyleVisibility();
   bool collapseGroup = (NS_STYLE_VISIBILITY_COLLAPSE == groupVis->mVisible);
   if (collapseGroup) {
@@ -368,7 +387,7 @@ nsTableColGroupFrame::Reflow(nsPresContext*          aPresContext,
   }
   // for every content child that (is a column thingy and does not already have a frame)
   // create a frame and adjust it's style
-  
+
   for (nsIFrame *kidFrame = mFrames.FirstChild(); kidFrame;
        kidFrame = kidFrame->GetNextSibling()) {
     // Give the child frame a chance to reflow, even though we know it'll have 0 size
@@ -388,10 +407,9 @@ nsTableColGroupFrame::Reflow(nsPresContext*          aPresContext,
 
 void
 nsTableColGroupFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                       const nsRect&           aDirtyRect,
                                        const nsDisplayListSet& aLists)
 {
-  nsTableFrame::DisplayGenericTablePart(aBuilder, this, aDirtyRect, aLists);
+  nsTableFrame::DisplayGenericTablePart(aBuilder, this, aLists);
 }
 
 nsTableColFrame * nsTableColGroupFrame::GetFirstColumn()
@@ -483,6 +501,30 @@ nsTableColGroupFrame::InvalidateFrameWithRect(const nsRect& aRect,
   GetParent()->InvalidateFrameWithRect(aRect + GetPosition(), aDisplayItemKey);
 }
 
+void
+nsTableColGroupFrame::AppendDirectlyOwnedAnonBoxes(
+  nsTArray<OwnedAnonBox>& aResult)
+{
+  nsTableColFrame* col = GetFirstColumn();
+  if (!col) {
+    // No columns, nothing to do.
+    return;
+  }
+
+  if (col->GetColType() == eColContent) {
+    // We have actual columns; no anon boxes here.
+    return;
+  }
+
+  for ( ; col; col = col->GetNextCol()) {
+    MOZ_ASSERT(col->GetColType() != eColContent,
+               "We should not have any real columns after anonymous ones");
+    MOZ_ASSERT(col->GetColType() != eColAnonymousCol,
+               "We shouldn't have spanning anonymous columns");
+    aResult.AppendElement(OwnedAnonBox(col));
+  }
+}
+
 #ifdef DEBUG_FRAME_DUMP
 nsresult
 nsTableColGroupFrame::GetFrameName(nsAString& aResult) const
@@ -506,10 +548,10 @@ void nsTableColGroupFrame::Dump(int32_t aIndent)
   case eColGroupContent:
     printf(" content ");
     break;
-  case eColGroupAnonymousCol: 
+  case eColGroupAnonymousCol:
     printf(" anonymous-column  ");
     break;
-  case eColGroupAnonymousCell: 
+  case eColGroupAnonymousCell:
     printf(" anonymous-cell ");
     break;
   }

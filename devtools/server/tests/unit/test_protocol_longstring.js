@@ -165,7 +165,7 @@ function run_test() {
       // That reference should be removed now.
       expectRootChildren(0);
     }).then(() => {
-      let deferred = promise.defer();
+      let deferred = defer();
       rootClient.once("string-event", (str) => {
         trace.expectSend({"type": "emitShortString", "to": "<actorid>"});
         trace.expectReceive({"type": "string-event", "str": "abc", "from": "<actorid>"});
@@ -187,7 +187,7 @@ function run_test() {
       // Will generate no packets
       return strfront.release();
     }).then(() => {
-      let deferred = promise.defer();
+      let deferred = defer();
       rootClient.once("string-event", (str) => {
         trace.expectSend({"type": "emitLongString", "to": "<actorid>"});
         trace.expectReceive({"type": "string-event",
@@ -235,7 +235,7 @@ function run_test() {
       client.close().then(() => {
         do_test_finished();
       });
-    }).then(null, err => {
+    }).catch(err => {
       do_report_unexpected_exception(err, "Failure executing test");
     });
   });

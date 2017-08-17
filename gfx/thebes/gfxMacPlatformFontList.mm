@@ -65,7 +65,6 @@
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/gfx/2D.h"
@@ -236,7 +235,7 @@ MacOSFontEntry::ReadCMAP(FontInfoData *aFontInfoData)
         mCharacterMap = new gfxCharacterMap();
     }
 
-    LOG_FONTLIST(("(fontlist-cmap) name: %s, size: %" PRIuSIZE " hash: %8.8x%s\n",
+    LOG_FONTLIST(("(fontlist-cmap) name: %s, size: %zu hash: %8.8x%s\n",
                   NS_ConvertUTF16toUTF8(mName).get(),
                   charmap->SizeOfIncludingThis(moz_malloc_size_of),
                   charmap->mHash, mCharacterMap == charmap ? " new" : ""));
@@ -1059,23 +1058,11 @@ gfxMacPlatformFontList::RegisteredFontsChangedNotificationCallback(CFNotificatio
 }
 
 gfxFontEntry*
-gfxMacPlatformFontList::GlobalFontFallback(const uint32_t aCh,
-                                           Script aRunScript,
-                                           const gfxFontStyle* aMatchStyle,
-                                           uint32_t& aCmapCount,
-                                           gfxFontFamily** aMatchedFamily)
+gfxMacPlatformFontList::PlatformGlobalFontFallback(const uint32_t aCh,
+                                                   Script aRunScript,
+                                                   const gfxFontStyle* aMatchStyle,
+                                                   gfxFontFamily** aMatchedFamily)
 {
-    bool useCmaps = IsFontFamilyWhitelistActive() ||
-                    gfxPlatform::GetPlatform()->UseCmapsDuringSystemFallback();
-
-    if (useCmaps) {
-        return gfxPlatformFontList::GlobalFontFallback(aCh,
-                                                       aRunScript,
-                                                       aMatchStyle,
-                                                       aCmapCount,
-                                                       aMatchedFamily);
-    }
-
     CFStringRef str;
     UniChar ch[2];
     CFIndex length = 1;
@@ -1266,6 +1253,7 @@ static const char kSystemFont_system[] = "-apple-system";
 bool
 gfxMacPlatformFontList::FindAndAddFamilies(const nsAString& aFamily,
                                            nsTArray<gfxFontFamily*>* aOutput,
+                                           bool aDeferOtherFamilyNamesLoading,
                                            gfxFontStyle* aStyle,
                                            gfxFloat aDevToCssSize)
 {
@@ -1280,7 +1268,10 @@ gfxMacPlatformFontList::FindAndAddFamilies(const nsAString& aFamily,
         return true;
     }
 
-    return gfxPlatformFontList::FindAndAddFamilies(aFamily, aOutput, aStyle,
+    return gfxPlatformFontList::FindAndAddFamilies(aFamily,
+                                                   aOutput,
+                                                   aDeferOtherFamilyNamesLoading,
+                                                   aStyle,
                                                    aDevToCssSize);
 }
 

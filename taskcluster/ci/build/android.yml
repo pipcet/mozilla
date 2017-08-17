@@ -9,9 +9,11 @@ android-api-15/debug:
     worker-type: aws-provisioner-v1/gecko-{level}-b-android
     worker:
         max-run-time: 7200
+        env:
+            TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android/releng.manifest"
     run:
         using: mozharness
-        actions: [get-secrets build generate-build-stats multi-l10n update]
+        actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
@@ -20,6 +22,9 @@ android-api-15/debug:
         secrets: true
         custom-build-variant-cfg: api-15-debug
         tooltool-downloads: internal
+    toolchains:
+        - linux64-gcc
+        - linux64-sccache
 
 android-x86/opt:
     description: "Android 4.2 x86 Opt"
@@ -32,9 +37,11 @@ android-x86/opt:
     worker-type: aws-provisioner-v1/gecko-{level}-b-android
     worker:
         max-run-time: 7200
+        env:
+            TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android-x86/releng.manifest"
     run:
         using: mozharness
-        actions: [get-secrets build generate-build-stats multi-l10n update]
+        actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
@@ -43,6 +50,9 @@ android-x86/opt:
         secrets: true
         custom-build-variant-cfg: x86
         tooltool-downloads: internal
+    toolchains:
+        - linux64-gcc
+        - linux64-sccache
 
 android-x86-nightly/opt:
     description: "Android 4.2 x86 Nightly"
@@ -58,9 +68,11 @@ android-x86-nightly/opt:
     worker-type: aws-provisioner-v1/gecko-{level}-b-android
     worker:
         max-run-time: 7200
+        env:
+            TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android-x86/releng.manifest"
     run:
         using: mozharness
-        actions: [get-secrets build generate-build-stats multi-l10n update]
+        actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
@@ -70,6 +82,9 @@ android-x86-nightly/opt:
         secrets: true
         custom-build-variant-cfg: x86
         tooltool-downloads: internal
+    toolchains:
+        - linux64-gcc
+        - linux64-sccache
 
 android-api-15/opt:
     description: "Android 4.0 API15+ Opt"
@@ -82,9 +97,11 @@ android-api-15/opt:
     worker-type: aws-provisioner-v1/gecko-{level}-b-android
     worker:
         max-run-time: 7200
+        env:
+            TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android/releng.manifest"
     run:
         using: mozharness
-        actions: [get-secrets build generate-build-stats multi-l10n update]
+        actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
@@ -93,6 +110,9 @@ android-api-15/opt:
         secrets: true
         custom-build-variant-cfg: api-15
         tooltool-downloads: internal
+    toolchains:
+        - linux64-gcc
+        - linux64-sccache
 
 android-api-15-nightly/opt:
     description: "Android 4.0 API15+ Nightly"
@@ -108,9 +128,11 @@ android-api-15-nightly/opt:
     worker-type: aws-provisioner-v1/gecko-{level}-b-android
     worker:
         max-run-time: 7200
+        env:
+            TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android/releng.manifest"
     run:
         using: mozharness
-        actions: [get-secrets build generate-build-stats multi-l10n update]
+        actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
@@ -120,6 +142,9 @@ android-api-15-nightly/opt:
         secrets: true
         custom-build-variant-cfg: api-15
         tooltool-downloads: internal
+    toolchains:
+        - linux64-gcc
+        - linux64-sccache
 
 android-x86-old-id/opt:
     description: "Android 4.2 x86 Opt OldId"
@@ -132,6 +157,8 @@ android-x86-old-id/opt:
     worker-type: aws-provisioner-v1/gecko-{level}-b-android
     worker:
         max-run-time: 7200
+        env:
+            TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android-x86/releng.manifest"
     run:
         using: mozharness
         actions: [get-secrets build multi-l10n update]
@@ -144,6 +171,9 @@ android-x86-old-id/opt:
         custom-build-variant-cfg: x86-old-id
         tooltool-downloads: internal
     run-on-projects: [ 'mozilla-central' ]
+    toolchains:
+        - linux64-gcc
+        - linux64-sccache
 
 android-x86-old-id-nightly/opt:
     description: "Android 4.2 x86 OldId Nightly"
@@ -159,6 +189,8 @@ android-x86-old-id-nightly/opt:
     worker-type: aws-provisioner-v1/gecko-{level}-b-android
     worker:
         max-run-time: 7200
+        env:
+            TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android-x86/releng.manifest"
     run:
         using: mozharness
         actions: [get-secrets build multi-l10n update]
@@ -172,6 +204,9 @@ android-x86-old-id-nightly/opt:
         custom-build-variant-cfg: x86-old-id
         tooltool-downloads: internal
     run-on-projects: [ 'mozilla-central' ]
+    toolchains:
+        - linux64-gcc
+        - linux64-sccache
 
 android-api-15-old-id/opt:
     description: "Android 4.0 API15+ Opt OldId"
@@ -184,6 +219,8 @@ android-api-15-old-id/opt:
     worker-type: aws-provisioner-v1/gecko-{level}-b-android
     worker:
         max-run-time: 7200
+        env:
+            TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android/releng.manifest"
     run:
         using: mozharness
         actions: [get-secrets build multi-l10n update]
@@ -196,6 +233,9 @@ android-api-15-old-id/opt:
         custom-build-variant-cfg: api-15-old-id
         tooltool-downloads: internal
     run-on-projects: [ 'mozilla-central' ]
+    toolchains:
+        - linux64-gcc
+        - linux64-sccache
 
 android-api-15-old-id-nightly/opt:
     description: "Android 4.0 API15+ OldId Nightly"
@@ -211,6 +251,8 @@ android-api-15-old-id-nightly/opt:
     worker-type: aws-provisioner-v1/gecko-{level}-b-android
     worker:
         max-run-time: 7200
+        env:
+            TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android/releng.manifest"
     run:
         using: mozharness
         actions: [get-secrets build multi-l10n update]
@@ -224,6 +266,9 @@ android-api-15-old-id-nightly/opt:
         custom-build-variant-cfg: api-15-old-id
         tooltool-downloads: internal
     run-on-projects: [ 'mozilla-central' ]
+    toolchains:
+        - linux64-gcc
+        - linux64-sccache
 
 android-api-15-gradle/opt:
     description: "Android 4.0 API15+ (Gradle) Opt"
@@ -240,6 +285,7 @@ android-api-15-gradle/opt:
         env:
             # Bug 1292762 - Set GRADLE_USER_HOME to avoid sdk-manager-plugin intermittent
             GRADLE_USER_HOME: /home/worker/workspace/build/src/dotgradle
+            TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android/releng.manifest"
         artifacts:
           - name: public/android/maven
             path: /home/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
@@ -252,7 +298,7 @@ android-api-15-gradle/opt:
             type: directory
     run:
         using: mozharness
-        actions: [get-secrets build generate-build-stats multi-l10n update]
+        actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
@@ -261,6 +307,9 @@ android-api-15-gradle/opt:
         secrets: true
         custom-build-variant-cfg: api-15-gradle
         tooltool-downloads: internal
+    toolchains:
+        - linux64-gcc
+        - linux64-sccache
 
 android-aarch64/opt:
     description: "Android 5.0 AArch64 Opt"
@@ -273,9 +322,11 @@ android-aarch64/opt:
     worker-type: aws-provisioner-v1/gecko-{level}-b-android
     worker:
         max-run-time: 7200
+        env:
+            TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android/releng.manifest"
     run:
         using: mozharness
-        actions: [get-secrets build generate-build-stats multi-l10n update]
+        actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
@@ -284,6 +335,9 @@ android-aarch64/opt:
         secrets: true
         custom-build-variant-cfg: aarch64
         tooltool-downloads: internal
+    toolchains:
+        - linux64-gcc
+        - linux64-sccache
 
 android-aarch64-nightly/opt:
     description: "Android 5.0 AArch64 Nightly"
@@ -299,9 +353,11 @@ android-aarch64-nightly/opt:
     worker-type: aws-provisioner-v1/gecko-{level}-b-android
     worker:
         max-run-time: 7200
+        env:
+            TOOLTOOL_MANIFEST: "mobile/android/config/tooltool-manifests/android/releng.manifest"
     run:
         using: mozharness
-        actions: [get-secrets build generate-build-stats multi-l10n update]
+        actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
             - disable_signing.py
@@ -311,3 +367,6 @@ android-aarch64-nightly/opt:
         secrets: true
         custom-build-variant-cfg: aarch64
         tooltool-downloads: internal
+    toolchains:
+        - linux64-gcc
+        - linux64-sccache

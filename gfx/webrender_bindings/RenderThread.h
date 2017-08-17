@@ -12,11 +12,13 @@
 #include "base/thread.h"                // for Thread
 #include "base/message_loop.h"
 #include "nsISupportsImpl.h"
+#include "nsRefPtrHashtable.h"
 #include "ThreadSafeRefcountingWithMainThreadDestruction.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/webrender/webrender_ffi.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/webrender/WebRenderTypes.h"
+#include "mozilla/layers/SynchronousTask.h"
 
 namespace mozilla {
 namespace wr {
@@ -24,6 +26,20 @@ namespace wr {
 class RendererOGL;
 class RenderTextureHost;
 class RenderThread;
+
+/// A rayon thread pool that is shared by all WebRender instances within a process.
+class WebRenderThreadPool {
+public:
+  WebRenderThreadPool();
+
+  ~WebRenderThreadPool();
+
+  wr::WrThreadPool* Raw() { return mThreadPool; }
+
+protected:
+  wr::WrThreadPool* mThreadPool;
+};
+
 
 /// Base class for an event that can be scheduled to run on the render thread.
 ///
@@ -91,9 +107,6 @@ public:
   void NewFrameReady(wr::WindowId aWindowId);
 
   /// Automatically forwarded to the render thread.
-  void NewScrollFrameReady(wr::WindowId aWindowId, bool aCompositeNeeded);
-
-  /// Automatically forwarded to the render thread.
   void PipelineSizeChanged(wr::WindowId aWindowId, uint64_t aPipelineId, float aWidth, float aHeight);
 
   /// Automatically forwarded to the render thread.
@@ -105,10 +118,13 @@ public:
   void Pause(wr::WindowId aWindowId);
   bool Resume(wr::WindowId aWindowId);
 
-  void RegisterExternalImage(uint64_t aExternalImageId, RenderTextureHost* aTexture);
+  /// Can be called from any thread.
+  void RegisterExternalImage(uint64_t aExternalImageId, already_AddRefed<RenderTextureHost> aTexture);
 
+  /// Can be called from any thread.
   void UnregisterExternalImage(uint64_t aExternalImageId);
 
+  /// Can only be called from the render thread.
   RenderTextureHost* GetRenderTexture(WrExternalImageId aExternalImageId);
 
   /// Can be called from any thread.
@@ -118,12 +134,20 @@ public:
   /// Can be called from any thread.
   void DecPendingFrameCount(wr::WindowId aWindowId);
 
+  /// Can be called from any thread.
+  WebRenderThreadPool& ThreadPool() { return mThreadPool; }
+
 private:
   explicit RenderThread(base::Thread* aThread);
+
+  void DeferredRenderTextureHostDestroy(RefPtr<RenderTextureHost> aTexture);
+  void ShutDownTask(layers::SynchronousTask* aTask);
 
   ~RenderThread();
 
   base::Thread* const mThread;
+
+  WebRenderThreadPool mThreadPool;
 
   std::map<wr::WindowId, UniquePtr<RendererOGL>> mRenderers;
 
@@ -131,7 +155,8 @@ private:
   nsDataHashtable<nsUint64HashKey, uint32_t> mPendingFrameCounts;
 
   Mutex mRenderTextureMapLock;
-  nsDataHashtable<nsUint64HashKey, RefPtr<RenderTextureHost> > mRenderTextures;
+  nsRefPtrHashtable<nsUint64HashKey, RenderTextureHost> mRenderTextures;
+  bool mHasShutdown;
 };
 
 } // namespace wr

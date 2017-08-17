@@ -340,6 +340,40 @@ function getResponseTime(item, firstRequestStartedMillis = 0) {
     eventTimings.timings.receive;
 }
 
+/**
+ * Format the protocols used by the request.
+ */
+function getFormattedProtocol(item) {
+  let { httpVersion = "", responseHeaders = { headers: [] } } = item;
+  let protocol = [httpVersion];
+  responseHeaders.headers.some(h => {
+    if (h.hasOwnProperty("name") && h.name.toLowerCase() === "x-firefox-spdy") {
+      protocol.push(h.value);
+      return true;
+    }
+    return false;
+  });
+  return protocol.join("+");
+}
+
+/**
+ * Get the value of a particular response header, or null if not
+ * present.
+ */
+function getResponseHeader(item, header) {
+  let { responseHeaders } = item;
+  if (!responseHeaders || !responseHeaders.headers.length) {
+    return null;
+  }
+  header = header.toLowerCase();
+  for (let responseHeader of responseHeaders.headers) {
+    if (responseHeader.name.toLowerCase() == header) {
+      return responseHeader.value;
+    }
+  }
+  return null;
+}
+
 module.exports = {
   getFormDataSections,
   fetchHeaders,
@@ -348,6 +382,8 @@ module.exports = {
   decodeUnicodeUrl,
   getAbbreviatedMimeType,
   getEndTime,
+  getFormattedProtocol,
+  getResponseHeader,
   getResponseTime,
   getStartTime,
   getUrlBaseName,

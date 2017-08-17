@@ -82,12 +82,6 @@ class nsIParserService : public nsISupports {
    *                  ...).
    */
   virtual nsIAtom *HTMLIdToAtomTag(int32_t aId) const = 0;
-  
-  NS_IMETHOD HTMLConvertEntityToUnicode(const nsAString& aEntity, 
-                                        int32_t* aUnicode) const = 0;
-
-  NS_IMETHOD HTMLConvertUnicodeToEntity(int32_t aUnicode,
-                                        nsCString& aEntity) const = 0;
 
   NS_IMETHOD IsContainer(int32_t aId, bool& aIsContainer) const = 0;
   NS_IMETHOD IsBlock(int32_t aId, bool& aIsBlock) const = 0;

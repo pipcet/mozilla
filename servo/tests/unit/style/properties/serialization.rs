@@ -2,17 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use properties::parse;
+use properties::{parse, parse_input};
 use style::computed_values::display::T::inline_block;
-use style::properties::{PropertyDeclaration, Importance, PropertyId};
-use style::properties::longhands::outline_color::computed_value::T as ComputedColor;
+use style::properties::{PropertyDeclaration, Importance};
 use style::properties::parse_property_declaration_list;
-use style::values::{RGBA, Auto};
-use style::values::CustomIdent;
-use style::values::specified::{BorderStyle, BorderWidth, CSSColor, Length, LengthOrPercentage};
-use style::values::specified::{LengthOrPercentageOrAuto, LengthOrPercentageOrAutoOrContent};
-use style::values::specified::{NoCalcLength, PositionComponent};
-use style::values::specified::position::Y;
+use style::values::{CustomIdent, RGBA, Auto};
+use style::values::generics::flex::FlexBasis;
+use style::values::specified::{BorderStyle, BorderSideWidth, Color};
+use style::values::specified::{Length, LengthOrPercentage, LengthOrPercentageOrAuto};
+use style::values::specified::NoCalcLength;
 use style::values::specified::url::SpecifiedUrl;
 use style_traits::ToCss;
 use stylesheets::block_from;
@@ -99,47 +97,6 @@ mod shorthand_serialization {
         }
     }
 
-    mod text {
-        use style::properties::longhands::text_decoration_line as TextDecorationLine;
-        use style::properties::longhands::text_decoration_style::SpecifiedValue as TextDecorationStyle;
-        use super::*;
-
-        #[test]
-        fn text_decoration_should_show_all_properties_when_set() {
-            let mut properties = Vec::new();
-
-            let line = TextDecorationLine::OVERLINE;
-            let style = TextDecorationStyle::dotted;
-            let color = CSSColor {
-                parsed: ComputedColor::RGBA(RGBA::new(128, 0, 128, 255)),
-                authored: None
-            };
-
-            properties.push(PropertyDeclaration::TextDecorationLine(line));
-            properties.push(PropertyDeclaration::TextDecorationStyle(style));
-            properties.push(PropertyDeclaration::TextDecorationColor(color));
-
-            let serialization = shorthand_properties_to_string(properties);
-            assert_eq!(serialization, "text-decoration: overline dotted rgb(128, 0, 128);");
-        }
-
-        #[test]
-        fn text_decoration_should_not_serialize_initial_style_value() {
-            let mut properties = Vec::new();
-
-            let line = TextDecorationLine::UNDERLINE;
-            let style = TextDecorationStyle::solid;
-            let color = CSSColor::currentcolor();
-
-            properties.push(PropertyDeclaration::TextDecorationLine(line));
-            properties.push(PropertyDeclaration::TextDecorationStyle(style));
-            properties.push(PropertyDeclaration::TextDecorationColor(color));
-
-            let serialization = shorthand_properties_to_string(properties);
-            assert_eq!(serialization, "text-decoration: underline;");
-        }
-    }
-
     mod four_sides_shorthands {
         pub use super::*;
 
@@ -221,18 +178,15 @@ mod shorthand_serialization {
           properties.push(PropertyDeclaration::BorderBottomStyle(solid.clone()));
           properties.push(PropertyDeclaration::BorderLeftStyle(solid.clone()));
 
-          let px_30 = BorderWidth::from_length(Length::from_px(30f32));
-          let px_10 = BorderWidth::from_length(Length::from_px(10f32));
+          let px_30 = BorderSideWidth::Length(Length::from_px(30f32));
+          let px_10 = BorderSideWidth::Length(Length::from_px(10f32));
 
           properties.push(PropertyDeclaration::BorderTopWidth(px_30.clone()));
           properties.push(PropertyDeclaration::BorderRightWidth(px_30.clone()));
           properties.push(PropertyDeclaration::BorderBottomWidth(px_30.clone()));
           properties.push(PropertyDeclaration::BorderLeftWidth(px_10.clone()));
 
-          let blue = CSSColor {
-              parsed: ComputedColor::RGBA(RGBA::new(0, 0, 255, 255)),
-              authored: None
-          };
+          let blue = Color::rgba(RGBA::new(0, 0, 255, 255));
 
           properties.push(PropertyDeclaration::BorderTopColor(blue.clone()));
           properties.push(PropertyDeclaration::BorderRightColor(blue.clone()));
@@ -255,17 +209,14 @@ mod shorthand_serialization {
           properties.push(PropertyDeclaration::BorderBottomStyle(solid.clone()));
           properties.push(PropertyDeclaration::BorderLeftStyle(solid.clone()));
 
-          let px_30 = BorderWidth::from_length(Length::from_px(30f32));
+          let px_30 = BorderSideWidth::Length(Length::from_px(30f32));
 
           properties.push(PropertyDeclaration::BorderTopWidth(px_30.clone()));
           properties.push(PropertyDeclaration::BorderRightWidth(px_30.clone()));
           properties.push(PropertyDeclaration::BorderBottomWidth(px_30.clone()));
           properties.push(PropertyDeclaration::BorderLeftWidth(px_30.clone()));
 
-          let blue = CSSColor {
-              parsed: ComputedColor::RGBA(RGBA::new(0, 0, 255, 255)),
-              authored: None
-          };
+          let blue = Color::rgba(RGBA::new(0, 0, 255, 255));
 
           properties.push(PropertyDeclaration::BorderTopColor(blue.clone()));
           properties.push(PropertyDeclaration::BorderRightColor(blue.clone()));
@@ -278,10 +229,12 @@ mod shorthand_serialization {
 
         #[test]
         fn padding_should_serialize_correctly() {
+            use style::values::specified::NonNegativeLengthOrPercentage;
+
             let mut properties = Vec::new();
 
-            let px_10 = LengthOrPercentage::Length(NoCalcLength::from_px(10f32));
-            let px_15 = LengthOrPercentage::Length(NoCalcLength::from_px(15f32));
+            let px_10: NonNegativeLengthOrPercentage = NoCalcLength::from_px(10f32).into();
+            let px_15: NonNegativeLengthOrPercentage = NoCalcLength::from_px(15f32).into();
             properties.push(PropertyDeclaration::PaddingTop(px_10.clone()));
             properties.push(PropertyDeclaration::PaddingRight(px_15.clone()));
             properties.push(PropertyDeclaration::PaddingBottom(px_10));
@@ -295,11 +248,11 @@ mod shorthand_serialization {
         fn border_width_should_serialize_correctly() {
             let mut properties = Vec::new();
 
-            let top_px = BorderWidth::from_length(Length::from_px(10f32));
-            let bottom_px = BorderWidth::from_length(Length::from_px(10f32));
+            let top_px = BorderSideWidth::Length(Length::from_px(10f32));
+            let bottom_px = BorderSideWidth::Length(Length::from_px(10f32));
 
-            let right_px = BorderWidth::from_length(Length::from_px(15f32));
-            let left_px = BorderWidth::from_length(Length::from_px(15f32));
+            let right_px = BorderSideWidth::Length(Length::from_px(15f32));
+            let left_px = BorderSideWidth::Length(Length::from_px(15f32));
 
             properties.push(PropertyDeclaration::BorderTopWidth(top_px));
             properties.push(PropertyDeclaration::BorderRightWidth(right_px));
@@ -314,10 +267,10 @@ mod shorthand_serialization {
         fn border_width_with_keywords_should_serialize_correctly() {
             let mut properties = Vec::new();
 
-            let top_px = BorderWidth::Thin;
-            let right_px = BorderWidth::Medium;
-            let bottom_px = BorderWidth::Thick;
-            let left_px = BorderWidth::from_length(Length::from_px(15f32));
+            let top_px = BorderSideWidth::Thin;
+            let right_px = BorderSideWidth::Medium;
+            let bottom_px = BorderSideWidth::Thick;
+            let left_px = BorderSideWidth::Length(Length::from_px(15f32));
 
             properties.push(PropertyDeclaration::BorderTopWidth(top_px));
             properties.push(PropertyDeclaration::BorderRightWidth(right_px));
@@ -332,15 +285,8 @@ mod shorthand_serialization {
         fn border_color_should_serialize_correctly() {
             let mut properties = Vec::new();
 
-            let red = CSSColor {
-                parsed: ComputedColor::RGBA(RGBA::new(255, 0, 0, 255)),
-                authored: None
-            };
-
-            let blue = CSSColor {
-                parsed: ComputedColor::RGBA(RGBA::new(0, 0, 255, 255)),
-                authored: None
-            };
+            let red = Color::rgba(RGBA::new(255, 0, 0, 255));
+            let blue = Color::rgba(RGBA::new(0, 0, 255, 255));
 
             properties.push(PropertyDeclaration::BorderTopColor(blue.clone()));
             properties.push(PropertyDeclaration::BorderRightColor(red.clone()));
@@ -368,23 +314,22 @@ mod shorthand_serialization {
             assert_eq!(serialization, "border-style: solid dotted;");
         }
 
-        use style::values::specified::BorderCornerRadius;
-        use style::values::specified::length::Percentage;
+        use style::values::specified::{BorderCornerRadius, Percentage};
 
         #[test]
         fn border_radius_should_serialize_correctly() {
             let mut properties = Vec::new();
             properties.push(PropertyDeclaration::BorderTopLeftRadius(Box::new(BorderCornerRadius::new(
-                Percentage(0.01).into(), Percentage(0.05).into()
+                Percentage::new(0.01).into(), Percentage::new(0.05).into()
             ))));
             properties.push(PropertyDeclaration::BorderTopRightRadius(Box::new(BorderCornerRadius::new(
-                Percentage(0.02).into(), Percentage(0.06).into()
+                Percentage::new(0.02).into(), Percentage::new(0.06).into()
             ))));
             properties.push(PropertyDeclaration::BorderBottomRightRadius(Box::new(BorderCornerRadius::new(
-                Percentage(0.03).into(), Percentage(0.07).into()
+                Percentage::new(0.03).into(), Percentage::new(0.07).into()
             ))));
             properties.push(PropertyDeclaration::BorderBottomLeftRadius(Box::new(BorderCornerRadius::new(
-                Percentage(0.04).into(), Percentage(0.08).into()
+                Percentage::new(0.04).into(), Percentage::new(0.08).into()
             ))));
 
             let serialization = shorthand_properties_to_string(properties);
@@ -403,12 +348,9 @@ mod shorthand_serialization {
         fn directional_border_should_show_all_properties_when_values_are_set() {
             let mut properties = Vec::new();
 
-            let width = BorderWidth::from_length(Length::from_px(4f32));
+            let width = BorderSideWidth::Length(Length::from_px(4f32));
             let style = BorderStyle::solid;
-            let color = CSSColor {
-                parsed: ComputedColor::RGBA(RGBA::new(255, 0, 0, 255)),
-                authored: None
-            };
+            let color = RGBA::new(255, 0, 0, 255).into();
 
             properties.push(PropertyDeclaration::BorderTopWidth(width));
             properties.push(PropertyDeclaration::BorderTopStyle(style));
@@ -418,10 +360,10 @@ mod shorthand_serialization {
             assert_eq!(serialization, "border-top: 4px solid rgb(255, 0, 0);");
         }
 
-        fn get_border_property_values() -> (BorderWidth, BorderStyle, CSSColor) {
-            (BorderWidth::from_length(Length::from_px(4f32)),
+        fn get_border_property_values() -> (BorderSideWidth, BorderStyle, Color) {
+            (BorderSideWidth::Length(Length::from_px(4f32)),
              BorderStyle::solid,
-             CSSColor::currentcolor())
+             Color::currentcolor())
         }
 
         #[test]
@@ -523,7 +465,6 @@ mod shorthand_serialization {
     }
 
     mod outline {
-        use style::properties::longhands::outline_width::SpecifiedValue as WidthContainer;
         use style::values::Either;
         use super::*;
 
@@ -531,12 +472,9 @@ mod shorthand_serialization {
         fn outline_should_show_all_properties_when_set() {
             let mut properties = Vec::new();
 
-            let width = WidthContainer(Length::from_px(4f32));
+            let width = BorderSideWidth::Length(Length::from_px(4f32));
             let style = Either::Second(BorderStyle::solid);
-            let color = CSSColor {
-                parsed: ComputedColor::RGBA(RGBA::new(255, 0, 0, 255)),
-                authored: None
-            };
+            let color = RGBA::new(255, 0, 0, 255).into();
 
             properties.push(PropertyDeclaration::OutlineWidth(width));
             properties.push(PropertyDeclaration::OutlineStyle(style));
@@ -550,12 +488,9 @@ mod shorthand_serialization {
         fn outline_should_serialize_correctly_when_style_is_auto() {
             let mut properties = Vec::new();
 
-            let width = WidthContainer(Length::from_px(4f32));
+            let width = BorderSideWidth::Length(Length::from_px(4f32));
             let style = Either::First(Auto);
-            let color = CSSColor {
-                parsed: ComputedColor::RGBA(RGBA::new(255, 0, 0, 255)),
-                authored: None
-            };
+            let color = RGBA::new(255, 0, 0, 255).into();
             properties.push(PropertyDeclaration::OutlineWidth(width));
             properties.push(PropertyDeclaration::OutlineStyle(style));
             properties.push(PropertyDeclaration::OutlineColor(color));
@@ -583,14 +518,14 @@ mod shorthand_serialization {
 
     #[test]
     fn flex_should_serialize_all_available_properties() {
-        use style::values::specified::{Number, Percentage};
+        use style::values::specified::{NonNegativeNumber, Percentage};
 
         let mut properties = Vec::new();
 
-        let grow = Number::new(2f32);
-        let shrink = Number::new(3f32);
+        let grow = NonNegativeNumber::new(2f32);
+        let shrink = NonNegativeNumber::new(3f32);
         let basis =
-            LengthOrPercentageOrAutoOrContent::Percentage(Percentage(0.5f32));
+            FlexBasis::Length(Percentage::new(0.5f32).into());
 
         properties.push(PropertyDeclaration::FlexGrow(grow));
         properties.push(PropertyDeclaration::FlexShrink(shrink));
@@ -615,60 +550,6 @@ mod shorthand_serialization {
 
         let serialization = shorthand_properties_to_string(properties);
         assert_eq!(serialization, "flex-flow: row wrap;");
-    }
-
-    mod font {
-        use super::*;
-
-        #[test]
-        fn font_should_serialize_to_empty_if_there_are_nondefault_subproperties() {
-            // Test with non-default font-kerning value
-            let block_text = "font-style: italic; \
-                              font-variant: normal; \
-                              font-weight: bolder; \
-                              font-stretch: expanded; \
-                              font-size: 4px; \
-                              line-height: 3; \
-                              font-family: serif; \
-                              font-size-adjust: none; \
-                              font-variant-caps: normal; \
-                              font-variant-position: normal; \
-                              font-language-override: normal; \
-                              font-kerning: none";
-
-            let block = parse(|c, i| Ok(parse_property_declaration_list(c, i)), block_text).unwrap();
-
-            let mut s = String::new();
-            let id = PropertyId::parse("font".into()).unwrap();
-            let x = block.property_value_to_css(&id, &mut s);
-
-            assert_eq!(x.is_ok(), true);
-            assert_eq!(s, "");
-        }
-
-        #[test]
-        fn font_should_serialize_all_available_properties() {
-            let block_text = "font-style: italic; \
-                              font-variant: normal; \
-                              font-weight: bolder; \
-                              font-stretch: expanded; \
-                              font-size: 4px; \
-                              line-height: 3; \
-                              font-family: serif; \
-                              font-size-adjust: none; \
-                              font-kerning: auto; \
-                              font-variant-caps: normal; \
-                              font-variant-position: normal; \
-                              font-language-override: normal; \
-                              font-feature-settings: normal;";
-
-            let block = parse(|c, i| Ok(parse_property_declaration_list(c, i)), block_text).unwrap();
-
-            let serialization = block.to_css_string();
-
-            assert_eq!(serialization, "font: italic normal bolder expanded 4px/3 serif;");
-        }
-
     }
 
     mod background {
@@ -792,220 +673,6 @@ mod shorthand_serialization {
             let block = parse(|c, i| Ok(parse_property_declaration_list(c, i)), block_text).unwrap();
             let serialization = block.to_css_string();
             assert_eq!(serialization, "background-position: center 20px;");
-        }
-    }
-
-    mod mask {
-        use style::properties::longhands::mask_clip as clip;
-        use style::properties::longhands::mask_composite as composite;
-        use style::properties::longhands::mask_image as image;
-        use style::properties::longhands::mask_mode as mode;
-        use style::properties::longhands::mask_origin as origin;
-        use style::properties::longhands::mask_position_x as position_x;
-        use style::properties::longhands::mask_position_y as position_y;
-        use style::properties::longhands::mask_repeat as repeat;
-        use style::properties::longhands::mask_size as size;
-        use style::values::Either;
-        use style::values::generics::background::BackgroundSize;
-        use style::values::generics::image::Image;
-        use super::*;
-
-        macro_rules! single_vec_value_typedef {
-            ($name:ident, $path:expr) => {
-                $name::SpecifiedValue(
-                    vec![$path]
-                )
-            };
-        }
-        macro_rules! single_vec_keyword_value {
-            ($name:ident, $kw:ident) => {
-                $name::SpecifiedValue(
-                    vec![$name::single_value::SpecifiedValue::$kw]
-                )
-            };
-        }
-        macro_rules! single_vec_variant_value {
-            ($name:ident, $variant:expr) => {
-                $name::SpecifiedValue(
-                        vec![$variant]
-                )
-            };
-        }
-
-        #[test]
-        fn mask_should_serialize_all_available_properties_when_specified() {
-            let mut properties = Vec::new();
-
-            let image = single_vec_value_typedef!(
-                image,
-                Either::Second(Image::Url(SpecifiedUrl::new_for_testing("http://servo/test.png")))
-            );
-
-            let mode = single_vec_keyword_value!(mode, luminance);
-
-            let position_x = single_vec_value_typedef!(position_x,
-                PositionComponent::Length(LengthOrPercentage::Length(NoCalcLength::from_px(7f32)))
-            );
-            let position_y = single_vec_value_typedef!(position_y,
-                PositionComponent::Side(
-                    Y::Bottom,
-                    Some(LengthOrPercentage::Length(NoCalcLength::from_px(4f32))),
-                )
-            );
-
-            let size = single_vec_variant_value!(
-                size,
-                BackgroundSize::Explicit {
-                    width: LengthOrPercentageOrAuto::Length(NoCalcLength::from_px(70f32)),
-                    height: LengthOrPercentageOrAuto::Length(NoCalcLength::from_px(50f32)),
-                }
-            );
-
-            let repeat = single_vec_keyword_value!(repeat, RepeatX);
-            let origin = single_vec_keyword_value!(origin, padding_box);
-            let clip = single_vec_keyword_value!(clip, border_box);
-            let composite = single_vec_keyword_value!(composite, subtract);
-
-            properties.push(PropertyDeclaration::MaskImage(image));
-            properties.push(PropertyDeclaration::MaskMode(mode));
-            properties.push(PropertyDeclaration::MaskPositionX(position_x));
-            properties.push(PropertyDeclaration::MaskPositionY(position_y));
-            properties.push(PropertyDeclaration::MaskSize(size));
-            properties.push(PropertyDeclaration::MaskRepeat(repeat));
-            properties.push(PropertyDeclaration::MaskOrigin(origin));
-            properties.push(PropertyDeclaration::MaskClip(clip));
-            properties.push(PropertyDeclaration::MaskComposite(composite));
-
-            let serialization = shorthand_properties_to_string(properties);
-            assert_eq!(
-                serialization,
-                "mask: url(\"http://servo/test.png\") luminance left 7px bottom 4px / 70px 50px \
-                repeat-x padding-box border-box subtract;"
-            );
-        }
-
-        #[test]
-        fn mask_should_combine_origin_and_clip_properties_when_equal() {
-            let mut properties = Vec::new();
-
-            let image = single_vec_value_typedef!(
-                image,
-                Either::Second(Image::Url(SpecifiedUrl::new_for_testing("http://servo/test.png")))
-            );
-
-            let mode = single_vec_keyword_value!(mode, luminance);
-
-            let position_x = single_vec_value_typedef!(position_x,
-                PositionComponent::Length(LengthOrPercentage::Length(NoCalcLength::from_px(7f32)))
-            );
-
-            let position_y = single_vec_value_typedef!(position_y,
-                PositionComponent::Length(LengthOrPercentage::Length(NoCalcLength::from_px(4f32)))
-            );
-
-            let size = single_vec_variant_value!(
-                size,
-                BackgroundSize::Explicit {
-                    width: LengthOrPercentageOrAuto::Length(NoCalcLength::from_px(70f32)),
-                    height: LengthOrPercentageOrAuto::Length(NoCalcLength::from_px(50f32)),
-                }
-            );
-
-            let repeat = single_vec_keyword_value!(repeat, RepeatX);
-            let origin = single_vec_keyword_value!(origin, padding_box);
-            let clip = single_vec_keyword_value!(clip, padding_box);
-            let composite = single_vec_keyword_value!(composite, subtract);
-
-            properties.push(PropertyDeclaration::MaskImage(image));
-            properties.push(PropertyDeclaration::MaskMode(mode));
-            properties.push(PropertyDeclaration::MaskPositionX(position_x));
-            properties.push(PropertyDeclaration::MaskPositionY(position_y));
-            properties.push(PropertyDeclaration::MaskSize(size));
-            properties.push(PropertyDeclaration::MaskRepeat(repeat));
-            properties.push(PropertyDeclaration::MaskOrigin(origin));
-            properties.push(PropertyDeclaration::MaskClip(clip));
-            properties.push(PropertyDeclaration::MaskComposite(composite));
-
-            let serialization = shorthand_properties_to_string(properties);
-            assert_eq!(
-                serialization,
-                "mask: url(\"http://servo/test.png\") luminance 7px 4px / 70px 50px \
-                repeat-x padding-box subtract;"
-            );
-        }
-
-        #[test]
-        fn serialize_mask_position_with_multiple_values() {
-            let block_text = "mask-position: 1px 2px, 4px 3px;";
-            let block = parse(|c, i| Ok(parse_property_declaration_list(c, i)), block_text).unwrap();
-            let serialization = block.to_css_string();
-            assert_eq!(serialization, block_text);
-        }
-
-        #[test]
-        fn mask_position_should_be_a_valid_form_its_longhands() {
-            // If there is any longhand consisted of both keyword and position,
-            // the shorthand result should be the 4-value format.
-            let block_text = "\
-                mask-position-x: 30px;\
-                mask-position-y: bottom 20px;";
-            let block = parse(|c, i| Ok(parse_property_declaration_list(c, i)), block_text).unwrap();
-            let serialization = block.to_css_string();
-            assert_eq!(serialization, "mask-position: left 30px bottom 20px;");
-
-            // If there is no longhand consisted of both keyword and position,
-            // the shorthand result should be the 2-value format.
-            let block_text = "\
-                mask-position-x: center;\
-                mask-position-y: 20px;";
-            let block = parse(|c, i| Ok(parse_property_declaration_list(c, i)), block_text).unwrap();
-            let serialization = block.to_css_string();
-            assert_eq!(serialization, "mask-position: center 20px;");
-        }
-    }
-
-    mod scroll_snap_type {
-        pub use super::*;
-        use style::properties::longhands::scroll_snap_type_x::SpecifiedValue as ScrollSnapTypeXValue;
-
-        #[test]
-        fn should_serialize_to_empty_string_if_sub_types_not_equal() {
-            let declarations = vec![
-                (PropertyDeclaration::ScrollSnapTypeX(ScrollSnapTypeXValue::mandatory),
-                Importance::Normal),
-                (PropertyDeclaration::ScrollSnapTypeY(ScrollSnapTypeXValue::none),
-                Importance::Normal)
-            ];
-
-            let block = block_from(declarations);
-
-            let mut s = String::new();
-
-            let id = PropertyId::parse("scroll-snap-type".into()).unwrap();
-            let x = block.single_value_to_css(&id, &mut s);
-
-            assert_eq!(x.is_ok(), true);
-            assert_eq!(s, "");
-        }
-
-        #[test]
-        fn should_serialize_to_single_value_if_sub_types_are_equal() {
-            let declarations = vec![
-                (PropertyDeclaration::ScrollSnapTypeX(ScrollSnapTypeXValue::mandatory),
-                Importance::Normal),
-                (PropertyDeclaration::ScrollSnapTypeY(ScrollSnapTypeXValue::mandatory),
-                Importance::Normal)
-            ];
-
-            let block = block_from(declarations);
-
-            let mut s = String::new();
-
-            let id = PropertyId::parse("scroll-snap-type".into()).unwrap();
-            let x = block.single_value_to_css(&id, &mut s);
-
-            assert_eq!(x.is_ok(), true);
-            assert_eq!(s, "mandatory");
         }
     }
 
@@ -1261,16 +928,26 @@ mod shorthand_serialization {
 
     mod effects {
         pub use super::*;
-        pub use style::properties::longhands::box_shadow::SpecifiedValue as BoxShadow;
-        pub use style::values::specified::Shadow;
+        pub use style::properties::longhands::box_shadow::SpecifiedValue as BoxShadowList;
+        pub use style::values::specified::effects::{BoxShadow, SimpleShadow};
 
         #[test]
         fn box_shadow_should_serialize_correctly() {
+            use style::values::specified::length::NonNegativeLength;
+
             let mut properties = Vec::new();
-            let shadow_val = Shadow { offset_x: Length::from_px(1f32), offset_y: Length::from_px(2f32),
-            blur_radius: Length::from_px(3f32), spread_radius: Length::from_px(4f32), color: None, inset: false };
-            let shadow_decl = BoxShadow(vec![shadow_val]);
-            properties.push(PropertyDeclaration:: BoxShadow(shadow_decl));
+            let shadow_val = BoxShadow {
+                base: SimpleShadow {
+                    color: None,
+                    horizontal: Length::from_px(1f32),
+                    vertical: Length::from_px(2f32),
+                    blur: Some(NonNegativeLength::from_px(3f32)),
+                },
+                spread: Some(Length::from_px(4f32)),
+                inset: false,
+            };
+            let shadow_decl = BoxShadowList(vec![shadow_val]);
+            properties.push(PropertyDeclaration::BoxShadow(shadow_decl));
             let shadow_css = "box-shadow: 1px 2px 3px 4px;";
             let shadow = parse(|c, i| Ok(parse_property_declaration_list(c, i)), shadow_css).unwrap();
 

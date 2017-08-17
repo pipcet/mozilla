@@ -72,21 +72,6 @@ using JobQueue = GCVector<JSObject*, 0, SystemAllocPolicy>;
 
 class AutoLockForExclusiveAccess;
 
-/*
- * Used for engine-internal handling of async tasks, as currently
- * enabled in the js shell and jsapi tests.
- */
-struct InternalAsyncTasks
-{
-    explicit InternalAsyncTasks()
-      : outstanding(0),
-        finished()
-    {}
-
-    size_t outstanding;
-    Vector<JS::AsyncTask*, 0, SystemAllocPolicy> finished;
-};
-
 void ReportOverRecursed(JSContext* cx, unsigned errorNumber);
 
 /* Thread Local Storage slot for storing the context for a thread. */
@@ -308,13 +293,8 @@ struct JSContext : public JS::RootingContext,
     void addPendingOutOfMemory();
 
     JSRuntime* runtime() { return runtime_; }
+    const JSRuntime* runtime() const { return runtime_; }
 
-    static size_t offsetOfActivation() {
-        return offsetof(JSContext, activation_);
-    }
-    static size_t offsetOfProfilingActivation() {
-        return offsetof(JSContext, profilingActivation_);
-     }
     static size_t offsetOfCompartment() {
         return offsetof(JSContext, compartment_);
     }
@@ -388,12 +368,16 @@ struct JSContext : public JS::RootingContext,
     js::Activation* activation() const {
         return activation_;
     }
+    static size_t offsetOfActivation() {
+        return offsetof(JSContext, activation_);
+    }
+
     js::Activation* profilingActivation() const {
         return profilingActivation_;
     }
-    void* addressOfProfilingActivation() {
-        return (void*) &profilingActivation_;
-    }
+    static size_t offsetOfProfilingActivation() {
+        return offsetof(JSContext, profilingActivation_);
+     }
 
   private:
     /* Space for interpreter frames. */
@@ -472,10 +456,6 @@ struct JSContext : public JS::RootingContext,
      * in non-exposed debugging facilities.
      */
     js::ThreadLocalData<int32_t> suppressGC;
-
-    // In some cases, invoking GC barriers (incremental or otherwise) will break
-    // things. These barriers assert if this flag is set.
-    js::ThreadLocalData<bool> allowGCBarriers;
 
 #ifdef DEBUG
     // Whether this thread is actively Ion compiling.
@@ -570,6 +550,10 @@ struct JSContext : public JS::RootingContext,
     // exclusive threads are running.
     js::ThreadLocalData<unsigned> keepAtoms;
 
+    bool canCollectAtoms() const {
+        return !keepAtoms && !runtime()->hasHelperThreadZones();
+    }
+
   private:
     // Pools used for recycling name maps and vectors when parsing and
     // emitting bytecode. Purged on GC when there are no active script
@@ -600,6 +584,12 @@ struct JSContext : public JS::RootingContext,
     void enableProfilerSampling() {
         suppressProfilerSampling = false;
     }
+
+  private:
+    /* Gecko profiling metadata */
+    js::UnprotectedData<js::GeckoProfilerThread> geckoProfiler_;
+  public:
+    js::GeckoProfilerThread& geckoProfiler() { return geckoProfiler_.ref(); }
 
 #if defined(XP_DARWIN)
     js::wasm::MachExceptionHandler wasmMachExceptionHandler;
@@ -820,6 +810,7 @@ struct JSContext : public JS::RootingContext,
     js::ThreadLocalData<bool> interruptCallbackDisabled;
 
     mozilla::Atomic<uint32_t, mozilla::Relaxed> interrupt_;
+    mozilla::Atomic<uint32_t, mozilla::Relaxed> interruptRegExpJit_;
 
     enum InterruptMode {
         RequestInterruptUrgent,
@@ -910,12 +901,6 @@ struct JSContext : public JS::RootingContext,
         ionReturnOverride_ = v;
     }
 
-    /*
-     * If Baseline or Ion code is on the stack, and has called into C++, this
-     * will be aligned to an exit frame.
-     */
-    js::ThreadLocalData<uint8_t*> jitTop;
-
     mozilla::Atomic<uintptr_t, mozilla::Relaxed> jitStackLimit;
 
     // Like jitStackLimit, but not reset to trigger interrupts.
@@ -932,7 +917,6 @@ struct JSContext : public JS::RootingContext,
     js::ThreadLocalData<JS::PersistentRooted<js::JobQueue>*> jobQueue;
     js::ThreadLocalData<bool> drainingJobQueue;
     js::ThreadLocalData<bool> stopDrainingJobQueue;
-    js::ExclusiveData<js::InternalAsyncTasks> asyncTasks;
 
     js::ThreadLocalData<JSPromiseRejectionTrackerCallback> promiseRejectionTrackerCallback;
     js::ThreadLocalData<void*> promiseRejectionTrackerCallbackData;
@@ -1265,8 +1249,8 @@ class MOZ_RAII AutoKeepAtoms
 
         JSRuntime* rt = cx->runtime();
         if (!cx->helperThread()) {
-            if (rt->gc.fullGCForAtomsRequested() && !cx->keepAtoms)
-                rt->gc.triggerFullGCForAtoms();
+            if (rt->gc.fullGCForAtomsRequested() && cx->canCollectAtoms())
+                rt->gc.triggerFullGCForAtoms(cx);
         }
     }
 };

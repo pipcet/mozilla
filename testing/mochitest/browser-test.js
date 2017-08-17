@@ -165,6 +165,25 @@ function Tester(aTests, structuredLogger, aCallback) {
   });
 
   this._coverageCollector = null;
+
+  // Avoid failing tests when XPCOMUtils.defineLazyScriptGetter is used.
+  Services.scriptloader = {
+    loadSubScript: (url, obj, charset) => {
+      let before = Object.keys(window);
+      try {
+        return this._scriptLoader.loadSubScript(url, obj, charset);
+      } finally {
+        for (let property of Object.keys(window)) {
+          if (!before.includes(property) && !this._globalProperties.includes(property)) {
+            this._globalProperties.push(property);
+            this.SimpleTest.info("Global property added while loading " + url + ": " + property);
+          }
+        }
+      }
+    },
+    loadSubScriptWithOptions: this._scriptLoader.loadSubScriptWithOptions.bind(this._scriptLoader),
+    precompileScript: this._scriptLoader.precompileScript.bind(this._scriptLoader)
+  };
 }
 Tester.prototype = {
   EventUtils: {},
@@ -269,7 +288,6 @@ Tester.prototype = {
     // Remove stale windows
     this.structuredLogger.info("checking window state");
     let windowsEnum = Services.wm.getEnumerator(null);
-    let createdFakeTestForLogging = false;
     while (windowsEnum.hasMoreElements()) {
       let win = windowsEnum.getNext();
       if (win != window && !win.closed &&
@@ -291,24 +309,12 @@ Tester.prototype = {
             allowFailure: this.currentTest.allowFailure,
           }));
         } else {
-          if (!createdFakeTestForLogging) {
-            createdFakeTestForLogging = true;
-            this.structuredLogger.testStart("browser-test.js");
-          }
           this.failuresFromInitialWindowState++;
-          this.structuredLogger.testStatus("browser-test.js",
-                                           msg, "FAIL", false, "");
+          this.structuredLogger.error("browser-test.js | " + msg);
         }
 
         win.close();
       }
-    }
-    if (createdFakeTestForLogging) {
-      let time = Date.now() - startTime;
-      this.structuredLogger.testEnd("browser-test.js",
-                                    "OK",
-                                    undefined,
-                                    "finished window state check in " + time + "ms");
     }
 
     // Make sure the window is raised before each test.
@@ -348,10 +354,7 @@ Tester.prototype = {
         this.structuredLogger.info("Todo:    " + todoCount);
         this.structuredLogger.info("Mode:    " + e10sMode);
       } else {
-        this.structuredLogger.testEnd("browser-test.js",
-                                      "FAIL",
-                                      "PASS",
-                                      "No tests to run. Did you pass invalid test_paths?");
+        this.structuredLogger.error("browser-test.js | No tests to run. Did you pass invalid test_paths?");
       }
       this.structuredLogger.info("*** End BrowserChrome Test Results ***");
 
@@ -771,20 +774,48 @@ Tester.prototype = {
         }
         let Promise = this.Promise;
         let PromiseTestUtils = this.PromiseTestUtils;
+
+        // Allow for a task to be skipped; we need only use the structured logger
+        // for this, whilst deactivating log buffering to ensure that messages
+        // are always printed to stdout.
+        let skipTask = (task) => {
+          let logger = this.structuredLogger;
+          logger.deactivateBuffering();
+          logger.testStatus(this.currentTest.path, task.name, "SKIP");
+          logger.warning("Skipping test " + task.name);
+          logger.activateBuffering();
+        };
+
         this.Task.spawn(function*() {
           let task;
           while ((task = this.__tasks.shift())) {
+            if (task.__skipMe || (this.__runOnlyThisTask && task != this.__runOnlyThisTask)) {
+              skipTask(task);
+              continue;
+            }
             this.SimpleTest.info("Entering test " + task.name);
             try {
               yield task();
             } catch (ex) {
-              currentTest.addResult(new testResult({
-                name: "Uncaught exception",
-                pass: this.SimpleTest.isExpectingUncaughtException(),
-                ex,
-                stack: (typeof ex == "object" && "stack" in ex) ? ex.stack : null,
-                allowFailure: currentTest.allowFailure,
-              }));
+              if (currentTest.timedOut) {
+                currentTest.addResult(new testResult({
+                  name: "Uncaught exception received from previously timed out test",
+                  pass: false,
+                  ex,
+                  stack: (typeof ex == "object" && "stack" in ex) ? ex.stack : null,
+                  allowFailure: currentTest.allowFailure,
+                }));
+                // We timed out, so we've already cleaned up for this test, just get outta here.
+                return;
+              } else {
+                currentTest.addResult(new testResult({
+                  name: "Uncaught exception",
+                  pass: this.SimpleTest.isExpectingUncaughtException(),
+                  ex,
+                  stack: (typeof ex == "object" && "stack" in ex) ? ex.stack : null,
+                  allowFailure: currentTest.allowFailure,
+                }));
+              }
             }
             PromiseTestUtils.assertNoUncaughtRejections();
             this.SimpleTest.info("Leaving test " + task.name);
@@ -1073,9 +1104,18 @@ function testScope(aTester, aTest, expected) {
     })
   };
 }
+
+function decorateTaskFn(fn) {
+  fn = fn.bind(this);
+  fn.skip = () => fn.__skipMe = true;
+  fn.only = () => this.__runOnlyThisTask = fn;
+  return fn;
+}
+
 testScope.prototype = {
   __done: true,
   __tasks: null,
+  __runOnlyThisTask: null,
   __waitTimer: null,
   __cleanupFunctions: [],
   __timeoutFactor: 1,
@@ -1131,7 +1171,9 @@ testScope.prototype = {
       this.waitForExplicitFinish();
       this.__tasks = [];
     }
-    this.__tasks.push(aFunction.bind(this));
+    let bound = decorateTaskFn.call(this, aFunction);
+    this.__tasks.push(bound);
+    return bound;
   },
 
   destroy: function test_destroy() {

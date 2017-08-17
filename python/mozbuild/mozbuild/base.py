@@ -13,7 +13,6 @@ import subprocess
 import sys
 import which
 
-from mach.mixin.logging import LoggingMixin
 from mach.mixin.process import ProcessExecutionMixin
 from mozversioncontrol import get_repository_object
 
@@ -24,6 +23,7 @@ from .mozconfig import (
     MozconfigLoadException,
     MozconfigLoader,
 )
+from .pythonutil import find_python3_executable
 from .util import memoized_property
 from .virtualenv import VirtualenvManager
 
@@ -287,6 +287,25 @@ class MozbuildObject(ProcessExecutionMixin):
         '''Get a `mozversioncontrol.Repository` object for the
         top source directory.'''
         return get_repository_object(self.topsrcdir)
+
+    @memoized_property
+    def python3(self):
+        """Obtain info about a Python 3 executable.
+
+        Returns a tuple of an executable path and its version (as a tuple).
+        Either both entries will have a value or both will be None.
+        """
+        # Search configured build info first. Then fall back to system.
+        try:
+            subst = self.substs
+
+            if 'PYTHON3' in subst:
+                version = tuple(map(int, subst['PYTHON3_VERSION'].split('.')))
+                return subst['PYTHON3'], version
+        except BuildEnvironmentNotFoundException:
+            pass
+
+        return find_python3_executable()
 
     def is_clobber_needed(self):
         if not os.path.exists(self.topobjdir):
@@ -627,6 +646,10 @@ class MozbuildObject(ProcessExecutionMixin):
         self.virtualenv_manager.activate()
 
 
+    def _set_log_level(self, verbose):
+        self.log_manager.terminal_handler.setLevel(logging.INFO if not verbose else logging.DEBUG)
+
+
 class MachCommandBase(MozbuildObject):
     """Base class for mach command providers that wish to be MozbuildObjects.
 
@@ -747,24 +770,17 @@ class MachCommandConditions(object):
     @staticmethod
     def is_hg(cls):
         """Must have a mercurial source checkout."""
-        if hasattr(cls, 'substs'):
-            top_srcdir = cls.substs.get('top_srcdir')
-        elif hasattr(cls, 'topsrcdir'):
-            top_srcdir = cls.topsrcdir
-        else:
-            return False
-        return top_srcdir and os.path.isdir(os.path.join(top_srcdir, '.hg'))
+        return getattr(cls, 'substs', {}).get('VCS_CHECKOUT_TYPE') == 'hg'
 
     @staticmethod
     def is_git(cls):
         """Must have a git source checkout."""
-        if hasattr(cls, 'substs'):
-            top_srcdir = cls.substs.get('top_srcdir')
-        elif hasattr(cls, 'topsrcdir'):
-            top_srcdir = cls.topsrcdir
-        else:
-            return False
-        return top_srcdir and os.path.exists(os.path.join(top_srcdir, '.git'))
+        return getattr(cls, 'substs', {}).get('VCS_CHECKOUT_TYPE') == 'git'
+
+    @staticmethod
+    def is_artifact_build(cls):
+        """Must be an artifact build."""
+        return getattr(cls, 'substs', {}).get('MOZ_ARTIFACT_BUILDS')
 
 
 class PathArgument(object):

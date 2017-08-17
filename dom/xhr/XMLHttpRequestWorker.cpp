@@ -81,7 +81,7 @@ XMLHttpRequestWorker::StateData::trace(JSTracer *aTrc)
  *  reuse.  We maintain a counter on the main thread of how many times Send was
  *  called on this XHR, and we decrement the counter every time we receive a
  *  loadend event.  When the counter reaches zero we dispatch a runnable to the
- *  worker thread to unpin the XHR.  We only decrement the counter if the 
+ *  worker thread to unpin the XHR.  We only decrement the counter if the
  *  dispatch was successful, because the worker may no longer be accepting
  *  regular runnables.  In the event that we reach Proxy::Teardown and there
  *  the outstanding Send count is still non-zero, we dispatch a control
@@ -357,7 +357,8 @@ class AsyncTeardownRunnable final : public Runnable
 
 public:
   explicit AsyncTeardownRunnable(Proxy* aProxy)
-  : mProxy(aProxy)
+    : Runnable("dom::AsyncTeardownRunnable")
+    , mProxy(aProxy)
   {
     MOZ_ASSERT(aProxy);
   }
@@ -438,12 +439,16 @@ class LoadStartDetectionRunnable final : public Runnable,
 
 public:
   LoadStartDetectionRunnable(Proxy* aProxy, XMLHttpRequestWorker* aXHRPrivate)
-  : mWorkerPrivate(aProxy->mWorkerPrivate), mProxy(aProxy), mXHR(aProxy->mXHR),
-    mXMLHttpRequestPrivate(aXHRPrivate), mChannelId(mProxy->mInnerChannelId),
-    mReceivedLoadStart(false)
+    : Runnable("dom::LoadStartDetectionRunnable")
+    , mWorkerPrivate(aProxy->mWorkerPrivate)
+    , mProxy(aProxy)
+    , mXHR(aProxy->mXHR)
+    , mXMLHttpRequestPrivate(aXHRPrivate)
+    , mChannelId(mProxy->mInnerChannelId)
+    , mReceivedLoadStart(false)
   {
     AssertIsOnMainThread();
-    mEventType.AssignWithConversion(sEventStrings[STRING_loadstart]);
+    CopyASCIItoUTF16(sEventStrings[STRING_loadstart], mEventType);
   }
 
   NS_DECL_ISUPPORTS_INHERITED
@@ -1350,7 +1355,8 @@ EventRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
 
   event->SetTrusted(true);
 
-  target->DispatchDOMEvent(nullptr, event, nullptr, nullptr);
+  bool dummy;
+  target->DispatchEvent(event, &dummy);
 
   // After firing the event set mResponse to JSVAL_NULL for chunked response
   // types.
@@ -1752,7 +1758,8 @@ XMLHttpRequestWorker::DispatchPrematureAbortEvent(EventTarget* aTarget,
 
   event->SetTrusted(true);
 
-  aTarget->DispatchDOMEvent(nullptr, event, nullptr, nullptr);
+  bool dummy;
+  aTarget->DispatchEvent(event, &dummy);
 }
 
 void

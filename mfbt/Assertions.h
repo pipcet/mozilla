@@ -278,6 +278,10 @@ static MOZ_COLD MOZ_NORETURN MOZ_NEVER_INLINE void MOZ_NoReturn(int aLine)
  * arbitrary strings from a potentially compromised process is not without risk.
  * If the string being passed is the result of a printf-style function,
  * consider using MOZ_CRASH_UNSAFE_PRINTF instead.
+ *
+ * @note This macro causes data collection because crash strings are annotated
+ * to crash-stats and are publicly visible. Firefox data stewards must do data
+ * review on usages of this macro.
  */
 #ifndef DEBUG
 MFBT_API MOZ_COLD MOZ_NORETURN MOZ_NEVER_INLINE void
@@ -311,12 +315,19 @@ MOZ_CrashPrintf(const char* aFilename, int aLine, const char* aFormat, ...);
  * 1 and 4 additional arguments. A regular MOZ_CRASH() is preferred wherever
  * possible, as passing arbitrary strings to printf from a potentially
  * compromised process is not without risk.
+ *
+ * @note This macro causes data collection because crash strings are annotated
+ * to crash-stats and are publicly visible. Firefox data stewards must do data
+ * review on usages of this macro.
  */
 #define MOZ_CRASH_UNSAFE_PRINTF(format, ...) \
    do { \
-     MOZ_STATIC_ASSERT_VALID_ARG_COUNT(__VA_ARGS__); \
      static_assert( \
-       MOZ_PASTE_PREFIX_AND_ARG_COUNT(, __VA_ARGS__) <= sPrintfMaxArgs, \
+       MOZ_ARG_COUNT(__VA_ARGS__) > 0, \
+       "Did you forget arguments to MOZ_CRASH_UNSAFE_PRINTF? " \
+       "Or maybe you want MOZ_CRASH instead?"); \
+     static_assert( \
+       MOZ_ARG_COUNT(__VA_ARGS__) <= sPrintfMaxArgs, \
        "Only up to 4 additional arguments are allowed!"); \
      static_assert(sizeof(format) <= sPrintfCrashReasonSize, \
        "The supplied format string is too long!"); \
@@ -447,14 +458,14 @@ struct AssertionConditionType
 #  define MOZ_ASSERT(...) do { } while (0)
 #endif /* DEBUG */
 
-#ifdef RELEASE_OR_BETA
+#if defined(NIGHTLY_BUILD) || defined(MOZ_DEV_EDITION)
+#  define MOZ_DIAGNOSTIC_ASSERT MOZ_RELEASE_ASSERT
+#  define MOZ_DIAGNOSTIC_ASSERT_ENABLED 1
+#else
 #  define MOZ_DIAGNOSTIC_ASSERT MOZ_ASSERT
 #  ifdef DEBUG
 #    define MOZ_DIAGNOSTIC_ASSERT_ENABLED 1
 #  endif
-#else
-#  define MOZ_DIAGNOSTIC_ASSERT MOZ_RELEASE_ASSERT
-#  define MOZ_DIAGNOSTIC_ASSERT_ENABLED 1
 #endif
 
 /*

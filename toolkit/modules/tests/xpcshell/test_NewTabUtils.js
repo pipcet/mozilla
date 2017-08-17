@@ -392,13 +392,28 @@ add_task(async function getTopFrecentSites_dedupeWWW() {
   Assert.equal(links[0].frecency, 200, "frecency scores are combined");
 
   // add another page visit with www and without www
-  testURI = "http://mozilla.com/page";
-  await PlacesTestUtils.addVisits(testURI);
-  testURI = "http://www.mozilla.com/page";
-  await PlacesTestUtils.addVisits(testURI);
+  let noWWW = "http://mozilla.com/page";
+  await PlacesTestUtils.addVisits(noWWW);
+  let withWWW = "http://www.mozilla.com/page";
+  await PlacesTestUtils.addVisits(withWWW);
   links = await provider.getTopSites();
   Assert.equal(links.length, 1, "adding both www. and no-www. yields one link");
   Assert.equal(links[0].frecency, 200, "frecency scores are combined ignoring extra pages");
+
+  // add another visit with www
+  await PlacesTestUtils.addVisits(withWWW);
+  links = await provider.getTopSites();
+  Assert.equal(links.length, 1, "still yields one link");
+  Assert.equal(links[0].url, withWWW, "more frecent www link is used");
+  Assert.equal(links[0].frecency, 300, "frecency scores are combined ignoring extra pages");
+
+  // add a couple more visits to the no-www page
+  await PlacesTestUtils.addVisits(noWWW);
+  await PlacesTestUtils.addVisits(noWWW);
+  links = await provider.getTopSites();
+  Assert.equal(links.length, 1, "still yields one link");
+  Assert.equal(links[0].url, noWWW, "now more frecent no-www link is used");
+  Assert.equal(links[0].frecency, 500, "frecency scores are combined ignoring extra pages");
 });
 
 add_task(async function getTopFrencentSites_maxLimit() {
@@ -416,6 +431,40 @@ add_task(async function getTopFrencentSites_maxLimit() {
   let links = await provider.getTopSites();
   Assert.ok(links.length < MANY_LINKS, "query default limited to less than many");
   Assert.ok(links.length > 6, "query default to more than visible count");
+});
+
+add_task(async function getTopFrencentSites_allowedProtocols() {
+  await setUpActivityStreamTest();
+
+  let provider = NewTabUtils.activityStreamLinks;
+
+  // add a visit from a file:// site
+  let testURI = "file:///some/file/path.png";
+  await PlacesTestUtils.addVisits(testURI);
+
+  let links = await provider.getTopSites();
+  Assert.equal(links.length, 0, "don't get sites with the file:// protocol");
+
+  // now add a site with an allowed protocol
+  testURI = "http://www.mozilla.com";
+  await PlacesTestUtils.addVisits(testURI);
+
+  links = await provider.getTopSites();
+  Assert.equal(links.length, 1, "http:// is an allowed protocol");
+
+  // and just to be sure, add a visit to a site with ftp:// protocol
+  testURI = "ftp://bad/example";
+  await PlacesTestUtils.addVisits(testURI);
+
+  links = await provider.getTopSites();
+  Assert.equal(links.length, 1, "we still only accept http:// and https:// for top sites");
+
+  // add a different allowed protocol
+  testURI = "https://https";
+  await PlacesTestUtils.addVisits(testURI);
+
+  links = await provider.getTopSites();
+  Assert.equal(links.length, 2, "we now accept both http:// and https:// for top sites");
 });
 
 add_task(async function getTopFrecentSites_order() {
@@ -504,38 +553,6 @@ add_task(async function activitySteamProvider_deleteHistoryLink() {
   // ensure that there's only one link left
   size = await NewTabUtils.activityStreamProvider.getHistorySize();
   Assert.equal(size, 1, "expected history size");
-});
-
-add_task(async function activityStream_addBookmark() {
-  await setUpActivityStreamTest();
-
-  let provider = NewTabUtils.activityStreamLinks;
-  let bookmarks = [
-    "https://mozilla1.com/0",
-    "https://mozilla1.com/1"
-  ];
-
-  let bookmarksSize = await NewTabUtils.activityStreamProvider.getBookmarksSize();
-  Assert.equal(bookmarksSize, 0, "empty bookmarks yields 0 size");
-
-  for (let url of bookmarks) {
-    await provider.addBookmark(url);
-  }
-  bookmarksSize = await NewTabUtils.activityStreamProvider.getBookmarksSize();
-  Assert.equal(bookmarksSize, 2, "size 2 for 2 bookmarks added");
-});
-
-add_task(async function activityStream_getBookmark() {
-    await setUpActivityStreamTest();
-
-    let provider = NewTabUtils.activityStreamLinks;
-    let bookmark = await provider.addBookmark("https://mozilla1.com/0");
-
-    let result = await NewTabUtils.activityStreamProvider.getBookmark(bookmark.guid);
-    Assert.equal(result.bookmarkGuid, bookmark.guid, "got the correct bookmark guid");
-    Assert.equal(result.bookmarkTitle, bookmark.title, "got the correct bookmark title");
-    Assert.equal(result.lastModified, bookmark.lastModified.getTime(), "got the correct bookmark time");
-    Assert.equal(result.url, bookmark.url.href, "got the correct bookmark url");
 });
 
 add_task(async function activityStream_deleteBookmark() {

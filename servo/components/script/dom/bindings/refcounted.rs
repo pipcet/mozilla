@@ -11,7 +11,7 @@
 //! To guarantee the lifetime of a DOM object when performing asynchronous operations,
 //! obtain a `Trusted<T>` from that object and pass it along with each operation.
 //! A usable pointer to the original DOM object can be obtained on the script thread
-//! from a `Trusted<T>` via the `to_temporary` method.
+//! from a `Trusted<T>` via the `root` method.
 //!
 //! The implementation of `Trusted<T>` is as follows:
 //! The `Trusted<T>` object contains an atomic reference counted pointer to the Rust DOM object.
@@ -127,6 +127,7 @@ impl TrustedPromise {
         struct RejectPromise(TrustedPromise, Error);
         impl Runnable for RejectPromise {
             fn main_thread_handler(self: Box<Self>, script_thread: &ScriptThread) {
+                debug!("Rejecting promise.");
                 let this = *self;
                 let cx = script_thread.get_cx();
                 let promise = this.0.root();
@@ -145,6 +146,7 @@ impl TrustedPromise {
         struct ResolvePromise<T>(TrustedPromise, T);
         impl<T: ToJSValConvertible> Runnable for ResolvePromise<T> {
             fn main_thread_handler(self: Box<Self>, script_thread: &ScriptThread) {
+                debug!("Resolving promise.");
                 let this = *self;
                 let cx = script_thread.get_cx();
                 let promise = this.0.root();
@@ -198,7 +200,7 @@ impl<T: DomObject> Trusted<T> {
             self.owner_thread == (&*live_references) as *const _ as *const libc::c_void
         }));
         unsafe {
-            Root::new(NonZero::new(self.refcount.0 as *const T))
+            Root::new(NonZero::new_unchecked(self.refcount.0 as *const T))
         }
     }
 }

@@ -10,7 +10,6 @@
 
 #include "mozilla/CheckedInt.h"
 #include "mozilla/Logging.h"
-#include "mozilla/SizePrintfMacros.h"
 
 #if defined(MOZ_FMP4)
 extern mozilla::LogModule* GetDemuxerLog();
@@ -31,11 +30,26 @@ using namespace mozilla;
 const uint32_t kKeyIdSize = 16;
 
 bool
-MoofParser::RebuildFragmentedIndex(
-  const MediaByteRangeSet& aByteRanges)
+MoofParser::RebuildFragmentedIndex(const MediaByteRangeSet& aByteRanges)
 {
   BoxContext context(mSource, aByteRanges);
   return RebuildFragmentedIndex(context);
+}
+
+bool
+MoofParser::RebuildFragmentedIndex(
+  const MediaByteRangeSet& aByteRanges, bool* aCanEvict)
+{
+  MOZ_ASSERT(aCanEvict);
+  if (*aCanEvict && mMoofs.Length() > 1) {
+    MOZ_ASSERT(mMoofs.Length() == mMediaRanges.Length());
+    mMoofs.RemoveElementsAt(0, mMoofs.Length() - 1);
+    mMediaRanges.RemoveElementsAt(0, mMediaRanges.Length() - 1);
+    *aCanEvict = true;
+  } else {
+    *aCanEvict = false;
+  }
+  return RebuildFragmentedIndex(aByteRanges);
 }
 
 bool
@@ -379,11 +393,29 @@ Moof::Moof(Box& aBox, Trex& aTrex, Mvhd& aMvhd, Mdhd& aMdhd, Edts& aEdts, Sinf& 
   : mRange(aBox.Range())
   , mMaxRoundingError(35000)
 {
+  nsTArray<Box> psshBoxes;
   for (Box box = aBox.FirstChild(); box.IsAvailable(); box = box.Next()) {
     if (box.IsType("traf")) {
       ParseTraf(box, aTrex, aMvhd, aMdhd, aEdts, aSinf, aDecodeTime, aIsAudio);
     }
+    if (box.IsType("pssh")) {
+      psshBoxes.AppendElement(box);
+    }
   }
+
+  // The EME spec requires that PSSH boxes which are contiguous in the
+  // file are dispatched to the media element in a single "encrypted" event.
+  // So append contiguous boxes here.
+  for (size_t i = 0; i < psshBoxes.Length(); ++i) {
+    Box box = psshBoxes[i];
+    if (i == 0 || box.Offset() != psshBoxes[i - 1].NextOffset()) {
+      mPsshes.AppendElement();
+    }
+    nsTArray<uint8_t>& pssh = mPsshes.LastElement();
+    pssh.AppendElements(box.Header());
+    pssh.AppendElements(box.Read());
+  }
+
   if (IsValid()) {
     if (mIndex.Length()) {
       // Ensure the samples are contiguous with no gaps.
@@ -585,7 +617,7 @@ Moof::ParseTrun(Box& aBox, Tfhd& aTfhd, Mvhd& aMvhd, Mdhd& aMdhd, Edts& aEdts, u
     }
   }
   if (reader->Remaining() < need) {
-    LOG(Moof, "Incomplete Box (have:%" PRIuSIZE " need:%" PRIuSIZE ")",
+    LOG(Moof, "Incomplete Box (have:%zu need:%zu)",
         reader->Remaining(), need);
     return false;
   }

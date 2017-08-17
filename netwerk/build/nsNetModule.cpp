@@ -267,6 +267,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsFtpProtocolHandler, Init)
 #include "nsHttpNTLMAuth.h"
 #include "nsHttpActivityDistributor.h"
 #include "ThrottleQueue.h"
+#include "BackgroundChannelRegistrar.h"
 #undef LOG
 #undef LOG_ENABLED
 namespace mozilla {
@@ -280,6 +281,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsHttpActivityDistributor)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHttpBasicAuth)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHttpDigestAuth)
 NS_GENERIC_FACTORY_CONSTRUCTOR(ThrottleQueue)
+NS_GENERIC_FACTORY_CONSTRUCTOR(BackgroundChannelRegistrar)
 } // namespace net
 } // namespace mozilla
 #endif // !NECKO_PROTOCOL_http
@@ -308,7 +310,8 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(NamedPipeService, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsResProtocolHandler, Init)
 
 namespace mozilla {
-NS_GENERIC_FACTORY_CONSTRUCTOR(ExtensionProtocolHandler)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(ExtensionProtocolHandler,
+    ExtensionProtocolHandler::GetSingleton)
 NS_GENERIC_FACTORY_CONSTRUCTOR(SubstitutingURL)
 } // namespace mozilla
 #endif
@@ -515,125 +518,125 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsBinHexDecoder)
 #endif
 
 static nsresult
-CreateNewStreamConvServiceFactory(nsISupports* aOuter, REFNSIID aIID, void **aResult) 
+CreateNewStreamConvServiceFactory(nsISupports* aOuter, REFNSIID aIID, void **aResult)
 {
-    if (!aResult) {                                                  
-        return NS_ERROR_INVALID_POINTER;                             
+    if (!aResult) {
+        return NS_ERROR_INVALID_POINTER;
     }
-    if (aOuter) {                                                    
-        *aResult = nullptr;                                           
-        return NS_ERROR_NO_AGGREGATION;                              
-    }   
+    if (aOuter) {
+        *aResult = nullptr;
+        return NS_ERROR_NO_AGGREGATION;
+    }
     nsStreamConverterService* inst = nullptr;
     nsresult rv = NS_NewStreamConv(&inst);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-        return rv;                                                   
-    } 
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+        return rv;
+    }
     rv = inst->QueryInterface(aIID, aResult);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-    }                                                                
-    NS_RELEASE(inst);             /* get rid of extra refcnt */      
-    return rv;              
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+    }
+    NS_RELEASE(inst);             /* get rid of extra refcnt */
+    return rv;
 }
 
 #ifdef NECKO_PROTOCOL_ftp
 static nsresult
-CreateNewFTPDirListingConv(nsISupports* aOuter, REFNSIID aIID, void **aResult) 
+CreateNewFTPDirListingConv(nsISupports* aOuter, REFNSIID aIID, void **aResult)
 {
-    if (!aResult) {                                                  
-        return NS_ERROR_INVALID_POINTER;                             
+    if (!aResult) {
+        return NS_ERROR_INVALID_POINTER;
     }
-    if (aOuter) {                                                    
-        *aResult = nullptr;                                           
-        return NS_ERROR_NO_AGGREGATION;                              
-    }   
+    if (aOuter) {
+        *aResult = nullptr;
+        return NS_ERROR_NO_AGGREGATION;
+    }
     nsFTPDirListingConv* inst = nullptr;
     nsresult rv = NS_NewFTPDirListingConv(&inst);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-        return rv;                                                   
-    } 
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+        return rv;
+    }
     rv = inst->QueryInterface(aIID, aResult);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-    }                                                                
-    NS_RELEASE(inst);             /* get rid of extra refcnt */      
-    return rv;              
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+    }
+    NS_RELEASE(inst);             /* get rid of extra refcnt */
+    return rv;
 }
 #endif
 
 static nsresult
-CreateNewMultiMixedConvFactory(nsISupports* aOuter, REFNSIID aIID, void **aResult) 
+CreateNewMultiMixedConvFactory(nsISupports* aOuter, REFNSIID aIID, void **aResult)
 {
-    if (!aResult) {                                                  
-        return NS_ERROR_INVALID_POINTER;                             
+    if (!aResult) {
+        return NS_ERROR_INVALID_POINTER;
     }
-    if (aOuter) {                                                    
-        *aResult = nullptr;                                           
-        return NS_ERROR_NO_AGGREGATION;                              
-    }   
+    if (aOuter) {
+        *aResult = nullptr;
+        return NS_ERROR_NO_AGGREGATION;
+    }
     nsMultiMixedConv* inst = nullptr;
     nsresult rv = NS_NewMultiMixedConv(&inst);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-        return rv;                                                   
-    } 
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+        return rv;
+    }
     rv = inst->QueryInterface(aIID, aResult);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-    }                                                                
-    NS_RELEASE(inst);             /* get rid of extra refcnt */      
-    return rv;              
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+    }
+    NS_RELEASE(inst);             /* get rid of extra refcnt */
+    return rv;
 }
 
 static nsresult
-CreateNewTXTToHTMLConvFactory(nsISupports* aOuter, REFNSIID aIID, void **aResult) 
+CreateNewTXTToHTMLConvFactory(nsISupports* aOuter, REFNSIID aIID, void **aResult)
 {
-    if (!aResult) {                                                  
-        return NS_ERROR_INVALID_POINTER;                             
+    if (!aResult) {
+        return NS_ERROR_INVALID_POINTER;
     }
-    if (aOuter) {                                                    
-        *aResult = nullptr;                                           
-        return NS_ERROR_NO_AGGREGATION;                              
-    }   
+    if (aOuter) {
+        *aResult = nullptr;
+        return NS_ERROR_NO_AGGREGATION;
+    }
     mozTXTToHTMLConv* inst = nullptr;
     nsresult rv = MOZ_NewTXTToHTMLConv(&inst);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-        return rv;                                                   
-    } 
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+        return rv;
+    }
     rv = inst->QueryInterface(aIID, aResult);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-    }                                                                
-    NS_RELEASE(inst);             /* get rid of extra refcnt */      
-    return rv;              
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+    }
+    NS_RELEASE(inst);             /* get rid of extra refcnt */
+    return rv;
 }
 
 static nsresult
-CreateNewHTTPCompressConvFactory (nsISupports* aOuter, REFNSIID aIID, void **aResult) 
+CreateNewHTTPCompressConvFactory (nsISupports* aOuter, REFNSIID aIID, void **aResult)
 {
-    if (!aResult) {                                                  
-        return NS_ERROR_INVALID_POINTER;                             
+    if (!aResult) {
+        return NS_ERROR_INVALID_POINTER;
     }
-    if (aOuter) {                                                    
-        *aResult = nullptr;                                           
-        return NS_ERROR_NO_AGGREGATION;                              
-    }   
+    if (aOuter) {
+        *aResult = nullptr;
+        return NS_ERROR_NO_AGGREGATION;
+    }
     mozilla::net::nsHTTPCompressConv* inst = nullptr;
     nsresult rv = NS_NewHTTPCompressConv (&inst);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-        return rv;                                                   
-    } 
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+        return rv;
+    }
     rv = inst->QueryInterface(aIID, aResult);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-    }                                                                
-    NS_RELEASE(inst);             /* get rid of extra refcnt */      
-    return rv;              
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+    }
+    NS_RELEASE(inst);             /* get rid of extra refcnt */
+    return rv;
 }
 
 static nsresult
@@ -651,7 +654,7 @@ CreateNewUnknownDecoderFactory(nsISupports *aOuter, REFNSIID aIID, void **aResul
   }
 
   nsUnknownDecoder *inst;
-  
+
   inst = new nsUnknownDecoder();
   if (!inst) {
     return NS_ERROR_OUT_OF_MEMORY;
@@ -708,7 +711,7 @@ static void nsNetShutdown()
 #ifdef XP_MACOSX
     net_ShutdownURLHelperOSX();
 #endif
-    
+
     // Release DNS service reference.
     nsDNSPrefetch::Shutdown();
 
@@ -805,6 +808,7 @@ NS_DEFINE_NAMED_CID(NS_HTTPAUTHMANAGER_CID);
 NS_DEFINE_NAMED_CID(NS_HTTPCHANNELAUTHPROVIDER_CID);
 NS_DEFINE_NAMED_CID(NS_HTTPACTIVITYDISTRIBUTOR_CID);
 NS_DEFINE_NAMED_CID(NS_THROTTLEQUEUE_CID);
+NS_DEFINE_NAMED_CID(NS_BACKGROUNDCHANNELREGISTRAR_CID);
 #endif // !NECKO_PROTOCOL_http
 #ifdef NECKO_PROTOCOL_ftp
 NS_DEFINE_NAMED_CID(NS_FTPPROTOCOLHANDLER_CID);
@@ -956,6 +960,7 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kNS_HTTPCHANNELAUTHPROVIDER_CID, false, nullptr, mozilla::net::nsHttpChannelAuthProviderConstructor },
     { &kNS_HTTPACTIVITYDISTRIBUTOR_CID, false, nullptr, mozilla::net::nsHttpActivityDistributorConstructor },
     { &kNS_THROTTLEQUEUE_CID, false, nullptr, mozilla::net::ThrottleQueueConstructor },
+    { &kNS_BACKGROUNDCHANNELREGISTRAR_CID, false, nullptr, mozilla::net::BackgroundChannelRegistrarConstructor },
 #endif // !NECKO_PROTOCOL_http
 #ifdef NECKO_PROTOCOL_ftp
     { &kNS_FTPPROTOCOLHANDLER_CID, false, nullptr, nsFtpProtocolHandlerConstructor },
@@ -1117,6 +1122,7 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
     { NS_HTTPCHANNELAUTHPROVIDER_CONTRACTID, &kNS_HTTPCHANNELAUTHPROVIDER_CID },
     { NS_HTTPACTIVITYDISTRIBUTOR_CONTRACTID, &kNS_HTTPACTIVITYDISTRIBUTOR_CID },
     { NS_THROTTLEQUEUE_CONTRACTID, &kNS_THROTTLEQUEUE_CID },
+    { NS_BACKGROUNDCHANNELREGISTRAR_CONTRACTID, &kNS_BACKGROUNDCHANNELREGISTRAR_CID },
 #endif // !NECKO_PROTOCOL_http
 #ifdef NECKO_PROTOCOL_ftp
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "ftp", &kNS_FTPPROTOCOLHANDLER_CID },

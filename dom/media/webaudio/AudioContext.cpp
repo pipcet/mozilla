@@ -41,6 +41,7 @@
 #include "AudioChannelService.h"
 #include "AudioDestinationNode.h"
 #include "AudioListener.h"
+#include "AudioNodeStream.h"
 #include "AudioStream.h"
 #include "BiquadFilterNode.h"
 #include "ChannelMergerNode.h"
@@ -60,6 +61,7 @@
 #include "nsNetUtil.h"
 #include "nsPIDOMWindow.h"
 #include "nsPrintfCString.h"
+#include "nsRFPService.h"
 #include "OscillatorNode.h"
 #include "PannerNode.h"
 #include "PeriodicWave.h"
@@ -127,7 +129,6 @@ static float GetSampleRateForAudioContext(bool aIsOffline, float aSampleRate)
 
 AudioContext::AudioContext(nsPIDOMWindowInner* aWindow,
                            bool aIsOffline,
-                           AudioChannel aChannel,
                            uint32_t aNumberOfChannels,
                            uint32_t aLength,
                            float aSampleRate)
@@ -147,7 +148,7 @@ AudioContext::AudioContext(nsPIDOMWindowInner* aWindow,
 
   // Note: AudioDestinationNode needs an AudioContext that must already be
   // bound to the window.
-  mDestination = new AudioDestinationNode(this, aIsOffline, aChannel,
+  mDestination = new AudioDestinationNode(this, aIsOffline,
                                           aNumberOfChannels, aLength, aSampleRate);
 
   // The context can't be muted until it has a destination.
@@ -205,8 +206,7 @@ AudioContext::Constructor(const GlobalObject& aGlobal,
   }
 
   RefPtr<AudioContext> object =
-    new AudioContext(window, false,
-                     AudioChannelService::GetDefaultAudioChannel());
+    new AudioContext(window, false);
   aRv = object->Init();
   if (NS_WARN_IF(aRv.Failed())) {
      return nullptr;
@@ -215,6 +215,18 @@ AudioContext::Constructor(const GlobalObject& aGlobal,
   RegisterWeakMemoryReporter(object);
 
   return object.forget();
+}
+
+/* static */ already_AddRefed<AudioContext>
+AudioContext::Constructor(const GlobalObject& aGlobal,
+                          const OfflineAudioContextOptions& aOptions,
+                          ErrorResult& aRv)
+{
+  return Constructor(aGlobal,
+                     aOptions.mNumberOfChannels,
+                     aOptions.mLength,
+                     aOptions.mSampleRate,
+                     aRv);
 }
 
 /* static */ already_AddRefed<AudioContext>
@@ -242,7 +254,6 @@ AudioContext::Constructor(const GlobalObject& aGlobal,
 
   RefPtr<AudioContext> object = new AudioContext(window,
                                                    true,
-                                                   AudioChannel::Normal,
                                                    aNumberOfChannels,
                                                    aLength,
                                                    aSampleRate);
@@ -491,6 +502,12 @@ AudioContext::Listener()
   return mListener;
 }
 
+bool
+AudioContext::IsRunning() const
+{
+  return mAudioContextState == AudioContextState::Running;
+}
+
 already_AddRefed<Promise>
 AudioContext::DecodeAudioData(const ArrayBuffer& aBuffer,
                               const Optional<OwningNonNull<DecodeSuccessCallback> >& aSuccessCallback,
@@ -633,7 +650,8 @@ double
 AudioContext::CurrentTime() const
 {
   MediaStream* stream = Destination()->Stream();
-  return stream->StreamTimeToSeconds(stream->GetCurrentTime());
+  return nsRFPService::ReduceTimePrecisionAsSecs(
+    stream->StreamTimeToSeconds(stream->GetCurrentTime()));
 }
 
 void AudioContext::DisconnectFromOwner()

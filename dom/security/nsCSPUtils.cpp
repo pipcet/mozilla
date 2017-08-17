@@ -88,10 +88,10 @@ CSP_PercentDecodeStr(const nsAString& aEncStr, nsAString& outDecStr)
 }
 
 void
-CSP_GetLocalizedStr(const char16_t* aName,
+CSP_GetLocalizedStr(const char* aName,
                     const char16_t** aParams,
                     uint32_t aLength,
-                    char16_t** outResult)
+                    nsAString& outResult)
 {
   nsCOMPtr<nsIStringBundle> keyStringBundle;
   nsCOMPtr<nsIStringBundleService> stringBundleService =
@@ -106,7 +106,8 @@ CSP_GetLocalizedStr(const char16_t* aName,
   if (!keyStringBundle) {
     return;
   }
-  keyStringBundle->FormatStringFromName(aName, aParams, aLength, outResult);
+  keyStringBundle->FormatStringFromName(aName, aParams, aLength,
+                                        outResult);
 }
 
 void
@@ -181,7 +182,7 @@ CSP_LogMessage(const nsAString& aMessage,
  * Combines CSP_LogMessage and CSP_GetLocalizedStr into one call.
  */
 void
-CSP_LogLocalizedStr(const char16_t* aName,
+CSP_LogLocalizedStr(const char* aName,
                     const char16_t** aParams,
                     uint32_t aLength,
                     const nsAString& aSourceName,
@@ -192,8 +193,8 @@ CSP_LogLocalizedStr(const char16_t* aName,
                     const char* aCategory,
                     uint64_t aInnerWindowID)
 {
-  nsXPIDLString logMsg;
-  CSP_GetLocalizedStr(aName, aParams, aLength, getter_Copies(logMsg));
+  nsAutoString logMsg;
+  CSP_GetLocalizedStr(aName, aParams, aLength, logMsg);
   CSP_LogMessage(logMsg, aSourceName, aSourceLine,
                  aLineNumber, aColumnNumber, aFlags,
                  aCategory, aInnerWindowID);
@@ -428,7 +429,7 @@ CSP_AppendCSPFromHeader(nsIContentSecurityPolicy* aCsp,
   nsresult rv = NS_OK;
   nsCharSeparatedTokenizer tokenizer(aHeaderValue, ',');
   while (tokenizer.hasMoreTokens()) {
-    const nsSubstring& policy = tokenizer.nextToken();
+    const nsAString& policy = tokenizer.nextToken();
     rv = aCsp->AppendPolicy(policy, aReportOnly, false);
     NS_ENSURE_SUCCESS(rv, rv);
     {
@@ -522,6 +523,7 @@ nsCSPSchemeSrc::toString(nsAString& outStr) const
 nsCSPHostSrc::nsCSPHostSrc(const nsAString& aHost)
   : mHost(aHost)
   , mGeneratedFromSelfKeyword(false)
+  , mWithinFrameAncstorsDir(false)
 {
   ToLowerCase(mHost);
 }
@@ -704,6 +706,11 @@ nsCSPHostSrc::permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected
     nsAutoCString uriPath;
     rv = url->GetFilePath(uriPath);
     NS_ENSURE_SUCCESS(rv, false);
+
+    if (mWithinFrameAncstorsDir) {
+      // no path matching for frame-ancestors to not leak any path information.
+      return true;
+    }
 
     nsString decodedUriPath;
     CSP_PercentDecodeStr(NS_ConvertUTF8toUTF16(uriPath), decodedUriPath);

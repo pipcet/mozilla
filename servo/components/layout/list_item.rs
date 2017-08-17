@@ -20,7 +20,7 @@ use generated_content;
 use inline::InlineFlow;
 use style::computed_values::{list_style_type, position};
 use style::logical_geometry::LogicalSize;
-use style::properties::ServoComputedValues;
+use style::properties::ComputedValues;
 use style::servo::restyle_damage::RESOLVE_GENERATED_CONTENT;
 
 /// A block with the CSS `display` property equal to `list-item`.
@@ -119,8 +119,8 @@ impl Flow for ListItemFlow {
         }
     }
 
-    fn compute_absolute_position(&mut self, layout_context: &LayoutContext) {
-        self.block_flow.compute_absolute_position(layout_context)
+    fn compute_stacking_relative_position(&mut self, layout_context: &LayoutContext) {
+        self.block_flow.compute_stacking_relative_position(layout_context)
     }
 
     fn place_float_if_applicable<'a>(&mut self) {
@@ -147,7 +147,7 @@ impl Flow for ListItemFlow {
         self.block_flow.collect_stacking_contexts(state);
     }
 
-    fn repair_style(&mut self, new_style: &::StyleArc<ServoComputedValues>) {
+    fn repair_style(&mut self, new_style: &::ServoArc<ComputedValues>) {
         self.block_flow.repair_style(new_style)
     }
 
@@ -197,7 +197,7 @@ impl Flow for ListItemFlow {
                                                              .early_absolute_position_info
                                                              .relative_containing_block_mode,
                                                          CoordinateSystem::Own)
-                           .translate(stacking_context_position));
+                           .translate(&stacking_context_position.to_vector()));
             }
         }
     }

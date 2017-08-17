@@ -20,22 +20,21 @@ ${helpers.single_keyword("caption-side", "top bottom",
                          animation_value_type="discrete",
                          spec="https://drafts.csswg.org/css-tables/#propdef-caption-side")}
 
-<%helpers:longhand name="border-spacing" animation_value_type="ComputedValue" boxed="True"
+<%helpers:longhand name="border-spacing" animation_value_type="BorderSpacing" boxed="True"
                    spec="https://drafts.csswg.org/css-tables/#propdef-border-spacing">
-    use app_units::Au;
-    use std::fmt;
-    use style_traits::ToCss;
     use values::specified::{AllowQuirks, Length};
+    use values::specified::length::NonNegativeLength;
 
     pub mod computed_value {
-        use app_units::Au;
         use properties::animated_properties::Animatable;
+        use values::animated::{ToAnimatedValue, ToAnimatedZero};
+        use values::computed::NonNegativeAu;
 
-        #[derive(Clone, Copy, Debug, PartialEq)]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+        #[derive(Clone, ComputeSquaredDistance, Copy, Debug, PartialEq, ToCss)]
         pub struct T {
-            pub horizontal: Au,
-            pub vertical: Au,
+            pub horizontal: NonNegativeAu,
+            pub vertical: NonNegativeAu,
         }
 
         /// https://drafts.csswg.org/css-transitions/#animtype-simple-list
@@ -44,59 +43,50 @@ ${helpers.single_keyword("caption-side", "top bottom",
             fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64)
                 -> Result<Self, ()> {
                 Ok(T {
-                    horizontal: try!(self.horizontal.add_weighted(&other.horizontal,
-                                                                  self_portion, other_portion)),
-                    vertical: try!(self.vertical.add_weighted(&other.vertical,
-                                                              self_portion, other_portion)),
+                    horizontal: self.horizontal.add_weighted(&other.horizontal,
+                                                             self_portion, other_portion)?,
+                    vertical: self.vertical.add_weighted(&other.vertical,
+                                                         self_portion, other_portion)?,
                 })
             }
+        }
+
+        impl ToAnimatedZero for T {
+            #[inline]
+            fn to_animated_zero(&self) -> Result<Self, ()> { Err(()) }
+        }
+
+        impl ToAnimatedValue for T {
+            type AnimatedValue = Self;
 
             #[inline]
-            fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-                self.compute_squared_distance(other).map(|sd| sd.sqrt())
+            fn to_animated_value(self) -> Self {
+                self
             }
 
             #[inline]
-            fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-                Ok(try!(self.horizontal.compute_squared_distance(&other.horizontal)) +
-                   try!(self.vertical.compute_squared_distance(&other.vertical)))
+            fn from_animated_value(animated: Self::AnimatedValue) -> Self {
+                T {
+                    horizontal: ToAnimatedValue::from_animated_value(animated.horizontal),
+                    vertical: ToAnimatedValue::from_animated_value(animated.vertical)
+                }
             }
         }
     }
 
-    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq, ToCss)]
     pub struct SpecifiedValue {
-        pub horizontal: Length,
-        pub vertical: Option<Length>,
+        pub horizontal: NonNegativeLength,
+        pub vertical: Option<NonNegativeLength>,
     }
 
     #[inline]
     pub fn get_initial_value() -> computed_value::T {
+        use values::computed::NonNegativeAu;
         computed_value::T {
-            horizontal: Au(0),
-            vertical: Au(0),
-        }
-    }
-
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result
-            where W: fmt::Write,
-        {
-            try!(self.horizontal.to_css(dest));
-            if let Some(vertical) = self.vertical.as_ref() {
-                try!(dest.write_str(" "));
-                vertical.to_css(dest)?;
-            }
-            Ok(())
-        }
-    }
-
-    impl ToCss for computed_value::T {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            try!(self.horizontal.to_css(dest));
-            try!(dest.write_str(" "));
-            self.vertical.to_css(dest)
+            horizontal: NonNegativeAu::zero(),
+            vertical: NonNegativeAu::zero(),
         }
     }
 
@@ -121,11 +111,12 @@ ${helpers.single_keyword("caption-side", "top bottom",
         }
     }
 
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue,()> {
+    pub fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                         -> Result<SpecifiedValue,ParseError<'i>> {
         let mut first = None;
         let mut second = None;
         match Length::parse_non_negative_quirky(context, input, AllowQuirks::Yes) {
-            Err(()) => (),
+            Err(_) => (),
             Ok(length) => {
                 first = Some(length);
                 if let Ok(len) = input.try(|i| Length::parse_non_negative_quirky(context, i, AllowQuirks::Yes)) {
@@ -134,17 +125,17 @@ ${helpers.single_keyword("caption-side", "top bottom",
             }
         }
         match (first, second) {
-            (None, None) => Err(()),
+            (None, None) => Err(StyleParseError::UnspecifiedError.into()),
             (Some(length), None) => {
                 Ok(SpecifiedValue {
-                    horizontal: length,
+                    horizontal: length.into(),
                     vertical: None,
                 })
             }
             (Some(horizontal), Some(vertical)) => {
                 Ok(SpecifiedValue {
-                    horizontal: horizontal,
-                    vertical: Some(vertical),
+                    horizontal: horizontal.into(),
+                    vertical: Some(vertical.into()),
                 })
             }
             (None, Some(_)) => unreachable!(),

@@ -1,7 +1,7 @@
 BRANCH = "mozilla-release"
 MOZ_UPDATE_CHANNEL = "release"
 MOZILLA_DIR = BRANCH
-OBJDIR = "obj-l10n"
+OBJDIR = "obj-firefox"
 STAGE_SERVER = "dev-stage01.srv.releng.scl3.mozilla.com"
 EN_US_BINARY_URL = "http://" + STAGE_SERVER + "/pub/mozilla.org/mobile/candidates/%(version)s-candidates/build%(buildnum)d/android-api-15/en-US"
 HG_SHARE_BASE_DIR = "/builds/hg-shared"
@@ -60,7 +60,6 @@ config = {
     "base_post_upload_cmd": "post_upload.py -p mobile -n %(buildnum)s -v %(version)s --builddir android-api-15/%(locale)s --release-to-mobile-candidates-dir --nightly-dir=candidates %(post_upload_extra)s",
     "merge_locales": True,
     "mozilla_dir": MOZILLA_DIR,
-    "mozconfig": "%s/mobile/android/config/mozconfigs/android-api-15/l10n-release" % MOZILLA_DIR,
     "signature_verification_script": "tools/release/signing/verify-android-signature.sh",
 
     # Mock

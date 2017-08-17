@@ -552,7 +552,8 @@ NullHttpChannel::GetIsDocument(bool *aIsDocument)
 NS_IMETHODIMP
 NullHttpChannel::GetTimingEnabled(bool *aTimingEnabled)
 {
-  *aTimingEnabled = true;
+  // We don't want to report timing for null channels.
+  *aTimingEnabled = false;
   return NS_OK;
 }
 
@@ -690,6 +691,13 @@ NS_IMETHODIMP
 NullHttpChannel::GetConnectStart(mozilla::TimeStamp *aConnectStart)
 {
   *aConnectStart = mAsyncOpenTime;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+NullHttpChannel::GetSecureConnectionStart(mozilla::TimeStamp *aSecureConnectionStart)
+{
+  *aSecureConnectionStart = mAsyncOpenTime;
   return NS_OK;
 }
 
@@ -846,6 +854,12 @@ NullHttpChannel::SetIsMainDocumentChannel(bool aValue)
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
+NS_IMETHODIMP
+NullHttpChannel::LogBlockedCORSRequest(const nsAString& aMessage)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
 #define IMPL_TIMING_ATTR(name)                                 \
 NS_IMETHODIMP                                                  \
 NullHttpChannel::Get##name##Time(PRTime* _retval) {            \
@@ -871,6 +885,7 @@ IMPL_TIMING_ATTR(HandleFetchEventEnd)
 IMPL_TIMING_ATTR(DomainLookupStart)
 IMPL_TIMING_ATTR(DomainLookupEnd)
 IMPL_TIMING_ATTR(ConnectStart)
+IMPL_TIMING_ATTR(SecureConnectionStart)
 IMPL_TIMING_ATTR(ConnectEnd)
 IMPL_TIMING_ATTR(RequestStart)
 IMPL_TIMING_ATTR(ResponseStart)

@@ -17,7 +17,7 @@ const promise = require("promise");
 const {shortSource, prettifyCSS} = require("devtools/shared/inspector/css-logic");
 const {console} = require("resource://gre/modules/Console.jsm");
 const Services = require("Services");
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 const {Task} = require("devtools/shared/task");
 const {FileUtils} = require("resource://gre/modules/FileUtils.jsm");
 const {NetUtil} = require("resource://gre/modules/NetUtil.jsm");
@@ -290,7 +290,7 @@ StyleSheetEditor.prototype = {
     return this._getSourceTextAndPrettify().then((source) => {
       this.sourceLoaded = true;
       return source;
-    }).then(null, e => {
+    }).catch(e => {
       if (this._isDestroyed) {
         console.warn("Could not fetch the source for " +
                      this.styleSheet.href +
@@ -518,7 +518,7 @@ StyleSheetEditor.prototype = {
    * Toggled the disabled state of the underlying stylesheet.
    */
   toggleDisabled: function () {
-    this.styleSheet.toggleDisabled().then(null, e => console.error(e));
+    this.styleSheet.toggleDisabled().catch(e => console.error(e));
   },
 
   /**
@@ -560,7 +560,7 @@ StyleSheetEditor.prototype = {
 
     this._isUpdating = true;
     this.styleSheet.update(this._state.text, this.transitionsEnabled)
-      .then(null, e => console.error(e));
+      .catch(e => console.error(e));
   },
 
   /**
@@ -857,8 +857,8 @@ function findProjectPath(file, branch) {
  *         object with 'branch' and 'origBranch' array of path parts for branch
  */
 function findUnsharedBranches(origUri, uri) {
-  origUri = OS.Path.split(origUri.path).components;
-  uri = OS.Path.split(uri.path).components;
+  origUri = OS.Path.split(origUri.pathQueryRef).components;
+  uri = OS.Path.split(uri.pathQueryRef).components;
 
   for (let i = 0; i < uri.length - 1; i++) {
     if (uri[i] != origUri[i]) {

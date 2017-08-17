@@ -41,47 +41,36 @@ const SCALAR_STORAGE_CONSUMED = "storage.sync.api.usage.storage_consumed";
 // Default is 5sec, which seems a bit aggressive on the open internet
 const KINTO_REQUEST_TIMEOUT = 30000;
 
+Cu.import("resource://gre/modules/Log.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
+  BulkKeyBundle: "resource://services-sync/keys.js",
+  CollectionKeyManager: "resource://services-sync/record.js",
+  CommonUtils: "resource://services-common/utils.js",
+  CryptoUtils: "resource://services-crypto/utils.js",
+  fxAccounts: "resource://gre/modules/FxAccounts.jsm",
+  KintoHttpClient: "resource://services-common/kinto-http-client.js",
+  Kinto: "resource://services-common/kinto-offline-client.js",
+  FirefoxAdapter: "resource://services-common/kinto-storage-adapter.js",
+  Observers: "resource://services-common/observers.js",
+  Sqlite: "resource://gre/modules/Sqlite.jsm",
+  Utils: "resource://services-sync/util.js",
+});
 
-XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
-                                  "resource://gre/modules/AsyncShutdown.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "BulkKeyBundle",
-                                  "resource://services-sync/keys.js");
-XPCOMUtils.defineLazyModuleGetter(this, "CollectionKeyManager",
-                                  "resource://services-sync/record.js");
-XPCOMUtils.defineLazyModuleGetter(this, "CommonUtils",
-                                  "resource://services-common/utils.js");
-XPCOMUtils.defineLazyModuleGetter(this, "CryptoUtils",
-                                  "resource://services-crypto/utils.js");
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionStorage",
-                                  "resource://gre/modules/ExtensionStorage.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "fxAccounts",
-                                  "resource://gre/modules/FxAccounts.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "KintoHttpClient",
-                                  "resource://services-common/kinto-http-client.js");
-XPCOMUtils.defineLazyModuleGetter(this, "Kinto",
-                                  "resource://services-common/kinto-offline-client.js");
-XPCOMUtils.defineLazyModuleGetter(this, "FirefoxAdapter",
-                                  "resource://services-common/kinto-storage-adapter.js");
-XPCOMUtils.defineLazyModuleGetter(this, "Log",
-                                  "resource://gre/modules/Log.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Observers",
-                                  "resource://services-common/observers.js");
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                  "resource://gre/modules/Services.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Sqlite",
-                                  "resource://gre/modules/Sqlite.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Svc",
-                                  "resource://services-sync/util.js");
-XPCOMUtils.defineLazyModuleGetter(this, "Utils",
-                                  "resource://services-sync/util.js");
 XPCOMUtils.defineLazyPreferenceGetter(this, "prefPermitsStorageSync",
                                       STORAGE_SYNC_ENABLED_PREF, true);
 XPCOMUtils.defineLazyPreferenceGetter(this, "prefStorageSyncServerURL",
                                       STORAGE_SYNC_SERVER_URL_PREF,
                                       KINTO_DEFAULT_SERVER_URL);
+XPCOMUtils.defineLazyGetter(this, "WeaveCrypto", function() {
+  let {WeaveCrypto} = Cu.import("resource://services-crypto/WeaveCrypto.js", {});
+  return new WeaveCrypto();
+});
+
 const {
   runSafeSyncWithoutClone,
 } = ExtensionUtils;
@@ -180,9 +169,9 @@ class EncryptionRemoteTransformer {
       throw new Error("Record ID is missing or invalid");
     }
 
-    let IV = Svc.Crypto.generateRandomIV();
-    let ciphertext = Svc.Crypto.encrypt(JSON.stringify(record),
-                                        keyBundle.encryptionKeyB64, IV);
+    let IV = WeaveCrypto.generateRandomIV();
+    let ciphertext = WeaveCrypto.encrypt(JSON.stringify(record),
+                                         keyBundle.encryptionKeyB64, IV);
     let hmac = ciphertextHMAC(keyBundle, id, IV, ciphertext);
     const encryptedResult = {ciphertext, IV, hmac, id};
 
@@ -215,8 +204,8 @@ class EncryptionRemoteTransformer {
     }
 
     // Handle invalid data here. Elsewhere we assume that cleartext is an object.
-    let cleartext = Svc.Crypto.decrypt(record.ciphertext,
-                                       keyBundle.encryptionKeyB64, record.IV);
+    let cleartext = WeaveCrypto.decrypt(record.ciphertext,
+                                        keyBundle.encryptionKeyB64, record.IV);
     let jsonResult = JSON.parse(cleartext);
     if (!jsonResult || typeof jsonResult !== "object") {
       throw new Error("Decryption failed: result is <" + jsonResult + ">, not an object.");
@@ -604,7 +593,7 @@ class CryptoCollection {
 
   async sync(extensionStorageSync) {
     const collection = await this.getCollection();
-    return await extensionStorageSync._syncCollection(collection, {
+    return extensionStorageSync._syncCollection(collection, {
       strategy: "server_wins",
     });
   }
@@ -827,9 +816,9 @@ class ExtensionStorageSync {
    *                 Additional options to be passed to sync().
    * @returns {Promise<SyncResultObject>}
    */
-  async _syncCollection(collection, options) {
+  _syncCollection(collection, options) {
     // FIXME: this should support syncing to self-hosted
-    return await this._requestWithToken(`Syncing ${collection.name}`, async function(token) {
+    return this._requestWithToken(`Syncing ${collection.name}`, function(token) {
       const allOptions = Object.assign({}, {
         remote: prefStorageSyncServerURL,
         headers: {
@@ -837,7 +826,7 @@ class ExtensionStorageSync {
         },
       }, options);
 
-      return await collection.sync(allOptions);
+      return collection.sync(allOptions);
     });
   }
 
@@ -858,7 +847,7 @@ class ExtensionStorageSync {
         const newToken = await this._fxaService.getOAuthToken(FXA_OAUTH_OPTIONS);
 
         // If this fails too, let it go.
-        return await f(newToken);
+        return f(newToken);
       }
       // Otherwise, we don't know how to handle this error, so just reraise.
       throw e;
@@ -870,15 +859,15 @@ class ExtensionStorageSync {
    *
    * @returns {Promise<void>}
    */
-  async _deleteBucket() {
+  _deleteBucket() {
     log.error("Deleting default bucket and everything in it");
-    return await this._requestWithToken("Clearing server", async function(token) {
+    return this._requestWithToken("Clearing server", function(token) {
       const headers = {Authorization: "Bearer " + token};
       const kintoHttp = new KintoHttpClient(prefStorageSyncServerURL, {
         headers: headers,
         timeout: KINTO_REQUEST_TIMEOUT,
       });
-      return await kintoHttp.deleteBucket("default");
+      return kintoHttp.deleteBucket("default");
     });
   }
 
@@ -952,7 +941,7 @@ class ExtensionStorageSync {
       // We had a conflict which was automatically resolved. We now
       // have a new keyring which might have keys for the
       // collections. Recurse.
-      return await this.ensureCanSync(extIds);
+      return this.ensureCanSync(extIds);
     }
 
     // No conflicts. We're good.
@@ -1095,7 +1084,7 @@ class ExtensionStorageSync {
           // Reupload our keyring, which is the only new keyring.
           // We don't want client_wins here because another device
           // could have uploaded another keyring in the meantime.
-          return await this.cryptoCollection.sync(this);
+          return this.cryptoCollection.sync(this);
         }
       }
       throw e;

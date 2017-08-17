@@ -46,19 +46,22 @@ def _defines():
                 'MOZ_ANDROID_GCM',
                 'MOZ_ANDROID_MLS_STUMBLER',
                 'MOZ_ANDROID_MMA',
+                'MOZ_ANDROID_MOZILLA_ONLINE',
+                'MOZ_ANDROID_PWA',
                 'MOZ_LEANPLUM_SDK_KEY',
                 'MOZ_LEANPLUM_SDK_CLIENTID',
                 'MOZ_ANDROID_SEARCH_ACTIVITY',
                 'MOZ_CRASHREPORTER',
                 'MOZ_DEBUG',
                 'MOZ_INSTALL_TRACKING',
-                'MOZ_LOCALE_SWITCHER',
                 'MOZ_NATIVE_DEVICES',
                 'MOZ_SWITCHBOARD'):
         if CONFIG[var]:
             DEFINES[var] = 1
 
     for var in ('MOZ_ANDROID_GCM_SENDERID',
+                'MOZ_ANDROID_MAX_SDK_VERSION',
+                'MOZ_ANDROID_MIN_SDK_VERSION',
                 'MOZ_PKG_SPECIAL',
                 'MOZ_UPDATER'):
         if CONFIG[var]:
@@ -66,6 +69,7 @@ def _defines():
 
     for var in ('ANDROID_CPU_ARCH',
                 'ANDROID_PACKAGE_NAME',
+                'ANDROID_TARGET_SDK',
                 'GRE_MILESTONE',
                 'MOZ_ANDROID_SHARED_ID',
                 'MOZ_ANDROID_APPLICATION_CLASS',
@@ -107,6 +111,9 @@ def _defines():
     if CONFIG['MOZ_ANDROID_MMA']:
         DEFINES['MOZ_LEANPLUM_SDK_KEY'] = CONFIG['MOZ_LEANPLUM_SDK_KEY']
         DEFINES['MOZ_LEANPLUM_SDK_CLIENTID'] = CONFIG['MOZ_LEANPLUM_SDK_CLIENTID']
+
+    if CONFIG['MOZ_ANDROID_POCKET']:
+        DEFINES['MOZ_POCKET_API_KEY'] = CONFIG['MOZ_POCKET_API_KEY']
 
     DEFINES['MOZ_BUILDID'] = open(os.path.join(buildconfig.topobjdir, 'buildid.h')).readline().split()[2]
 

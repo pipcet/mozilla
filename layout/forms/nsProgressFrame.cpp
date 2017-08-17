@@ -92,10 +92,9 @@ NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
 
 void
 nsProgressFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                  const nsRect&           aDirtyRect,
                                   const nsDisplayListSet& aLists)
 {
-  BuildDisplayListForInline(aBuilder, aDirtyRect, aLists);
+  BuildDisplayListForInline(aBuilder, aLists);
 }
 
 void
@@ -224,7 +223,7 @@ nsProgressFrame::AttributeChanged(int32_t  aNameSpaceID,
 }
 
 LogicalSize
-nsProgressFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
+nsProgressFrame::ComputeAutoSize(gfxContext*         aRenderingContext,
                                  WritingMode         aWM,
                                  const LogicalSize&  aCBSize,
                                  nscoord             aAvailableISize,
@@ -249,7 +248,7 @@ nsProgressFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
 }
 
 nscoord
-nsProgressFrame::GetMinISize(nsRenderingContext *aRenderingContext)
+nsProgressFrame::GetMinISize(gfxContext *aRenderingContext)
 {
   RefPtr<nsFontMetrics> fontMet =
     nsLayoutUtils::GetFontMetricsForFrame(this, 1.0f);
@@ -265,7 +264,7 @@ nsProgressFrame::GetMinISize(nsRenderingContext *aRenderingContext)
 }
 
 nscoord
-nsProgressFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
+nsProgressFrame::GetPrefISize(gfxContext *aRenderingContext)
 {
   return GetMinISize(aRenderingContext);
 }

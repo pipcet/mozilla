@@ -3,6 +3,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// This file is loaded into the browser window scope.
+/* eslint-env mozilla/browser-window */
+
 /**
  * Customization handler prepares this browser window for entering and exiting
  * customization mode by handling customizationstarting and customizationending
@@ -13,9 +16,6 @@ var CustomizationHandler = {
     switch (aEvent.type) {
       case "customizationstarting":
         this._customizationStarting();
-        break;
-      case "customizationchange":
-        this._customizationChange();
         break;
       case "customizationending":
         this._customizationEnding(aEvent.detail);
@@ -41,18 +41,6 @@ var CustomizationHandler = {
     CombinedStopReload.uninit();
     PlacesToolbarHelper.customizeStart();
     DownloadsButton.customizeStart();
-
-    // The additional padding on the sides of the browser
-    // can cause the customize tab to get clipped.
-    let tabContainer = gBrowser.tabContainer;
-    if (tabContainer.getAttribute("overflow") == "true") {
-      let tabstrip = tabContainer.mTabstrip;
-      tabstrip.ensureElementIsVisible(gBrowser.selectedTab, true);
-    }
-  },
-
-  _customizationChange() {
-    PlacesToolbarHelper.customizeChange();
   },
 
   _customizationEnding(aDetails) {
@@ -61,7 +49,6 @@ var CustomizationHandler = {
       gURLBar = document.getElementById("urlbar");
 
       gHomeButton.updateTooltip();
-      XULBrowserWindow.init();
 
       if (AppConstants.platform != "macosx")
         updateEditUIVisibility();

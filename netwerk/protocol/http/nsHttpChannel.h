@@ -31,6 +31,7 @@
 #include "AlternateServices.h"
 #include "nsIHstsPrimingCallback.h"
 #include "nsIRaceCacheWithNetwork.h"
+#include "mozilla/Mutex.h"
 
 class nsDNSPrefetch;
 class nsICancelable;
@@ -40,14 +41,16 @@ class nsISSLStatus;
 
 namespace mozilla { namespace net {
 
+class nsChannelClassifier;
 class Http2PushedStream;
 
-class HttpChannelSecurityWarningReporter
+class HttpChannelSecurityWarningReporter : public nsISupports
 {
 public:
   virtual MOZ_MUST_USE nsresult
   ReportSecurityMessage(const nsAString& aMessageTag,
                         const nsAString& aMessageCategory) = 0;
+  virtual nsresult LogBlockedCORSRequest(const nsAString& aMessage) = 0;
 };
 
 //-----------------------------------------------------------------------------
@@ -177,6 +180,7 @@ public:
     NS_IMETHOD GetDomainLookupStart(mozilla::TimeStamp *aDomainLookupStart) override;
     NS_IMETHOD GetDomainLookupEnd(mozilla::TimeStamp *aDomainLookupEnd) override;
     NS_IMETHOD GetConnectStart(mozilla::TimeStamp *aConnectStart) override;
+    NS_IMETHOD GetSecureConnectionStart(mozilla::TimeStamp *aSecureConnectionStart) override;
     NS_IMETHOD GetConnectEnd(mozilla::TimeStamp *aConnectEnd) override;
     NS_IMETHOD GetRequestStart(mozilla::TimeStamp *aRequestStart) override;
     NS_IMETHOD GetResponseStart(mozilla::TimeStamp *aResponseStart) override;
@@ -188,10 +192,10 @@ public:
     MOZ_MUST_USE nsresult
     AddSecurityMessage(const nsAString& aMessageTag,
                        const nsAString& aMessageCategory) override;
+    NS_IMETHOD LogBlockedCORSRequest(const nsAString& aMessage) override;
 
-    void SetWarningReporter(HttpChannelSecurityWarningReporter* aReporter)
-      { mWarningReporter = aReporter; }
-
+    void SetWarningReporter(HttpChannelSecurityWarningReporter *aReporter);
+    HttpChannelSecurityWarningReporter* GetWarningReporter();
 public: /* internal necko use only */
 
     using InitLocalBlockListCallback = std::function<void(bool)>;
@@ -478,7 +482,7 @@ private:
     int64_t ComputeTelemetryBucketNumber(int64_t difftime_ms);
 
     // Report telemetry and stats to about:networking
-    void ReportRcwnStats(nsIRequest* firstResponseRequest);
+    void ReportRcwnStats(bool isFromNet);
 
     // Create a aggregate set of the current notification callbacks
     // and ensure the transaction is updated to use it.
@@ -506,6 +510,8 @@ private:
 
     void SetDoNotTrack();
 
+    already_AddRefed<nsChannelClassifier> GetOrCreateChannelClassifier();
+
 private:
     // this section is for main-thread-only object
     // all the references need to be proxy released on main thread.
@@ -515,6 +521,13 @@ private:
     nsCOMPtr<nsIURI> mRedirectURI;
     nsCOMPtr<nsIChannel> mRedirectChannel;
     nsCOMPtr<nsIChannel> mPreflightChannel;
+
+    // nsChannelClassifier checks this channel's URI against
+    // the URI classifier service.
+    // nsChannelClassifier will be invoked twice in InitLocalBlockList() and
+    // BeginConnectActual(), so save the nsChannelClassifier here to keep the
+    // state of whether tracking protection is enabled or not.
+    RefPtr<nsChannelClassifier> mChannelClassifier;
 
     // Proxy release all members above on main thread.
     void ReleaseMainThreadOnlyReferences();
@@ -661,7 +674,7 @@ private:
     nsCString mUsername;
 
     // If non-null, warnings should be reported to this object.
-    HttpChannelSecurityWarningReporter* mWarningReporter;
+    RefPtr<HttpChannelSecurityWarningReporter> mWarningReporter;
 
     RefPtr<ADivertableParentChannel> mParentChannel;
 
@@ -675,11 +688,12 @@ private:
     uint32_t mCacheOpenDelay = 0;
 
     // We need to remember which is the source of the response we are using.
-    enum {
-        RESPONSE_PENDING,           // response is pending
-        RESPONSE_FROM_CACHE,        // response coming from cache. no network.
-        RESPONSE_FROM_NETWORK,      // response coming from the network
-    } mFirstResponseSource = RESPONSE_PENDING;
+    enum ResponseSource {
+        RESPONSE_PENDING      = 0,  // response is pending
+        RESPONSE_FROM_CACHE   = 1,  // response coming from cache. no network.
+        RESPONSE_FROM_NETWORK = 2   // response coming from the network
+    };
+    Atomic<ResponseSource, Relaxed> mFirstResponseSource;
 
     // Determines if it's possible and advisable to race the network request
     // with the cache fetch, and proceeds to do so.
@@ -694,13 +708,26 @@ private:
     bool mNetworkTriggered = false;
     bool mWaitingForProxy = false;
     // Is true if the onCacheEntryAvailable callback has been called.
-    Atomic<bool> mOnCacheAvailableCalled;
+    bool mOnCacheAvailableCalled;
     // Will be true if the onCacheEntryAvailable callback is not called by the
     // time we send the network request
     Atomic<bool> mRaceCacheWithNetwork;
+    uint32_t mRaceDelay;
+    bool mCacheAsyncOpenCalled;
+    // If true then OnCacheEntryAvailable should ignore the entry, because
+    // SetupTransaction removed conditional headers and decisions made in
+    // OnCacheEntryCheck are no longer valid.
+    bool mIgnoreCacheEntry;
+    // Lock preventing OnCacheEntryCheck and SetupTransaction being called at
+    // the same time.
+    mozilla::Mutex mRCWNLock;
 
 protected:
     virtual void DoNotifyListenerCleanup() override;
+
+    // Override ReleaseListeners() because mChannelClassifier only exists
+    // in nsHttpChannel and it will be released in ReleaseListeners().
+    virtual void ReleaseListeners() override;
 
 private: // cache telemetry
     bool mDidReval;

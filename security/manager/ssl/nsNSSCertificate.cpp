@@ -39,7 +39,6 @@
 #include "pkix/pkixtypes.h"
 #include "pkix/Result.h"
 #include "prerror.h"
-#include "prmem.h"
 #include "secasn1.h"
 #include "secder.h"
 #include "secerr.h"
@@ -896,6 +895,11 @@ nsNSSCertificate::ExportAsCMS(uint32_t chainMode,
   nsNSSShutDownPreventionLock locker;
   if (isAlreadyShutDown())
     return NS_ERROR_NOT_AVAILABLE;
+
+  nsresult rv = BlockUntilLoadableRootsLoaded();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
 
   if (!mCert)
     return NS_ERROR_FAILURE;

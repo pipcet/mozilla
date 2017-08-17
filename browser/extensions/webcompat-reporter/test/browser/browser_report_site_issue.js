@@ -7,12 +7,12 @@ add_task(async function test_screenshot() {
   await SpecialPowers.pushPrefEnv({set: [[PREF_WC_REPORTER_ENDPOINT, NEW_ISSUE_PAGE]]});
 
   let tab1 = await BrowserTestUtils.openNewForegroundTab(gBrowser, TEST_PAGE);
-  await PanelUI.show();
 
-  let webcompatButton = document.getElementById("webcompat-reporter-button");
+  let webcompatButton = document.getElementById(WC_PAGE_ACTION_ID);
   ok(webcompatButton, "Report Site Issue button exists.");
 
   let newTabPromise = BrowserTestUtils.waitForNewTab(gBrowser);
+  openPageActions();
   webcompatButton.click();
   let tab2 = await newTabPromise;
 

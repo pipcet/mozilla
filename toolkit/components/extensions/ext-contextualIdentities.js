@@ -1,11 +1,25 @@
 "use strict";
 
+// The ext-* files are imported into the same scopes.
+/* import-globals-from ext-toolkit.js */
+
 XPCOMUtils.defineLazyModuleGetter(this, "ContextualIdentityService",
                                   "resource://gre/modules/ContextualIdentityService.jsm");
 XPCOMUtils.defineLazyPreferenceGetter(this, "containersEnabled",
                                       "privacy.userContext.enabled");
 
-function convert(identity) {
+Cu.import("resource://gre/modules/ExtensionPreferencesManager.jsm");
+
+const CONTAINER_PREF_INSTALL_DEFAULTS = {
+  "privacy.userContext.enabled": true,
+  "privacy.userContext.longPressBehavior": 2,
+  "privacy.userContext.ui.enabled": true,
+  "privacy.usercontext.about_newtab_segregation.enabled": true,
+};
+
+const CONTAINERS_ENABLED_SETTING_NAME = "privacy.containers";
+
+const convertIdentity = identity => {
   let result = {
     name: ContextualIdentityService.getUserContextLabel(identity.userContextId),
     icon: identity.icon,
@@ -14,31 +28,59 @@ function convert(identity) {
   };
 
   return result;
-}
+};
+
+const convertIdentityFromObserver = wrappedIdentity => {
+  let identity = wrappedIdentity.wrappedJSObject;
+  let result = {
+    name: identity.name,
+    icon: identity.icon,
+    color: identity.color,
+    cookieStoreId: getCookieStoreIdForContainer(identity.userContextId),
+  };
+
+  return result;
+};
+
+ExtensionPreferencesManager.addSetting(CONTAINERS_ENABLED_SETTING_NAME, {
+  prefNames: Object.keys(CONTAINER_PREF_INSTALL_DEFAULTS),
+
+  setCallback(value) {
+    if (value === true) {
+      return CONTAINER_PREF_INSTALL_DEFAULTS;
+    }
+
+    let prefs = {};
+    for (let pref of this.prefNames) {
+      prefs[pref] = undefined;
+    }
+    return prefs;
+  },
+});
 
 this.contextualIdentities = class extends ExtensionAPI {
+  onStartup() {
+    let {extension} = this;
+
+    if (extension.hasPermission("contextualIdentities")) {
+      ExtensionPreferencesManager.setSetting(extension, CONTAINERS_ENABLED_SETTING_NAME, true);
+    }
+  }
+
   getAPI(context) {
     let self = {
       contextualIdentities: {
         get(cookieStoreId) {
-          if (!containersEnabled) {
-            return Promise.resolve(false);
-          }
-
           let containerId = getContainerForCookieStoreId(cookieStoreId);
           if (!containerId) {
             return Promise.resolve(null);
           }
 
           let identity = ContextualIdentityService.getPublicIdentityFromId(containerId);
-          return Promise.resolve(convert(identity));
+          return Promise.resolve(convertIdentity(identity));
         },
 
         query(details) {
-          if (!containersEnabled) {
-            return Promise.resolve(false);
-          }
-
           let identities = [];
           ContextualIdentityService.getPublicIdentities().forEach(identity => {
             if (details.name &&
@@ -46,28 +88,20 @@ this.contextualIdentities = class extends ExtensionAPI {
               return;
             }
 
-            identities.push(convert(identity));
+            identities.push(convertIdentity(identity));
           });
 
           return Promise.resolve(identities);
         },
 
         create(details) {
-          if (!containersEnabled) {
-            return Promise.resolve(false);
-          }
-
           let identity = ContextualIdentityService.create(details.name,
                                                           details.icon,
                                                           details.color);
-          return Promise.resolve(convert(identity));
+          return Promise.resolve(convertIdentity(identity));
         },
 
         update(cookieStoreId, details) {
-          if (!containersEnabled) {
-            return Promise.resolve(false);
-          }
-
           let containerId = getContainerForCookieStoreId(cookieStoreId);
           if (!containerId) {
             return Promise.resolve(null);
@@ -96,14 +130,10 @@ this.contextualIdentities = class extends ExtensionAPI {
             return Promise.resolve(null);
           }
 
-          return Promise.resolve(convert(identity));
+          return Promise.resolve(convertIdentity(identity));
         },
 
         remove(cookieStoreId) {
-          if (!containersEnabled) {
-            return Promise.resolve(false);
-          }
-
           let containerId = getContainerForCookieStoreId(cookieStoreId);
           if (!containerId) {
             return Promise.resolve(null);
@@ -115,7 +145,7 @@ this.contextualIdentities = class extends ExtensionAPI {
           }
 
           // We have to create the identity object before removing it.
-          let convertedIdentity = convert(identity);
+          let convertedIdentity = convertIdentity(identity);
 
           if (!ContextualIdentityService.remove(identity.userContextId)) {
             return Promise.resolve(null);
@@ -123,6 +153,40 @@ this.contextualIdentities = class extends ExtensionAPI {
 
           return Promise.resolve(convertedIdentity);
         },
+
+        onCreated: new EventManager(context, "contextualIdentities.onCreated", fire => {
+          let observer = (subject, topic) => {
+            fire.async({contextualIdentity: convertIdentityFromObserver(subject)});
+          };
+
+          Services.obs.addObserver(observer, "contextual-identity-created");
+          return () => {
+            Services.obs.removeObserver(observer, "contextual-identity-created");
+          };
+        }).api(),
+
+        onUpdated: new EventManager(context, "contextualIdentities.onUpdated", fire => {
+          let observer = (subject, topic) => {
+            fire.async({contextualIdentity: convertIdentityFromObserver(subject)});
+          };
+
+          Services.obs.addObserver(observer, "contextual-identity-updated");
+          return () => {
+            Services.obs.removeObserver(observer, "contextual-identity-updated");
+          };
+        }).api(),
+
+        onRemoved: new EventManager(context, "contextualIdentities.onRemoved", fire => {
+          let observer = (subject, topic) => {
+            fire.async({contextualIdentity: convertIdentityFromObserver(subject)});
+          };
+
+          Services.obs.addObserver(observer, "contextual-identity-deleted");
+          return () => {
+            Services.obs.removeObserver(observer, "contextual-identity-deleted");
+          };
+        }).api(),
+
       },
     };
 

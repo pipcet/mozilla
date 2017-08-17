@@ -86,8 +86,9 @@ add_test(function test_initial_state() {
   run_next_test();
 });
 
-add_test(function test_history_guids() {
+add_task(async function test_history_guids() {
   let engine = new HistoryEngine(Service);
+  await engine.initialize();
   let store = engine._store;
 
   let places = [
@@ -108,17 +109,10 @@ add_test(function test_history_guids() {
       }]
     }
   ];
-  PlacesUtils.asyncHistory.updatePlaces(places, {
-    handleError: function handleError() {
-      do_throw("Unexpected error in adding visit.");
-    },
-    handleResult: function handleResult() {},
-    handleCompletion: onVisitAdded
-  });
 
-  function onVisitAdded() {
-    let fxguid = store.GUIDForUri(fxuri, true);
-    let tbguid = store.GUIDForUri(tburi, true);
+  async function onVisitAdded() {
+    let fxguid = await store.GUIDForUri(fxuri, true);
+    let tbguid = await store.GUIDForUri(tburi, true);
     dump("fxguid: " + fxguid + "\n");
     dump("tbguid: " + tbguid + "\n");
 
@@ -150,12 +144,20 @@ add_test(function test_history_guids() {
     result = Async.querySpinningly(stmt, ["guid"]);
     do_check_eq(result.length, 0);
     stmt.finalize();
-
-    run_next_test();
   }
+
+  await new Promise((resolve, reject) => {
+    PlacesUtils.asyncHistory.updatePlaces(places, {
+      handleError: function handleError() {
+        do_throw("Unexpected error in adding visit.");
+      },
+      handleResult: function handleResult() {},
+      handleCompletion: () => { onVisitAdded().then(resolve, reject) },
+    });
+  });
 });
 
-add_test(function test_bookmark_guids() {
+add_task(async function test_bookmark_guids() {
   let engine = new BookmarksEngine(Service);
   let store = engine._store;
 
@@ -170,8 +172,8 @@ add_test(function test_bookmark_guids() {
     PlacesUtils.bookmarks.DEFAULT_INDEX,
     "Get Thunderbird!");
 
-  let fxguid = store.GUIDForId(fxid);
-  let tbguid = store.GUIDForId(tbid);
+  let fxguid = await store.GUIDForId(fxid);
+  let tbguid = await store.GUIDForId(tbid);
 
   _("Bookmarks: Verify GUIDs are added to the guid column.");
   let connection = PlacesUtils.history
@@ -203,8 +205,6 @@ add_test(function test_bookmark_guids() {
   result = Async.querySpinningly(stmt, ["guid"]);
   do_check_eq(result.length, 0);
   stmt.finalize();
-
-  run_next_test();
 });
 
 function run_test() {

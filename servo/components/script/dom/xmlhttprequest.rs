@@ -40,7 +40,7 @@ use dom_struct::dom_struct;
 use encoding::all::UTF_8;
 use encoding::label::encoding_from_whatwg_label;
 use encoding::types::{DecoderTrap, EncoderTrap, Encoding, EncodingRef};
-use euclid::length::Length;
+use euclid::Length;
 use html5ever::serialize;
 use html5ever::serialize::SerializeOpts;
 use hyper::header::{ContentLength, ContentType, ContentEncoding};
@@ -501,7 +501,7 @@ impl XMLHttpRequestMethods for XMLHttpRequest {
         // Step 4 (first half)
         let extracted_or_serialized = match data {
             Some(DocumentOrBodyInit::Document(ref doc)) => {
-                let data = Vec::from(try!(serialize_document(&doc)).as_ref());
+                let data = Vec::from(serialize_document(&doc)?.as_ref());
                 let content_type = if doc.is_html_document() {
                     "text/html;charset=UTF-8"
                 } else {
@@ -594,7 +594,7 @@ impl XMLHttpRequestMethods for XMLHttpRequest {
             use_cors_preflight: has_handlers,
             credentials_mode: credentials_mode,
             use_url_credentials: use_url_credentials,
-            origin: self.global().get_url(),
+            origin: self.global().origin().immutable().clone(),
             referrer_url: self.referrer_url.clone(),
             referrer_policy: self.referrer_policy.clone(),
             pipeline_id: Some(self.global().pipeline_id()),
@@ -627,7 +627,7 @@ impl XMLHttpRequestMethods for XMLHttpRequest {
 
                 if !content_type_set {
                     let ct = request.headers.get_mut::<ContentType>();
-                    if let Some(mut ct) = ct {
+                    if let Some(ct) = ct {
                         if let Some(encoding) = encoding {
                             for param in &mut (ct.0).2 {
                                 if param.0 == MimeAttr::Charset {
@@ -719,7 +719,7 @@ impl XMLHttpRequestMethods for XMLHttpRequest {
             _ => {},
         }
         // Step 2
-        let override_mime = try!(mime.parse::<Mime>().map_err(|_| Error::Syntax));
+        let override_mime = mime.parse::<Mime>().map_err(|_| Error::Syntax)?;
         // Step 3
         let mime_no_params = Mime(override_mime.clone().0, override_mime.clone().1, vec![]);
         *self.override_mime_type.borrow_mut() = Some(mime_no_params);

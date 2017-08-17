@@ -111,7 +111,7 @@ for (let variant of variants) {
   */
 
   exports[`test native Loader overrides (${variant.description})`] = function*(assert) {
-    const expectedKeys = Object.keys(require("sdk/io/fs")).join(", ");
+    const expectedKeys = Object.keys(require("sdk/io/file")).join(", ");
     const manifest = yield getJSON('/fixtures/native-overrides-test/package.json');
     const rootURI = variant.getRootURI('native-overrides-test');
 
@@ -130,10 +130,10 @@ for (let variant of variants) {
     let overloadKeys = Object.keys(program.overload.fs).join(", ");
     let overloadLibKeys = Object.keys(program.overloadLib.fs).join(", ");
 
-    assert.equal(fooKeys, expectedKeys, "foo exports sdk/io/fs");
-    assert.equal(barKeys, expectedKeys, "bar exports sdk/io/fs");
-    assert.equal(fsKeys, expectedKeys, "sdk/io/fs exports sdk/io/fs");
-    assert.equal(overloadKeys, expectedKeys, "overload exports foo which exports sdk/io/fs");
+    assert.equal(fooKeys, expectedKeys, "foo exports sdk/io/file");
+    assert.equal(barKeys, expectedKeys, "bar exports sdk/io/file");
+    assert.equal(fsKeys, expectedKeys, "sdk/io/file exports sdk/io/file");
+    assert.equal(overloadKeys, expectedKeys, "overload exports foo which exports sdk/io/file");
     assert.equal(overloadLibKeys, expectedKeys, "overload/lib/foo exports foo/lib/foo");
     assert.equal(program.internal, "test", "internal exports ./lib/internal");
     assert.equal(program.extra, true, "fs-extra was exported properly");
@@ -237,7 +237,7 @@ for (let variant of variants) {
       testLoader(program, assert);
       unload(loader);
       done();
-    }).then(null, (reason) => console.error(reason));
+    }).catch((reason) => console.error(reason));
   };
 
   exports[`test require#resolve with relative, dependencies (${variant.description})`] = function(assert, done) {
@@ -265,7 +265,7 @@ for (let variant of variants) {
 
       unload(loader);
       done();
-    }).then(null, (reason) => console.error(reason));
+    }).catch((reason) => console.error(reason));
   };
 }
 
@@ -309,7 +309,7 @@ exports['test JSM loading'] = function (assert, done) {
       assert.equal(jsabsolute, 30, 'JS files resolved from full resource:// work');
     }).then(done, console.error);
 
-  }).then(null, console.error);
+  }).catch(console.error);
 };
 
 function testLoader (program, assert) {
@@ -388,7 +388,7 @@ function loadAddon (uri, map) {
       }
     });
     let program = main(loader);
-  }).then(null, console.error);
+  }).catch(console.error);
 }
 
 require('sdk/test').run(exports);

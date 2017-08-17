@@ -4,28 +4,18 @@
 
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
-                                  "resource://gre/modules/BrowserUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Downloads",
-                                  "resource://gre/modules/Downloads.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "DownloadLastDir",
-                                  "resource://gre/modules/DownloadLastDir.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
-                                  "resource://gre/modules/FileUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
-                                  "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
-                                  "resource://gre/modules/PrivateBrowsingUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-                                  "resource://gre/modules/Promise.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                  "resource://gre/modules/Services.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Deprecated",
-                                  "resource://gre/modules/Deprecated.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
-                                  "resource://gre/modules/AppConstants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
+  Downloads: "resource://gre/modules/Downloads.jsm",
+  DownloadLastDir: "resource://gre/modules/DownloadLastDir.jsm",
+  FileUtils: "resource://gre/modules/FileUtils.jsm",
+  OS: "resource://gre/modules/osfile.jsm",
+  PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
+  Services: "resource://gre/modules/Services.jsm",
+  Deprecated: "resource://gre/modules/Deprecated.jsm",
+  AppConstants: "resource://gre/modules/AppConstants.jsm",
+  NetUtil: "resource://gre/modules/NetUtil.jsm",
+});
 
 var ContentAreaUtils = {
 
@@ -405,8 +395,6 @@ function internalSave(aURL, aDocument, aDefaultFileName, aContentDisposition,
     var charset = null;
     if (aDocument)
       charset = aDocument.characterSet;
-    else if (aReferrer)
-      charset = aReferrer.originCharset;
     var fileInfo = new FileInfo(aDefaultFileName);
     initFileInfo(fileInfo, aURL, charset, aDocument,
                  aContentType, aContentDisposition);
@@ -432,7 +420,7 @@ function internalSave(aURL, aDocument, aDefaultFileName, aContentDisposition,
       file = fpParams.file;
 
       continueSave();
-    }).then(null, Components.utils.reportError);
+    }).catch(Components.utils.reportError);
   }
 
   function continueSave() {
@@ -825,7 +813,7 @@ function DownloadURL(aURL, aFileName, aInitiatingDocument) {
     // Add the download to the list, allowing it to be managed.
     let list = await Downloads.getList(Downloads.ALL);
     list.add(download);
-  })().then(null, Components.utils.reportError);
+  })().catch(Components.utils.reportError);
 }
 
 // We have no DOM, and can only save the URL as is.
@@ -1036,7 +1024,7 @@ function getDefaultFileName(aDefaultFileName, aURI, aDocument,
       // 3) Use the actual file name, if present
       var textToSubURI = Components.classes["@mozilla.org/intl/texttosuburi;1"]
                                    .getService(Components.interfaces.nsITextToSubURI);
-      return validateFileName(textToSubURI.unEscapeURIForUI(url.originCharset || "UTF-8", url.fileName));
+      return validateFileName(textToSubURI.unEscapeURIForUI("UTF-8", url.fileName));
     }
   } catch (e) {
     // This is something like a data: and so forth URI... no filename here.
@@ -1051,7 +1039,7 @@ function getDefaultFileName(aDefaultFileName, aURI, aDocument,
     return validateFileName(aDefaultFileName);
 
   // 6) If this is a directory, use the last directory name
-  var path = aURI.path.match(/\/([^\/]+)\/$/);
+  var path = aURI.pathQueryRef.match(/\/([^\/]+)\/$/);
   if (path && path.length > 1)
     return validateFileName(path[1]);
 
@@ -1228,7 +1216,7 @@ function openURL(aURL) {
 
   if (!protocolSvc.isExposedProtocol(uri.scheme)) {
     // If we're not a browser, use the external protocol service to load the URI.
-    protocolSvc.loadUrl(uri);
+    protocolSvc.loadURI(uri);
   } else {
     var recentWindow = Services.wm.getMostRecentWindow("navigator:browser");
     if (recentWindow) {

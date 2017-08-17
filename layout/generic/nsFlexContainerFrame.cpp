@@ -15,11 +15,11 @@
 #include "nsLayoutUtils.h"
 #include "nsPlaceholderFrame.h"
 #include "nsPresContext.h"
-#include "nsRenderingContext.h"
 #include "nsStyleContext.h"
 #include "mozilla/CSSOrderAwareFrameIterator.h"
 #include "mozilla/Logging.h"
 #include <algorithm>
+#include "gfxContext.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/UniquePtr.h"
@@ -2245,7 +2245,6 @@ GetDisplayFlagsForFlexItem(nsIFrame* aFrame)
 
 void
 nsFlexContainerFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                       const nsRect&           aDirtyRect,
                                        const nsDisplayListSet& aLists)
 {
   DisplayBorderBackgroundOutline(aBuilder, aLists);
@@ -2266,7 +2265,7 @@ nsFlexContainerFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                   OrderingPropertyForIter(this));
   for (; !iter.AtEnd(); iter.Next()) {
     nsIFrame* childFrame = *iter;
-    BuildDisplayListForChild(aBuilder, childFrame, aDirtyRect, childLists,
+    BuildDisplayListForChild(aBuilder, childFrame, childLists,
                              GetDisplayFlagsForFlexItem(childFrame));
   }
 }
@@ -4631,7 +4630,7 @@ nsFlexContainerFrame::ReflowPlaceholders(nsPresContext* aPresContext,
 }
 
 /* virtual */ nscoord
-nsFlexContainerFrame::GetMinISize(nsRenderingContext* aRenderingContext)
+nsFlexContainerFrame::GetMinISize(gfxContext* aRenderingContext)
 {
   nscoord minISize = 0;
   DISPLAY_MIN_WIDTH(this, minISize);
@@ -4661,7 +4660,7 @@ nsFlexContainerFrame::GetMinISize(nsRenderingContext* aRenderingContext)
 }
 
 /* virtual */ nscoord
-nsFlexContainerFrame::GetPrefISize(nsRenderingContext* aRenderingContext)
+nsFlexContainerFrame::GetPrefISize(gfxContext* aRenderingContext)
 {
   nscoord prefISize = 0;
   DISPLAY_PREF_WIDTH(this, prefISize);

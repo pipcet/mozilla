@@ -8,7 +8,9 @@
  */
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
+#ifndef __FreeBSD__
 #define _POSIX_SOURCE
+#endif
 #include <dlfcn.h>
 #include <stdio.h>
 #include <string.h>
@@ -123,6 +125,7 @@ static struct cubeb_ops const cbjack_ops = {
   .stream_destroy = cbjack_stream_destroy,
   .stream_start = cbjack_stream_start,
   .stream_stop = cbjack_stream_stop,
+  .stream_reset_default_device = NULL,
   .stream_get_position = cbjack_stream_get_position,
   .stream_get_latency = cbjack_get_latency,
   .stream_set_volume = cbjack_stream_set_volume,

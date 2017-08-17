@@ -229,6 +229,7 @@ public:
    * @param aLineNumber the line number at which the stylesheet data started.
    * @param aTitle the title of the sheet.
    * @param aMedia the media string for the sheet.
+   * @param aReferrerPolicy the referrer policy for loading the sheet.
    * @param aObserver the observer to notify when the load completes.
    *        May be null.
    * @param [out] aCompleted whether parsing of the sheet completed.
@@ -240,6 +241,7 @@ public:
                            uint32_t aLineNumber,
                            const nsAString& aTitle,
                            const nsAString& aMedia,
+                           ReferrerPolicy aReferrerPolicy,
                            mozilla::dom::Element* aScopeElement,
                            nsICSSLoaderObserver* aObserver,
                            bool* aCompleted,
@@ -292,8 +294,6 @@ public:
    * @param aGeckoParentRule the @import rule importing this child, when using
    *                         Gecko's style system. This is used to properly
    *                         order the child sheet list of aParentSheet.
-   * @param aServoChildSheet the child stylesheet of the @import rule, when
-   *                         using Servo's style system.
    * @param aSavedSheets any saved style sheets which could be reused
    *              for this load
    */
@@ -301,7 +301,6 @@ public:
                           nsIURI* aURL,
                           dom::MediaList* aMedia,
                           ImportRule* aGeckoParentRule,
-                          const RawServoStyleSheet* aServoChildSheet,
                           LoaderReusableStyleSheets* aSavedSheets);
 
   /**
@@ -519,8 +518,7 @@ private:
 
   nsresult InsertChildSheet(StyleSheet* aSheet,
                             StyleSheet* aParentSheet,
-                            ImportRule* aGeckoParentRule,
-                            const RawServoStyleSheet* aServoChildSheet);
+                            ImportRule* aGeckoParentRule);
 
   nsresult InternalLoadNonDocumentSheet(nsIURI* aURL,
                                         bool aIsPreload,

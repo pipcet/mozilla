@@ -9,28 +9,30 @@ describe("ActivityStreamMessageChannel", () => {
   let globals;
   let dispatch;
   let mm;
-  before(() => {
-    function RP(url) {
+  beforeEach(() => {
+    function RP(url, isFromAboutNewTab = false) {
       this.url = url;
       this.messagePorts = [];
       this.addMessageListener = globals.sandbox.spy();
+      this.removeMessageListener = globals.sandbox.spy();
       this.sendAsyncMessage = globals.sandbox.spy();
       this.destroy = globals.sandbox.spy();
+      this.isFromAboutNewTab = isFromAboutNewTab;
     }
     globals = new GlobalOverrider();
+    const override = globals.sandbox.stub();
+    override.withArgs(true).returns(new RP("about:newtab", true));
+    override.withArgs(false).returns(null);
     globals.set("AboutNewTab", {
-      override: globals.sandbox.spy(),
+      override,
       reset: globals.sandbox.spy()
     });
     globals.set("RemotePages", RP);
     dispatch = globals.sandbox.spy();
-  });
-  beforeEach(() => {
     mm = new ActivityStreamMessageChannel({dispatch});
   });
 
-  afterEach(() => globals.reset());
-  after(() => globals.restore());
+  afterEach(() => globals.restore());
 
   it("should exist", () => {
     assert.ok(ActivityStreamMessageChannel);
@@ -55,9 +57,9 @@ describe("ActivityStreamMessageChannel", () => {
         assert.ok(mm.channel);
         assert.equal(mm.channel.url, mm.pageURL);
       });
-      it("should add 3 message listeners", () => {
+      it("should add 4 message listeners", () => {
         mm.createChannel();
-        assert.callCount(mm.channel.addMessageListener, 3);
+        assert.callCount(mm.channel.addMessageListener, 4);
       });
       it("should add the custom message listener to the channel", () => {
         mm.createChannel();
@@ -66,6 +68,10 @@ describe("ActivityStreamMessageChannel", () => {
       it("should override AboutNewTab", () => {
         mm.createChannel();
         assert.calledOnce(global.AboutNewTab.override);
+      });
+      it("should use the channel passed by AboutNewTab on override", () => {
+        mm.createChannel();
+        assert.ok(mm.channel.isFromAboutNewTab);
       });
       it("should not override AboutNewTab if the pageURL is not about:newtab", () => {
         mm = new ActivityStreamMessageChannel({pageURL: "foo.html"});
@@ -79,23 +85,27 @@ describe("ActivityStreamMessageChannel", () => {
         mm.createChannel();
         channel = mm.channel;
       });
-      it("should call channel.destroy()", () => {
-        mm.destroyChannel();
-        assert.calledOnce(channel.destroy);
-      });
       it("should set .channel to null", () => {
         mm.destroyChannel();
         assert.isNull(mm.channel);
       });
-      it("should reset AboutNewTab", () => {
+      it("should reset AboutNewTab, and pass back its channel", () => {
         mm.destroyChannel();
         assert.calledOnce(global.AboutNewTab.reset);
+        assert.calledWith(global.AboutNewTab.reset, channel);
       });
       it("should not reset AboutNewTab if the pageURL is not about:newtab", () => {
         mm = new ActivityStreamMessageChannel({pageURL: "foo.html"});
         mm.createChannel();
         mm.destroyChannel();
         assert.notCalled(global.AboutNewTab.reset);
+      });
+      it("should call channel.destroy() if pageURL is not about:newtab", () => {
+        mm = new ActivityStreamMessageChannel({pageURL: "foo.html"});
+        mm.createChannel();
+        channel = mm.channel;
+        mm.destroyChannel();
+        assert.calledOnce(channel.destroy);
       });
     });
   });
@@ -112,6 +122,14 @@ describe("ActivityStreamMessageChannel", () => {
         mm.createChannel();
         mm.channel.messagePorts.push(t);
         assert.equal(mm.getTargetById("bar"), null);
+      });
+    });
+    describe("#onNewTabInit", () => {
+      it("should dispatch a NEW_TAB_INIT action", () => {
+        const t = {portID: "foo"};
+        sinon.stub(mm, "onActionFromContent");
+        mm.onNewTabInit({target: t});
+        assert.calledWith(mm.onActionFromContent, {type: at.NEW_TAB_INIT}, "foo");
       });
     });
     describe("#onNewTabLoad", () => {
@@ -131,6 +149,12 @@ describe("ActivityStreamMessageChannel", () => {
       });
     });
     describe("#onMessage", () => {
+      let sandbox;
+      beforeEach(() => {
+        sandbox = sinon.sandbox.create();
+        sandbox.spy(global.Components.utils, "reportError");
+      });
+      afterEach(() => sandbox.restore());
       it("should report an error if the msg.data is missing", () => {
         mm.onMessage({target: {portID: "foo"}});
         assert.calledOnce(global.Components.utils.reportError);

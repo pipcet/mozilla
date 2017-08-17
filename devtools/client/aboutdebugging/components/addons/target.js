@@ -8,7 +8,8 @@
 
 const { createClass, DOM: dom, PropTypes } =
   require("devtools/client/shared/vendor/react");
-const { debugAddon, uninstallAddon } = require("../../modules/addon");
+const { debugAddon, isTemporaryID, parseFileUri, uninstallAddon } =
+  require("../../modules/addon");
 const Services = require("Services");
 
 loader.lazyImporter(this, "BrowserToolboxProcess",
@@ -20,12 +21,15 @@ loader.lazyRequireGetter(this, "DebuggerClient",
 const Strings = Services.strings.createBundle(
   "chrome://devtools/locale/aboutdebugging.properties");
 
+const TEMP_ID_URL = "https://developer.mozilla.org/Add-ons" +
+                    "/WebExtensions/WebExtensions_and_the_Add-on_ID";
+
 function filePathForTarget(target) {
   // Only show file system paths, and only for temporarily installed add-ons.
   if (!target.temporarilyInstalled || !target.url || !target.url.startsWith("file://")) {
     return [];
   }
-  let path = target.url.slice("file://".length);
+  let path = parseFileUri(target.url);
   return [
     dom.dt(
       { className: "addon-target-info-label" },
@@ -35,6 +39,22 @@ function filePathForTarget(target) {
     dom.dd(
       { className: "addon-target-info-content file-path" },
       dom.span({ className: "file-path-inner", title: path }, path),
+    ),
+  ];
+}
+
+function addonIDforTarget(target) {
+  return [
+    dom.dt(
+      { className: "addon-target-info-label" },
+      Strings.GetStringFromName("extensionID"),
+    ),
+    dom.dd(
+      { className: "addon-target-info-content extension-id" },
+      dom.span(
+        { title: target.addonID },
+        target.addonID
+      )
     ),
   ];
 }
@@ -67,6 +87,41 @@ function internalIDForTarget(target) {
   ];
 }
 
+function showMessages(target) {
+  const messages = [
+    ...warningMessages(target.warnings),
+    ...infoMessages(target),
+  ];
+  if (messages.length > 0) {
+    return dom.ul(
+      { className: "addon-target-messages" },
+      ...messages);
+  }
+  return null;
+}
+
+function infoMessages(target) {
+  const messages = [];
+  if (isTemporaryID(target.addonID)) {
+    messages.push(dom.li(
+      { className: "addon-target-info-message addon-target-message" },
+      Strings.GetStringFromName("temporaryID"),
+      " ",
+      dom.a({ href: TEMP_ID_URL, className: "temporary-id-url", target: "_blank" },
+        Strings.GetStringFromName("temporaryID.learnMore")
+      )));
+  }
+  return messages;
+}
+
+function warningMessages(warnings = []) {
+  return warnings.map((warning) => {
+    return dom.li(
+      { className: "addon-target-warning-message addon-target-message" },
+      warning);
+  });
+}
+
 module.exports = createClass({
   displayName: "AddonTarget",
 
@@ -80,6 +135,7 @@ module.exports = createClass({
       name: PropTypes.string.isRequired,
       temporarilyInstalled: PropTypes.bool,
       url: PropTypes.string,
+      warnings: PropTypes.array,
     }).isRequired
   },
 
@@ -117,11 +173,15 @@ module.exports = createClass({
           role: "presentation",
           src: target.icon
         }),
-        dom.span({ className: "target-name", title: target.name }, target.name)
+        dom.span(
+          { className: "target-name addon-target-name", title: target.name },
+          target.name)
       ),
+      showMessages(target),
       dom.dl(
         { className: "addon-target-info" },
         ...filePathForTarget(target),
+        ...addonIDforTarget(target),
         ...internalIDForTarget(target),
       ),
       dom.div({className: "addon-target-actions"},

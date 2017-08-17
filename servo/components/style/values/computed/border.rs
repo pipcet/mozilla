@@ -4,19 +4,20 @@
 
 //! Computed types for CSS values related to borders.
 
+use values::animated::ToAnimatedZero;
 use values::computed::{Number, NumberOrPercentage};
 use values::computed::length::LengthOrPercentage;
 use values::generics::border::BorderCornerRadius as GenericBorderCornerRadius;
+use values::generics::border::BorderImageSideWidth as GenericBorderImageSideWidth;
 use values::generics::border::BorderImageSlice as GenericBorderImageSlice;
-use values::generics::border::BorderImageWidthSide as GenericBorderImageWidthSide;
 use values::generics::border::BorderRadius as GenericBorderRadius;
 use values::generics::rect::Rect;
 
 /// A computed value for the `border-image-width` property.
-pub type BorderImageWidth = Rect<BorderImageWidthSide>;
+pub type BorderImageWidth = Rect<BorderImageSideWidth>;
 
 /// A computed value for a single side of a `border-image-width` property.
-pub type BorderImageWidthSide = GenericBorderImageWidthSide<LengthOrPercentage, Number>;
+pub type BorderImageSideWidth = GenericBorderImageSideWidth<LengthOrPercentage, Number>;
 
 /// A computed value for the `border-image-slice` property.
 pub type BorderImageSlice = GenericBorderImageSlice<NumberOrPercentage>;
@@ -27,10 +28,18 @@ pub type BorderRadius = GenericBorderRadius<LengthOrPercentage>;
 /// A computed value for the `border-*-radius` longhand properties.
 pub type BorderCornerRadius = GenericBorderCornerRadius<LengthOrPercentage>;
 
-impl BorderImageWidthSide {
+impl BorderImageSideWidth {
     /// Returns `1`.
     #[inline]
     pub fn one() -> Self {
-        GenericBorderImageWidthSide::Number(1.)
+        GenericBorderImageSideWidth::Number(1.)
+    }
+}
+
+impl ToAnimatedZero for BorderCornerRadius {
+    #[inline]
+    fn to_animated_zero(&self) -> Result<Self, ()> {
+        // FIXME(nox): Why?
+        Err(())
     }
 }

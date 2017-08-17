@@ -76,7 +76,7 @@ using namespace mozilla;
 
 static LazyLogModule nsComponentManagerLog("nsComponentManager");
 
-#if 0 || defined (DEBUG_timeless)
+#if 0
  #define SHOW_DENIED_ON_SHUTDOWN
  #define SHOW_CI_ON_EXISTING_SERVICE
 #endif
@@ -482,8 +482,8 @@ nsComponentManagerImpl::RegisterCIDEntryLocked(
     return;
   }
 
-  nsFactoryEntry* f = mFactories.Get(*aEntry->cid);
-  if (f) {
+  if (auto entry = mFactories.LookupForAdd(*aEntry->cid)) {
+    nsFactoryEntry* f = entry.Data();
     NS_WARNING("Re-registering a CID?");
 
     char idstr[NSID_LENGTH];
@@ -500,11 +500,9 @@ nsComponentManagerImpl::RegisterCIDEntryLocked(
                aModule->Description().get(),
                idstr,
                existing.get());
-    return;
+  } else {
+    entry.OrInsert([aEntry, aModule] () { return new nsFactoryEntry(aEntry, aModule); });
   }
-
-  f = new nsFactoryEntry(aEntry, aModule);
-  mFactories.Put(*aEntry->cid, f);
 }
 
 void
@@ -598,7 +596,6 @@ nsComponentManagerImpl::ManifestBinaryComponent(ManifestProcessingContext& aCx,
 {
   LogMessageWithContext(aCx.mFile, aLineNo,
                         "Binary XPCOM components are no longer supported.");
-  return;
 }
 
 static void
@@ -654,8 +651,9 @@ nsComponentManagerImpl::ManifestComponent(ManifestProcessingContext& aCx,
   fl.GetURIString(hash);
 
   MutexLock lock(mLock);
-  nsFactoryEntry* f = mFactories.Get(cid);
-  if (f) {
+  auto entry = mFactories.LookupForAdd(cid);
+  if (entry) {
+    nsFactoryEntry* f = entry.Data();
     char idstr[NSID_LENGTH];
     cid.ToProvidedString(idstr);
 
@@ -691,8 +689,7 @@ nsComponentManagerImpl::ManifestComponent(ManifestProcessingContext& aCx,
   auto* e = new (KnownNotNull, place) mozilla::Module::CIDEntry();
   e->cid = permanentCID;
 
-  f = new nsFactoryEntry(e, km);
-  mFactories.Put(cid, f);
+  entry.OrInsert([e, km] () { return new nsFactoryEntry(e, km); });
 }
 
 void
@@ -742,6 +739,11 @@ nsComponentManagerImpl::RereadChromeManifests(bool aChromeOnly)
   for (uint32_t i = 0; i < sModuleLocations->Length(); ++i) {
     ComponentLocation& l = sModuleLocations->ElementAt(i);
     RegisterManifest(l.type, l.location, aChromeOnly);
+  }
+
+  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+  if (obs) {
+    obs->NotifyObservers(nullptr, "chrome-manifests-loaded", nullptr);
   }
 }
 
@@ -949,7 +951,7 @@ nsComponentManagerImpl::GetClassObjectByContractID(const char* aContractID,
   nsresult rv;
 
   MOZ_LOG(nsComponentManagerLog, LogLevel::Debug,
-         ("nsComponentManager: GetClassObject(%s)", aContractID));
+         ("nsComponentManager: GetClassObjectByContractID(%s)", aContractID));
 
   nsCOMPtr<nsIFactory> factory = FindFactory(aContractID, strlen(aContractID));
   if (!factory) {
@@ -959,7 +961,7 @@ nsComponentManagerImpl::GetClassObjectByContractID(const char* aContractID,
   rv = factory->QueryInterface(aIID, aResult);
 
   MOZ_LOG(nsComponentManagerLog, LogLevel::Warning,
-         ("\t\tGetClassObject() %s", NS_SUCCEEDED(rv) ? "succeeded" : "FAILED"));
+         ("\t\tGetClassObjectByContractID() %s", NS_SUCCEEDED(rv) ? "succeeded" : "FAILED"));
 
   return rv;
 }
@@ -983,11 +985,11 @@ nsComponentManagerImpl::CreateInstance(const nsCID& aClass,
   if (gXPCOMShuttingDown) {
     // When processing shutdown, don't process new GetService() requests
 #ifdef SHOW_DENIED_ON_SHUTDOWN
-    nsXPIDLCString cid, iid;
-    cid.Adopt(aClass.ToString());
-    iid.Adopt(aIID.ToString());
+    char cid[NSID_LENGTH], iid[NSID_LENGTH];
+    aClass.ToProvidedString(cid);
+    aIID.ToProvidedString(iid);
     fprintf(stderr, "Creating new instance on shutdown. Denied.\n"
-            "         CID: %s\n         IID: %s\n", cid.get(), iid.get());
+            "         CID: %s\n         IID: %s\n", cid, iid);
 #endif /* SHOW_DENIED_ON_SHUTDOWN */
     return NS_ERROR_UNEXPECTED;
   }
@@ -1005,11 +1007,11 @@ nsComponentManagerImpl::CreateInstance(const nsCID& aClass,
 
 #ifdef SHOW_CI_ON_EXISTING_SERVICE
   if (entry->mServiceObject) {
-    nsXPIDLCString cid;
-    cid.Adopt(aClass.ToString());
+    char cid[NSID_LENGTH];
+    aClass.ToProvidedString(cid);
     nsAutoCString message;
     message = NS_LITERAL_CSTRING("You are calling CreateInstance \"") +
-              cid +
+              nsDependentCString(cid) +
               NS_LITERAL_CSTRING("\" when a service for this CID already exists!");
     NS_ERROR(message.get());
   }
@@ -1066,10 +1068,10 @@ nsComponentManagerImpl::CreateInstanceByContractID(const char* aContractID,
   if (gXPCOMShuttingDown) {
     // When processing shutdown, don't process new GetService() requests
 #ifdef SHOW_DENIED_ON_SHUTDOWN
-    nsXPIDLCString iid;
-    iid.Adopt(aIID.ToString());
+    char iid[NSID_LENGTH];
+    aIID.ToProvidedString(iid);
     fprintf(stderr, "Creating new instance on shutdown. Denied.\n"
-            "  ContractID: %s\n         IID: %s\n", aContractID, iid.get());
+            "  ContractID: %s\n         IID: %s\n", aContractID, iid);
 #endif /* SHOW_DENIED_ON_SHUTDOWN */
     return NS_ERROR_UNEXPECTED;
   }
@@ -1189,11 +1191,11 @@ nsComponentManagerImpl::GetService(const nsCID& aClass,
   if (gXPCOMShuttingDown) {
     // When processing shutdown, don't process new GetService() requests
 #ifdef SHOW_DENIED_ON_SHUTDOWN
-    nsXPIDLCString cid, iid;
-    cid.Adopt(aClass.ToString());
-    iid.Adopt(aIID.ToString());
+    char cid[NSID_LENGTH], iid[NSID_LENGTH];
+    aClass.ToProvidedString(cid);
+    aIID.ToProvidedString(iid);
     fprintf(stderr, "Getting service on shutdown. Denied.\n"
-            "         CID: %s\n         IID: %s\n", cid.get(), iid.get());
+            "         CID: %s\n         IID: %s\n", cid, iid);
 #endif /* SHOW_DENIED_ON_SHUTDOWN */
     return NS_ERROR_UNEXPECTED;
   }
@@ -1305,16 +1307,16 @@ nsComponentManagerImpl::IsServiceInstantiated(const nsCID& aClass,
   if (gXPCOMShuttingDown) {
     // When processing shutdown, don't process new GetService() requests
 #ifdef SHOW_DENIED_ON_SHUTDOWN
-    nsXPIDLCString cid, iid;
-    cid.Adopt(aClass.ToString());
-    iid.Adopt(aIID.ToString());
+    char cid[NSID_LENGTH], iid[NSID_LENGTH];
+    aClass.ToProvidedString(cid);
+    aIID.ToProvidedString(iid);
     fprintf(stderr, "Checking for service on shutdown. Denied.\n"
-            "         CID: %s\n         IID: %s\n", cid.get(), iid.get());
+            "         CID: %s\n         IID: %s\n", cid, iid);
 #endif /* SHOW_DENIED_ON_SHUTDOWN */
     return NS_ERROR_UNEXPECTED;
   }
 
-  nsresult rv = NS_ERROR_SERVICE_NOT_AVAILABLE;
+  nsresult rv = NS_OK;
   nsFactoryEntry* entry;
 
   {
@@ -1326,6 +1328,8 @@ nsComponentManagerImpl::IsServiceInstantiated(const nsCID& aClass,
     nsCOMPtr<nsISupports> service;
     rv = entry->mServiceObject->QueryInterface(aIID, getter_AddRefs(service));
     *aResult = (service != nullptr);
+  } else {
+    *aResult = false;
   }
 
   return rv;
@@ -1346,15 +1350,15 @@ nsComponentManagerImpl::IsServiceInstantiatedByContractID(
   if (gXPCOMShuttingDown) {
     // When processing shutdown, don't process new GetService() requests
 #ifdef SHOW_DENIED_ON_SHUTDOWN
-    nsXPIDLCString iid;
-    iid.Adopt(aIID.ToString());
+    char iid[NSID_LENGTH];
+    aIID.ToProvidedString(iid);
     fprintf(stderr, "Checking for service on shutdown. Denied.\n"
-            "  ContractID: %s\n         IID: %s\n", aContractID, iid.get());
+            "  ContractID: %s\n         IID: %s\n", aContractID, iid);
 #endif /* SHOW_DENIED_ON_SHUTDOWN */
     return NS_ERROR_UNEXPECTED;
   }
 
-  nsresult rv = NS_ERROR_SERVICE_NOT_AVAILABLE;
+  nsresult rv = NS_OK;
   nsFactoryEntry* entry;
   {
     SafeMutexAutoLock lock(mLock);
@@ -1365,6 +1369,8 @@ nsComponentManagerImpl::IsServiceInstantiatedByContractID(
     nsCOMPtr<nsISupports> service;
     rv = entry->mServiceObject->QueryInterface(aIID, getter_AddRefs(service));
     *aResult = (service != nullptr);
+  } else {
+    *aResult = false;
   }
   return rv;
 }
@@ -1381,10 +1387,10 @@ nsComponentManagerImpl::GetServiceByContractID(const char* aContractID,
   if (gXPCOMShuttingDown) {
     // When processing shutdown, don't process new GetService() requests
 #ifdef SHOW_DENIED_ON_SHUTDOWN
-    nsXPIDLCString iid;
-    iid.Adopt(aIID.ToString());
+    char iid[NSID_LENGTH];
+    aIID.ToProvidedString(iid);
     fprintf(stderr, "Getting service on shutdown. Denied.\n"
-            "  ContractID: %s\n         IID: %s\n", aContractID, iid.get());
+            "  ContractID: %s\n         IID: %s\n", aContractID, iid);
 #endif /* SHOW_DENIED_ON_SHUTDOWN */
     return NS_ERROR_UNEXPECTED;
   }
@@ -1532,16 +1538,14 @@ nsComponentManagerImpl::RegisterFactory(const nsCID& aClass,
   nsAutoPtr<nsFactoryEntry> f(new nsFactoryEntry(aClass, aFactory));
 
   SafeMutexAutoLock lock(mLock);
-  nsFactoryEntry* oldf = mFactories.Get(aClass);
-  if (oldf) {
+  if (auto entry = mFactories.LookupForAdd(aClass)) {
     return NS_ERROR_FACTORY_EXISTS;
+  } else {
+    if (aContractID) {
+      mContractIDs.Put(nsDependentCString(aContractID), f);
+    }
+    entry.OrInsert([&f] () { return f.forget(); });
   }
-
-  if (aContractID) {
-    mContractIDs.Put(nsDependentCString(aContractID), f);
-  }
-
-  mFactories.Put(aClass, f.forget());
 
   return NS_OK;
 }
@@ -1557,12 +1561,13 @@ nsComponentManagerImpl::UnregisterFactory(const nsCID& aClass,
 
   {
     SafeMutexAutoLock lock(mLock);
-    nsFactoryEntry* f = mFactories.Get(aClass);
+    auto entry = mFactories.Lookup(aClass);
+    nsFactoryEntry* f = entry ? entry.Data() : nullptr;
     if (!f || f->mFactory != aFactory) {
       return NS_ERROR_FACTORY_NOT_REGISTERED;
     }
 
-    mFactories.Remove(aClass);
+    entry.Remove();
 
     // This might leave a stale contractid -> factory mapping in
     // place, so null out the factory entry (see

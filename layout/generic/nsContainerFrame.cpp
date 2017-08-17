@@ -222,24 +222,74 @@ nsContainerFrame::DestroyFrom(nsIFrame* aDestructRoot)
   // Destroy frames on the principal child list.
   mFrames.DestroyFramesFrom(aDestructRoot);
 
-  // Destroy frames on the auxiliary frame lists and delete the lists.
-  nsPresContext* pc = PresContext();
-  nsIPresShell* shell = pc->PresShell();
-  SafelyDestroyFrameListProp(aDestructRoot, shell, OverflowProperty());
+  // If we have any IB split siblings, clear their references to us.
+  if (HasAnyStateBits(NS_FRAME_PART_OF_IBSPLIT)) {
+    // Delete previous sibling's reference to me.
+    nsIFrame* prevSib = GetProperty(nsIFrame::IBSplitPrevSibling());
+    if (prevSib) {
+      NS_WARNING_ASSERTION(
+        this == prevSib->GetProperty(nsIFrame::IBSplitSibling()),
+        "IB sibling chain is inconsistent");
+      prevSib->DeleteProperty(nsIFrame::IBSplitSibling());
+    }
 
-  MOZ_ASSERT(IsFrameOfType(nsIFrame::eCanContainOverflowContainers) ||
-             !(GetProperty(nsContainerFrame::OverflowContainersProperty()) ||
-               GetProperty(nsContainerFrame::ExcessOverflowContainersProperty())),
-             "this type of frame should't have overflow containers");
-  SafelyDestroyFrameListProp(aDestructRoot, shell,
-                             OverflowContainersProperty());
-  SafelyDestroyFrameListProp(aDestructRoot, shell,
-                             ExcessOverflowContainersProperty());
+    // Delete next sibling's reference to me.
+    nsIFrame* nextSib = GetProperty(nsIFrame::IBSplitSibling());
+    if (nextSib) {
+      NS_WARNING_ASSERTION(
+        this == nextSib->GetProperty(nsIFrame::IBSplitPrevSibling()),
+        "IB sibling chain is inconsistent");
+      nextSib->DeleteProperty(nsIFrame::IBSplitPrevSibling());
+    }
 
-  MOZ_ASSERT(!GetProperty(BackdropProperty()) ||
-             StyleDisplay()->mTopLayer != NS_STYLE_TOP_LAYER_NONE,
-             "only top layer frame may have backdrop");
-  SafelyDestroyFrameListProp(aDestructRoot, shell, BackdropProperty());
+#ifdef DEBUG
+    // This is just so we can assert it's not set in nsFrame::DestroyFrom.
+    RemoveStateBits(NS_FRAME_PART_OF_IBSPLIT);
+#endif
+  }
+
+  if (MOZ_UNLIKELY(!mProperties.IsEmpty())) {
+    using T = mozilla::FrameProperties::UntypedDescriptor;
+    bool hasO = false, hasOC = false, hasEOC = false, hasBackdrop = false;
+    mProperties.ForEach([&] (const T& aProp, void*) {
+      if (aProp == OverflowProperty()) {
+        hasO = true;
+      } else if (aProp == OverflowContainersProperty()) {
+        hasOC = true;
+      } else if (aProp == ExcessOverflowContainersProperty()) {
+        hasEOC = true;
+      } else if (aProp == BackdropProperty()) {
+        hasBackdrop = true;
+      }
+      return true;
+    });
+
+    // Destroy frames on the auxiliary frame lists and delete the lists.
+    nsPresContext* pc = PresContext();
+    nsIPresShell* shell = pc->PresShell();
+    if (hasO) {
+      SafelyDestroyFrameListProp(aDestructRoot, shell, OverflowProperty());
+    }
+
+    MOZ_ASSERT(IsFrameOfType(eCanContainOverflowContainers) ||
+               !(hasOC || hasEOC),
+               "this type of frame shouldn't have overflow containers");
+    if (hasOC) {
+      SafelyDestroyFrameListProp(aDestructRoot, shell,
+                                 OverflowContainersProperty());
+    }
+    if (hasEOC) {
+      SafelyDestroyFrameListProp(aDestructRoot, shell,
+                                 ExcessOverflowContainersProperty());
+    }
+
+    MOZ_ASSERT(!GetProperty(BackdropProperty()) ||
+               StyleDisplay()->mTopLayer != NS_STYLE_TOP_LAYER_NONE,
+               "only top layer frame may have backdrop");
+    if (hasBackdrop) {
+      SafelyDestroyFrameListProp(aDestructRoot, shell, BackdropProperty());
+    }
+  }
 
   nsSplittableFrame::DestroyFrom(aDestructRoot);
 }
@@ -277,36 +327,32 @@ nsContainerFrame::GetChildList(ChildListID aListID) const
   }
 }
 
-static void
-AppendIfNonempty(const nsIFrame* aFrame,
-                 nsContainerFrame::FrameListPropertyDescriptor aProperty,
-                 nsTArray<nsIFrame::ChildList>* aLists,
-                 nsIFrame::ChildListID aListID)
-{
-  if (nsFrameList* list = aFrame->GetProperty(aProperty)) {
-    list->AppendIfNonempty(aLists, aListID);
-  }
-}
-
 void
 nsContainerFrame::GetChildLists(nsTArray<ChildList>* aLists) const
 {
   mFrames.AppendIfNonempty(aLists, kPrincipalList);
-  ::AppendIfNonempty(this, OverflowProperty(),
-                     aLists, kOverflowList);
-  if (IsFrameOfType(nsIFrame::eCanContainOverflowContainers)) {
-    ::AppendIfNonempty(this, OverflowContainersProperty(),
-                       aLists, kOverflowContainersList);
-    ::AppendIfNonempty(this, ExcessOverflowContainersProperty(),
-                       aLists, kExcessOverflowContainersList);
-  }
-  // Bypass BackdropProperty hashtable lookup for any in-flow frames
-  // since frames in the top layer (only which can have backdrop) are
-  // definitely out-of-flow.
-  if (GetStateBits() & NS_FRAME_OUT_OF_FLOW) {
-    ::AppendIfNonempty(this, BackdropProperty(),
-                       aLists, kBackdropList);
-  }
+
+  using T = mozilla::FrameProperties::UntypedDescriptor;
+  mProperties.ForEach([this, aLists] (const T& aProp, void* aValue) {
+    typedef const nsFrameList* L;
+    if (aProp == OverflowProperty()) {
+      L(aValue)->AppendIfNonempty(aLists, kOverflowList);
+    } else if (aProp == OverflowContainersProperty()) {
+      MOZ_ASSERT(IsFrameOfType(nsIFrame::eCanContainOverflowContainers),
+                 "found unexpected OverflowContainersProperty");
+      Unused << this; // silence clang -Wunused-lambda-capture in opt builds
+      L(aValue)->AppendIfNonempty(aLists, kOverflowContainersList);
+    } else if (aProp == ExcessOverflowContainersProperty()) {
+      MOZ_ASSERT(IsFrameOfType(nsIFrame::eCanContainOverflowContainers),
+                 "found unexpected ExcessOverflowContainersProperty");
+      Unused << this; // silence clang -Wunused-lambda-capture in opt builds
+      L(aValue)->AppendIfNonempty(aLists, kExcessOverflowContainersList);
+    } else if (aProp == BackdropProperty()) {
+      L(aValue)->AppendIfNonempty(aLists, kBackdropList);
+    }
+    return true;
+  });
+
   nsSplittableFrame::GetChildLists(aLists);
 }
 
@@ -315,17 +361,14 @@ nsContainerFrame::GetChildLists(nsTArray<ChildList>* aLists) const
 
 void
 nsContainerFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                   const nsRect&           aDirtyRect,
                                    const nsDisplayListSet& aLists)
 {
   DisplayBorderBackgroundOutline(aBuilder, aLists);
-
-  BuildDisplayListForNonBlockChildren(aBuilder, aDirtyRect, aLists);
+  BuildDisplayListForNonBlockChildren(aBuilder, aLists);
 }
 
 void
 nsContainerFrame::BuildDisplayListForNonBlockChildren(nsDisplayListBuilder*   aBuilder,
-                                                      const nsRect&           aDirtyRect,
                                                       const nsDisplayListSet& aLists,
                                                       uint32_t                aFlags)
 {
@@ -334,7 +377,7 @@ nsContainerFrame::BuildDisplayListForNonBlockChildren(nsDisplayListBuilder*   aB
   nsDisplayListSet set(aLists, aLists.Content());
   // The children should be in content order
   while (kid) {
-    BuildDisplayListForChild(aBuilder, kid, aDirtyRect, set, aFlags);
+    BuildDisplayListForChild(aBuilder, kid, set, aFlags);
     kid = kid->GetNextSibling();
   }
 }
@@ -356,8 +399,9 @@ nsContainerFrame::PeekOffsetNoAmount(bool aForward, int32_t* aOffset)
 }
 
 nsIFrame::FrameSearchResult
-nsContainerFrame::PeekOffsetCharacter(bool aForward, int32_t* aOffset,
-                                      bool aRespectClusters)
+nsContainerFrame::PeekOffsetCharacter(
+                    bool aForward, int32_t* aOffset,
+                    PeekOffsetCharacterOptions aOptions)
 {
   NS_ASSERTION (aOffset && *aOffset <= 1, "aOffset out of range");
   // Don't allow the caret to stay in an empty (leaf) container frame.
@@ -417,7 +461,7 @@ nsContainerFrame::ReparentFrameView(nsIFrame* aChildFrame,
     // typically be the same distance (height wise) from the
     aOldParentFrame = aOldParentFrame->GetParent();
     aNewParentFrame = aNewParentFrame->GetParent();
-    
+
     // We should never walk all the way to the root frame without finding
     // a view
     NS_ASSERTION(aOldParentFrame && aNewParentFrame, "didn't find view");
@@ -441,7 +485,7 @@ nsContainerFrame::ReparentFrameView(nsIFrame* aChildFrame,
   // found a common ancestor.
   nsView* oldParentView = aOldParentFrame->GetClosestView();
   nsView* newParentView = aNewParentFrame->GetClosestView();
-  
+
   // See if the old parent frame and the new parent frame are in the
   // same view sub-hierarchy. If they are then we don't have to do
   // anything
@@ -476,7 +520,7 @@ nsContainerFrame::ReparentFrameViewList(const nsFrameList& aChildFrameList,
     // typically be the same distance (height wise) from the
     aOldParentFrame = aOldParentFrame->GetParent();
     aNewParentFrame = aNewParentFrame->GetParent();
-    
+
     // We should never walk all the way to the root frame without finding
     // a view
     NS_ASSERTION(aOldParentFrame && aNewParentFrame, "didn't find view");
@@ -501,7 +545,7 @@ nsContainerFrame::ReparentFrameViewList(const nsFrameList& aChildFrameList,
   // found a common ancestor.
   nsView* oldParentView = aOldParentFrame->GetClosestView();
   nsView* newParentView = aNewParentFrame->GetClosestView();
-  
+
   // See if the old parent frame and the new parent frame are in the
   // same view sub-hierarchy. If they are then we don't have to do
   // anything
@@ -544,7 +588,7 @@ void
 nsContainerFrame::SyncWindowProperties(nsPresContext*       aPresContext,
                                        nsIFrame*            aFrame,
                                        nsView*              aView,
-                                       nsRenderingContext*  aRC,
+                                       gfxContext*          aRC,
                                        uint32_t             aFlags)
 {
 #ifdef MOZ_XUL
@@ -683,7 +727,7 @@ static nscoord GetCoord(const nsStyleCoord& aCoord, nscoord aIfNotCoord)
 }
 
 void
-nsContainerFrame::DoInlineIntrinsicISize(nsRenderingContext *aRenderingContext,
+nsContainerFrame::DoInlineIntrinsicISize(gfxContext *aRenderingContext,
                                          InlineIntrinsicISizeData *aData,
                                          nsLayoutUtils::IntrinsicISizeType aType)
 {
@@ -780,7 +824,7 @@ nsContainerFrame::DoInlineIntrinsicISize(nsRenderingContext *aRenderingContext,
 
 /* virtual */
 LogicalSize
-nsContainerFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
+nsContainerFrame::ComputeAutoSize(gfxContext*         aRenderingContext,
                                   WritingMode         aWM,
                                   const LogicalSize&  aCBSize,
                                   nscoord             aAvailableISize,
@@ -1188,13 +1232,12 @@ nsContainerFrame::ReflowOverflowContainerChildren(nsPresContext*           aPres
 
 void
 nsContainerFrame::DisplayOverflowContainers(nsDisplayListBuilder*   aBuilder,
-                                            const nsRect&           aDirtyRect,
                                             const nsDisplayListSet& aLists)
 {
   nsFrameList* overflowconts = GetPropTableFrames(OverflowContainersProperty());
   if (overflowconts) {
     for (nsIFrame* frame : *overflowconts) {
-      BuildDisplayListForChild(aBuilder, frame, aDirtyRect, aLists);
+      BuildDisplayListForChild(aBuilder, frame, aLists);
     }
   }
 }

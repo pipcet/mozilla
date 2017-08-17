@@ -24,54 +24,52 @@ extern crate ipc_channel;
 extern crate libc;
 extern crate msg;
 extern crate net_traits;
-extern crate offscreen_gl_context;
 extern crate profile_traits;
 extern crate rustc_serialize;
-extern crate serde;
-#[macro_use]
-extern crate serde_derive;
+#[macro_use] extern crate serde;
+extern crate servo_atoms;
 extern crate servo_url;
 extern crate style_traits;
 extern crate time;
-extern crate webrender_traits;
+extern crate webrender_api;
 extern crate webvr_traits;
 
 mod script_msg;
 pub mod webdriver_msg;
 
 use bluetooth_traits::BluetoothRequest;
+use canvas_traits::webgl::WebGLPipeline;
 use devtools_traits::{DevtoolScriptControlMsg, ScriptToDevtoolsControlMsg, WorkerId};
-use euclid::Size2D;
-use euclid::length::Length;
-use euclid::point::Point2D;
-use euclid::rect::Rect;
-use euclid::scale_factor::ScaleFactor;
-use euclid::size::TypedSize2D;
+use euclid::{Size2D, Length, Point2D, Vector2D, Rect, ScaleFactor, TypedSize2D};
 use gfx_traits::Epoch;
 use heapsize::HeapSizeOf;
 use hyper::header::Headers;
 use hyper::method::Method;
+use ipc_channel::{Error as IpcError};
 use ipc_channel::ipc::{IpcReceiver, IpcSender};
 use libc::c_void;
 use msg::constellation_msg::{BrowsingContextId, TopLevelBrowsingContextId, FrameType, Key, KeyModifiers, KeyState};
 use msg::constellation_msg::{PipelineId, PipelineNamespaceId, TraversalDirection};
-use net_traits::{ReferrerPolicy, ResourceThreads};
+use net_traits::{FetchResponseMsg, ReferrerPolicy, ResourceThreads};
 use net_traits::image::base::Image;
+use net_traits::image::base::PixelFormat;
 use net_traits::image_cache::ImageCache;
 use net_traits::response::HttpsState;
 use net_traits::storage_thread::StorageType;
 use profile_traits::mem;
 use profile_traits::time as profile_time;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use servo_atoms::Atom;
 use servo_url::ImmutableOrigin;
 use servo_url::ServoUrl;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, RecvTimeoutError};
 use style_traits::CSSPixel;
+use style_traits::SpeculativePainter;
 use webdriver_msg::{LoadStatus, WebDriverScriptCommand};
-use webrender_traits::ClipId;
+use webrender_api::{ClipId, DevicePixel, ImageKey};
 use webvr_traits::{WebVREvent, WebVRMsg};
 
 pub use script_msg::{LayoutMsg, ScriptMsg, EventResult, LogEntry};
@@ -97,9 +95,9 @@ impl Serialize for UntrustedNodeAddress {
     }
 }
 
-impl Deserialize for UntrustedNodeAddress {
-    fn deserialize<D: Deserializer>(d: D) -> Result<UntrustedNodeAddress, D::Error> {
-        let value: usize = try!(Deserialize::deserialize(d));
+impl<'de> Deserialize<'de> for UntrustedNodeAddress {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<UntrustedNodeAddress, D::Error> {
+        let value: usize = Deserialize::deserialize(d)?;
         Ok(UntrustedNodeAddress::from_id(value))
     }
 }
@@ -232,6 +230,9 @@ pub enum UpdatePipelineIdReason {
 /// Messages sent from the constellation or layout to the script thread.
 #[derive(Deserialize, Serialize)]
 pub enum ConstellationControlMsg {
+    /// Sends the final response to script thread for fetching after all redirections
+    /// have been resolved
+    NavigationResponse(PipelineId, FetchResponseMsg),
     /// Gives a channel and ID to a layout thread, as well as the ID of that layout's parent
     AttachLayout(NewLayoutInfo),
     /// Window resized.  Sends a DOM event eventually, but first we combine events.
@@ -247,7 +248,7 @@ pub enum ConstellationControlMsg {
     /// Notifies script of the viewport.
     Viewport(PipelineId, Rect<f32>),
     /// Notifies script of a new set of scroll offsets.
-    SetScrollState(PipelineId, Vec<(UntrustedNodeAddress, Point2D<f32>)>),
+    SetScrollState(PipelineId, Vec<(UntrustedNodeAddress, Vector2D<f32>)>),
     /// Requests that the script thread immediately send the constellation the title of a pipeline.
     GetTitle(PipelineId),
     /// Notifies script thread of a change to one of its document's activity
@@ -293,7 +294,7 @@ pub enum ConstellationControlMsg {
     /// The strings are key, old value and new value.
     DispatchStorageEvent(PipelineId, StorageType, ServoUrl, Option<String>, Option<String>, Option<String>),
     /// Report an error from a CSS parser for the given pipeline
-    ReportCSSError(PipelineId, String, usize, usize, String),
+    ReportCSSError(PipelineId, String, u32, u32, String),
     /// Reload the given page.
     Reload(PipelineId),
     /// Notifies the script thread of WebVR events.
@@ -304,6 +305,7 @@ impl fmt::Debug for ConstellationControlMsg {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         use self::ConstellationControlMsg::*;
         let variant = match *self {
+            NavigationResponse(..) => "NavigationResponse",
             AttachLayout(..) => "AttachLayout",
             Resize(..) => "Resize",
             ResizeInactive(..) => "ResizeInactive",
@@ -443,11 +445,11 @@ pub enum TimerSchedulerMsg {
 /// Notifies the script thread to fire due timers.
 /// `TimerSource` must be `FromWindow` when dispatched to `ScriptThread` and
 /// must be `FromWorker` when dispatched to a `DedicatedGlobalWorkerScope`
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TimerEvent(pub TimerSource, pub TimerEventId);
 
 /// Describes the thread that requested the TimerEvent.
-#[derive(Copy, Clone, HeapSizeOf, Deserialize, Serialize)]
+#[derive(Copy, Clone, Debug, HeapSizeOf, Deserialize, Serialize)]
 pub enum TimerSource {
     /// The event was requested from a window (ScriptThread).
     FromWindow(PipelineId),
@@ -499,7 +501,7 @@ pub struct InitialScriptState {
     /// A port on which messages sent by the constellation to script can be received.
     pub control_port: IpcReceiver<ConstellationControlMsg>,
     /// A channel on which messages can be sent to the constellation from script.
-    pub constellation_chan: IpcSender<ScriptMsg>,
+    pub script_to_constellation_chan: ScriptToConstellationChan,
     /// A sender for the layout thread to communicate to the constellation.
     pub layout_to_constellation_chan: IpcSender<LayoutMsg>,
     /// A channel to schedule timer events.
@@ -522,8 +524,10 @@ pub struct InitialScriptState {
     pub pipeline_namespace_id: PipelineNamespaceId,
     /// A ping will be sent on this channel once the script thread shuts down.
     pub content_process_shutdown_chan: IpcSender<()>,
+    /// A channel to the webgl thread used in this pipeline.
+    pub webgl_chan: WebGLPipeline,
     /// A channel to the webvr thread, if available.
-    pub webvr_thread: Option<IpcSender<WebVRMsg>>
+    pub webvr_chan: Option<IpcSender<WebVRMsg>>
 }
 
 /// This trait allows creating a `ScriptThread` without depending on the `script`
@@ -682,14 +686,8 @@ pub struct ScrollState {
     /// The ID of the scroll root.
     pub scroll_root_id: ClipId,
     /// The scrolling offset of this stacking context.
-    pub scroll_offset: Point2D<f32>,
+    pub scroll_offset: Vector2D<f32>,
 }
-
-/// One hardware pixel.
-///
-/// This unit corresponds to the smallest addressable element of the display hardware.
-#[derive(Copy, Clone, Debug)]
-pub enum DevicePixel {}
 
 /// Data about the window size.
 #[derive(Copy, Clone, Deserialize, Serialize, HeapSizeOf)]
@@ -745,17 +743,12 @@ pub enum ConstellationMsg {
     /// Request that the constellation send the current focused top-level browsing context id,
     /// over a provided channel.
     GetFocusTopLevelBrowsingContext(IpcSender<Option<TopLevelBrowsingContextId>>),
-    /// Requests that the constellation inform the compositor of the title of the pipeline
-    /// immediately.
-    GetPipelineTitle(PipelineId),
-    /// Request to load the initial page.
-    InitLoadUrl(ServoUrl),
     /// Query the constellation to see if the current compositor output is stable
     IsReadyToSaveImage(HashMap<PipelineId, Epoch>),
     /// Inform the constellation of a key event.
     KeyEvent(Option<char>, Key, KeyState, KeyModifiers),
     /// Request to load a page.
-    LoadUrl(PipelineId, LoadData),
+    LoadUrl(TopLevelBrowsingContextId, ServoUrl),
     /// Request to traverse the joint session history of the provided browsing context.
     TraverseHistory(TopLevelBrowsingContextId, TraversalDirection),
     /// Inform the constellation of a window being resized.
@@ -768,10 +761,12 @@ pub enum ConstellationMsg {
     Reload(TopLevelBrowsingContextId),
     /// A log entry, with the top-level browsing context id and thread name
     LogEntry(Option<TopLevelBrowsingContextId>, Option<String>, LogEntry),
-    /// Set the WebVR thread channel.
-    SetWebVRThread(IpcSender<WebVRMsg>),
     /// Dispatch WebVR events to the subscribed script threads.
     WebVREvents(Vec<PipelineId>, Vec<WebVREvent>),
+    /// Create a new top level browsing context.
+    NewBrowser(ServoUrl, IpcSender<TopLevelBrowsingContextId>),
+    /// Make browser visible.
+    SelectBrowser(TopLevelBrowsingContextId),
 }
 
 /// Resources required by workerglobalscopes
@@ -788,7 +783,7 @@ pub struct WorkerGlobalScopeInit {
     /// From devtools sender
     pub from_devtools_sender: Option<IpcSender<DevtoolScriptControlMsg>>,
     /// Messages to send to constellation
-    pub constellation_chan: IpcSender<ScriptMsg>,
+    pub script_to_constellation_chan: ScriptToConstellationChan,
     /// Message to send to the scheduler
     pub scheduler_chan: IpcSender<TimerSchedulerMsg>,
     /// The worker id
@@ -808,4 +803,62 @@ pub struct WorkerScriptLoadOrigin {
     pub referrer_policy: Option<ReferrerPolicy>,
     /// the pipeline id of the entity requesting the load
     pub pipeline_id: Option<PipelineId>,
+}
+
+/// Errors from executing a paint worklet
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub enum PaintWorkletError {
+    /// Execution timed out.
+    Timeout,
+    /// No such worklet.
+    WorkletNotFound,
+}
+
+impl From<RecvTimeoutError> for PaintWorkletError {
+    fn from(_: RecvTimeoutError) -> PaintWorkletError {
+        PaintWorkletError::Timeout
+    }
+}
+
+/// Execute paint code in the worklet thread pool.
+pub trait Painter: SpeculativePainter {
+    /// https://drafts.css-houdini.org/css-paint-api/#draw-a-paint-image
+    fn draw_a_paint_image(&self,
+                          size: TypedSize2D<f32, CSSPixel>,
+                          zoom: ScaleFactor<f32, CSSPixel, DevicePixel>,
+                          properties: Vec<(Atom, String)>,
+                          arguments: Vec<String>)
+                          -> DrawAPaintImageResult;
+}
+
+/// The result of executing paint code: the image together with any image URLs that need to be loaded.
+/// TODO: this should return a WR display list. https://github.com/servo/servo/issues/17497
+#[derive(Debug, Deserialize, Serialize, Clone, HeapSizeOf)]
+pub struct DrawAPaintImageResult {
+    /// The image height
+    pub width: u32,
+    /// The image width
+    pub height: u32,
+    /// The image format
+    pub format: PixelFormat,
+    /// The image drawn, or None if an invalid paint image was drawn
+    pub image_key: Option<ImageKey>,
+    /// Drawing the image might have requested loading some image URLs.
+    pub missing_image_urls: Vec<ServoUrl>,
+}
+
+/// A Script to Constellation channel.
+#[derive(Deserialize, Serialize, Clone)]
+pub struct ScriptToConstellationChan {
+    /// Sender for communicating with constellation thread.
+    pub sender: IpcSender<(PipelineId, ScriptMsg)>,
+    /// Used to identify the origin of the message.
+    pub pipeline_id: PipelineId,
+}
+
+impl ScriptToConstellationChan {
+    /// Send ScriptMsg and attach the pipeline_id to the message.
+    pub fn send(&self, msg: ScriptMsg) -> Result<(), IpcError> {
+        self.sender.send((self.pipeline_id, msg))
+    }
 }

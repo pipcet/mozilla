@@ -87,6 +87,8 @@ SpecialPowersObserver.prototype._loadFrameScript = function() {
     this._messageManager.addMessageListener("SPUnloadExtension", this);
     this._messageManager.addMessageListener("SPExtensionMessage", this);
     this._messageManager.addMessageListener("SPCleanUpSTSData", this);
+    this._messageManager.addMessageListener("SPRequestDumpCoverageCounters", this);
+    this._messageManager.addMessageListener("SPRequestResetCoverageCounters", this);
 
     this._messageManager.loadFrameScript(CHILD_LOGGER_SCRIPT, true);
     this._messageManager.loadFrameScript(CHILD_SCRIPT_API, true);
@@ -111,7 +113,7 @@ SpecialPowersObserver.prototype.init = function() {
   // Register special testing modules.
   var testsURI = Cc["@mozilla.org/file/directory_service;1"].
                    getService(Ci.nsIProperties).
-                   get("ProfD", Ci.nsILocalFile);
+                   get("ProfD", Ci.nsIFile);
   testsURI.append("tests.manifest");
   var ioSvc = Cc["@mozilla.org/network/io-service;1"].
                 getService(Ci.nsIIOService);
@@ -155,6 +157,8 @@ SpecialPowersObserver.prototype.uninit = function() {
     this._messageManager.removeMessageListener("SPUnloadExtension", this);
     this._messageManager.removeMessageListener("SPExtensionMessage", this);
     this._messageManager.removeMessageListener("SPCleanUpSTSData", this);
+    this._messageManager.removeMessageListener("SPRequestDumpCoverageCounters", this);
+    this._messageManager.removeMessageListener("SPRequestResetCoverageCounters", this);
 
     this._messageManager.removeDelayedFrameScript(CHILD_LOGGER_SCRIPT);
     this._messageManager.removeDelayedFrameScript(CHILD_SCRIPT_API);

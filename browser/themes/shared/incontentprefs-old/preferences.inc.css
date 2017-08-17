@@ -24,14 +24,18 @@ treecol {
 
 #engineList treechildren::-moz-tree-image(engineShown, checked),
 #blocklistsTree treechildren::-moz-tree-image(selectionCol, checked) {
-  list-style-image: url("chrome://global/skin/in-content/check.svg#check");
+  list-style-image: url("chrome://global/skin/in-content/check.svg");
+  -moz-context-properties: fill, stroke;
+  fill: #2292d0;
+  stroke: none;
   width: 21px;
   height: 21px;
 }
 
 #engineList treechildren::-moz-tree-image(engineShown, checked, selected),
 #blocklistsTree treechildren::-moz-tree-image(selectionCol, checked, selected) {
-  list-style-image: url("chrome://global/skin/in-content/check.svg#check-inverted");
+  fill: white;
+  stroke: #0095dd;
 }
 
 #engineList treechildren::-moz-tree-row,
@@ -291,12 +295,15 @@ description > html|a {
  * Dialog
  */
 
-#dialogOverlay {
-  background-color: rgba(0,0,0,0.5);
+.dialogOverlay {
   visibility: hidden;
 }
 
-#dialogBox {
+.dialogOverlay[topmost="true"] {
+  background-color: rgba(0,0,0,0.5);
+}
+
+.dialogBox {
   background-color: #fbfbfb;
   background-clip: content-box;
   color: #424e5a;
@@ -311,40 +318,37 @@ description > html|a {
   padding: 0;
 }
 
-#dialogBox[resizable="true"] {
+.dialogBox[resizable="true"] {
   resize: both;
   overflow: hidden;
   min-height: 20em;
   min-width: 66ch;
 }
 
-#dialogBox > .groupbox-title {
+.dialogBox > .groupbox-title {
   padding: 3.5px 0;
   background-color: #F1F1F1;
   border-bottom: 1px solid #C1C1C1;
 }
 
-#dialogTitle {
+.dialogTitle {
   text-align: center;
   -moz-user-select: none;
 }
 
 .close-icon {
-  background-color: transparent !important;
   border: none;
-  box-shadow: none;
-  padding: 0;
-  height: auto;
-  min-height: 16px;
+  background: none !important;
   min-width: 0;
+  min-height: auto;
 }
 
-#dialogBox > .groupbox-body {
+.dialogBox > .groupbox-body {
   -moz-appearance: none;
   padding: 20px;
 }
 
-#dialogFrame {
+.dialogFrame {
   -moz-box-flex: 1;
   /* Default dialog dimensions */
   width: 66ch;
@@ -375,15 +379,18 @@ description > html|a {
  */
 
 #fxaProfileImage {
-  max-width: 60px;
+  width: 60px;
+  height: 60px;
   border-radius: 50%;
   list-style-image: url(chrome://browser/skin/fxa/default-avatar.svg);
   margin-inline-end: 15px;
-  image-rendering: -moz-crisp-edges;
+  image-rendering: auto;
+  border: 1px solid transparent;
 }
 
 #fxaLoginStatus[hasName] #fxaProfileImage {
-  max-width: 80px;
+  width: 80px;
+  height: 80px;
 }
 
 #fxaProfileImage.actionable {
@@ -391,11 +398,11 @@ description > html|a {
 }
 
 #fxaProfileImage.actionable:hover {
-  box-shadow: 0px 0px 0px 1px #0095DD;
+  border-color: #0095DD;
 }
 
 #fxaProfileImage.actionable:hover:active {
-  box-shadow: 0px 0px 0px 1px #ff9500;
+  border-color: #ff9500;
 }
 
 #noFxaAccount {
@@ -510,7 +517,8 @@ description > html|a {
 
 .fxaFirefoxLogo {
   list-style-image: url(chrome://browser/skin/fxa/logo.png);
-  max-width: 64px;
+  width: 64px;
+  height: 64px;
   margin-inline-end: 14px;
 }
 

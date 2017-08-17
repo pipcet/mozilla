@@ -4,23 +4,109 @@
 
 //! Data needed to style a Gecko document.
 
-use Atom;
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
 use dom::TElement;
-use fnv::FnvHashMap;
-use gecko::rules::{CounterStyleRule, FontFaceRule};
-use gecko::wrapper::GeckoElement;
-use gecko_bindings::bindings::RawServoStyleSet;
+use gecko_bindings::bindings::{self, RawServoStyleSet};
+use gecko_bindings::structs::{ServoStyleSheet, StyleSheetInfo, ServoStyleSheetInner};
 use gecko_bindings::structs::RawGeckoPresContextOwned;
 use gecko_bindings::structs::nsIDocument;
-use gecko_bindings::sugar::ownership::{HasBoxFFI, HasFFI, HasSimpleFFI};
-use media_queries::Device;
+use gecko_bindings::sugar::ownership::{HasArcFFI, HasBoxFFI, HasFFI, HasSimpleFFI};
+use invalidation::media_queries::{MediaListKey, ToMediaListKey};
+use media_queries::{Device, MediaList};
 use properties::ComputedValues;
+use servo_arc::Arc;
 use shared_lock::{Locked, StylesheetGuards, SharedRwLockReadGuard};
-use stylearc::Arc;
 use stylesheet_set::StylesheetSet;
-use stylesheets::Origin;
+use stylesheets::{Origin, PerOrigin, StylesheetContents, StylesheetInDocument};
 use stylist::{ExtraStyleData, Stylist};
+
+/// Little wrapper to a Gecko style sheet.
+#[derive(PartialEq, Eq, Debug)]
+pub struct GeckoStyleSheet(*const ServoStyleSheet);
+
+impl ToMediaListKey for ::gecko::data::GeckoStyleSheet {
+    fn to_media_list_key(&self) -> MediaListKey {
+        use std::mem;
+        unsafe {
+            MediaListKey::from_raw(mem::transmute(self.0))
+        }
+    }
+}
+
+impl GeckoStyleSheet {
+    /// Create a `GeckoStyleSheet` from a raw `ServoStyleSheet` pointer.
+    #[inline]
+    pub unsafe fn new(s: *const ServoStyleSheet) -> Self {
+        debug_assert!(!s.is_null());
+        bindings::Gecko_StyleSheet_AddRef(s);
+        Self::from_addrefed(s)
+    }
+
+    /// Create a `GeckoStyleSheet` from a raw `ServoStyleSheet` pointer that
+    /// already holds a strong reference.
+    #[inline]
+    pub unsafe fn from_addrefed(s: *const ServoStyleSheet) -> Self {
+        debug_assert!(!s.is_null());
+        GeckoStyleSheet(s)
+    }
+
+    /// Get the raw `ServoStyleSheet` that we're wrapping.
+    pub fn raw(&self) -> &ServoStyleSheet {
+        unsafe { &*self.0 }
+    }
+
+    fn inner(&self) -> &ServoStyleSheetInner {
+        unsafe {
+            &*(self.raw()._base.mInner as *const StyleSheetInfo as *const ServoStyleSheetInner)
+        }
+    }
+}
+
+impl Drop for GeckoStyleSheet {
+    fn drop(&mut self) {
+        unsafe { bindings::Gecko_StyleSheet_Release(self.0) };
+    }
+}
+
+impl Clone for GeckoStyleSheet {
+    fn clone(&self) -> Self {
+        unsafe { bindings::Gecko_StyleSheet_AddRef(self.0) };
+        GeckoStyleSheet(self.0)
+    }
+}
+
+impl StylesheetInDocument for GeckoStyleSheet {
+    fn contents(&self, _: &SharedRwLockReadGuard) -> &StylesheetContents {
+        debug_assert!(!self.inner().mContents.mRawPtr.is_null());
+        unsafe {
+            let contents =
+                (&**StylesheetContents::as_arc(&&*self.inner().mContents.mRawPtr)) as *const _;
+            &*contents
+        }
+    }
+
+    fn media<'a>(&'a self, guard: &'a SharedRwLockReadGuard) -> Option<&'a MediaList> {
+        use gecko_bindings::structs::ServoMediaList;
+        use std::mem;
+
+        unsafe {
+            let servo_media_list =
+                self.raw()._base.mMedia.mRawPtr as *const ServoMediaList;
+            if servo_media_list.is_null() {
+                return None;
+            }
+            let raw_list = &*(*servo_media_list).mRawList.mRawPtr;
+            let list = Locked::<MediaList>::as_arc(mem::transmute(&raw_list));
+            Some(list.read_with(guard))
+        }
+    }
+
+    // All the stylesheets Servo knows about are enabled, because that state is
+    // handled externally by Gecko.
+    fn enabled(&self) -> bool {
+        true
+    }
+}
 
 /// The container for data that a Servo-backed Gecko document needs to style
 /// itself.
@@ -29,13 +115,10 @@ pub struct PerDocumentStyleDataImpl {
     pub stylist: Stylist,
 
     /// List of stylesheets, mirrored from Gecko.
-    pub stylesheets: StylesheetSet,
+    pub stylesheets: StylesheetSet<GeckoStyleSheet>,
 
-    /// List of effective font face rules.
-    pub font_faces: Vec<(Arc<Locked<FontFaceRule>>, Origin)>,
-
-    /// Map for effective counter style rules.
-    pub counter_styles: FnvHashMap<Atom, Arc<Locked<CounterStyleRule>>>,
+    /// List of effective @font-face and @counter-style rules.
+    pub extra_style_data: PerOrigin<ExtraStyleData>,
 }
 
 /// The data itself is an `AtomicRefCell`, which guarantees the proper semantics
@@ -47,14 +130,13 @@ impl PerDocumentStyleData {
     pub fn new(pres_context: RawGeckoPresContextOwned) -> Self {
         let device = Device::new(pres_context);
         let quirks_mode = unsafe {
-            (*(*device.pres_context).mDocument.raw::<nsIDocument>()).mCompatMode
+            (*device.pres_context().mDocument.raw::<nsIDocument>()).mCompatMode
         };
 
         PerDocumentStyleData(AtomicRefCell::new(PerDocumentStyleDataImpl {
             stylist: Stylist::new(device, quirks_mode.into()),
             stylesheets: StylesheetSet::new(),
-            font_faces: vec![],
-            counter_styles: FnvHashMap::default(),
+            extra_style_data: Default::default(),
         }))
     }
 
@@ -70,15 +152,6 @@ impl PerDocumentStyleData {
 }
 
 impl PerDocumentStyleDataImpl {
-    /// Reset the device state because it may have changed.
-    ///
-    /// Implies also a stylesheet flush.
-    pub fn reset_device(&mut self, guard: &SharedRwLockReadGuard) {
-        self.stylist.device_mut().reset();
-        self.stylesheets.force_dirty();
-        self.flush_stylesheets::<GeckoElement>(guard, None);
-    }
-
     /// Recreate the style data if the stylesheets have changed.
     pub fn flush_stylesheets<E>(&mut self,
                                 guard: &SharedRwLockReadGuard,
@@ -89,20 +162,24 @@ impl PerDocumentStyleDataImpl {
             return;
         }
 
-        let mut extra_data = ExtraStyleData {
-            font_faces: &mut self.font_faces,
-            counter_styles: &mut self.counter_styles,
-        };
-
         let author_style_disabled = self.stylesheets.author_style_disabled();
-        self.stylist.clear();
+
         let iter = self.stylesheets.flush(document_element);
-        self.stylist.rebuild(iter,
-                             &StylesheetGuards::same(guard),
-                             /* ua_sheets = */ None,
-                             /* stylesheets_changed = */ true,
-                             author_style_disabled,
-                             &mut extra_data);
+        self.stylist.rebuild(
+            iter,
+            &StylesheetGuards::same(guard),
+            /* ua_sheets = */ None,
+            /* stylesheets_changed = */ true,
+            author_style_disabled,
+            &mut self.extra_style_data,
+        );
+    }
+
+    /// Returns whether private browsing is enabled.
+    pub fn is_private_browsing_enabled(&self) -> bool {
+        let doc =
+            self.stylist.device().pres_context().mDocument.raw::<nsIDocument>();
+        unsafe { bindings::Gecko_IsPrivateBrowsingEnabled(doc) }
     }
 
     /// Get the default computed values for this document.
@@ -114,6 +191,20 @@ impl PerDocumentStyleDataImpl {
     /// already cleared; the stylist handles that.
     pub fn clear_stylist(&mut self) {
         self.stylist.clear();
+    }
+
+    /// Clear the stylist's data for the specified origin.
+    pub fn clear_stylist_origin(&mut self, origin: &Origin) {
+        self.stylist.clear_origin(origin);
+    }
+
+    /// Returns whether visited links are enabled.
+    fn visited_links_enabled(&self) -> bool {
+        unsafe { bindings::Gecko_AreVisitedLinksEnabled() }
+    }
+    /// Returns whether visited styles are enabled.
+    pub fn visited_styles_enabled(&self) -> bool {
+        self.visited_links_enabled() && !self.is_private_browsing_enabled()
     }
 }
 

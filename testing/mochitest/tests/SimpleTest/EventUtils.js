@@ -16,7 +16,7 @@
  *  synthesizeNativeKey
  *  synthesizeMouseExpectEvent
  *  synthesizeKeyExpectEvent
- *  synthesizeNativeClick
+ *  synthesizeNativeOSXClick
  *
  *  When adding methods to this file, please add a performance test for it.
  */
@@ -408,7 +408,7 @@ function synthesizeTouchAtPoint(left, top, aEvent, aWindow = window)
   if (utils) {
     var id = aEvent.id || utils.DEFAULT_TOUCH_POINTER_ID;
     var rx = aEvent.rx || 1;
-    var ry = aEvent.rx || 1;
+    var ry = aEvent.ry || 1;
     var angle = aEvent.angle || 0;
     var force = aEvent.force || 1;
     var modifiers = _parseModifiers(aEvent, aWindow);
@@ -633,6 +633,31 @@ function sendWheelAndPaint(aTarget, aOffsetX, aOffsetY, aEvent, aCallback, aWind
   synthesizeWheel(aTarget, aOffsetX, aOffsetY, aEvent, aWindow);
 }
 
+function synthesizeNativeTapAtCenter(aTarget, aLongTap = false, aCallback = null, aWindow = window) {
+  let rect = aTarget.getBoundingClientRect();
+  return synthesizeNativeTap(aTarget, rect.width / 2, rect.height / 2, aLongTap, aCallback, aWindow);
+}
+
+function synthesizeNativeTap(aTarget, aOffsetX, aOffsetY, aLongTap = false, aCallback = null, aWindow = window) {
+  let utils = _getDOMWindowUtils(aWindow);
+  if (!utils)
+    return;
+
+  let scale = utils.screenPixelsPerCSSPixel;
+  let rect = aTarget.getBoundingClientRect();
+  let x = (aWindow.mozInnerScreenX + rect.left + aOffsetX) * scale;
+  let y = (aWindow.mozInnerScreenY + rect.top + aOffsetY) * scale;
+
+  let observer = {
+    observe: (subject, topic, data) => {
+      if (aCallback && topic == "mouseevent") {
+        aCallback(data);
+      }
+    }
+  };
+  utils.sendNativeTouchTap(x, y, aLongTap, observer);
+}
+
 function synthesizeNativeMouseMove(aTarget, aOffsetX, aOffsetY, aCallback, aWindow = window) {
   var utils = _getDOMWindowUtils(aWindow);
   if (!utils)
@@ -651,6 +676,44 @@ function synthesizeNativeMouseMove(aTarget, aOffsetX, aOffsetY, aCallback, aWind
     }
   };
   utils.sendNativeMouseMove(x * scale, y * scale, null, observer);
+}
+
+/**
+ * This is a wrapper around synthesizeNativeMouseMove that waits for the mouse
+ * event to be dispatched to the target content.
+ *
+ * This API is supposed to be used in those test cases that synthesize some
+ * input events to chrome process and have some checks in content.
+ */
+function synthesizeAndWaitNativeMouseMove(aTarget, aOffsetX, aOffsetY,
+                                          aCallback, aWindow = window) {
+  let browser = gBrowser.selectedTab.linkedBrowser;
+  let mm = browser.messageManager;
+  let ContentTask =
+    _EU_Cu.import("resource://testing-common/ContentTask.jsm", null).ContentTask;
+
+  let eventRegisteredPromise = new Promise(resolve => {
+    mm.addMessageListener("Test:MouseMoveRegistered", function processed(message) {
+      mm.removeMessageListener("Test:MouseMoveRegistered", processed);
+      resolve();
+    });
+  });
+  let eventReceivedPromise = ContentTask.spawn(browser, [aOffsetX, aOffsetY],
+                                               ([clientX, clientY]) => {
+    return new Promise(resolve => {
+      addEventListener("mousemove", function onMouseMoveEvent(e) {
+        if (e.clientX == clientX && e.clientY == clientY) {
+          removeEventListener("mousemove", onMouseMoveEvent);
+          resolve();
+        }
+      });
+      sendAsyncMessage("Test:MouseMoveRegistered");
+    });
+  });
+  eventRegisteredPromise.then(() => {
+    synthesizeNativeMouseMove(aTarget, aOffsetX, aOffsetY, null, aWindow);
+  });
+  return eventReceivedPromise;
 }
 
 function _computeKeyCodeFromChar(aChar)
@@ -802,6 +865,51 @@ function synthesizeKey(aKey, aEvent, aWindow = window, aCallback)
   } finally {
     _emulateToInactivateModifiers(TIP, modifiers, aWindow);
   }
+}
+
+/**
+ * This is a wrapper around synthesizeKey that waits for the key event to be
+ * dispatched to the target content. It returns a promise which is resolved
+ * when the content receives the key event.
+ *
+ * This API is supposed to be used in those test cases that synthesize some
+ * input events to chrome process and have some checks in content.
+ */
+function synthesizeAndWaitKey(aKey, aEvent, aWindow = window,
+                              checkBeforeSynthesize, checkAfterSynthesize)
+{
+  let browser = gBrowser.selectedTab.linkedBrowser;
+  let mm = browser.messageManager;
+  let keyCode = _createKeyboardEventDictionary(aKey, aEvent, aWindow).dictionary.keyCode;
+  let ContentTask = _EU_Cu.import("resource://testing-common/ContentTask.jsm", null).ContentTask;
+
+  let keyRegisteredPromise = new Promise(resolve => {
+    mm.addMessageListener("Test:KeyRegistered", function processed(message) {
+      mm.removeMessageListener("Test:KeyRegistered", processed);
+      resolve();
+    });
+  });
+  let keyReceivedPromise = ContentTask.spawn(browser, keyCode, (keyCode) => {
+    return new Promise(resolve => {
+      addEventListener("keyup", function onKeyEvent(e) {
+        if (e.keyCode == keyCode) {
+          removeEventListener("keyup", onKeyEvent);
+          resolve();
+        }
+      });
+      sendAsyncMessage("Test:KeyRegistered");
+    });
+  });
+  keyRegisteredPromise.then(() => {
+    if (checkBeforeSynthesize) {
+      checkBeforeSynthesize();
+    }
+    synthesizeKey(aKey, aEvent, aWindow);
+    if (checkAfterSynthesize) {
+      checkAfterSynthesize();
+    }
+  });
+  return keyReceivedPromise;
 }
 
 function _parseNativeModifiers(aModifiers, aWindow = window)

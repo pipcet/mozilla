@@ -3,7 +3,7 @@
    - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
 
 <!-- LOCALIZATION NOTE : FILE This file contains the browser main menu items -->
-<!-- LOCALIZATION NOTE : FILE Do not translate commandkeys --> 
+<!-- LOCALIZATION NOTE : FILE Do not translate commandkeys -->
 
 <!-- LOCALIZATION NOTE (mainWindow.title): DONT_TRANSLATE -->
 <!ENTITY mainWindow.title "&brandFullName;">
@@ -244,10 +244,16 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY bookmarksCmd.commandkey "b">
 
 <!ENTITY bookmarksMenuButton.label          "Bookmarks">
-<!ENTITY bookmarksMenuButton.other.label "Other Bookmarks">
-<!ENTITY bookmarksMenuButton.mobile.label "Mobile Bookmarks">
+<!ENTITY bookmarksMenuButton.other.label    "Other Bookmarks">
+<!ENTITY bookmarksMenuButton.mobile.label   "Mobile Bookmarks">
 <!ENTITY viewBookmarksSidebar2.label        "View Bookmarks Sidebar">
+<!ENTITY hideBookmarksSidebar.label         "Hide Bookmarks Sidebar">
 <!ENTITY viewBookmarksToolbar.label         "View Bookmarks Toolbar">
+<!ENTITY hideBookmarksToolbar.label         "Hide Bookmarks Toolbar">
+<!ENTITY searchBookmarks.label              "Search Bookmarks">
+<!ENTITY bookmarkingTools.label             "Bookmarking Tools">
+<!ENTITY addBookmarksMenu.label             "Add Bookmarks Menu to Toolbar">
+<!ENTITY removeBookmarksMenu.label          "Remove Bookmarks Menu from Toolbar">
 
 <!ENTITY containersMenu.label "Containers">
 
@@ -261,7 +267,7 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY historySidebarCmd.commandKey   "h">
 
 <!ENTITY toolsMenu.label              "Tools">
-<!ENTITY toolsMenu.accesskey          "T"> 
+<!ENTITY toolsMenu.accesskey          "T">
 
 <!ENTITY keywordfield.label           "Add a Keyword for this Search…">
 <!ENTITY keywordfield.accesskey       "K">
@@ -280,7 +286,7 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY inspectContextMenu.label     "Inspect Element">
 <!ENTITY inspectContextMenu.accesskey "Q">
 
-<!ENTITY fileMenu.label         "File"> 
+<!ENTITY fileMenu.label         "File">
 <!ENTITY fileMenu.accesskey       "F">
 <!ENTITY newUserContext.label             "New Container Tab">
 <!ENTITY newUserContext.accesskey         "B">
@@ -291,46 +297,48 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY newPrivateWindow.accesskey "W">
 <!ENTITY newNonRemoteWindow.label   "New Non-e10s Window">
 
-<!ENTITY editMenu.label         "Edit"> 
-<!ENTITY editMenu.accesskey       "E"> 
-<!ENTITY undoCmd.label            "Undo">  
-<!ENTITY undoCmd.key            "Z">  
-<!ENTITY undoCmd.accesskey          "U"> 
-<!ENTITY redoCmd.label            "Redo">  
-<!ENTITY redoCmd.key            "Y">  
-<!ENTITY redoCmd.accesskey          "R"> 
-<!ENTITY cutCmd.label           "Cut">  
-<!ENTITY cutCmd.key             "X">  
-<!ENTITY cutCmd.accesskey         "t"> 
-<!ENTITY copyCmd.label            "Copy">  
-<!ENTITY copyCmd.key            "C">  
-<!ENTITY copyCmd.accesskey          "C"> 
-<!ENTITY pasteCmd.label           "Paste">  
-<!ENTITY pasteCmd.key           "V">  
-<!ENTITY pasteCmd.accesskey         "P"> 
-<!ENTITY deleteCmd.label          "Delete">  
-<!ENTITY deleteCmd.key            "D">  
-<!ENTITY deleteCmd.accesskey        "D"> 
-<!ENTITY selectAllCmd.label         "Select All">  
-<!ENTITY selectAllCmd.key         "A">  
-<!ENTITY selectAllCmd.accesskey       "A"> 
+<!ENTITY editMenu.label         "Edit">
+<!ENTITY editMenu.accesskey       "E">
+<!ENTITY undoCmd.label            "Undo">
+<!ENTITY undoCmd.key            "Z">
+<!ENTITY undoCmd.accesskey          "U">
+<!ENTITY redoCmd.label            "Redo">
+<!ENTITY redoCmd.key            "Y">
+<!ENTITY redoCmd.accesskey          "R">
+<!ENTITY cutCmd.label           "Cut">
+<!ENTITY cutCmd.key             "X">
+<!ENTITY cutCmd.accesskey         "t">
+<!ENTITY copyCmd.label            "Copy">
+<!ENTITY copyCmd.key            "C">
+<!ENTITY copyCmd.accesskey          "C">
+<!ENTITY pasteCmd.label           "Paste">
+<!ENTITY pasteCmd.key           "V">
+<!ENTITY pasteCmd.accesskey         "P">
+<!ENTITY deleteCmd.label          "Delete">
+<!ENTITY deleteCmd.key            "D">
+<!ENTITY deleteCmd.accesskey        "D">
+<!ENTITY selectAllCmd.label         "Select All">
+<!ENTITY selectAllCmd.key         "A">
+<!ENTITY selectAllCmd.accesskey       "A">
 <!ENTITY preferencesCmd2.label       "Options">
 <!ENTITY preferencesCmd2.accesskey     "O">
 <!ENTITY preferencesCmdUnix.label       "Preferences">
-<!ENTITY preferencesCmdUnix.accesskey     "n"> 
+<!ENTITY preferencesCmdUnix.accesskey     "n">
 
 <!ENTITY clearRecentHistory.label               "Clear Recent History…">
 
 <!ENTITY privateBrowsingCmd.commandkey          "P">
 
-<!ENTITY viewMenu.label         "View"> 
-<!ENTITY viewMenu.accesskey       "V"> 
-<!ENTITY viewToolbarsMenu.label       "Toolbars"> 
-<!ENTITY viewToolbarsMenu.accesskey     "T"> 
+<!ENTITY viewMenu.label         "View">
+<!ENTITY viewMenu.accesskey       "V">
+<!ENTITY viewToolbarsMenu.label       "Toolbars">
+<!ENTITY viewToolbarsMenu.accesskey     "T">
 <!ENTITY viewSidebarMenu.label "Sidebar">
 <!ENTITY viewSidebarMenu.accesskey "e">
-<!ENTITY viewCustomizeToolbar.label       "Customize…"> 
+<!ENTITY viewCustomizeToolbar.label       "Customize…">
 <!ENTITY viewCustomizeToolbar.accesskey     "C">
+<!ENTITY overflowCustomizeToolbar.label       "Customize Toolbar…">
+<!ENTITY overflowCustomizeToolbar.accesskey   "C">
 
 <!ENTITY historyMenu.label "History">
 <!ENTITY historyMenu.accesskey "s">
@@ -351,6 +359,7 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY appMenuHistory.clearRecent.label "Clear Recent History…">
 <!ENTITY appMenuHistory.restoreSession.label "Restore Previous Session">
 <!ENTITY appMenuHistory.viewSidebar.label "View History Sidebar">
+<!ENTITY appMenuHistory.recentHistory.label "Recent History">
 <!ENTITY appMenuHelp.label "Help">
 <!ENTITY appMenuHelp.tooltip "Open Help Menu">
 
@@ -470,6 +479,11 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY contentSearchInput.label     "Search query">
 <!ENTITY contentSearchSubmit.tooltip  "Submit search">
 
+<!-- LOCALIZATION NOTE (searchInput.placeholder):
+     This string is displayed in the search box when the input field is empty. -->
+<!ENTITY searchInput.placeholder      "Search">
+<!ENTITY searchIcon.tooltip           "Search">
+
 <!-- LOCALIZATION NOTE (searchFor.label, searchWith.label):
      These two strings are used to build the header above the list of one-click
      search providers:  "Search for <used typed keywords> with:" -->
@@ -522,7 +536,7 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY reloadFrameCmd.accesskey     "R">
 <!ENTITY viewPartialSourceForSelectionCmd.label "View Selection Source">
 <!ENTITY viewPartialSourceForMathMLCmd.label    "View MathML Source">
-<!-- LOCALIZATION NOTE (viewPartialSourceCmd.accesskey): This accesskey is used for both 
+<!-- LOCALIZATION NOTE (viewPartialSourceCmd.accesskey): This accesskey is used for both
          viewPartialSourceForSelectionCmd.label and viewPartialSourceForMathMLCmd.label -->
 <!ENTITY viewPartialSourceCmd.accesskey "e">
 <!ENTITY viewPageSourceCmd.label      "View Page Source">
@@ -589,7 +603,7 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY copyImageCmd.label           "Copy Image Location">
 <!ENTITY copyImageCmd.accesskey       "o">
 <!ENTITY copyImageContentsCmd.label   "Copy Image">
-<!ENTITY copyImageContentsCmd.accesskey  "y"> 
+<!ENTITY copyImageContentsCmd.accesskey  "y">
 <!ENTITY copyVideoURLCmd.label        "Copy Video Location">
 <!ENTITY copyVideoURLCmd.accesskey    "o">
 <!ENTITY copyAudioURLCmd.label        "Copy Audio Location">
@@ -685,14 +699,13 @@ you can use these alternative items. Otherwise, their values should be empty.  -
 <!ENTITY quitApplicationCmdWin2.tooltip     "Exit &brandShorterName;">
 <!ENTITY goBackCmd.commandKey "[">
 <!ENTITY goForwardCmd.commandKey "]">
-<!ENTITY quitApplicationCmd.label       "Quit"> 
+<!ENTITY quitApplicationCmd.label       "Quit">
 <!ENTITY quitApplicationCmd.accesskey   "Q">
 <!ENTITY quitApplicationCmdMac2.label   "Quit &brandShorterName;">
-<!-- LOCALIZATION NOTE(quitApplicationCmdUnix.key): This keyboard shortcut is used by both Linux and OSX builds. -->
-<!ENTITY quitApplicationCmdUnix.key     "Q">
+<!ENTITY quitApplicationCmd.key         "Q">
 
-<!ENTITY closeCmd.label                 "Close">  
-<!ENTITY closeCmd.key                   "W">  
+<!ENTITY closeCmd.label                 "Close">
+<!ENTITY closeCmd.key                   "W">
 <!ENTITY closeCmd.accesskey             "C">
 
 <!ENTITY toggleMuteCmd.key              "M">
@@ -850,6 +863,27 @@ you can use these alternative items. Otherwise, their values should be empty.  -
 <!ENTITY customizeMode.lwthemes.menuManage.accessKey "M">
 <!ENTITY customizeMode.lwthemes.menuGetMore "Get More Themes">
 <!ENTITY customizeMode.lwthemes.menuGetMore.accessKey "G">
+<!ENTITY customizeMode.emptyOverflowList.description "Drag and drop items here to keep them within reach but out of your toolbar…">
+<!ENTITY customizeMode.uidensity "Density">
+<!-- LOCALIZATION NOTE (customizeMode.uidensity.menuNormal.*):
+     “Normal” is displayed in the Customize screen, under the Density menu. -->
+<!ENTITY customizeMode.uidensity.menuNormal.label "Normal">
+<!ENTITY customizeMode.uidensity.menuNormal.tooltip "Normal">
+<!ENTITY customizeMode.uidensity.menuNormal.accessKey "N">
+<!-- LOCALIZATION NOTE (customizeMode.uidensity.menuCompact.*):
+     “Compact” is displayed in the Customize screen, under the Density menu.
+     It’s an adjective (Density -> Compact). -->
+<!ENTITY customizeMode.uidensity.menuCompact.label "Compact">
+<!ENTITY customizeMode.uidensity.menuCompact.tooltip "Compact">
+<!ENTITY customizeMode.uidensity.menuCompact.accessKey "C">
+<!-- LOCALIZATION NOTE (customizeMode.uidensity.menuTouch.*):
+     “Touch” is displayed in the Customize screen, under the Density menu.
+     It’s an adjective (Density -> Touch), and it means that control layout is
+     optimized for touch devices. -->
+<!ENTITY customizeMode.uidensity.menuTouch.label "Touch">
+<!ENTITY customizeMode.uidensity.menuTouch.tooltip "Touch">
+<!ENTITY customizeMode.uidensity.menuTouch.accessKey "T">
+<!ENTITY customizeMode.uidensity.autoTouchMode.checkbox.label "Use Touch for Tablet Mode">
 
 <!ENTITY getUserMedia.selectCamera.label "Camera to share:">
 <!ENTITY getUserMedia.selectCamera.accesskey "C">
@@ -959,8 +993,8 @@ you can use these alternative items. Otherwise, their values should be empty.  -
 <!ENTITY updateRestart.panelUI.label2 "Restart to update &brandShorterName;">
 
 <!ENTITY pageActionButton.tooltip "Page actions">
+<!ENTITY pageAction.addToUrlbar.label "Add to Address Bar">
+<!ENTITY pageAction.removeFromUrlbar.label "Remove from Address Bar">
 
-<!ENTITY sendToDevice.label "Send to Device…">
-<!ENTITY sendToDevice.viewTitle "Send to Device">
-<!ENTITY sendToDevice.fxaRequired.label "Required">
-<!ENTITY sendToDevice.noDevices.label "No Devices Available">
+<!ENTITY sendToDevice.label2 "Send to Device">
+<!ENTITY sendToDevice.syncNotReady.label "Syncing Devices…">

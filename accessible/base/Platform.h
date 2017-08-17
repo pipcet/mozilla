@@ -44,6 +44,19 @@ void PreInit();
 bool ShouldA11yBeEnabled();
 #endif
 
+#if defined(XP_WIN)
+/*
+ * Do we have AccessibleHandler.dll registered.
+ */
+bool IsHandlerRegistered();
+
+/*
+ * Name of platform service that instantiated accessibility
+ */
+void SetInstantiator(const nsAString& aInstantiator);
+bool GetInstantiator(nsAString& aInstantiator);
+#endif
+
 /**
  * Called to initialize platform specific accessibility support.
  * Note this is called after internal accessibility support is initialized.

@@ -81,7 +81,7 @@ public:
     static nsresult
     Create(nsISupports *aOuter, REFNSIID aIID, void **aResult);
 
-    nsIInputStream* Source() { 
+    nsIInputStream* Source() {
         return (nsIInputStream*)mStream;
     }
 
@@ -99,10 +99,10 @@ protected:
 
 ////////////////////////////////////////////////////////////////////////////////
 
-class nsBufferedOutputStream final : public nsBufferedStream,
-                                     public nsISafeOutputStream,
-                                     public nsIBufferedOutputStream,
-                                     public nsIStreamBufferAccess
+class nsBufferedOutputStream  : public nsBufferedStream,
+                                public nsISafeOutputStream,
+                                public nsIBufferedOutputStream,
+                                public nsIStreamBufferAccess
 {
 public:
     NS_DECL_ISUPPORTS_INHERITED
@@ -116,7 +116,7 @@ public:
     static nsresult
     Create(nsISupports *aOuter, REFNSIID aIID, void **aResult);
 
-    nsIOutputStream* Sink() { 
+    nsIOutputStream* Sink() {
         return (nsIOutputStream*)mStream;
     }
 

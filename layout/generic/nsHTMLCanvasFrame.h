@@ -28,6 +28,7 @@ nsIFrame* NS_NewHTMLCanvasFrame (nsIPresShell* aPresShell, nsStyleContext* aCont
 class nsHTMLCanvasFrame final : public nsContainerFrame
 {
 public:
+  typedef mozilla::layers::CanvasRenderer CanvasRenderer;
   typedef mozilla::layers::Layer Layer;
   typedef mozilla::layers::LayerManager LayerManager;
   typedef mozilla::ContainerLayerParameters ContainerLayerParameters;
@@ -45,24 +46,25 @@ public:
                     nsIFrame*         aPrevInFlow) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
                                      LayerManager* aManager,
                                      nsDisplayItem* aItem,
                                      const ContainerLayerParameters& aContainerParameters);
+  void InitializeCanvasRenderer(nsDisplayListBuilder* aBuilder,
+                                CanvasRenderer* aRenderer);
 
   /* get the size of the canvas's image */
   nsIntSize GetCanvasSize();
 
-  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
-  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
+  virtual nscoord GetMinISize(gfxContext *aRenderingContext) override;
+  virtual nscoord GetPrefISize(gfxContext *aRenderingContext) override;
   virtual mozilla::IntrinsicSize GetIntrinsicSize() override;
   virtual nsSize GetIntrinsicRatio() override;
 
   virtual mozilla::LogicalSize
-  ComputeSize(nsRenderingContext *aRenderingContext,
+  ComputeSize(gfxContext *aRenderingContext,
               mozilla::WritingMode aWritingMode,
               const mozilla::LogicalSize& aCBSize,
               nscoord aAvailableISize,
@@ -97,12 +99,9 @@ public:
     return PrincipalChildList().FirstChild()->GetContentInsertionFrame();
   }
 
-  /**
-   * Update the style of our ::-moz-html-canvas-content anonymous box.
-   */
-  void DoUpdateStyleOfOwnedAnonBoxes(mozilla::ServoStyleSet& aStyleSet,
-                                     nsStyleChangeList& aChangeList,
-                                     nsChangeHint aHintForThisFrame) override;
+  // Return the ::-moz-html-canvas-content anonymous box.
+  void AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult) override;
+
 protected:
   virtual ~nsHTMLCanvasFrame();
 

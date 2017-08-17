@@ -15,7 +15,6 @@ config = {
         'checkout-sources',
         # 'setup-mock', windows do not use mock
         'build',
-        'generate-build-stats',
         'upload-files',
         'sendchange',
         'check-test',
@@ -41,8 +40,8 @@ config = {
                         'C:/mozilla-build/tooltool.py'],
     'tooltool_bootstrap': "setup.sh",
     'enable_count_ctors': False,
-    'enable_talos_sendchange': True,
-    'enable_unittest_sendchange': True,
+    'enable_talos_sendchange': False,
+    'enable_unittest_sendchange': False,
     'max_build_output_timeout': 60 * 80,
     #########################################################################
 

@@ -5,16 +5,13 @@ const {actionCreators: ac} = require("common/Actions.jsm");
 describe("initStore", () => {
   let globals;
   let store;
-  before(() => {
+  beforeEach(() => {
     globals = new GlobalOverrider();
     globals.set("sendAsyncMessage", globals.sandbox.spy());
     globals.set("addMessageListener", globals.sandbox.spy());
-  });
-  beforeEach(() => {
     store = initStore({number: addNumberReducer});
   });
-  afterEach(() => globals.reset());
-  after(() => globals.restore());
+  afterEach(() => globals.restore());
   it("should create a store with the provided reducers", () => {
     assert.ok(store);
     assert.property(store.getState(), "number");
@@ -26,6 +23,16 @@ describe("initStore", () => {
     const message = {name: initStore.INCOMING_MESSAGE_NAME, data: {type: "FOO"}};
     callback(message);
     assert.calledWith(store.dispatch, message.data);
+  });
+  it("should log errors from failed messages", () => {
+    const callback = global.addMessageListener.firstCall.args[1];
+    globals.sandbox.stub(global.console, "error");
+    globals.sandbox.stub(store, "dispatch").throws(Error("failed"));
+
+    const message = {name: initStore.INCOMING_MESSAGE_NAME, data: {type: "FOO"}};
+    callback(message);
+
+    assert.calledOnce(global.console.error);
   });
   it("should replace the state if a MERGE_STORE_ACTION is dispatched", () => {
     store.dispatch({type: initStore.MERGE_STORE_ACTION, data: {number: 42}});

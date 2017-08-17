@@ -6,6 +6,7 @@
 #include "nsFieldSetFrame.h"
 
 #include <algorithm>
+#include "gfxContext.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/Likely.h"
 #include "mozilla/Maybe.h"
@@ -16,7 +17,6 @@
 #include "nsIFrameInlines.h"
 #include "nsLayoutUtils.h"
 #include "nsLegendFrame.h"
-#include "nsRenderingContext.h"
 #include "nsStyleConsts.h"
 
 using namespace mozilla;
@@ -91,7 +91,7 @@ public:
   }
 #endif
   virtual void Paint(nsDisplayListBuilder* aBuilder,
-                     nsRenderingContext* aCtx) override;
+                     gfxContext* aCtx) override;
   virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) override;
   virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
                                          const nsDisplayItemGeometry* aGeometry,
@@ -102,7 +102,7 @@ public:
 
 void
 nsDisplayFieldSetBorder::Paint(nsDisplayListBuilder* aBuilder,
-                               nsRenderingContext* aCtx)
+                               gfxContext* aCtx)
 {
   image::DrawResult result = static_cast<nsFieldSetFrame*>(mFrame)->
     PaintBorder(aBuilder, *aCtx, ToReferenceFrame(), mVisibleRect);
@@ -148,7 +148,6 @@ nsDisplayFieldSetBorder::GetBounds(nsDisplayListBuilder* aBuilder,
 
 void
 nsFieldSetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                  const nsRect&           aDirtyRect,
                                   const nsDisplayListSet& aLists) {
   // Paint our background and border in a special way.
   // REVIEW: We don't really need to check frame emptiness here; if it's empty,
@@ -168,14 +167,14 @@ nsFieldSetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
     aLists.BorderBackground()->AppendNewToTop(new (aBuilder)
       nsDisplayFieldSetBorder(aBuilder, this));
-  
+
     DisplayOutlineUnconditional(aBuilder, aLists);
 
     DO_GLOBAL_REFLOW_COUNT_DSP("nsFieldSetFrame");
   }
 
   if (GetPrevInFlow()) {
-    DisplayOverflowContainers(aBuilder, aDirtyRect, aLists);
+    DisplayOverflowContainers(aBuilder, aLists);
   }
 
   nsDisplayListCollection contentDisplayItems;
@@ -186,13 +185,13 @@ nsFieldSetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     // legend. However, we want the inner frame's display items to be
     // after the legend's display items in z-order, so we need to save them
     // and append them later.
-    BuildDisplayListForChild(aBuilder, inner, aDirtyRect, contentDisplayItems);
+    BuildDisplayListForChild(aBuilder, inner, contentDisplayItems);
   }
   if (nsIFrame* legend = GetLegend()) {
     // The legend's background goes on our BlockBorderBackgrounds list because
     // it's a block child.
     nsDisplayListSet set(aLists, aLists.BlockBorderBackgrounds());
-    BuildDisplayListForChild(aBuilder, legend, aDirtyRect, set);
+    BuildDisplayListForChild(aBuilder, legend, set);
   }
   // Put the inner frame's display items on the master list. Note that this
   // moves its border/background display items to our BorderBackground() list,
@@ -204,7 +203,7 @@ nsFieldSetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 image::DrawResult
 nsFieldSetFrame::PaintBorder(
   nsDisplayListBuilder* aBuilder,
-  nsRenderingContext& aRenderingContext,
+  gfxContext& aRenderingContext,
   nsPoint aPt,
   const nsRect& aDirtyRect)
 {
@@ -255,14 +254,12 @@ nsFieldSetFrame::PaintBorder(
                      false);
     RefPtr<Path> clipPath = pathBuilder->Finish();
 
-    gfxContext* gfx = aRenderingContext.ThebesContext();
-
-    gfx->Save();
-    gfx->Clip(clipPath);
+    aRenderingContext.Save();
+    aRenderingContext.Clip(clipPath);
     result &=
       nsCSSRendering::PaintBorder(presContext, aRenderingContext, this,
                                   aDirtyRect, rect, mStyleContext, borderFlags);
-    gfx->Restore();
+    aRenderingContext.Restore();
   } else {
     result &=
       nsCSSRendering::PaintBorder(presContext, aRenderingContext, this,
@@ -274,7 +271,7 @@ nsFieldSetFrame::PaintBorder(
 }
 
 nscoord
-nsFieldSetFrame::GetIntrinsicISize(nsRenderingContext* aRenderingContext,
+nsFieldSetFrame::GetIntrinsicISize(gfxContext* aRenderingContext,
                                    nsLayoutUtils::IntrinsicISizeType aType)
 {
   nscoord legendWidth = 0;
@@ -298,7 +295,7 @@ nsFieldSetFrame::GetIntrinsicISize(nsRenderingContext* aRenderingContext,
 
 
 nscoord
-nsFieldSetFrame::GetMinISize(nsRenderingContext* aRenderingContext)
+nsFieldSetFrame::GetMinISize(gfxContext* aRenderingContext)
 {
   nscoord result = 0;
   DISPLAY_MIN_WIDTH(this, result);
@@ -308,7 +305,7 @@ nsFieldSetFrame::GetMinISize(nsRenderingContext* aRenderingContext)
 }
 
 nscoord
-nsFieldSetFrame::GetPrefISize(nsRenderingContext* aRenderingContext)
+nsFieldSetFrame::GetPrefISize(gfxContext* aRenderingContext)
 {
   nscoord result = 0;
   DISPLAY_PREF_WIDTH(this, result);
@@ -666,13 +663,10 @@ nsFieldSetFrame::GetNaturalBaselineBOffset(WritingMode          aWM,
 }
 
 void
-nsFieldSetFrame::DoUpdateStyleOfOwnedAnonBoxes(ServoStyleSet& aStyleSet,
-                                               nsStyleChangeList& aChangeList,
-                                               nsChangeHint aHintForThisFrame)
+nsFieldSetFrame::AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult)
 {
-  nsIFrame* kid = GetInner();
-  if (kid) {
-    UpdateStyleOfChildAnonBox(kid, aStyleSet, aChangeList, aHintForThisFrame);
+  if (nsIFrame* kid = GetInner()) {
+    aResult.AppendElement(OwnedAnonBox(kid));
   }
 }
 

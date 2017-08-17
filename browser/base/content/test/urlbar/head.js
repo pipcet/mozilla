@@ -2,8 +2,6 @@
 
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-  "resource://gre/modules/Promise.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
   "resource://gre/modules/PlacesUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
@@ -200,4 +198,67 @@ function promiseNewSearchEngine(basename) {
       },
     });
   });
+}
+
+function promisePageActionPanelOpen() {
+  if (BrowserPageActions.panelNode.state == "open") {
+    return Promise.resolve();
+  }
+  let shownPromise = promisePageActionPanelShown();
+  EventUtils.synthesizeMouseAtCenter(BrowserPageActions.mainButtonNode, {});
+  return shownPromise;
+}
+
+function promisePageActionPanelShown() {
+  return promisePanelShown(BrowserPageActions.panelNode);
+}
+
+function promisePageActionPanelHidden() {
+  return promisePanelHidden(BrowserPageActions.panelNode);
+}
+
+function promisePanelShown(panelIDOrNode) {
+  return promisePanelEvent(panelIDOrNode, "popupshown");
+}
+
+function promisePanelHidden(panelIDOrNode) {
+  return promisePanelEvent(panelIDOrNode, "popuphidden");
+}
+
+function promisePanelEvent(panelIDOrNode, eventType) {
+  return new Promise(resolve => {
+    let panel = typeof(panelIDOrNode) != "string" ? panelIDOrNode :
+                document.getElementById(panelIDOrNode);
+    if (!panel ||
+        (eventType == "popupshown" && panel.state == "open") ||
+        (eventType == "popuphidden" && panel.state == "closed")) {
+      executeSoon(resolve);
+      return;
+    }
+    panel.addEventListener(eventType, () => {
+      executeSoon(resolve);
+    }, { once: true });
+  });
+}
+
+function promisePageActionViewShown() {
+  return new Promise(resolve => {
+    BrowserPageActions.panelNode.addEventListener("ViewShown", (event) => {
+      let target = event.originalTarget;
+      window.setTimeout(() => {
+        resolve(target);
+      }, 5000);
+    }, { once: true });
+  });
+}
+
+function promiseSpeculativeConnection(httpserver) {
+  return BrowserTestUtils.waitForCondition(() => {
+    if (httpserver) {
+      is(httpserver.connectionNumber, 1,
+         `${httpserver.connectionNumber} speculative connection has been setup.`)
+      return httpserver.connectionNumber == 1;
+    }
+    return false;
+  }, "Waiting for connection setup");
 }

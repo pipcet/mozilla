@@ -1,9 +1,5 @@
 "use strict";
 
-Cu.import("resource://gre/modules/Services.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
-                                  "resource://gre/modules/AddonManager.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetryStopwatch",
                                   "resource://gre/modules/TelemetryStopwatch.jsm");
 
@@ -36,6 +32,7 @@ class BackgroundPage extends HiddenExtensionPage {
   async build() {
     TelemetryStopwatch.start("WEBEXT_BACKGROUND_PAGE_LOAD_MS", this);
     await this.createBrowserElement();
+    this.extension._backgroundPageFrameLoader = this.browser.frameLoader;
 
     extensions.emit("extension-browser-inserted", this.browser);
 
@@ -55,6 +52,7 @@ class BackgroundPage extends HiddenExtensionPage {
   }
 
   shutdown() {
+    this.extension._backgroundPageFrameLoader = null;
     super.shutdown();
   }
 }

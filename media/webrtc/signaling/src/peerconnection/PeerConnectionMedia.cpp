@@ -28,6 +28,7 @@
 
 #include "MediaStreamGraphImpl.h"
 
+#include "nsContentUtils.h"
 #include "nsNetCID.h"
 #include "nsNetUtil.h"
 #include "nsIURI.h"
@@ -61,8 +62,7 @@ static const char* logTag = "PeerConnectionMedia";
 RefPtr<WebRtcCallWrapper>
 CreateCall()
 {
-  WebRtcCallWrapper::Config call_config;
-  return WebRtcCallWrapper::Create(call_config);
+  return WebRtcCallWrapper::Create();
 }
 
 nsresult
@@ -294,10 +294,15 @@ PeerConnectionMedia::InitLocalAddrs()
   if (XRE_IsContentProcess()) {
     CSFLogDebug(logTag, "%s: Get stun addresses via IPC",
                 mParentHandle.c_str());
+
+    nsCOMPtr<nsIEventTarget> target = mParent->GetWindow()
+      ? mParent->GetWindow()->EventTargetFor(TaskCategory::Other)
+      : nullptr;
+
     // We're in the content process, so send a request over IPC for the
     // stun address discovery.
     mStunAddrsRequest =
-        new StunAddrsRequestChild(new StunAddrsHandler(this));
+      new StunAddrsRequestChild(new StunAddrsHandler(this), target);
     mStunAddrsRequest->SendGetStunAddrs();
   } else {
     // No content process, so don't need to hold up the ice event queue
@@ -337,26 +342,10 @@ PeerConnectionMedia::InitProxy()
     return NS_ERROR_FAILURE;
   }
 
-  nsCOMPtr<nsIScriptSecurityManager> secMan(
-      do_GetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID, &rv));
-  if (NS_FAILED(rv)) {
-    CSFLogError(logTag, "%s: Failed to get IOService: %d",
-        __FUNCTION__, (int)rv);
-    CSFLogError(logTag, "%s: Failed to get securityManager: %d", __FUNCTION__, (int)rv);
-    return NS_ERROR_FAILURE;
-  }
-
-  nsCOMPtr<nsIPrincipal> systemPrincipal;
-  rv = secMan->GetSystemPrincipal(getter_AddRefs(systemPrincipal));
-  if (NS_FAILED(rv)) {
-    CSFLogError(logTag, "%s: Failed to get systemPrincipal: %d", __FUNCTION__, (int)rv);
-    return NS_ERROR_FAILURE;
-  }
-
   nsCOMPtr<nsIChannel> channel;
   rv = NS_NewChannel(getter_AddRefs(channel),
                      fakeHttpsLocation,
-                     systemPrincipal,
+                     nsContentUtils::GetSystemPrincipal(),
                      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                      nsIContentPolicy::TYPE_OTHER);
 
@@ -366,11 +355,14 @@ PeerConnectionMedia::InitProxy()
     return NS_ERROR_FAILURE;
   }
 
+  nsCOMPtr<nsIEventTarget> target = mParent->GetWindow()
+      ? mParent->GetWindow()->EventTargetFor(TaskCategory::Network)
+      : nullptr;
   RefPtr<ProtocolProxyQueryHandler> handler = new ProtocolProxyQueryHandler(this);
   rv = pps->AsyncResolve(channel,
                          nsIProtocolProxyService::RESOLVE_PREFER_HTTPS_PROXY |
                          nsIProtocolProxyService::RESOLVE_ALWAYS_TUNNEL,
-                         handler, getter_AddRefs(mProxyRequest));
+                         handler, target, getter_AddRefs(mProxyRequest));
   if (NS_FAILED(rv)) {
     CSFLogError(logTag, "%s: Failed to resolve protocol proxy: %d", __FUNCTION__, (int)rv);
     return NS_ERROR_FAILURE;
@@ -414,7 +406,7 @@ nsresult PeerConnectionMedia::Init(const std::vector<NrIceStunServer>& stun_serv
       CSFLogError(logTag, "%s: Failed to set turn servers", __FUNCTION__);
       return rv;
     }
-  } else if (turn_servers.size() != 0) {
+  } else if (!turn_servers.empty()) {
     CSFLogError(logTag, "%s: Setting turn servers disabled", __FUNCTION__);
   }
   if (NS_FAILED(rv = mDNSResolver->Init())) {
@@ -565,6 +557,7 @@ PeerConnectionMedia::ActivateOrRemoveTransport_s(
                 static_cast<unsigned>(aComponentCount));
 
     std::vector<std::string> attrs;
+    attrs.reserve(aCandidateList.size() + 2 /* ufrag + pwd */);
     for (const auto& candidate : aCandidateList) {
       attrs.push_back("candidate:" + candidate);
     }
@@ -1137,6 +1130,7 @@ PeerConnectionMedia::ShutdownMediaTransport_s()
 
   mIceCtxHdlr = nullptr;
 
+  // we're holding a ref to 'this' that's released by SelfDestruct_m
   mMainThread->Dispatch(WrapRunnable(this, &PeerConnectionMedia::SelfDestruct_m),
                         NS_DISPATCH_NORMAL);
 }
@@ -1452,7 +1446,9 @@ void
 PeerConnectionMedia::RemoveTransportFlow(int aIndex, bool aRtcp)
 {
   int index_inner = GetTransportFlowIndex(aIndex, aRtcp);
-  NS_ProxyRelease(GetSTSThread(), mTransportFlows[index_inner].forget());
+  NS_ProxyRelease(
+    "PeerConnectionMedia::mTransportFlows",
+    GetSTSThread(), mTransportFlows[index_inner].forget());
 }
 
 void

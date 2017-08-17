@@ -36,7 +36,7 @@ Structure:
       settings: {
         addonCompatibilityCheckEnabled: <bool>, // Whether application compatibility is respected for add-ons
         blocklistEnabled: <bool>, // true on failure
-        isDefaultBrowser: <bool>, // null on failure, not available on Android
+        isDefaultBrowser: <bool>, // null on failure and until session restore completes, not available on Android
         defaultSearchEngine: <string>, // e.g. "yahoo"
         defaultSearchEngineData: {, // data about the current default engine
           name: <string>, // engine name, e.g. "Yahoo"; or "NONE" if no default
@@ -68,6 +68,9 @@ Structure:
           campaign: <string>, // identifier of the particular campaign that led to the download of the product
           content: <string>, // identifier to indicate the particular link within a campaign
         },
+        sandbox: {
+          effectiveContentProcessLevel: <integer>,
+        }
       },
       profile: {
         creationDate: <integer>, // integer days since UNIX epoch, e.g. 16446
@@ -194,6 +197,9 @@ Structure:
               gpuProcess: { // Out-of-process compositing ("GPU process") feature
                 status: <string>, // "Available" means currently in use
               },
+              advancedLayers: { // Advanced Layers compositing. Only present if D3D11 enabled.
+                status: <string>,    // See the status codes above.
+              },
             },
           },
       },
@@ -209,7 +215,7 @@ Structure:
             scope: <integer>,
             type: <string>, // "extension", "service", ...
             foreignInstall: <bool>,
-            hasBinaryComponents: <bool>
+            hasBinaryComponents: <bool>,
             installDay: <number>, // days since UNIX epoch, 0 on failure
             updateDay: <number>, // days since UNIX epoch, 0 on failure
             signedState: <integer>, // whether the add-on is signed by AMO, only present for extensions
@@ -333,8 +339,6 @@ The following is a partial list of collected preferences.
 
 - ``browser.zoom.full`` (deprecated): True if zoom is enabled for both text and images, that is if "Zoom Text Only" is not enabled. Defaults to true. This preference was collected in Firefox 50 to 52 (`Bug 979323 <https://bugzilla.mozilla.org/show_bug.cgi?id=979323>`_).
 
-- ``security.sandbox.content.level``: The meanings of the values are OS dependent, but 0 means not sandboxed for all OS. Details of the meanings can be found in the `Firefox prefs file <https://hg.mozilla.org/mozilla-central/file/tip/browser/app/profile/firefox.js>`_.
-
 attribution
 ~~~~~~~~~~~
 
@@ -343,6 +347,15 @@ This object contains the attribution data for the product installation.
 Attribution data is used to link installations of Firefox with the source that the user arrived at the Firefox download page from. It would indicate, for instance, when a user executed a web search for Firefox and arrived at the download page from there, directly navigated to the site, clicked on a link from a particular social media campaign, etc.
 
 The attribution data is included in some versions of the default Firefox installer for Windows (the "stub" installer) and stored as part of the installation. All platforms other than Windows and also Windows installations that did not use the stub installer do not have this data and will not include the ``attribution`` object.
+
+sandbox
+~~~~~~~
+
+This object contains data about the state of Firefox's sandbox.
+
+Specific keys are:
+
+- ``effectiveContentProcessLevel``: The meanings of the values are OS dependent. Details of the meanings can be found in the `Firefox prefs file <https://hg.mozilla.org/mozilla-central/file/tip/browser/app/profile/firefox.js>`_. The value here is the effective value, not the raw value, some platforms enforce a minimum sandbox level. If there is an error calculating this, it will be ``null``.
 
 partner
 -------
@@ -381,6 +394,8 @@ activeAddons
 ~~~~~~~~~~~~
 
 Starting from Firefox 44, the length of the following string fields: ``name``, ``description`` and ``version`` is limited to 100 characters. The same limitation applies to the same fields in ``theme`` and ``activePlugins``.
+
+Some of the fields in the record for each addon are not available during startup.  The fields that will always be present are ``id``, ``version``, ``type``, ``updateDate``, ``scope``, ``isSystem``, ``isWebExtension``, and ``multiprocessCompatible``.  All the other fields documented above become present shortly after the ``sessionstore-windows-restored`` event is dispatched.
 
 experiments
 -----------

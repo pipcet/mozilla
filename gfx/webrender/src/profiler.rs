@@ -4,11 +4,11 @@
 
 use debug_render::DebugRenderer;
 use device::{Device, GpuMarker, GpuSample, NamedTag};
-use euclid::{Point2D, Size2D, Rect};
+use euclid::{Point2D, Size2D, Rect, vec2};
 use std::collections::vec_deque::VecDeque;
 use std::f32;
 use std::mem;
-use webrender_traits::ColorF;
+use api::{ColorF, ColorU};
 use time::precise_time_ns;
 
 const GRAPH_WIDTH: f32 = 1024.0;
@@ -45,7 +45,7 @@ pub struct IntProfileCounter {
 impl IntProfileCounter {
     fn new(description: &'static str) -> IntProfileCounter {
         IntProfileCounter {
-            description: description,
+            description,
             value: 0,
         }
     }
@@ -94,7 +94,7 @@ pub struct ResourceProfileCounter {
 impl ResourceProfileCounter {
     fn new(description: &'static str) -> ResourceProfileCounter {
         ResourceProfileCounter {
-            description: description,
+            description,
             value: 0,
             size: 0,
         }
@@ -131,12 +131,24 @@ pub struct TimeProfileCounter {
     invert: bool,
 }
 
+pub struct Timer<'a> {
+    start: u64,
+    result: &'a mut u64,
+}
+
+impl<'a> Drop for Timer<'a> {
+    fn drop(&mut self) {
+        let end = precise_time_ns();
+        *self.result += end - self.start;
+    }
+}
+
 impl TimeProfileCounter {
     pub fn new(description: &'static str, invert: bool) -> TimeProfileCounter {
         TimeProfileCounter {
-            description: description,
+            description,
             nanoseconds: 0,
-            invert: invert,
+            invert,
         }
     }
 
@@ -156,6 +168,13 @@ impl TimeProfileCounter {
         let ns = t1 - t0;
         self.nanoseconds += ns;
         val
+    }
+
+    pub fn timer(&mut self) -> Timer {
+        Timer {
+            start: precise_time_ns(),
+            result: &mut self.nanoseconds,
+        }
     }
 
     pub fn inc(&mut self, ns: u64) {
@@ -195,13 +214,13 @@ pub struct AverageTimeProfileCounter {
 impl AverageTimeProfileCounter {
     pub fn new(description: &'static str, invert: bool, average_over_ns: u64) -> AverageTimeProfileCounter {
         AverageTimeProfileCounter {
-            description: description,
-            average_over_ns: average_over_ns,
+            description,
+            average_over_ns,
             start_ns: precise_time_ns(),
             sum_ns: 0,
             num_samples: 0,
             nanoseconds: 0,
-            invert: invert,
+            invert,
         }
     }
 
@@ -290,6 +309,21 @@ impl TextureCacheProfileCounters {
 }
 
 #[derive(Clone)]
+pub struct GpuCacheProfileCounters {
+    pub allocated_rows: IntProfileCounter,
+    pub allocated_blocks: IntProfileCounter,
+}
+
+impl GpuCacheProfileCounters {
+    pub fn new() -> GpuCacheProfileCounters {
+        GpuCacheProfileCounters {
+            allocated_rows: IntProfileCounter::new("GPU cache rows"),
+            allocated_blocks: IntProfileCounter::new("GPU cache blocks"),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct BackendProfileCounters {
     pub total_time: TimeProfileCounter,
     pub resources: ResourceProfileCounters,
@@ -301,6 +335,7 @@ pub struct ResourceProfileCounters {
     pub font_templates: ResourceProfileCounter,
     pub image_templates: ResourceProfileCounter,
     pub texture_cache: TextureCacheProfileCounters,
+    pub gpu_cache: GpuCacheProfileCounters,
 }
 
 #[derive(Clone)]
@@ -313,13 +348,20 @@ pub struct IpcProfileCounters {
 }
 
 impl IpcProfileCounters {
-    pub fn set(&mut self, build_start: u64, build_end: u64, 
-                              consume_start: u64, consume_end: u64,
-                              display_len: usize) {
-        self.build_time.inc(build_end - build_start);
-        self.consume_time.inc(consume_end - consume_start);
-        self.send_time.inc(consume_start - build_end);
-        self.total_time.inc(consume_end - build_start);
+    pub fn set(&mut self,
+               build_start: u64,
+               build_end: u64,
+               send_start: u64,
+               consume_start: u64,
+               consume_end: u64,
+               display_len: usize) {
+        let build_time = build_end - build_start;
+        let consume_time = consume_end - consume_start;
+        let send_time = consume_start - send_start;
+        self.build_time.inc(build_time);
+        self.consume_time.inc(consume_time);
+        self.send_time.inc(send_time);
+        self.total_time.inc(build_time + consume_time + send_time);
         self.display_lists.inc(display_len);
     }
 }
@@ -332,6 +374,7 @@ impl BackendProfileCounters {
                 font_templates: ResourceProfileCounter::new("Font Templates"),
                 image_templates: ResourceProfileCounter::new("Image Templates"),
                 texture_cache: TextureCacheProfileCounters::new(),
+                gpu_cache: GpuCacheProfileCounters::new(),
             },
             ipc: IpcProfileCounters {
                 build_time: TimeProfileCounter::new("Display List Build Time", false),
@@ -339,7 +382,7 @@ impl BackendProfileCounters {
                 send_time: TimeProfileCounter::new("Display List Send Time", false),
                 total_time: TimeProfileCounter::new("Total Display List Time", false),
                 display_lists: ResourceProfileCounter::new("Display Lists Sent"),
-            }
+            },
         }
     }
 
@@ -408,7 +451,7 @@ struct ProfileGraph {
 impl ProfileGraph {
     fn new(max_samples: usize) -> ProfileGraph {
         ProfileGraph {
-            max_samples: max_samples,
+            max_samples,
             values: VecDeque::new(),
         }
     }
@@ -451,32 +494,32 @@ impl ProfileGraph {
         let mut rect = Rect::new(Point2D::new(x, y), size);
         let stats = self.stats();
 
-        let text_color = ColorF::new(1.0, 1.0, 0.0, 1.0);
-        let text_origin = rect.origin + Point2D::new(rect.size.width, 20.0);
+        let text_color = ColorU::new(255, 255, 0, 255);
+        let text_origin = rect.origin + vec2(rect.size.width, 20.0);
         debug_renderer.add_text(text_origin.x,
                                 text_origin.y,
                                 description,
-                                &ColorF::new(0.0, 1.0, 0.0, 1.0));
+                                ColorU::new(0, 255, 0, 255));
         debug_renderer.add_text(text_origin.x,
                                 text_origin.y + line_height,
                                 &format!("Min: {:.2} ms", stats.min_value),
-                                &text_color);
+                                text_color);
         debug_renderer.add_text(text_origin.x,
                                 text_origin.y + line_height * 2.0,
                                 &format!("Mean: {:.2} ms", stats.mean_value),
-                                &text_color);
+                                text_color);
         debug_renderer.add_text(text_origin.x,
                                 text_origin.y + line_height * 3.0,
                                 &format!("Max: {:.2} ms", stats.max_value),
-                                &text_color);
+                                text_color);
 
         rect.size.width += 140.0;
         debug_renderer.add_quad(rect.origin.x,
                                 rect.origin.y,
                                 rect.origin.x + rect.size.width + 10.0,
                                 rect.origin.y + rect.size.height,
-                                &ColorF::new(0.1, 0.1, 0.1, 0.8),
-                                &ColorF::new(0.2, 0.2, 0.2, 0.8));
+                                ColorF::new(0.1, 0.1, 0.1, 0.8).into(),
+                                ColorF::new(0.2, 0.2, 0.2, 0.8).into());
 
         let bx0 = x + 10.0;
         let by0 = y + 10.0;
@@ -486,14 +529,14 @@ impl ProfileGraph {
         let w = (bx1 - bx0) / self.max_samples as f32;
         let h = by1 - by0;
 
-        let color_t0 = ColorF::new(0.0, 1.0, 0.0, 1.0);
-        let color_b0 = ColorF::new(0.0, 0.7, 0.0, 1.0);
+        let color_t0 = ColorU::new(0, 255, 0, 255);
+        let color_b0 = ColorU::new(0, 180, 0, 255);
 
-        let color_t1 = ColorF::new(0.0, 1.0, 0.0, 1.0);
-        let color_b1 = ColorF::new(0.0, 0.7, 0.0, 1.0);
+        let color_t1 = ColorU::new(0, 255, 0, 255);
+        let color_b1 = ColorU::new(0, 180, 0, 255);
 
-        let color_t2 = ColorF::new(1.0, 0.0, 0.0, 1.0);
-        let color_b2 = ColorF::new(0.7, 0.0, 0.0, 1.0);
+        let color_t2 = ColorU::new(255, 0, 0, 255);
+        let color_b2 = ColorU::new(180, 0, 0, 255);
 
         for (index, sample) in self.values.iter().enumerate() {
             let sample = *sample;
@@ -504,11 +547,11 @@ impl ProfileGraph {
             let y1 = by1;
 
             let (color_top, color_bottom) = if sample < 1000.0 / 60.0 {
-                (&color_t0, &color_b0)
+                (color_t0, color_b0)
             } else if sample < 1000.0 / 30.0 {
-                (&color_t1, &color_b1)
+                (color_t1, color_b1)
             } else {
-                (&color_t2, &color_b2)
+                (color_t2, color_b2)
             };
 
             debug_renderer.add_quad(x0, y0, x1, y1, color_top, color_bottom);
@@ -539,8 +582,8 @@ impl GpuFrameCollection {
             self.frames.pop_back();
         }
         self.frames.push_front(GpuFrame {
-            total_time: total_time,
-            samples: samples,
+            total_time,
+            samples,
         });
     }
 }
@@ -559,8 +602,8 @@ impl GpuFrameCollection {
                                 bounding_rect.origin.y,
                                 bounding_rect.origin.x + bounding_rect.size.width,
                                 bounding_rect.origin.y + bounding_rect.size.height,
-                                &ColorF::new(0.1, 0.1, 0.1, 0.8),
-                                &ColorF::new(0.2, 0.2, 0.2, 0.8));
+                                ColorF::new(0.1, 0.1, 0.1, 0.8).into(),
+                                ColorF::new(0.2, 0.2, 0.2, 0.8).into());
 
         let w = graph_rect.size.width;
         let mut y0 = graph_rect.origin.y;
@@ -587,8 +630,8 @@ impl GpuFrameCollection {
                                         y0,
                                         x1,
                                         y1,
-                                        &sample.tag.color,
-                                        &bottom_color);
+                                        sample.tag.color.into(),
+                                        bottom_color.into());
             }
 
             y0 = y1;
@@ -640,15 +683,15 @@ impl Profiler {
         let line_height = debug_renderer.line_height();
 
         let colors = [
-            ColorF::new(1.0, 1.0, 1.0, 1.0),
-            ColorF::new(1.0, 1.0, 0.0, 1.0),
+            ColorU::new(255, 255, 255, 255),
+            ColorU::new(255, 255, 0, 255),
         ];
 
         for counter in counters {
             let rect = debug_renderer.add_text(current_x,
                                                current_y,
                                                counter.description(),
-                                               &colors[color_index]);
+                                               colors[color_index]);
             color_index = (color_index+1) % colors.len();
 
             label_rect = label_rect.union(&rect);
@@ -667,7 +710,7 @@ impl Profiler {
             let rect = debug_renderer.add_text(current_x,
                                                     current_y,
                                                     &counter.value(),
-                                                    &colors[color_index]);
+                                                    colors[color_index]);
             color_index = (color_index+1) % colors.len();
 
             value_rect = value_rect.union(&rect);
@@ -679,8 +722,8 @@ impl Profiler {
                                 total_rect.origin.y,
                                 total_rect.origin.x + total_rect.size.width,
                                 total_rect.origin.y + total_rect.size.height,
-                                &ColorF::new(0.1, 0.1, 0.1, 0.8),
-                                &ColorF::new(0.2, 0.2, 0.2, 0.8));
+                                ColorF::new(0.1, 0.1, 0.1, 0.8).into(),
+                                ColorF::new(0.2, 0.2, 0.2, 0.8).into());
         let new_y = total_rect.origin.y + total_rect.size.height + 30.0;
         if left {
             self.y_left = new_y;
@@ -721,6 +764,8 @@ impl Profiler {
             &frame_profile.passes,
             &frame_profile.color_targets,
             &frame_profile.alpha_targets,
+            &backend_profile.resources.gpu_cache.allocated_rows,
+            &backend_profile.resources.gpu_cache.allocated_blocks,
         ], debug_renderer, true);
 
         self.draw_counters(&[
@@ -753,9 +798,6 @@ impl Profiler {
             &renderer_timers.cpu_time,
             &renderer_timers.gpu_time,
         ], debug_renderer, false);
-        
-
-
 
         self.backend_time.push(backend_profile.total_time.nanoseconds);
         self.compositor_time.push(renderer_timers.cpu_time.nanoseconds);

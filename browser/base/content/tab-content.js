@@ -16,6 +16,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "E10SUtils",
   "resource:///modules/E10SUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
   "resource://gre/modules/BrowserUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Utils",
+  "resource://gre/modules/sessionstore/Utils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AboutReader",
@@ -160,7 +162,7 @@ var AboutHomeListener = {
     addEventListener("click", this, true);
     addEventListener("pagehide", this, true);
 
-    sendAsyncMessage("AboutHome:MaybeShowAutoMigrationUndoNotification");
+    sendAsyncMessage("AboutHome:MaybeShowMigrateMessage");
     sendAsyncMessage("AboutHome:RequestUpdate");
   },
 
@@ -657,7 +659,7 @@ let PrerenderContentHandler = {
     }
   },
 
-  startPrerenderingDocument(aHref, aReferrer) {
+  startPrerenderingDocument(aHref, aReferrer, aTriggeringPrincipal) {
     // XXX: Make this constant a pref
     if (this._pending.length >= 2) {
       return;
@@ -668,6 +670,7 @@ let PrerenderContentHandler = {
       href: aHref.spec,
       referrer: aReferrer ? aReferrer.spec : null,
       id,
+      triggeringPrincipal: Utils.serializePrincipal(aTriggeringPrincipal),
     });
 
     this._pending.push({
@@ -729,9 +732,9 @@ var WebBrowserChrome = {
     return true;
   },
 
-  startPrerenderingDocument(aHref, aReferrer) {
+  startPrerenderingDocument(aHref, aReferrer, aTriggeringPrincipal) {
     if (PrerenderContentHandler.initialized) {
-      PrerenderContentHandler.startPrerenderingDocument(aHref, aReferrer);
+      PrerenderContentHandler.startPrerenderingDocument(aHref, aReferrer, aTriggeringPrincipal);
     }
   },
 
@@ -908,6 +911,7 @@ var RefreshBlocker = {
     this._filter = Cc["@mozilla.org/appshell/component/browser-status-filter;1"]
                      .createInstance(Ci.nsIWebProgress);
     this._filter.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_ALL);
+    this._filter.target = tabEventTarget;
 
     let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
                               .getInterface(Ci.nsIWebProgress);
@@ -975,7 +979,6 @@ var RefreshBlocker = {
 
     let data = {
       URI: aURI.spec,
-      originCharset: aURI.originCharset,
       delay: aDelay,
       sameURI: aSameURI,
       outerWindowID,
@@ -1003,7 +1006,7 @@ var RefreshBlocker = {
                           .getInterface(Ci.nsIDocShell)
                           .QueryInterface(Ci.nsIRefreshURI);
 
-      let URI = Services.io.newURI(data.URI, data.originCharset);
+      let URI = Services.io.newURI(data.URI);
 
       refreshURI.forceRefreshURI(URI, data.delay, true);
     }

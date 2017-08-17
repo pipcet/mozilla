@@ -17,8 +17,9 @@ import org.mozilla.gecko.R;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.activitystream.ActivityStreamTelemetry;
-import org.mozilla.gecko.home.HomePager;
 import org.mozilla.gecko.activitystream.homepanel.model.TopSite;
+import org.mozilla.gecko.home.HomePager;
+import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.widget.RecyclerViewClickSupport;
 
 import java.util.ArrayList;
@@ -29,23 +30,19 @@ import java.util.List;
     private List<TopSite> topSites;
     private final int pageNumber;
     private int tiles;
-    private int tilesWidth;
-    private int tilesHeight;
-    private int textHeight;
+    private int tilesSize;
 
     private final HomePager.OnUrlOpenListener onUrlOpenListener;
     private final HomePager.OnUrlOpenInBackgroundListener onUrlOpenInBackgroundListener;
 
-    /* package-local */ TopSitesPageAdapter(Context context, int pageNumber, int tiles, int tilesWidth, int tilesHeight,
+    /* package-local */ TopSitesPageAdapter(Context context, int pageNumber, int tiles, int tilesSize,
                                HomePager.OnUrlOpenListener onUrlOpenListener, HomePager.OnUrlOpenInBackgroundListener onUrlOpenInBackgroundListener) {
         setHasStableIds(true);
 
         this.topSites = new ArrayList<>();
         this.pageNumber = pageNumber;
         this.tiles = tiles;
-        this.tilesWidth = tilesWidth;
-        this.tilesHeight = tilesHeight;
-        this.textHeight = context.getResources().getDimensionPixelSize(R.dimen.activity_stream_top_sites_text_height);
+        this.tilesSize = tilesSize;
 
         this.onUrlOpenListener = onUrlOpenListener;
         this.onUrlOpenInBackgroundListener = onUrlOpenInBackgroundListener;
@@ -87,7 +84,7 @@ import java.util.List;
                 extras.build()
         );
 
-        onUrlOpenListener.onUrlOpen(topSite.getUrl(), EnumSet.noneOf(HomePager.OnUrlOpenListener.Flags.class));
+        onUrlOpenListener.onUrlOpen(StringUtils.decodeUserEnteredUrl(topSite.getUrl()), EnumSet.noneOf(HomePager.OnUrlOpenListener.Flags.class));
     }
 
     @Override
@@ -100,12 +97,12 @@ import java.util.List;
         final LayoutInflater inflater = LayoutInflater.from(parent.getContext());
 
         final FrameLayout card = (FrameLayout) inflater.inflate(R.layout.activity_stream_topsites_card, parent, false);
-        final View content = card.findViewById(R.id.content);
+        final int tilesMargin = parent.getResources().getDimensionPixelSize(R.dimen.activity_stream_base_margin);
 
-        ViewGroup.LayoutParams layoutParams = content.getLayoutParams();
-        layoutParams.width = tilesWidth;
-        layoutParams.height = tilesHeight + textHeight;
-        content.setLayoutParams(layoutParams);
+        ViewGroup.LayoutParams layoutParams = card.getLayoutParams();
+        layoutParams.width = tilesSize;
+        layoutParams.height = tilesSize;
+        card.setLayoutParams(layoutParams);
 
         return new TopSitesCard(card, onUrlOpenListener, onUrlOpenInBackgroundListener);
     }

@@ -28,7 +28,9 @@ const {PromiseTestUtils} = scopedCuImport("resource://testing-common/PromiseTest
 PromiseTestUtils.whitelistRejectionsGlobally(/Component not initialized/);
 PromiseTestUtils.whitelistRejectionsGlobally(/Connection closed/);
 PromiseTestUtils.whitelistRejectionsGlobally(/destroy/);
+PromiseTestUtils.whitelistRejectionsGlobally(/File closed/);
 PromiseTestUtils.whitelistRejectionsGlobally(/is no longer, usable/);
+PromiseTestUtils.whitelistRejectionsGlobally(/NS_ERROR_FAILURE/);
 PromiseTestUtils.whitelistRejectionsGlobally(/this\._urls is null/);
 PromiseTestUtils.whitelistRejectionsGlobally(/this\.tabTarget is null/);
 PromiseTestUtils.whitelistRejectionsGlobally(/this\.toolbox is null/);
@@ -55,6 +57,9 @@ const URL_ROOT = CHROME_URL_ROOT.replace("chrome://mochitests/content/",
                                          "http://example.com/");
 const URL_ROOT_SSL = CHROME_URL_ROOT.replace("chrome://mochitests/content/",
                                              "https://example.com/");
+
+// Force devtools to be initialized so menu items and keyboard shortcuts get installed
+require("devtools/client/framework/devtools-browser");
 
 // All test are asynchronous
 waitForExplicitFinish();

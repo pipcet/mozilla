@@ -24,9 +24,25 @@ XPCOMUtils.defineLazyGetter(this, "FxAccountsCommon", function() {
 });
 
 /*
+ * Custom exception types.
+ */
+class LockException extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "LockException";
+  }
+}
+
+class HMACMismatch extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "HMACMismatch";
+  }
+}
+
+/*
  * Utility functions
  */
-
 this.Utils = {
   // Alias in functions from CommonUtils. These previously were defined here.
   // In the ideal world, references to these would be removed.
@@ -54,7 +70,6 @@ this.Utils = {
   makeHMACHasher: CryptoUtils.makeHMACHasher,
   hkdfExpand: CryptoUtils.hkdfExpand,
   pbkdf2Generate: CryptoUtils.pbkdf2Generate,
-  deriveKeyFromPassphrase: CryptoUtils.deriveKeyFromPassphrase,
   getHTTPMACSHA1Header: CryptoUtils.getHTTPMACSHA1Header,
 
   /**
@@ -77,7 +92,7 @@ this.Utils = {
   },
 
   /**
-   * Wrap a function to catch all exceptions and log them
+   * Wrap a [promise-returning] function to catch all exceptions and log them.
    *
    * @usage MyObj._catch = Utils.catch;
    *        MyObj.foo = function() { this._catch(func)(); }
@@ -85,11 +100,11 @@ this.Utils = {
    * Optionally pass a function which will be called if an
    * exception occurs.
    */
-  catch: function Utils_catch(func, exceptionCallback) {
+  catch(func, exceptionCallback) {
     let thisArg = this;
-    return function WrappedCatch() {
+    return async function WrappedCatch() {
       try {
-        return func.call(thisArg);
+        return await func.call(thisArg);
       } catch (ex) {
         thisArg._log.debug("Exception calling " + (func.name || "anonymous function"), ex);
         if (exceptionCallback) {
@@ -100,21 +115,26 @@ this.Utils = {
     };
   },
 
+  throwLockException(label) {
+    throw new LockException(`Could not acquire lock. Label: "${label}".`);
+  },
+
   /**
-   * Wrap a function to call lock before calling the function then unlock.
+   * Wrap a [promise-returning] function to call lock before calling the function
+   * then unlock when it finishes executing or if it threw an error.
    *
    * @usage MyObj._lock = Utils.lock;
-   *        MyObj.foo = function() { this._lock(func)(); }
+   *        MyObj.foo = async function() { await this._lock(func)(); }
    */
-  lock: function lock(label, func) {
+  lock(label, func) {
     let thisArg = this;
-    return function WrappedLock() {
+    return async function WrappedLock() {
       if (!thisArg.lock()) {
-        throw "Could not acquire lock. Label: \"" + label + "\".";
+        Utils.throwLockException(label);
       }
 
       try {
-        return func.call(thisArg);
+        return await func.call(thisArg);
       } finally {
         thisArg.unlock();
       }
@@ -122,12 +142,12 @@ this.Utils = {
   },
 
   isLockException: function isLockException(ex) {
-    return ex && ex.indexOf && ex.indexOf("Could not acquire lock.") == 0;
+    return ex instanceof LockException;
   },
 
   /**
-   * Wrap functions to notify when it starts and finishes executing or if it
-   * threw an error.
+   * Wrap [promise-returning] functions to notify when it starts and
+   * finishes executing or if it threw an error.
    *
    * The message is a combination of a provided prefix, the local name, and
    * the event. Possible events are: "start", "finish", "error". The subject
@@ -141,12 +161,12 @@ this.Utils = {
    *          this._notify = Utils.notify("obj:");
    *        }
    *        MyObj.prototype = {
-   *          foo: function() this._notify("func", "data-arg", function () {
+   *          foo: function() this._notify("func", "data-arg", async function () {
    *            //...
    *          }(),
    *        };
    */
-  notify: function Utils_notify(prefix) {
+  notify(prefix) {
     return function NotifyMaker(name, data, func) {
       let thisArg = this;
       let notify = function(state, subject) {
@@ -155,10 +175,10 @@ this.Utils = {
         Observers.notify(mesg, subject, data);
       };
 
-      return function WrappedNotify() {
+      return async function WrappedNotify() {
+        notify("start", null);
         try {
-          notify("start", null);
-          let ret = func.call(thisArg);
+          let ret = await func.call(thisArg);
           notify("finish", ret);
           return ret;
         } catch (ex) {
@@ -244,12 +264,12 @@ this.Utils = {
   // Split these out in case we want to make them richer in future, and to
   // avoid inevitable confusion if the message changes.
   throwHMACMismatch: function throwHMACMismatch(shouldBe, is) {
-    throw "Record SHA256 HMAC mismatch: should be " + shouldBe + ", is " + is;
+    throw new HMACMismatch(
+        `Record SHA256 HMAC mismatch: should be ${shouldBe}, is ${is}`);
   },
 
   isHMACMismatch: function isHMACMismatch(ex) {
-    const hmacFail = "Record SHA256 HMAC mismatch: ";
-    return ex && ex.indexOf && (ex.indexOf(hmacFail) == 0);
+    return ex instanceof HMACMismatch;
   },
 
   /**
@@ -288,39 +308,6 @@ this.Utils = {
            .slice(0, SYNC_KEY_DECODED_LENGTH);
   },
 
-  base64Key: function base64Key(keyData) {
-    return btoa(keyData);
-  },
-
-  /**
-   * N.B., salt should be base64 encoded, even though we have to decode
-   * it later!
-   */
-  derivePresentableKeyFromPassphrase: function derivePresentableKeyFromPassphrase(passphrase, salt, keyLength, forceJS) {
-    let k = CryptoUtils.deriveKeyFromPassphrase(passphrase, salt, keyLength,
-                                                forceJS);
-    return Utils.encodeKeyBase32(k);
-  },
-
-  /**
-   * N.B., salt should be base64 encoded, even though we have to decode
-   * it later!
-   */
-  deriveEncodedKeyFromPassphrase: function deriveEncodedKeyFromPassphrase(passphrase, salt, keyLength, forceJS) {
-    let k = CryptoUtils.deriveKeyFromPassphrase(passphrase, salt, keyLength,
-                                                forceJS);
-    return Utils.base64Key(k);
-  },
-
-  /**
-   * Take a base64-encoded 128-bit AES key, returning it as five groups of five
-   * uppercase alphanumeric characters, separated by hyphens.
-   * A.K.A. base64-to-base32 encoding.
-   */
-  presentEncodedKeyAsSyncKey: function presentEncodedKeyAsSyncKey(encodedKey) {
-    return Utils.encodeKeyBase32(atob(encodedKey));
-  },
-
   jsonFilePath(filePath) {
     return OS.Path.normalize(OS.Path.join(OS.Constants.Path.profileDir, "weave", filePath + ".json"));
   },
@@ -333,35 +320,28 @@ this.Utils = {
    *        <profile>/<filePath>.json. i.e. Do not specify the ".json"
    *        extension.
    * @param that
-   *        Object to use for logging and "this" for callback.
-   * @param callback
-   *        Function to process json object as its first argument. If the file
-   *        could not be loaded, the first argument will be undefined.
+   *        Object to use for logging.
+   *
+   * @return Promise<>
+   *        Promise resolved when the write has been performed.
    */
-  async jsonLoad(filePath, that, callback) {
+  async jsonLoad(filePath, that) {
     let path = Utils.jsonFilePath(filePath);
 
-    if (that._log) {
+    if (that._log && that._log.trace) {
       that._log.trace("Loading json from disk: " + filePath);
     }
 
-    let json;
-
     try {
-      json = await CommonUtils.readJSON(path);
+      return await CommonUtils.readJSON(path);
     } catch (e) {
-      if (e instanceof OS.File.Error && e.becauseNoSuchFile) {
-        // Ignore non-existent files, but explicitly return null.
-        json = null;
-      } else if (that._log) {
+      if (!(e instanceof OS.File.Error && e.becauseNoSuchFile)) {
+        if (that._log) {
           that._log.debug("Failed to load json", e);
         }
+      }
+      return null;
     }
-
-    if (callback) {
-      callback.call(that, json);
-    }
-    return json;
   },
 
   /**
@@ -370,39 +350,29 @@ this.Utils = {
    * @param filePath
    *        JSON file path save to <filePath>.json
    * @param that
-   *        Object to use for logging and "this" for callback
+   *        Object to use for logging.
    * @param obj
    *        Function to provide json-able object to save. If this isn't a
-   *        function, it'll be used as the object to make a json string.
-   * @param callback
+   *        function, it'll be used as the object to make a json string.*
    *        Function called when the write has been performed. Optional.
-   *        The first argument will be a Components.results error
-   *        constant on error or null if no error was encountered (and
-   *        the file saved successfully).
+   *
+   * @return Promise<>
+   *        Promise resolved when the write has been performed.
    */
-  async jsonSave(filePath, that, obj, callback) {
+  async jsonSave(filePath, that, obj) {
     let path = OS.Path.join(OS.Constants.Path.profileDir, "weave",
                             ...(filePath + ".json").split("/"));
     let dir = OS.Path.dirname(path);
-    let error = null;
 
-    try {
-      await OS.File.makeDir(dir, { from: OS.Constants.Path.profileDir });
+    await OS.File.makeDir(dir, { from: OS.Constants.Path.profileDir });
 
-      if (that._log) {
-        that._log.trace("Saving json to disk: " + path);
-      }
-
-      let json = typeof obj == "function" ? obj.call(that) : obj;
-
-      await CommonUtils.writeJSON(json, path);
-    } catch (e) {
-      error = e
+    if (that._log) {
+      that._log.trace("Saving json to disk: " + path);
     }
 
-    if (typeof callback == "function") {
-      callback.call(that, error);
-    }
+    let json = typeof obj == "function" ? obj.call(that) : obj;
+
+    return CommonUtils.writeJSON(json, path);
   },
 
   /**
@@ -452,26 +422,11 @@ this.Utils = {
   },
 
   /**
-   * Generate 26 characters.
-   */
-  generatePassphrase: function generatePassphrase() {
-    // Note that this is a different base32 alphabet to the one we use for
-    // other tasks. It's lowercase, uses different letters, and needs to be
-    // decoded with decodeKeyBase32, not just decodeBase32.
-    return Utils.encodeKeyBase32(CryptoUtils.generateRandomBytes(16));
-  },
-
-  /**
    * The following are the methods supported for UI use:
    *
    * * isPassphrase:
    *     determines whether a string is either a normalized or presentable
    *     passphrase.
-   * * hyphenatePassphrase:
-   *     present a normalized passphrase for display. This might actually
-   *     perform work beyond just hyphenation; sorry.
-   * * hyphenatePartialPassphrase:
-   *     present a fragment of a normalized passphrase for display.
    * * normalizePassphrase:
    *     take a presentable passphrase and reduce it to a normalized
    *     representation for storage. normalizePassphrase can safely be called
@@ -483,40 +438,6 @@ this.Utils = {
       return /^[abcdefghijkmnpqrstuvwxyz23456789]{26}$/.test(Utils.normalizePassphrase(s));
     }
     return false;
-  },
-
-  /**
-   * Hyphenate a passphrase (26 characters) into groups.
-   * abbbbccccddddeeeeffffggggh
-   * =>
-   * a-bbbbc-cccdd-ddeee-effff-ggggh
-   */
-  hyphenatePassphrase: function hyphenatePassphrase(passphrase) {
-    // For now, these are the same.
-    return Utils.hyphenatePartialPassphrase(passphrase, true);
-  },
-
-  hyphenatePartialPassphrase: function hyphenatePartialPassphrase(passphrase, omitTrailingDash) {
-    if (!passphrase)
-      return null;
-
-    // Get the raw data input. Just base32.
-    let data = passphrase.toLowerCase().replace(/[^abcdefghijkmnpqrstuvwxyz23456789]/g, "");
-
-    // This is the neatest way to do this.
-    if ((data.length == 1) && !omitTrailingDash)
-      return data + "-";
-
-    // Hyphenate it.
-    let y = data.substr(0, 1);
-    let z = data.substr(1).replace(/(.{1,5})/g, "-$1");
-
-    // Correct length? We're done.
-    if ((z.length == 30) || omitTrailingDash)
-      return y + z;
-
-    // Add a trailing dash if appropriate.
-    return (y + z.replace(/([^-]{5})$/, "$1-")).substr(0, SYNC_KEY_HYPHENATED_LENGTH);
   },
 
   normalizePassphrase: function normalizePassphrase(pp) {
@@ -675,7 +596,7 @@ this.Utils = {
       // 'device' is defined on unix systems
       Cc["@mozilla.org/system-info;1"].getService(Ci.nsIPropertyBag2).get("device") ||
       // hostname of the system, usually assigned by the user or admin
-      Cc["@mozilla.org/system-info;1"].getService(Ci.nsIPropertyBag2).get("host") ||
+      Cc["@mozilla.org/network/dns-service;1"].getService(Ci.nsIDNSService).myHostName ||
       // fall back on ua info string
       Cc["@mozilla.org/network/protocol;1?name=http"].getService(Ci.nsIHttpProtocolHandler).oscpu;
 
@@ -723,15 +644,6 @@ XPCOMUtils.defineLazyGetter(Utils, "_utf8Converter", function() {
 this.Svc = {};
 Svc.Prefs = new Preferences(PREFS_BRANCH);
 Svc.Obs = Observers;
-
-Svc.__defineGetter__("Crypto", function() {
-  let cryptoSvc;
-  let ns = {};
-  Cu.import("resource://services-crypto/WeaveCrypto.js", ns);
-  cryptoSvc = new ns.WeaveCrypto();
-  delete Svc.Crypto;
-  return Svc.Crypto = cryptoSvc;
-});
 
 Svc.Obs.add("xpcom-shutdown", function() {
   for (let name in Svc)

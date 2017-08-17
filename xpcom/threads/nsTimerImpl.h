@@ -129,7 +129,11 @@ public:
     void*                 mClosure;
   };
 
-  nsresult InitCommon(uint32_t aDelay, uint32_t aType, Callback&& newCallback);
+  nsresult InitCommon(uint32_t aDelayMS, uint32_t aType,
+                      Callback&& newCallback);
+
+  nsresult InitCommon(const mozilla::TimeDuration& aDelay, uint32_t aType,
+                      Callback&& newCallback);
 
   Callback& GetCallback()
   {
@@ -196,9 +200,9 @@ public:
   // Updated only after this timer has been removed from the timer thread.
   int32_t               mGeneration;
 
-  uint32_t              mDelay;
+  mozilla::TimeDuration mDelay;
   // Updated only after this timer has been removed from the timer thread.
-  TimeStamp             mTimeout;
+  mozilla::TimeStamp    mTimeout;
 
 #ifdef MOZ_TASK_TRACER
   mozilla::tasktracer::TracedTaskCommon mTracedTask;

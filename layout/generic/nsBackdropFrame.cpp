@@ -33,7 +33,6 @@ nsBackdropFrame::GetParentStyleContext(nsIFrame** aProviderFrame) const
 
 /* virtual */ void
 nsBackdropFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
-                                  const nsRect& aDirtyRect,
                                   const nsDisplayListSet& aLists)
 {
   DO_GLOBAL_REFLOW_COUNT_DSP("nsBackdropFrame");
@@ -50,7 +49,7 @@ nsBackdropFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
 }
 
 /* virtual */ LogicalSize
-nsBackdropFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
+nsBackdropFrame::ComputeAutoSize(gfxContext*         aRenderingContext,
                                  WritingMode         aWM,
                                  const LogicalSize&  aCBSize,
                                  nscoord             aAvailableISize,

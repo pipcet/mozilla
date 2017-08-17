@@ -7,6 +7,9 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "AsyncPrefs",
+                                  "resource://gre/modules/AsyncPrefs.jsm");
+
 XPCOMUtils.defineLazyModuleGetter(this, "ContentPrefServiceParent",
                                   "resource://gre/modules/ContentPrefServiceParent.jsm");
 
@@ -39,6 +42,8 @@ PromptFactory.prototype = {
       case "profile-after-change": {
         // ContentPrefServiceParent is needed for e10s file picker.
         ContentPrefServiceParent.init();
+        // AsyncPrefs is needed for reader mode.
+        AsyncPrefs.init();
         Services.mm.addMessageListener("GeckoView:Prompt", this);
         break;
       }
@@ -140,7 +145,7 @@ PromptFactory.prototype = {
       let dispatchEvents = false;
       if (!aElement.multiple) {
         let elem = map[result.choices[0]];
-        if (elem) {
+        if (elem && elem instanceof win.HTMLOptionElement) {
           dispatchEvents = !elem.selected;
           elem.selected = true;
         } else {
@@ -150,16 +155,17 @@ PromptFactory.prototype = {
         for (let i = 0; i < id; i++) {
           let elem = map[i];
           let index = result.choices.indexOf(String(i));
-          if (elem.selected != (index >= 0)) {
+          if (elem instanceof win.HTMLOptionElement &&
+              elem.selected !== (index >= 0)) {
             // Current selected is not the same as the new selected state.
             dispatchEvents = true;
             elem.selected = !elem.selected;
-            result.choices[index] = undefined;
           }
+          result.choices[index] = undefined;
         }
         for (let i = 0; i < result.choices.length; i++) {
           if (result.choices[i] !== undefined && result.choices[i] !== null) {
-            Cu.reportError("Invalid id for select result: " + result.choices[0]);
+            Cu.reportError("Invalid id for select result: " + result.choices[i]);
             break;
           }
         }
@@ -440,7 +446,7 @@ PromptDelegate.prototype = {
       }
       return true;
 
-    } catch(ex) {
+    } catch (ex) {
       Cu.reportError("Failed to change modal state: " + e);
     }
     return false;
@@ -459,10 +465,7 @@ PromptDelegate.prototype = {
       this.asyncShowPrompt(aMsg, res => result = res);
 
       // Spin this thread while we wait for a result
-      let thread = Services.tm.currentThread;
-      while (result === undefined) {
-        thread.processNextEvent(true);
-      }
+      Services.tm.spinEventLoopUntil(() => result !== undefined);
     } finally {
       this._changeModalState(/* aEntering */ false);
     }

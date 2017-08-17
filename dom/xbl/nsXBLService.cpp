@@ -116,19 +116,21 @@ public:
     if (!doc)
       return;
 
-    // Destroy the frames for mBoundElement.
+    // Get the binding.
+    bool ready = false;
+    nsXBLService::GetInstance()->BindingReady(mBoundElement, mBindingURI, &ready);
+    if (!ready)
+      return;
+
+    // Destroy the frames for mBoundElement. Do this after getting the binding,
+    // since if the binding fetch fails then we don't want to destroy the
+    // frames.
     nsIContent* destroyedFramesFor = nullptr;
     nsIPresShell* shell = doc->GetShell();
     if (shell) {
       shell->DestroyFramesFor(mBoundElement, &destroyedFramesFor);
     }
     MOZ_ASSERT(!mBoundElement->GetPrimaryFrame());
-
-    // Get the binding.
-    bool ready = false;
-    nsXBLService::GetInstance()->BindingReady(mBoundElement, mBindingURI, &ready);
-    if (!ready)
-      return;
 
     // If |mBoundElement| is (in addition to having binding |mBinding|)
     // also a descendant of another element with binding |mBinding|,
@@ -143,11 +145,10 @@ public:
     if (shell) {
       nsIFrame* childFrame = mBoundElement->GetPrimaryFrame();
       if (!childFrame) {
-        // Check to see if it's in the undisplayed content map...
+        // Check if it's in the display:none or display:contents maps.
         nsFrameManager* fm = shell->FrameManager();
-        nsStyleContext* sc = fm->GetUndisplayedContent(mBoundElement);
+        nsStyleContext* sc = fm->GetDisplayNoneStyleFor(mBoundElement);
         if (!sc) {
-          // or in the display:contents map.
           sc = fm->GetDisplayContentsStyleFor(mBoundElement);
         }
         if (!sc) {
@@ -419,17 +420,12 @@ public:
     if (!presShell || !presShell->DidInitialize()) {
       return;
     }
+
     if (ServoStyleSet* servoSet = presShell->StyleSet()->GetAsServo()) {
-      // In general the element is always styled by the time we're applying XBL
-      // bindings, because we need to style the element to know what the binding
-      // URI is. However, programmatic consumers of the XBL service (like the
-      // XML pretty printer) _can_ apply bindings without having styled the bound
-      // element. We could assert against this and require the callers manually
-      // resolve the style first, but it's easy enough to just handle here.
-      if (MOZ_UNLIKELY(!mElement->HasServoData())) {
-        servoSet->StyleNewSubtree(mElement);
-      } else {
-        servoSet->StyleNewChildren(mElement);
+      // Check MayTraverseFrom to handle programatic XBL consumers.
+      // See bug 1370793.
+      if (servoSet->MayTraverseFrom(mElement)) {
+        servoSet->StyleNewlyBoundElement(mElement);
       }
     }
   }
@@ -790,7 +786,7 @@ nsXBLService::GetBinding(nsIContent* aBoundElement, nsIURI* aURI,
   }
 
   // Our prototype binding must have all its resources loaded.
-  bool ready = protoBinding->LoadResources();
+  bool ready = protoBinding->LoadResources(aBoundElement);
   if (!ready) {
     // Add our bound element to the protos list of elts that should
     // be notified when the stylesheets and scripts finish loading.

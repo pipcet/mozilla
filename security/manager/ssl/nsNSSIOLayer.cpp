@@ -64,7 +64,7 @@ namespace {
 
 void
 getSiteKey(const nsACString& hostName, uint16_t port,
-           /*out*/ nsCSubstring& key)
+           /*out*/ nsACString& key)
 {
   key = hostName;
   key.AppendASCII(":");
@@ -375,7 +375,7 @@ nsNSSSocketInfo::DriveHandshake()
       return NS_BASE_STREAM_WOULD_BLOCK;
     }
 
-    SetCanceled(errorCode, PlainErrorMessage);
+    SetCanceled(errorCode, SSLErrorMessageType::Plain);
     return GetXPCOMFromNSSError(errorCode);
   }
   return NS_OK;
@@ -450,7 +450,6 @@ nsNSSSocketInfo::IsAcceptableForHost(const nsACString& hostname, bool* _retval)
   if (!certVerifier) {
     return NS_OK;
   }
-  nsAutoCString hostnameFlat(PromiseFlatCString(hostname));
   CertVerifier::Flags flags = CertVerifier::FLAG_LOCAL_ONLY;
   UniqueCERTCertList unusedBuiltChain;
   mozilla::pkix::Result result =
@@ -459,7 +458,7 @@ nsNSSSocketInfo::IsAcceptableForHost(const nsACString& hostname, bool* _retval)
                                       nullptr, // sctsFromTLSExtension
                                       mozilla::pkix::Now(),
                                       nullptr, // pinarg
-                                      hostnameFlat.get(),
+                                      hostname,
                                       unusedBuiltChain,
                                       nullptr, // no peerCertChain
                                       false, // save intermediates
@@ -625,7 +624,7 @@ nsNSSSocketInfo::SetCertVerificationResult(PRErrorCode errorCode,
     // Only replace errorCode if there was originally no error
     if (rv != SECSuccess && errorCode == 0) {
       errorCode = PR_GetError();
-      errorMessageType = PlainErrorMessage;
+      errorMessageType = SSLErrorMessageType::Plain;
       if (errorCode == 0) {
         NS_ERROR("SSL_AuthCertificateComplete didn't set error code");
         errorCode = PR_INVALID_STATE_ERROR;
@@ -680,8 +679,8 @@ nsHandleSSLError(nsNSSSocketInfo* socketInfo,
   }
 
   // We must cancel first, which sets the error code.
-  socketInfo->SetCanceled(err, PlainErrorMessage);
-  nsXPIDLString errorString;
+  socketInfo->SetCanceled(err, SSLErrorMessageType::Plain);
+  nsAutoString errorString;
   socketInfo->GetErrorLogMessage(err, errtype, errorString);
 
   if (!errorString.IsEmpty()) {
@@ -1249,9 +1248,8 @@ checkHandshake(int32_t bytesTransfered, bool wasReading,
     // expensive no-op.)
     if (!wantRetry && mozilla::psm::IsNSSErrorCode(err) &&
         !socketInfo->GetErrorCode()) {
-      RefPtr<SyncRunnableBase> runnable(new SSLErrorRunnable(socketInfo,
-                                                             PlainErrorMessage,
-                                                             err));
+      RefPtr<SyncRunnableBase> runnable(
+        new SSLErrorRunnable(socketInfo, SSLErrorMessageType::Plain, err));
       (void) runnable->DispatchToMainThreadAndWait();
     }
   } else if (wasReading && 0 == bytesTransfered) {
@@ -1289,7 +1287,7 @@ checkHandshake(int32_t bytesTransfered, bool wasReading,
     // this socket. Note that we use the original error because if we use
     // PR_CONNECT_RESET_ERROR, we'll repeated try to reconnect.
     if (originalError != PR_WOULD_BLOCK_ERROR && !socketInfo->GetErrorCode()) {
-      socketInfo->SetCanceled(originalError, PlainErrorMessage);
+      socketInfo->SetCanceled(originalError, SSLErrorMessageType::Plain);
     }
     PR_SetError(err, 0);
   }
@@ -1705,7 +1703,7 @@ nsSSLIOLayerHelpers::setInsecureFallbackSites(const nsCString& str)
   nsCCharSeparatedTokenizer toker(str, ',');
 
   while (toker.hasMoreTokens()) {
-    const nsCSubstring& host = toker.nextToken();
+    const nsACString& host = toker.nextToken();
     if (!host.IsEmpty()) {
       mInsecureFallbackSites.PutEntry(host);
     }
@@ -1716,9 +1714,9 @@ void
 nsSSLIOLayerHelpers::initInsecureFallbackSites()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  nsCString insecureFallbackHosts;
+  nsAutoCString insecureFallbackHosts;
   Preferences::GetCString("security.tls.insecure_fallback_hosts",
-                          &insecureFallbackHosts);
+                          insecureFallbackHosts);
   setInsecureFallbackSites(insecureFallbackHosts);
 }
 
@@ -1732,7 +1730,8 @@ class FallbackPrefRemover final : public Runnable
 {
 public:
   explicit FallbackPrefRemover(const nsACString& aHost)
-    : mHost(aHost)
+    : mozilla::Runnable("FallbackPrefRemover")
+    , mHost(aHost)
   {}
   NS_IMETHOD Run() override;
 private:
@@ -1743,12 +1742,12 @@ NS_IMETHODIMP
 FallbackPrefRemover::Run()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  nsCString oldValue;
-  Preferences::GetCString("security.tls.insecure_fallback_hosts", &oldValue);
+  nsAutoCString oldValue;
+  Preferences::GetCString("security.tls.insecure_fallback_hosts", oldValue);
   nsCCharSeparatedTokenizer toker(oldValue, ',');
   nsCString newValue;
   while (toker.hasMoreTokens()) {
-    const nsCSubstring& host = toker.nextToken();
+    const nsACString& host = toker.nextToken();
     if (host.Equals(mHost)) {
       continue;
     }
@@ -1875,7 +1874,7 @@ nsConvertCANamesToStrings(const UniquePLArenaPool& arena, char** caNameStrings,
             // incorrectly formatted der without the outer wrapper of type and
             // length. Fix it up by adding the top level header.
             if (dername->len <= 127) {
-                newitem.data = (unsigned char*) PR_Malloc(dername->len + 2);
+                newitem.data = (unsigned char*) malloc(dername->len + 2);
                 if (!newitem.data) {
                     goto loser;
                 }
@@ -1883,7 +1882,7 @@ nsConvertCANamesToStrings(const UniquePLArenaPool& arena, char** caNameStrings,
                 newitem.data[1] = (unsigned char) dername->len;
                 (void) memcpy(&newitem.data[2], dername->data, dername->len);
             } else if (dername->len <= 255) {
-                newitem.data = (unsigned char*) PR_Malloc(dername->len + 3);
+                newitem.data = (unsigned char*) malloc(dername->len + 3);
                 if (!newitem.data) {
                     goto loser;
                 }
@@ -1893,7 +1892,7 @@ nsConvertCANamesToStrings(const UniquePLArenaPool& arena, char** caNameStrings,
                 (void) memcpy(&newitem.data[3], dername->data, dername->len);
             } else {
                 // greater than 256, better be less than 64k
-                newitem.data = (unsigned char*) PR_Malloc(dername->len + 4);
+                newitem.data = (unsigned char*) malloc(dername->len + 4);
                 if (!newitem.data) {
                     goto loser;
                 }
@@ -1912,21 +1911,21 @@ nsConvertCANamesToStrings(const UniquePLArenaPool& arena, char** caNameStrings,
             caNameStrings[n] = const_cast<char*>("");
         } else {
             caNameStrings[n] = PORT_ArenaStrdup(arena.get(), namestring);
-            PR_Free(namestring);
+            PR_Free(namestring); // CERT_DerNameToAscii() uses PR_Malloc().
             if (!caNameStrings[n]) {
                 goto loser;
             }
         }
 
         if (newitem.data) {
-            PR_Free(newitem.data);
+            free(newitem.data);
         }
     }
 
     return SECSuccess;
 loser:
     if (newitem.data) {
-        PR_Free(newitem.data);
+        free(newitem.data);
     }
     return SECFailure;
 }
@@ -1945,7 +1944,8 @@ UserCertChoice
 nsGetUserCertChoice()
 {
   nsAutoCString value;
-  nsresult rv = Preferences::GetCString("security.default_personal_cert", &value);
+  nsresult rv =
+    Preferences::GetCString("security.default_personal_cert", value);
   if (NS_FAILED(rv)) {
     return UserCertChoice::Ask;
   }
@@ -2256,9 +2256,6 @@ ClientAuthDataRunnable::RunOnTargetThread()
         goto loser;
       }
 
-      int32_t port;
-      mSocketInfo->GetPort(&port);
-
       UniquePORTString corg(CERT_GetOrgName(&mServerCert->subject));
       nsAutoCString org(corg.get());
 
@@ -2295,7 +2292,8 @@ ClientAuthDataRunnable::RunOnTargetThread()
 
       uint32_t selectedIndex = 0;
       bool certChosen = false;
-      rv = dialogs->ChooseCertificate(mSocketInfo, hostname, port, org, issuer,
+      rv = dialogs->ChooseCertificate(mSocketInfo, hostname,
+                                      mSocketInfo->GetPort(), org, issuer,
                                       certArray, &selectedIndex, &certChosen);
       if (NS_FAILED(rv)) {
         goto loser;

@@ -89,11 +89,11 @@ impl ServiceWorkerMethods for ServiceWorker {
             return Err(Error::InvalidState);
         }
         // Step 7
-        let data = try!(StructuredCloneData::write(cx, message));
+        let data = StructuredCloneData::write(cx, message)?;
         let msg_vec = DOMMessage(data.move_to_arraybuffer());
         let _ =
             self.global()
-                .constellation_chan()
+                .script_to_constellation_chan()
                 .send(ScriptMsg::ForwardDOMMessage(msg_vec, self.scope_url.clone()));
         Ok(())
     }

@@ -65,7 +65,7 @@ GetRequiredScopeStringPrefix(nsIURI* aScriptURI, nsACString& aPrefix,
     aPrefix.Append(dir);
   } else if (aPrefixMode == eUsePath) {
     nsAutoCString path;
-    rv = aScriptURI->GetPath(path);
+    rv = aScriptURI->GetPathQueryRef(path);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
@@ -98,15 +98,14 @@ public:
   ComparisonResult(nsresult aStatus,
                    bool aInCacheAndEqual,
                    const nsAString& aNewCacheName,
-                   const nsACString& aMaxScope) override
+                   const nsACString& aMaxScope,
+                   nsLoadFlags aLoadFlags) override
   {
-    mJob->ComparisonResult(aStatus, aInCacheAndEqual, aNewCacheName, aMaxScope);
-  }
-
-  virtual void
-  SaveLoadFlags(nsLoadFlags aLoadFlags) override
-  {
-    mJob->SetLoadFlags(aLoadFlags);
+    mJob->ComparisonResult(aStatus,
+                           aInCacheAndEqual,
+                           aNewCacheName,
+                           aMaxScope,
+                           aLoadFlags);
   }
 
   NS_INLINE_DECL_REFCOUNTING(ServiceWorkerUpdateJob::CompareCallback, override)
@@ -335,16 +334,11 @@ ServiceWorkerUpdateJob::GetLoadFlags() const
 }
 
 void
-ServiceWorkerUpdateJob::SetLoadFlags(nsLoadFlags aLoadFlags)
-{
-  mLoadFlags = aLoadFlags;
-}
-
-void
 ServiceWorkerUpdateJob::ComparisonResult(nsresult aStatus,
                                          bool aInCacheAndEqual,
                                          const nsAString& aNewCacheName,
-                                         const nsACString& aMaxScope)
+                                         const nsACString& aMaxScope,
+                                         nsLoadFlags aLoadFlags)
 {
   AssertIsOnMainThread();
 
@@ -387,6 +381,8 @@ ServiceWorkerUpdateJob::ComparisonResult(nsresult aStatus,
     }
   }
 
+  mLoadFlags = aLoadFlags;
+
   nsAutoCString defaultAllowedPrefix;
   rv = GetRequiredScopeStringPrefix(scriptURI, defaultAllowedPrefix,
                                     eUseDirectory);
@@ -405,7 +401,7 @@ ServiceWorkerUpdateJob::ComparisonResult(nsresult aStatus,
   }
 
   if (!StringBeginsWith(mRegistration->mScope, maxPrefix)) {
-    nsXPIDLString message;
+    nsAutoString message;
     NS_ConvertUTF8toUTF16 reportScope(mRegistration->mScope);
     NS_ConvertUTF8toUTF16 reportMaxPrefix(maxPrefix);
     const char16_t* params[] = { reportScope.get(), reportMaxPrefix.get() };
@@ -444,7 +440,8 @@ ServiceWorkerUpdateJob::ComparisonResult(nsresult aStatus,
   mRegistration->SetEvaluating(sw);
 
   nsMainThreadPtrHandle<ServiceWorkerUpdateJob> handle(
-      new nsMainThreadPtrHolder<ServiceWorkerUpdateJob>(this));
+      new nsMainThreadPtrHolder<ServiceWorkerUpdateJob>(
+        "ServiceWorkerUpdateJob", this));
   RefPtr<LifeCycleEventCallback> callback = new ContinueUpdateRunnable(handle);
 
   ServiceWorkerPrivate* workerPrivate = sw->WorkerPrivate();
@@ -508,6 +505,8 @@ ServiceWorkerUpdateJob::Install(ServiceWorkerManager* aSWM)
   // fire the updatefound event
   nsCOMPtr<nsIRunnable> upr =
     NewRunnableMethod<RefPtr<ServiceWorkerRegistrationInfo>>(
+      "dom::workers::ServiceWorkerManager::"
+      "FireUpdateFoundOnServiceWorkerRegistrations",
       aSWM,
       &ServiceWorkerManager::FireUpdateFoundOnServiceWorkerRegistrations,
       mRegistration);
@@ -515,11 +514,15 @@ ServiceWorkerUpdateJob::Install(ServiceWorkerManager* aSWM)
 
   // Call ContinueAfterInstallEvent(false) on main thread if the SW
   // script fails to load.
-  nsCOMPtr<nsIRunnable> failRunnable = NewRunnableMethod<bool>
-    (this, &ServiceWorkerUpdateJob::ContinueAfterInstallEvent, false);
+  nsCOMPtr<nsIRunnable> failRunnable = NewRunnableMethod<bool>(
+    "dom::workers::ServiceWorkerUpdateJob::ContinueAfterInstallEvent",
+    this,
+    &ServiceWorkerUpdateJob::ContinueAfterInstallEvent,
+    false);
 
   nsMainThreadPtrHandle<ServiceWorkerUpdateJob> handle(
-    new nsMainThreadPtrHolder<ServiceWorkerUpdateJob>(this));
+    new nsMainThreadPtrHolder<ServiceWorkerUpdateJob>(
+      "ServiceWorkerUpdateJob", this));
   RefPtr<LifeCycleEventCallback> callback = new ContinueInstallRunnable(handle);
 
   // Send the install event to the worker thread

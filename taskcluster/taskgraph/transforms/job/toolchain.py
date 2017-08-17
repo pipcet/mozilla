@@ -7,6 +7,8 @@ Support for running toolchain-building jobs via dedicated scripts
 
 from __future__ import absolute_import, print_function, unicode_literals
 
+import hashlib
+
 from taskgraph.util.schema import Schema
 from voluptuous import Optional, Required, Any
 
@@ -14,6 +16,7 @@ from taskgraph.transforms.job import run_job_using
 from taskgraph.transforms.job.common import (
     docker_worker_add_tc_vcs_cache,
     docker_worker_add_gecko_vcs_env_vars,
+    docker_worker_add_public_artifacts,
     support_vcs_checkout,
 )
 from taskgraph.util.hash import hash_paths
@@ -39,6 +42,13 @@ toolchain_run_schema = Schema({
     # Paths/patterns pointing to files that influence the outcome of a
     # toolchain build.
     Optional('resources'): [basestring],
+
+    # Path to the artifact produced by the toolchain job
+    Required('toolchain-artifact'): basestring,
+
+    # An alias that can be used instead of the real toolchain job name in
+    # the toolchains list for build jobs.
+    Optional('toolchain-alias'): basestring,
 })
 
 
@@ -49,10 +59,21 @@ def add_optimizations(config, run, taskdesc):
     # The script
     files.append('taskcluster/scripts/misc/{}'.format(run['script']))
 
+    digest = hash_paths(GECKO, files)
+
+    # If the task has dependencies, we need those dependencies to influence
+    # the index path. So take the digest from the files above, add the list
+    # of its dependencies, and hash the aggregate.
+    # If the task has no dependencies, just use the digest from above.
+    deps = taskdesc['dependencies']
+    if deps:
+        data = [digest] + sorted(deps.values())
+        digest = hashlib.sha256('\n'.join(data)).hexdigest()
+
     label = taskdesc['label']
     subs = {
-        'name': label.replace('toolchain-', '').split('/')[0],
-        'digest': hash_paths(GECKO, files),
+        'name': label.replace('%s-' % config.kind, ''),
+        'digest': digest,
     }
 
     optimizations = taskdesc.setdefault('optimizations', [])
@@ -71,17 +92,14 @@ def add_optimizations(config, run, taskdesc):
 @run_job_using("docker-worker", "toolchain-script", schema=toolchain_run_schema)
 def docker_worker_toolchain(config, job, taskdesc):
     run = job['run']
+    taskdesc['run-on-projects'] = ['trunk', 'try']
 
     worker = taskdesc['worker']
     worker['artifacts'] = []
     worker['caches'] = []
+    worker['chain-of-trust'] = True
 
-    worker['artifacts'].append({
-        'name': 'public',
-        'path': '/home/worker/workspace/artifacts/',
-        'type': 'directory',
-    })
-
+    docker_worker_add_public_artifacts(config, job, taskdesc)
     docker_worker_add_tc_vcs_cache(config, job, taskdesc)
     docker_worker_add_gecko_vcs_env_vars(config, job, taskdesc)
     support_vcs_checkout(config, job, taskdesc)
@@ -129,12 +147,18 @@ def docker_worker_toolchain(config, job, taskdesc):
             run['script'])
     ]
 
+    attributes = taskdesc.setdefault('attributes', {})
+    attributes['toolchain-artifact'] = run['toolchain-artifact']
+    if 'toolchain-alias' in run:
+        attributes['toolchain-alias'] = run['toolchain-alias']
+
     add_optimizations(config, run, taskdesc)
 
 
 @run_job_using("generic-worker", "toolchain-script", schema=toolchain_run_schema)
 def windows_toolchain(config, job, taskdesc):
     run = job['run']
+    taskdesc['run-on-projects'] = ['trunk', 'try']
 
     worker = taskdesc['worker']
 
@@ -142,18 +166,9 @@ def windows_toolchain(config, job, taskdesc):
         'path': r'public\build',
         'type': 'directory',
     }]
+    worker['chain-of-trust'] = True
 
     docker_worker_add_gecko_vcs_env_vars(config, job, taskdesc)
-
-    # We fetch LLVM SVN into this.
-    svn_cache = 'level-{}-toolchain-clang-cl-build-svn'.format(config.params['level'])
-    worker['mounts'] = [{
-        'cache-name': svn_cache,
-        'directory': r'llvm-sources',
-    }]
-    taskdesc['scopes'].extend([
-        'generic-worker:cache:' + svn_cache,
-    ])
 
     env = worker['env']
     env.update({
@@ -178,5 +193,10 @@ def windows_toolchain(config, job, taskdesc):
         # do something intelligent.
         r'{} -c ./build/src/taskcluster/scripts/misc/{}'.format(bash, run['script'])
     ]
+
+    attributes = taskdesc.setdefault('attributes', {})
+    attributes['toolchain-artifact'] = run['toolchain-artifact']
+    if 'toolchain-alias' in run:
+        attributes['toolchain-alias'] = run['toolchain-alias']
 
     add_optimizations(config, run, taskdesc)

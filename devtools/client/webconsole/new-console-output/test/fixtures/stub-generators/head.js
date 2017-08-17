@@ -161,12 +161,14 @@ function getCleanedPacket(key, packet) {
     }
 
     if (res.packet) {
-      if (res.packet.totalTime) {
-        // res.packet.totalTime is read-only so we use assign to override it.
-        res.packet = Object.assign({}, existingPacket.packet, {
-          totalTime: existingPacket.packet.totalTime
-        });
-      }
+      let override = {};
+      let keys = ["totalTime", "from", "contentSize", "transferredSize"];
+      keys.forEach(x => {
+        if (res.packet[x] !== undefined) {
+          override[x] = existingPacket.packet[key];
+        }
+      });
+      res.packet = Object.assign({}, res.packet, override);
     }
 
     if (res.networkInfo) {
@@ -191,9 +193,29 @@ function getCleanedPacket(key, packet) {
           existingPacket.networkInfo.request.headersSize;
       }
 
-      if (res.networkInfo.response && res.networkInfo.response.headersSize) {
+      if (
+        res.networkInfo.response
+        && res.networkInfo.response.headersSize !== undefined
+      ) {
         res.networkInfo.response.headersSize =
           existingPacket.networkInfo.response.headersSize;
+      }
+      if (res.networkInfo.response && res.networkInfo.response.bodySize !== undefined) {
+        res.networkInfo.response.bodySize =
+          existingPacket.networkInfo.response.bodySize;
+      }
+      if (
+        res.networkInfo.response
+        && res.networkInfo.response.transferredSize !== undefined
+      ) {
+        res.networkInfo.response.transferredSize =
+          existingPacket.networkInfo.response.transferredSize;
+      }
+    }
+
+    if (res.helperResult) {
+      if (res.helperResult.object) {
+        res.helperResult.object.actor = existingPacket.helperResult.object.actor;
       }
     }
   } else {
@@ -267,18 +289,34 @@ function* generateConsoleApiStubs() {
   };
 
   let toolbox = yield openNewTabAndToolbox(TEST_URI, "webconsole");
-  let {ui} = toolbox.getCurrentPanel().hud;
+  const hud = toolbox.getCurrentPanel().hud;
+  let {ui} = hud;
   ok(ui.jsterm, "jsterm exists");
   ok(ui.newConsoleOutput, "newConsoleOutput exists");
 
   for (let [key, {keys, code}] of consoleApi) {
     let received = new Promise(resolve => {
       let i = 0;
-      let listener = (type, res) => {
-        stubs.packets.push(formatPacket(keys[i], res));
-        stubs.preparedMessages.push(formatStub(keys[i], res));
+      let listener = async (type, res) => {
+        const callKey = keys[i];
+        stubs.packets.push(formatPacket(callKey, res));
+        stubs.preparedMessages.push(formatStub(callKey, res));
         if (++i === keys.length) {
           toolbox.target.client.removeListener("consoleAPICall", listener);
+
+          // If this is a console.dir call, we need to wait for the properties
+          // to be fetched so we don't have any server errors.
+          if (callKey === "console.dir({C, M, Y, K})") {
+            const dirMsg = await waitForMessage(hud, `cyan: "C"`);
+            const oi = dirMsg.querySelector(".tree");
+            // If there's only one node, it means that the object inspector
+            // is not expanded.
+            if (oi.querySelectorAll(".node").length === 1) {
+              await waitForNodeMutation(oi, {
+                childList: true
+              });
+            }
+          }
           resolve();
         }
       };
@@ -290,6 +328,7 @@ function* generateConsoleApiStubs() {
       [key, code],
       function ([subKey, subCode]) {
         let script = content.document.createElement("script");
+        // eslint-disable-next-line no-unsanitized/property
         script.innerHTML = `function triggerPacket() {${subCode}}`;
         content.document.body.appendChild(script);
         content.wrappedJSObject.triggerPacket();
@@ -333,6 +372,7 @@ function* generateCssMessageStubs() {
       [key, code],
       function ([subKey, subCode]) {
         let style = content.document.createElement("style");
+        // eslint-disable-next-line no-unsanitized/property
         style.innerHTML = subCode;
         content.document.body.appendChild(style);
       }
@@ -394,8 +434,21 @@ function* generateNetworkEventStubs() {
     let onNetworkUpdate = new Promise(resolve => {
       let i = 0;
       ui.jsterm.hud.on("network-message-updated", function onNetworkUpdated(event, res) {
-        let updateKey = `${keys[i++]} ${res.packet.updateType}`;
-        stubs.packets.push(formatPacket(updateKey, res));
+        let updateKey = `${keys[i++]} update`;
+        // We cannot ensure the form of the network update packet, some properties
+        // might be in another order than in the original packet.
+        // Hand-picking only what we need should prevent this.
+        const packet = {
+          networkInfo: {
+            _type: res.networkInfo._type,
+            actor: res.networkInfo.actor,
+            request: res.networkInfo.request,
+            response: res.networkInfo.response,
+            totalTime: res.networkInfo.totalTime,
+          }
+        };
+
+        stubs.packets.push(formatPacket(updateKey, packet));
         stubs.preparedMessages.push(formatNetworkEventStub(updateKey, res));
         if (i === keys.length) {
           ui.jsterm.hud.off("network-message-updated", onNetworkUpdated);
@@ -409,6 +462,7 @@ function* generateNetworkEventStubs() {
       [key, code],
       function ([subKey, subCode]) {
         let script = content.document.createElement("script");
+        // eslint-disable-next-line no-unsanitized/property
         script.innerHTML = `function triggerPacket() {${subCode}}`;
         content.document.body.appendChild(script);
         content.wrappedJSObject.triggerPacket();
@@ -455,6 +509,7 @@ function* generatePageErrorStubs() {
       [key, code],
       function ([subKey, subCode]) {
         let script = content.document.createElement("script");
+        // eslint-disable-next-line no-unsanitized/property
         script.innerHTML = subCode;
         content.document.body.appendChild(script);
         script.remove();
@@ -466,4 +521,45 @@ function* generatePageErrorStubs() {
 
   yield closeTabAndToolbox();
   return formatFile(stubs, "ConsoleMessage");
+}
+
+/**
+ * Wait for messages in the web console output, resolving once they are receieved.
+ *
+ * @param hud: the webconsole
+ * @param message: string. text match in .message-body
+ */
+function waitForMessage(hud, messageText) {
+  return new Promise(resolve => {
+    hud.ui.on("new-messages",
+      function messagesReceived(e, newMessages) {
+        for (let newMessage of newMessages) {
+          let messageBody = newMessage.node.querySelector(".message-body");
+          if (messageBody.textContent.includes(messageText)) {
+            info("Matched a message with text: " + messageText);
+            hud.ui.off("new-messages", messagesReceived);
+            resolve(newMessage.node);
+            break;
+          }
+        }
+      });
+  });
+}
+
+/**
+* Returns a promise that resolves when the node passed as an argument mutate
+* according to the passed configuration.
+*
+* @param {Node} node - The node to observe mutations on.
+* @param {Object} observeConfig - A configuration object for MutationObserver.observe.
+* @returns {Promise}
+*/
+function waitForNodeMutation(node, observeConfig = {}) {
+  return new Promise(resolve => {
+    const observer = new MutationObserver(mutations => {
+      resolve(mutations);
+      observer.disconnect();
+    });
+    observer.observe(node, observeConfig);
+  });
 }

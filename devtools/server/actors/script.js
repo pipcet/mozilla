@@ -17,7 +17,6 @@ const { assert, dumpn } = DevToolsUtils;
 const promise = require("promise");
 const xpcInspector = require("xpcInspector");
 const { DevToolsWorker } = require("devtools/shared/worker/worker");
-const object = require("sdk/util/object");
 const { threadSpec } = require("devtools/shared/specs/script");
 
 const { resolve, reject, all } = promise;
@@ -681,6 +680,9 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
     if ("observeAsmJS" in options) {
       this.dbg.allowUnobservedAsmJS = !options.observeAsmJS;
     }
+    if ("wasmBinarySource" in options) {
+      this.dbg.allowWasmBinarySource = !!options.wasmBinarySource;
+    }
 
     Object.assign(this._options, options);
 
@@ -735,7 +737,7 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
                       column: originalLocation.originalColumn
                     };
                     resolve(onPacket(packet))
-          .then(null, error => {
+          .catch(error => {
             reportError(error);
             return {
               error: "unknownError",
@@ -1068,7 +1070,7 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
       needNest = false;
       returnVal = resolvedVal;
     })
-    .then(null, (error) => {
+    .catch((error) => {
       reportError(error, "Error inside unsafeSynchronize:");
     })
     .then(() => {
@@ -1961,11 +1963,7 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
         this.unsafeSynchronize(sourceActorsCreated);
       }
 
-      for (let _actor of bpActors) {
-        // XXX bug 1142115: We do async work in here, so we need to create a fresh
-        // binding because for/of does not yet do that in SpiderMonkey.
-        let actor = _actor;
-
+      for (const actor of bpActors) {
         if (actor.isPending) {
           promises.push(actor.originalLocation.originalSourceActor._setBreakpoint(actor));
         } else {
@@ -2041,7 +2039,7 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
   }
 });
 
-ThreadActor.prototype.requestTypes = object.merge(ThreadActor.prototype.requestTypes, {
+Object.assign(ThreadActor.prototype.requestTypes, {
   "attach": ThreadActor.prototype.onAttach,
   "detach": ThreadActor.prototype.onDetach,
   "reconfigure": ThreadActor.prototype.onReconfigure,

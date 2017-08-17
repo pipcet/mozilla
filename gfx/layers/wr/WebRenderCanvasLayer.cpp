@@ -20,6 +20,7 @@
 #include "SharedSurface.h"
 #include "SharedSurfaceGL.h"
 #include "mozilla/webrender/WebRenderTypes.h"
+#include "WebRenderCanvasRenderer.h"
 
 namespace mozilla {
 namespace layers {
@@ -27,53 +28,32 @@ namespace layers {
 WebRenderCanvasLayer::~WebRenderCanvasLayer()
 {
   MOZ_COUNT_DTOR(WebRenderCanvasLayer);
-
-  if (mExternalImageId.isSome()) {
-    WrBridge()->DeallocExternalImageId(mExternalImageId.ref());
-  }
 }
 
-void
-WebRenderCanvasLayer::Initialize(const Data& aData)
+CanvasRenderer*
+WebRenderCanvasLayer::CreateCanvasRendererInternal()
 {
-  ShareableCanvasLayer::Initialize(aData);
-
-  // XXX: Use basic surface factory until we support shared surface.
-  if (!mGLContext || mGLFrontbuffer)
-    return;
-
-  gl::GLScreenBuffer* screen = mGLContext->Screen();
-  auto factory = MakeUnique<gl::SurfaceFactory_Basic>(mGLContext, screen->mCaps, mFlags);
-  screen->Morph(Move(factory));
+  return new WebRenderCanvasRendererSync(mManager->AsWebRenderLayerManager());
 }
 
 void
 WebRenderCanvasLayer::RenderLayer(wr::DisplayListBuilder& aBuilder,
                                   const StackingContextHelper& aSc)
 {
-  UpdateCompositableClient();
-
-  if (mExternalImageId.isNothing()) {
-    mExternalImageId = Some(WrBridge()->AllocExternalImageIdForCompositable(mCanvasClient));
-  }
+  WebRenderCanvasRendererSync* canvasRenderer = mCanvasRenderer->AsWebRenderCanvasRendererSync();
+  MOZ_ASSERT(canvasRenderer);
+  canvasRenderer->UpdateCompositableClient();
 
   Maybe<gfx::Matrix4x4> transform;
-  const bool needsYFlip = (mOriginPos == gl::OriginPos::BottomLeft);
-  if (needsYFlip) {
-    transform = Some(GetTransform().PreTranslate(0, mBounds.height, 0).PreScale(1, -1, 1));
+  if (canvasRenderer->NeedsYFlip()) {
+    transform = Some(GetTransform().PreTranslate(0, mBounds.Height(), 0).PreScale(1, -1, 1));
   }
 
   ScrollingLayersHelper scroller(this, aBuilder, aSc);
   StackingContextHelper sc(aSc, aBuilder, this, transform);
 
-  LayerRect rect(0, 0, mBounds.width, mBounds.height);
+  LayerRect rect(0, 0, mBounds.Width(), mBounds.Height());
   DumpLayerInfo("CanvasLayer", rect);
-
-  LayerRect clipRect = ClipRect().valueOr(rect);
-  Maybe<WrImageMask> mask = BuildWrMaskLayer(&sc);
-  WrClipRegionToken clip = aBuilder.PushClipRegion(
-      sc.ToRelativeWrRect(clipRect),
-      mask.ptrOr(nullptr));
 
   wr::ImageRendering filter = wr::ToImageRendering(mSamplingFilter);
 
@@ -83,23 +63,18 @@ WebRenderCanvasLayer::RenderLayer(wr::DisplayListBuilder& aBuilder,
                   Stringify(filter).c_str());
   }
 
-  WrImageKey key = GetImageKey();
-  WrBridge()->AddWebRenderParentCommand(OpAddExternalImage(mExternalImageId.value(), key));
+  wr::WrImageKey key = GenerateImageKey();
+  WrBridge()->AddWebRenderParentCommand(OpAddExternalImage(canvasRenderer->GetExternalImageId().value(), key));
   WrManager()->AddImageKeyForDiscard(key);
 
-  aBuilder.PushImage(sc.ToRelativeWrRect(rect), clip, filter, key);
+  wr::LayoutRect r = sc.ToRelativeLayoutRect(rect);
+  aBuilder.PushImage(r, r, filter, key);
 }
 
 void
-WebRenderCanvasLayer::AttachCompositable()
+WebRenderCanvasLayer::ClearCachedResources()
 {
-  mCanvasClient->Connect();
-}
-
-CompositableForwarder*
-WebRenderCanvasLayer::GetForwarder()
-{
-  return WrManager()->WrBridge();
+  mCanvasRenderer->ClearCachedResources();
 }
 
 } // namespace layers

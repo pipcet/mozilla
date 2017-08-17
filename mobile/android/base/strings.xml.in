@@ -31,35 +31,25 @@
 
   <string name="firstrun_panel_title_welcome">&firstrun_panel_title_welcome;</string>
 
-  <string name="firstrun_urlbar_message">&firstrun_urlbar_message;</string>
-  <string name="firstrun_urlbar_subtext">&firstrun_urlbar_subtext;</string>
-  <string name="firstrun_bookmarks_title">&firstrun_bookmarks_title;</string>
-  <string name="firstrun_bookmarks_message">&firstrun_bookmarks_message;</string>
-  <string name="firstrun_bookmarks_subtext">&firstrun_bookmarks_subtext;</string>
-  <string name="firstrun_data_title">&firstrun_data_title;</string>
-  <string name="firstrun_data_message">&firstrun_data_message;</string>
-  <string name="firstrun_data_subtext">&firstrun_data_subtext2;</string>
+  <string name="firstrun_urlbar_message">&firstrun_urlbar_message2;</string>
+  <string name="firstrun_urlbar_subtext">&firstrun_urlbar_subtext2;</string>
+  <string name="firstrun_panel_title_privacy">&firstrun_panel_title_privacy;</string>
+  <string name="firstrun_privacy_message">&firstrun_privacy_message;</string>
+  <string name="firstrun_privacy_subtext">&firstrun_privacy_subtext;</string>
+  <string name="firstrun_panel_title_customize">&firstrun_panel_title_customize;</string>
+  <string name="firstrun_customize_message">&firstrun_customize_message;</string>
+  <string name="firstrun_customize_subtext">&firstrun_customize_subtext;</string>
   <string name="firstrun_sync_title">&firstrun_sync_title;</string>
-  <string name="firstrun_sync_message">&firstrun_sync_message;</string>
-  <string name="firstrun_sync_subtext">&firstrun_sync_subtext;</string>
-  <string name="firstrun_signin_message">&firstrun_signin_message;</string>
+  <string name="firstrun_sync_message">&firstrun_sync_message2;</string>
+  <string name="firstrun_sync_subtext">&firstrun_sync_subtext2;</string>
   <string name="firstrun_signin_button">&firstrun_signin_button;</string>
   <string name="firstrun_welcome_button_browser">&onboard_start_button_browser;</string>
-  <string name="firstrun_button_notnow">&firstrun_button_notnow;</string>
   <string name="firstrun_button_next">&firstrun_button_next;</string>
 
-  <string name="firstrun_tabqueue_title">&firstrun_tabqueue_title;</string>
   <string name="firstrun_tabqueue_message_off">&firstrun_tabqueue_message_off;</string>
   <string name="firstrun_tabqueue_subtext_off">&firstrun_tabqueue_subtext_off;</string>
   <string name="firstrun_tabqueue_message_on">&firstrun_tabqueue_message_on;</string>
   <string name="firstrun_tabqueue_subtext_on">&firstrun_tabqueue_subtext_on;</string>
-
-  <string name="firstrun_readerview_title">&firstrun_readerview_title;</string>
-  <string name="firstrun_readerview_message">&firstrun_readerview_message;</string>
-  <string name="firstrun_readerview_subtext">&firstrun_readerview_subtext;</string>
-
-  <string name="firstrun_account_title">&firstrun_account_title;</string>
-  <string name="firstrun_account_message">&firstrun_account_message;</string>
 
   <string name="firstrun_welcome_restricted">&onboard_start_restricted1;</string>
 
@@ -247,8 +237,8 @@
   <string name="custom_tabs_menu_footer">&custom_tabs_menu_footer;</string>
   <string name="custom_tabs_hint_url_copy">&custom_tabs_hint_url_copy;</string>
 
-  <string name="pref_activity_stream">&pref_activity_stream;</string>
-  <string name="pref_activity_stream_summary">&pref_activity_stream_summary;</string>
+  <string name="pref_pwa">&pref_pwa;</string>
+  <string name="pref_pwa_summary">&pref_pwa_summary;</string>
 
   <string name="pref_char_encoding">&pref_char_encoding;</string>
   <string name="pref_char_encoding_on">&pref_char_encoding_on;</string>
@@ -258,10 +248,6 @@
   <string name="pref_clear_on_exit_title">&pref_clear_on_exit_title3;</string>
   <string name="pref_clear_on_exit_summary2">&pref_clear_on_exit_summary2;</string>
   <string name="pref_clear_on_exit_dialog_title">&pref_clear_on_exit_dialog_title;</string>
-  <string name="pref_plugins">&pref_plugins;</string>
-  <string name="pref_plugins_enabled">&pref_plugins_enabled;</string>
-  <string name="pref_plugins_tap_to_play">&pref_plugins_tap_to_play2;</string>
-  <string name="pref_plugins_disabled">&pref_plugins_disabled;</string>
   <string name="pref_use_system_font_size">&pref_use_system_font_size;</string>
   <string name="pref_use_system_font_size_summary">&pref_use_system_font_size_summary;</string>
   <string name="pref_media_autoplay_enabled">&pref_media_autoplay_enabled;</string>
@@ -433,6 +419,7 @@
   <string name="page_removed">&page_removed;</string>
 
   <string name="bookmark_edit_title">&bookmark_edit_title;</string>
+  <string name="bookmark_edit_folder_title">&bookmark_edit_folder_title;</string>
   <string name="bookmark_edit_name">&bookmark_edit_name;</string>
   <string name="bookmark_edit_location">&bookmark_edit_location;</string>
   <string name="bookmark_edit_keyword">&bookmark_edit_keyword;</string>
@@ -477,6 +464,9 @@
   <string name="home_remote_tabs_hidden_devices_title">&home_remote_tabs_hidden_devices_title;</string>
   <string name="home_remote_tabs_unhide_selected_devices">&home_remote_tabs_unhide_selected_devices;</string>
   <string name="pin_site_dialog_hint">&pin_site_dialog_hint;</string>
+
+  <string name="home_pinned_site">&home_pinned_site;</string>
+  <string name="home_unpinned_site">&home_unpinned_site;</string>
 
   <string name="remote_tabs_never_synced">&remote_tabs_never_synced;</string>
 
@@ -640,4 +630,9 @@
 
   <string name="activity_stream_welcome_title">&activity_stream_welcome_title;</string>
   <string name="activity_stream_welcome_content">&activity_stream_welcome_content1;</string>
+
+  <string name="private_tab_panel_title">&private_tab_panel_title;</string>
+  <string name="private_tab_panel_description">&private_tab_panel_description;</string>
+  <string name="private_tab_panel_description2">&private_tab_panel_description2;</string>
+  <string name="private_tab_learn_more">&private_tab_learn_more;</string>
 </resources>

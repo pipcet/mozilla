@@ -7,7 +7,7 @@ config = {
     "update_platform": "WINNT_x86-msvc",
     "mozconfig": "%(branch)s/browser/config/mozconfigs/win32/l10n-mozconfig",
     "bootstrap_env": {
-        "MOZ_OBJDIR": "obj-l10n",
+        "MOZ_OBJDIR": "obj-firefox",
         "EN_US_BINARY_URL": "%(en_us_binary_url)s",
         "LOCALE_MERGEDIR": "%(abs_merge_dir)s",
         "MOZ_UPDATE_CHANNEL": "%(update_channel)s",
@@ -18,10 +18,12 @@ config = {
                 '%s' % (os.environ.get('path')),
         'TOOLTOOL_CACHE': 'c:/builds/tooltool_cache',
         'TOOLTOOL_HOME': '/c/builds',
+        'EN_US_PACKAGE_NAME': 'target.zip',
+        'EN_US_PKG_INST_BASENAME': 'target.installer',
     },
     "ssh_key_dir": "~/.ssh",
     "log_name": "single_locale",
-    "objdir": "obj-l10n",
+    "objdir": "obj-firefox",
     "js_src_dir": "js/src",
     "vcs_share_base": "c:/builds/hg-shared",
 
@@ -29,8 +31,7 @@ config = {
     'tooltool_url': 'https://api.pub.build.mozilla.org/tooltool/',
     'tooltool_script': [sys.executable,
                         'C:/mozilla-build/tooltool.py'],
-    'tooltool_bootstrap': "setup.sh",
-    'tooltool_manifest_src': 'browser/config/tooltool-manifests/win32/releng.manifest',
+    'tooltool_manifest_src': 'browser/config/tooltool-manifests/win32/l10n.manifest',
     # balrog credential file:
     'balrog_credentials_file': 'oauth.txt',
 
