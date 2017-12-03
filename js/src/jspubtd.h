@@ -226,8 +226,9 @@ class JS_PUBLIC_API(AutoGCRooter)
     static void traceAll(const js::CooperatingContext& target, JSTracer* trc);
     static void traceAllWrappers(const js::CooperatingContext& target, JSTracer* trc);
 
-  protected:
     AutoGCRooter * const down;
+    AutoGCRooter ** const stackTop;
+  protected:
 
     /*
      * Discriminates actual subclass of this being used.  If non-negative, the
@@ -255,7 +256,6 @@ class JS_PUBLIC_API(AutoGCRooter)
     static ptrdiff_t GetTag(JSObject* obj) { return OBJVECTOR; }
 
   private:
-    AutoGCRooter ** const stackTop;
 
     /* No copy or assignment semantics. */
     AutoGCRooter(AutoGCRooter& ida) = delete;
@@ -290,14 +290,14 @@ enum StackKind
 class RootingContext
 {
     // Stack GC roots for Rooted GC heap pointers.
-    RootedListHeads stackRoots_;
     template <typename T> friend class JS::Rooted;
 
     // Stack GC roots for AutoFooRooter classes.
-    JS::AutoGCRooter* autoGCRooters_;
     friend class JS::AutoGCRooter;
 
   public:
+    RootedListHeads stackRoots_;
+    JS::AutoGCRooter* autoGCRooters_;
     RootingContext();
 
     void traceStackRoots(JSTracer* trc);

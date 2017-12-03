@@ -801,8 +801,8 @@ template <typename T>
 class MOZ_RAII Rooted : public js::RootedBase<T, Rooted<T>>
 {
     inline void registerWithRootLists(RootedListHeads& roots) {
-        this->stack = &roots[JS::MapTypeToRootKind<T>::kind];
-        this->prev = *stack;
+        stack = &roots[JS::MapTypeToRootKind<T>::kind];
+        prev = *stack;
         *stack = reinterpret_cast<Rooted<void*>*>(this);
     }
 
@@ -832,7 +832,6 @@ class MOZ_RAII Rooted : public js::RootedBase<T, Rooted<T>>
     }
 
     ~Rooted() {
-        MOZ_ASSERT(*stack == reinterpret_cast<Rooted<void*>*>(this));
         *stack = prev;
     }
 
@@ -856,16 +855,17 @@ class MOZ_RAII Rooted : public js::RootedBase<T, Rooted<T>>
     DECLARE_NONPOINTER_ACCESSOR_METHODS(ptr);
     DECLARE_NONPOINTER_MUTABLE_ACCESSOR_METHODS(ptr);
 
-  private:
     /*
      * These need to be templated on void* to avoid aliasing issues between, for
      * example, Rooted<JSObject> and Rooted<JSFunction>, which use the same
      * stack head pointer for different classes.
      */
+ public:
     Rooted<void*>** stack;
     Rooted<void*>* prev;
-
     detail::MaybeWrapped<T> ptr;
+
+  private:
 
     Rooted(const Rooted&) = delete;
 } JS_HAZ_ROOTED;

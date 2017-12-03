@@ -331,7 +331,7 @@ Poison(void* ptr, uint8_t value, size_t num)
 }
 
 /* Crash diagnostics by default in debug and on nightly channel. */
-#if (defined(DEBUG) || defined(NIGHTLY_BUILD)) && !defined(MOZ_ASAN)
+#if (defined(DEBUG)) && !defined(MOZ_ASAN)
 # define JS_CRASH_DIAGNOSTICS 1
 #endif
 

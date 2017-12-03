@@ -4838,7 +4838,7 @@ gc::ZealModeHelpText),
 
     JS_FN_HELP("deterministicgc", DeterministicGC, 1, 0,
 "deterministicgc(true|false)",
-"  If true, only allow determinstic GCs to run."),
+"  If true, only allow deterministic GCs to run."),
 
     JS_FN_HELP("dumpGCArenaInfo", DumpGCArenaInfo, 0, 0,
 "dumpGCArenaInfo()",

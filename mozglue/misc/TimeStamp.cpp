@@ -44,7 +44,7 @@ struct TimeStampInitialization
   };
 };
 
-static TimeStampInitialization sInitOnce;
+static TimeStampInitialization sInitOnce __attribute__((init_priority(101)));
 
 MFBT_API TimeStamp
 TimeStamp::ProcessCreation(bool* aIsInconsistent)
