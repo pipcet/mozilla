@@ -317,11 +317,6 @@ Poison(void* ptr, uint8_t value, size_t num)
     return ptr;
 }
 
-/* Crash diagnostics by default in debug and on nightly channel. */
-#if defined(DEBUG) || defined(NIGHTLY_BUILD)
-# define JS_CRASH_DIAGNOSTICS 1
-#endif
-
 /* Enable poisoning in crash-diagnostics and zeal builds. */
 #if defined(JS_CRASH_DIAGNOSTICS) || defined(JS_GC_ZEAL)
 # define JS_POISON(p, val, size) Poison(p, val, size)
