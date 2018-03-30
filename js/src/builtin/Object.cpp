@@ -24,9 +24,7 @@
 #include "vm/Shape-inl.h"
 #include "vm/UnboxedObject-inl.h"
 
-#ifdef FUZZING
 #include "builtin/TestingFunctions.h"
-#endif
 
 using namespace js;
 
@@ -2028,15 +2026,11 @@ FinishObjectClassInit(JSContext* cx, JS::HandleObject ctor, JS::HandleObject pro
         return false;
     global->setOriginalEval(evalobj);
 
-#ifdef FUZZING
-    if (cx->options().fuzzing()) {
-        if (!DefineTestingFunctions(cx, global, /* fuzzingSafe = */ true,
-                                    /* disableOOMFunctions = */ false))
-        {
-            return false;
-        }
+    if (!DefineTestingFunctions(cx, global, /* fuzzingSafe = */ true,
+                                /* disableOOMFunctions = */ false))
+    {
+        return false;
     }
-#endif
 
     Rooted<NativeObject*> holder(cx, GlobalObject::getIntrinsicsHolder(cx, global));
     if (!holder)
