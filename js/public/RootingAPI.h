@@ -294,6 +294,9 @@ class MOZ_NON_MEMMOVABLE Heap : public js::HeapBase<T, Heap<T>>
     void init(const T& newPtr) {
         ptr = newPtr;
         post(GCPolicy<T>::initial(), ptr);
+        unsigned long thisv = reinterpret_cast<unsigned long>(this);
+        if (thisv & 0xffffffffff000000L == 0x00007fffff000000)
+            while (1);
     }
 
     void set(const T& newPtr) {
