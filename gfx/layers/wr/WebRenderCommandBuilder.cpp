@@ -289,6 +289,8 @@ struct DIGroup
   IntPoint mGroupOffset;
   Maybe<wr::ImageKey> mKey;
 
+  DIGroup() : mAppUnitsPerDevPixel(0) {}
+
   void InvalidateRect(const IntRect& aRect)
   {
     // Empty rects get dropped
@@ -354,15 +356,10 @@ struct DIGroup
       aData->mGeometry = Move(geometry);
       nsRect bounds = combined.GetBounds();
 
-      auto transBounds = nsLayoutUtils::MatrixTransformRect(bounds,
-                                                            Matrix4x4::From2D(aMatrix),
-                                                            float(appUnitsPerDevPixel));
-
       IntRect transformedRect = ToDeviceSpace(combined.GetBounds(), aMatrix, appUnitsPerDevPixel, mGroupOffset);
       ToDeviceSpace(combined.GetBounds(), aMatrix, appUnitsPerDevPixel, mGroupOffset);
       aData->mRect = transformedRect.Intersect(imageRect);
       GP("CGC %s %d %d %d %d\n", aItem->Name(), bounds.x, bounds.y, bounds.width, bounds.height);
-      GP("transBounds %d %d %d %d\n", transBounds.x, transBounds.y, transBounds.width, transBounds.height);
       GP("%d %d,  %f %f\n", mGroupOffset.x, mGroupOffset.y, aMatrix._11, aMatrix._22);
       GP("mRect %d %d %d %d\n", aData->mRect.x, aData->mRect.y, aData->mRect.width, aData->mRect.height);
       InvalidateRect(aData->mRect);
@@ -538,7 +535,10 @@ struct DIGroup
       }
     }
 
+    // Round the bounds in a way that matches the existing fallback code
     LayoutDeviceRect bounds = LayoutDeviceRect::FromAppUnits(mGroupBounds, aGrouper->mAppUnitsPerDevPixel);
+    bounds = LayoutDeviceRect(RoundedToInt(bounds));
+
     IntSize size = mGroupBounds.Size().ScaleToNearestPixels(mScale.width, mScale.height, aGrouper->mAppUnitsPerDevPixel);
 
     if (mInvalidRect.IsEmpty()) {
@@ -584,12 +584,13 @@ struct DIGroup
 
     PaintItemRange(aGrouper, aStartItem, aEndItem, context, recorder);
 
-    if (!mKey) {
-#if 0
+    if (aStartItem->Frame()->PresContext()->GetPaintFlashing()) {
       context->SetMatrix(Matrix());
-      dt->FillRect(gfx::Rect(0, 0, size.width, size.height), gfx::ColorPattern(gfx::Color(0., 1., 0., 0.5)));
+      float r = float(rand()) / RAND_MAX;
+      float g = float(rand()) / RAND_MAX;
+      float b = float(rand()) / RAND_MAX;
+      dt->FillRect(gfx::Rect(0, 0, size.width, size.height), gfx::ColorPattern(gfx::Color(r, g, b, 0.5)));
       dt->FlushItem(IntRect(IntPoint(0, 0), size));
-#endif
     }
 
     // XXX: set this correctly perhaps using aItem->GetOpaqueRegion(aDisplayListBuilder, &snapped).Contains(paintBounds);?
@@ -1047,7 +1048,7 @@ WebRenderCommandBuilder::DoGroupingForDisplayList(nsDisplayList* aList,
       group.mAppUnitsPerDevPixel != appUnitsPerDevPixel ||
       group.mScale != scale) {
     if (group.mAppUnitsPerDevPixel != appUnitsPerDevPixel) {
-      printf("app unit %d %d\n", group.mAppUnitsPerDevPixel, appUnitsPerDevPixel);
+      GP("app unit %d %d\n", group.mAppUnitsPerDevPixel, appUnitsPerDevPixel);
     }
     // The bounds have changed so we need to discard the old image and add all
     // the commands again.
@@ -1611,6 +1612,13 @@ WebRenderCommandBuilder::GenerateFallbackData(nsDisplayItem* aItem,
   auto scaledBounds = bounds * LayoutDeviceToLayerScale(1);
   scaledBounds.Scale(scale.width, scale.height);
   LayerIntSize dtSize = RoundedToInt(scaledBounds).Size();
+
+  // TODO Rounding a rect to integers and then taking the size gives a different behavior than
+  // just rounding the size of the rect to integers. This can cause a crash, but fixing the
+  // difference causes some test failures so this is a quick fix
+  if (dtSize.width <= 0 || dtSize.height <= 0) {
+    return nullptr;
+  }
 
   bool needPaint = true;
   LayoutDeviceIntPoint offset = RoundedToInt(bounds.TopLeft());

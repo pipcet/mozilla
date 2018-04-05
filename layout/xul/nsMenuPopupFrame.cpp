@@ -19,7 +19,6 @@
 #include "nsPopupSetFrame.h"
 #include "nsPIDOMWindow.h"
 #include "nsIDOMEvent.h"
-#include "nsIDOMScreen.h"
 #include "nsIDOMXULMenuListElement.h"
 #include "nsIPresShell.h"
 #include "nsFrameManager.h"
@@ -159,14 +158,10 @@ nsMenuPopupFrame::Init(nsIContent*       aContent,
   viewManager->SetViewFloating(ourView, true);
 
   mPopupType = ePopupTypePanel;
-  nsIDocument* doc = aContent->OwnerDoc();
-  int32_t namespaceID;
-  RefPtr<nsAtom> tag = doc->BindingManager()->ResolveTag(aContent, &namespaceID);
-  if (namespaceID == kNameSpaceID_XUL) {
-    if (tag == nsGkAtoms::menupopup || tag == nsGkAtoms::popup)
-      mPopupType = ePopupTypeMenu;
-    else if (tag == nsGkAtoms::tooltip)
-      mPopupType = ePopupTypeTooltip;
+  if (aContent->IsAnyOfXULElements(nsGkAtoms::menupopup, nsGkAtoms::popup)) {
+    mPopupType = ePopupTypeMenu;
+  } else if (aContent->IsXULElement(nsGkAtoms::tooltip)) {
+    mPopupType = ePopupTypeTooltip;
   }
 
   nsCOMPtr<nsIDocShellTreeItem> dsti = PresContext()->GetDocShell();
@@ -231,7 +226,7 @@ nsMenuPopupFrame::PopupLevel(bool aIsNoAutoHide) const
 
   // If the level attribute has been set, use that.
   static Element::AttrValuesArray strings[] =
-    {&nsGkAtoms::top, &nsGkAtoms::parent, &nsGkAtoms::floating, nullptr};
+    {nsGkAtoms::top, nsGkAtoms::parent, nsGkAtoms::floating, nullptr};
   switch (mContent->AsElement()->FindAttrValueIn(kNameSpaceID_None,
                                                  nsGkAtoms::level, strings,
                                                  eCaseMatters)) {

@@ -1075,7 +1075,9 @@ pref("security.sandbox.gpu.level", 0);
 
 // Controls whether we disable win32k for the GMP processes.
 // true means that win32k system calls are not permitted.
-pref("security.sandbox.gmp.win32k-disable", true);
+// Note: win32k is currently _not_ disabled due to intermittent test failures,
+// where the GMP process fails very early. See bug 1449348.
+pref("security.sandbox.gmp.win32k-disable", false);
 #endif
 
 #if defined(XP_MACOSX) && defined(MOZ_SANDBOX) && defined(MOZ_CONTENT_SANDBOX)
@@ -1104,11 +1106,11 @@ pref("security.sandbox.content.level", 3);
 //      read access triggered by file dialog activity"
 // 2 - "no global read access, read and write access to some
 //      Flash-specific directories"
-pref("dom.ipc.plugins.sandbox-level.flash", 0);
+pref("dom.ipc.plugins.sandbox-level.flash", 1);
 // Controls the sandbox level used by plugins other than Flash. On Mac,
 // no other plugins are supported and this pref is only used for test
 // plugins used in automated tests.
-pref("dom.ipc.plugins.sandbox-level.default", 0);
+pref("dom.ipc.plugins.sandbox-level.default", 1);
 #endif
 
 #if defined(XP_LINUX) && defined(MOZ_SANDBOX) && defined(MOZ_CONTENT_SANDBOX)

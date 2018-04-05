@@ -20,6 +20,7 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/dom/ContentChild.h"
+#include "mozilla/StaticPrefs.h"
 #include "mozilla/Unused.h"
 #include "nsCharTraits.h"
 #include "nsDocument.h"
@@ -128,7 +129,6 @@
 #include "DisplayListChecker.h"
 #include "TextDrawTarget.h"
 #include "nsDeckFrame.h"
-#include "mozilla/StylePrefs.h"
 #include "mozilla/dom/InspectorFontFace.h"
 
 #ifdef MOZ_XUL
@@ -10131,7 +10131,7 @@ nsLayoutUtils::ComputeOffsetToUserSpace(nsDisplayListBuilder* aBuilder,
 /* static */ uint8_t
 nsLayoutUtils::ControlCharVisibilityDefault()
 {
-  return StylePrefs::sControlCharVisibility
+  return StaticPrefs::layout_css_control_characters_visible()
     ? NS_STYLE_CONTROL_CHARACTER_VISIBILITY_VISIBLE
     : NS_STYLE_CONTROL_CHARACTER_VISIBILITY_HIDDEN;
 }
@@ -10360,4 +10360,33 @@ nsLayoutUtils::ParseFontLanguageOverride(const nsAString& aLangTag)
     result = (result << 8) + 0x20;
   }
   return result;
+}
+
+/* static */ nscoord
+nsLayoutUtils::ResolveGapToLength(const nsStyleCoord& aCoord,
+                                  nscoord aPercentageBasis)
+{
+  switch (aCoord.GetUnit()) {
+    case eStyleUnit_Normal:
+      return nscoord(0);
+    case eStyleUnit_Coord:
+      return aCoord.GetCoordValue();
+    case eStyleUnit_Percent:
+      if (aPercentageBasis == NS_UNCONSTRAINEDSIZE) {
+        return nscoord(0);
+      }
+      return NSToCoordFloorClamped(aPercentageBasis *
+                                   aCoord.GetPercentValue());
+    case eStyleUnit_Calc: {
+      nsStyleCoord::Calc* calc = aCoord.GetCalcValue();
+      if (aPercentageBasis == NS_UNCONSTRAINEDSIZE) {
+        return std::max(nscoord(0), calc->mLength);
+      }
+      return std::max(nscoord(0), calc->mLength +
+        NSToCoordFloorClamped(aPercentageBasis * calc->mPercent));
+    }
+    default:
+      MOZ_ASSERT_UNREACHABLE("Unexpected unit!");
+      return nscoord(0);
+  }
 }

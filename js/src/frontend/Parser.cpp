@@ -485,7 +485,7 @@ FunctionBox::FunctionBox(JSContext* cx, ObjectBox* traceListHead,
     usesThis(false),
     usesReturn(false),
     hasRest_(false),
-    isExprBody_(false),
+    hasExprBody_(false),
     hasExtensibleScope_(false),
     argumentsHasLocalBinding_(false),
     definitelyNeedsArgsObj_(false),
@@ -2501,8 +2501,6 @@ PerHandlerParser<SyntaxParseHandler>::finishFunction(bool isStandaloneFunction /
     lazy->setAsyncKind(funbox->asyncKind());
     if (funbox->hasRest())
         lazy->setHasRest();
-    if (funbox->isExprBody())
-        lazy->setIsExprBody();
     if (funbox->isLikelyConstructorWrapper())
         lazy->setLikelyConstructorWrapper();
     if (funbox->isDerivedClassConstructor())
@@ -2820,12 +2818,10 @@ ParserBase::newFunction(HandleAtom atom, FunctionSyntaxKind kind,
         allocKind = gc::AllocKind::FUNCTION_EXTENDED;
         break;
       case Getter:
-      case GetterNoExpressionClosure:
         flags = JSFunction::INTERPRETED_GETTER;
         allocKind = gc::AllocKind::FUNCTION_EXTENDED;
         break;
       case Setter:
-      case SetterNoExpressionClosure:
         flags = JSFunction::INTERPRETED_SETTER;
         allocKind = gc::AllocKind::FUNCTION_EXTENDED;
         break;
@@ -2937,10 +2933,10 @@ JSAtom*
 ParserBase::prefixAccessorName(PropertyType propType, HandleAtom propAtom)
 {
     RootedAtom prefix(context);
-    if (propType == PropertyType::Setter || propType == PropertyType::SetterNoExpressionClosure) {
+    if (propType == PropertyType::Setter) {
         prefix = context->names().setPrefix;
     } else {
-        MOZ_ASSERT(propType == PropertyType::Getter || propType == PropertyType::GetterNoExpressionClosure);
+        MOZ_ASSERT(propType == PropertyType::Getter);
         prefix = context->names().getPrefix;
     }
 
@@ -3043,7 +3039,7 @@ GeneralParser<ParseHandler, CharT>::functionArguments(YieldHandling yieldHandlin
         bool disallowDuplicateParams = kind == Arrow || kind == Method || kind == ClassConstructor;
         AtomVector& positionalFormals = pc->positionalFormalParameterNames();
 
-        if (IsGetterKind(kind)) {
+        if (kind == Getter) {
             error(JSMSG_ACCESSOR_WRONG_ARGS, "getter", "no", "s");
             return false;
         }
@@ -3061,7 +3057,7 @@ GeneralParser<ParseHandler, CharT>::functionArguments(YieldHandling yieldHandlin
             MOZ_ASSERT_IF(parenFreeArrow, TokenKindIsPossibleIdentifier(tt));
 
             if (tt == TokenKind::TripleDot) {
-                if (IsSetterKind(kind)) {
+                if (kind == Setter) {
                     error(JSMSG_ACCESSOR_WRONG_ARGS, "setter", "one", "");
                     return false;
                 }
@@ -3188,7 +3184,7 @@ GeneralParser<ParseHandler, CharT>::functionArguments(YieldHandling yieldHandlin
             }
 
             // Setter syntax uniquely requires exactly one argument.
-            if (IsSetterKind(kind))
+            if (kind == Setter)
                 break;
 
             if (!tokenStream.matchToken(&matched, TokenKind::Comma, TokenStream::Operand))
@@ -3209,7 +3205,7 @@ GeneralParser<ParseHandler, CharT>::functionArguments(YieldHandling yieldHandlin
             if (!tokenStream.getToken(&tt, TokenStream::Operand))
                 return false;
             if (tt != TokenKind::Rp) {
-                if (IsSetterKind(kind)) {
+                if (kind == Setter) {
                     error(JSMSG_ACCESSOR_WRONG_ARGS, "setter", "one", "");
                     return false;
                 }
@@ -3226,7 +3222,7 @@ GeneralParser<ParseHandler, CharT>::functionArguments(YieldHandling yieldHandlin
             funbox->hasDirectEvalInParameterExpr = true;
 
         funbox->function()->setArgCount(positionalFormals.length());
-    } else if (IsSetterKind(kind)) {
+    } else if (kind == Setter) {
         error(JSMSG_ACCESSOR_WRONG_ARGS, "setter", "one", "");
         return false;
     }
@@ -3254,8 +3250,6 @@ Parser<FullParseHandler, CharT>::skipLazyInnerFunction(ParseNode* funcNode, uint
     LazyScript* lazy = fun->lazyScript();
     if (lazy->needsHomeObject())
         funbox->setNeedsHomeObject();
-    if (lazy->isExprBody())
-        funbox->setIsExprBody();
 
     PropagateTransitiveParseFlags(lazy, pc->sc());
 
@@ -3781,7 +3775,7 @@ GeneralParser<ParseHandler, CharT>::functionFormalParametersAndBody(InHandling i
 
         anyChars.ungetToken();
         bodyType = ExpressionBody;
-        funbox->setIsExprBody();
+        funbox->setHasExprBody();
     } else {
         openedPos = pos().begin;
     }
@@ -7161,10 +7155,8 @@ ToAccessorType(PropertyType propType)
 {
     switch (propType) {
       case PropertyType::Getter:
-      case PropertyType::GetterNoExpressionClosure:
         return AccessorType::Getter;
       case PropertyType::Setter:
-      case PropertyType::SetterNoExpressionClosure:
         return AccessorType::Setter;
       case PropertyType::Normal:
       case PropertyType::Method:
@@ -7301,11 +7293,6 @@ GeneralParser<ParseHandler, CharT>::classDefinition(YieldHandling yieldHandling,
             return null();
         }
 
-        if (propType == PropertyType::Getter)
-            propType = PropertyType::GetterNoExpressionClosure;
-        if (propType == PropertyType::Setter)
-            propType = PropertyType::SetterNoExpressionClosure;
-
         bool isConstructor = !isStatic && propAtom == context->names().constructor;
         if (isConstructor) {
             if (propType != PropertyType::Method) {
@@ -7324,8 +7311,8 @@ GeneralParser<ParseHandler, CharT>::classDefinition(YieldHandling yieldHandling,
 
         RootedAtom funName(context);
         switch (propType) {
-          case PropertyType::GetterNoExpressionClosure:
-          case PropertyType::SetterNoExpressionClosure:
+          case PropertyType::Getter:
+          case PropertyType::Setter:
             if (!anyChars.isCurrentTokenType(TokenKind::Rb)) {
                 funName = prefixAccessorName(propType, propAtom);
                 if (!funName)
@@ -8004,9 +7991,6 @@ GeneralParser<ParseHandler, CharT>::orExpr(InHandling inHandling, YieldHandling 
         if (!pn)
             return null();
 
-        if (handler.isExpressionClosure(pn))
-            return pn;
-
         expressionClosureHandling = ExpressionClosure::Forbidden;
 
         // If a binary operator follows, consume it and compute the
@@ -8081,9 +8065,6 @@ GeneralParser<ParseHandler, CharT>::condExpr(InHandling inHandling, YieldHandlin
                             expressionClosureHandling, possibleError, invoked);
     if (!condition)
         return null();
-
-    if (handler.isExpressionClosure(condition))
-        return condition;
 
     bool matched;
     if (!tokenStream.matchToken(&matched, TokenKind::Hook))
@@ -8512,9 +8493,6 @@ GeneralParser<ParseHandler, CharT>::unaryExpr(YieldHandling yieldHandling,
         if (!expr)
             return null();
 
-        if (handler.isExpressionClosure(expr))
-            return expr;
-
         /* Don't look across a newline boundary for a postfix incop. */
         if (!tokenStream.peekTokenSameLine(&tt))
             return null();
@@ -8682,9 +8660,6 @@ GeneralParser<ParseHandler, CharT>::memberExpr(YieldHandling yieldHandling,
                           possibleError, invoked);
         if (!lhs)
             return null();
-
-        if (handler.isExpressionClosure(lhs))
-            return lhs;
     }
 
     MOZ_ASSERT_IF(handler.isSuperBase(lhs), anyChars.isCurrentTokenType(TokenKind::Super));
@@ -9766,16 +9741,8 @@ GeneralParser<ParseHandler, CharT>::methodDefinition(uint32_t toStringStart, Pro
         kind = Getter;
         break;
 
-      case PropertyType::GetterNoExpressionClosure:
-        kind = GetterNoExpressionClosure;
-        break;
-
       case PropertyType::Setter:
         kind = Setter;
-        break;
-
-      case PropertyType::SetterNoExpressionClosure:
-        kind = SetterNoExpressionClosure;
         break;
 
       case PropertyType::Method:
@@ -10053,23 +10020,6 @@ ParserBase::addTelemetry(DeprecatedLanguageExtension e)
     if (context->helperThread())
         return;
     context->compartment()->addTelemetry(getFilename(), e);
-}
-
-template <class ParseHandler, typename CharT>
-bool
-GeneralParser<ParseHandler, CharT>::warnOnceAboutExprClosure()
-{
-#ifndef RELEASE_OR_BETA
-    if (context->helperThread())
-        return true;
-
-    if (!context->compartment()->warnedAboutExprClosure) {
-        if (!warning(JSMSG_DEPRECATED_EXPR_CLOSURE))
-            return false;
-        context->compartment()->warnedAboutExprClosure = true;
-    }
-#endif
-    return true;
 }
 
 template class PerHandlerParser<FullParseHandler>;

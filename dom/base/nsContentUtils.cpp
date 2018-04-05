@@ -3194,8 +3194,13 @@ nsContentUtils::NewURIWithDocumentCharset(nsIURI** aResult,
 
 // static
 bool
-nsContentUtils::IsCustomElementName(nsAtom* aName)
+nsContentUtils::IsCustomElementName(nsAtom* aName, uint32_t aNameSpaceID)
 {
+  // Allow non-dashed names in XUL for XBL to Custom Element migrations.
+  if (aNameSpaceID == kNameSpaceID_XUL) {
+    return true;
+  }
+
   // A valid custom element name is a sequence of characters name which
   // must match the PotentialCustomElementName production:
   // PotentialCustomElementName ::= [a-z] (PCENChar)* '-' (PCENChar)*
@@ -4659,7 +4664,7 @@ nsContentUtils::HasNonEmptyAttr(const nsIContent* aContent,
                                 int32_t aNameSpaceID,
                                 nsAtom* aName)
 {
-  static Element::AttrValuesArray strings[] = {&nsGkAtoms::_empty, nullptr};
+  static Element::AttrValuesArray strings[] = {nsGkAtoms::_empty, nullptr};
   return aContent->IsElement() &&
     aContent->AsElement()->FindAttrValueIn(aNameSpaceID, aName, strings, eCaseMatters)
       == Element::ATTR_VALUE_NO_MATCH;
@@ -5091,7 +5096,8 @@ nsContentUtils::ParseFragmentHTML(const nsAString& aSourceBuffer,
   // If this is a chrome-privileged document, create a fragment first, and
   // sanitize it before insertion.
   RefPtr<DocumentFragment> fragment;
-  if (aSanitize != NeverSanitize && !aTargetNode->OwnerDoc()->AllowUnsafeHTML()) {
+  if (aSanitize != NeverSanitize &&
+      IsSystemPrincipal(aTargetNode->NodePrincipal())) {
     fragment = new DocumentFragment(aTargetNode->OwnerDoc()->NodeInfoManager());
     target = fragment;
   }
@@ -5198,7 +5204,8 @@ nsContentUtils::ParseFragmentXML(const nsAString& aSourceBuffer,
 
   // If this is a chrome-privileged document, sanitize the fragment before
   // returning.
-  if (aSanitize != NeverSanitize && !aDocument->AllowUnsafeHTML()) {
+  if (aSanitize != NeverSanitize &&
+      IsSystemPrincipal(aDocument->NodePrincipal())) {
     // Don't fire mutation events for nodes removed by the sanitizer.
     nsAutoScriptBlockerSuppressNodeRemoved scriptBlocker;
 
@@ -7771,20 +7778,18 @@ nsContentUtils::GetHostOrIPv6WithBrackets(nsIURI* aURI, nsAString& aHost)
 }
 
 bool
-nsContentUtils::CallOnAllRemoteChildren(nsIMessageBroadcaster* aManager,
+nsContentUtils::CallOnAllRemoteChildren(ChromeMessageBroadcaster* aManager,
                                         CallOnRemoteChildFunction aCallback,
                                         void* aArg)
 {
-  uint32_t tabChildCount = 0;
-  aManager->GetChildCount(&tabChildCount);
+  uint32_t tabChildCount = aManager->ChildCount();
   for (uint32_t j = 0; j < tabChildCount; ++j) {
-    nsCOMPtr<nsIMessageListenerManager> childMM;
-    aManager->GetChildAt(j, getter_AddRefs(childMM));
+    RefPtr<MessageListenerManager> childMM = aManager->GetChildAt(j);
     if (!childMM) {
       continue;
     }
 
-    nsCOMPtr<nsIMessageBroadcaster> nonLeafMM = do_QueryInterface(childMM);
+    RefPtr<ChromeMessageBroadcaster> nonLeafMM = ChromeMessageBroadcaster::From(childMM);
     if (nonLeafMM) {
       if (CallOnAllRemoteChildren(nonLeafMM, aCallback, aArg)) {
         return true;
@@ -7792,10 +7797,7 @@ nsContentUtils::CallOnAllRemoteChildren(nsIMessageBroadcaster* aManager,
       continue;
     }
 
-    nsCOMPtr<nsIMessageSender> tabMM = do_QueryInterface(childMM);
-
-    mozilla::dom::ipc::MessageManagerCallback* cb =
-     static_cast<nsFrameMessageManager*>(tabMM.get())->GetCallback();
+    mozilla::dom::ipc::MessageManagerCallback* cb = childMM->GetCallback();
     if (cb) {
       nsFrameLoader* fl = static_cast<nsFrameLoader*>(cb);
       TabParent* remote = TabParent::GetFrom(fl);
@@ -7815,10 +7817,9 @@ nsContentUtils::CallOnAllRemoteChildren(nsPIDOMWindowOuter* aWindow,
                                         CallOnRemoteChildFunction aCallback,
                                         void* aArg)
 {
-  nsCOMPtr<nsIDOMChromeWindow> chromeWindow(do_QueryInterface(aWindow));
-  if (chromeWindow) {
-    nsCOMPtr<nsIMessageBroadcaster> windowMM;
-    chromeWindow->GetMessageManager(getter_AddRefs(windowMM));
+  nsGlobalWindowOuter* window = nsGlobalWindowOuter::Cast(aWindow);
+  if (window->IsChromeWindow()) {
+    RefPtr<ChromeMessageBroadcaster> windowMM = window->GetMessageManager();
     if (windowMM) {
       CallOnAllRemoteChildren(windowMM, aCallback, aArg);
     }
@@ -9984,9 +9985,9 @@ nsContentUtils::NewXULOrHTMLElement(Element** aResult, mozilla::dom::NodeInfo* a
   if (nodeInfo->NamespaceEquals(kNameSpaceID_XHTML)) {
     tag = nsHTMLTags::CaseSensitiveAtomTagToId(name);
     isCustomElementName = (tag == eHTMLTag_userdefined &&
-                           nsContentUtils::IsCustomElementName(name));
+                           nsContentUtils::IsCustomElementName(name, kNameSpaceID_XHTML));
   } else {
-    isCustomElementName = nsContentUtils::IsCustomElementName(name);
+    isCustomElementName = nsContentUtils::IsCustomElementName(name, kNameSpaceID_XUL);
   }
 
   RefPtr<nsAtom> tagAtom = nodeInfo->NameAtom();

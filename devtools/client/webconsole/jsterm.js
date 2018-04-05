@@ -261,6 +261,8 @@ JSTerm.prototype = {
     let inputContainer = doc.querySelector(".jsterm-input-container");
     this.completeNode = doc.querySelector(".jsterm-complete-node");
     this.inputNode = doc.querySelector(".jsterm-input-node");
+    this.inputBorderSize = this.inputNode.getBoundingClientRect().height -
+                           this.inputNode.clientHeight;
     // Update the character width and height needed for the popup offset
     // calculations.
     this._updateCharSize();
@@ -436,7 +438,7 @@ JSTerm.prototype = {
    * @returns Promise
    *          Resolves with the message once the result is displayed.
    */
-  execute: function(executeString, callback) {
+  execute: async function(executeString, callback) {
     let deferred = defer();
     let resultCallback;
     if (this.hud.NEW_CONSOLE_OUTPUT_ENABLED) {
@@ -455,6 +457,21 @@ JSTerm.prototype = {
     if (!executeString) {
       return null;
     }
+
+    // Append a new value in the history of executed code, or overwrite the most
+    // recent entry. The most recent entry may contain the last edited input
+    // value that was not evaluated yet.
+    this.history[this.historyIndex++] = executeString;
+    this.historyPlaceHolder = this.history.length;
+
+    if (this.history.length > this.inputHistoryCount) {
+      this.history.splice(0, this.history.length - this.inputHistoryCount);
+      this.historyIndex = this.historyPlaceHolder = this.history.length;
+    }
+    this.storeHistory();
+    WebConsoleUtils.usageCount++;
+    this.setInputValue("");
+    this.clearCompletion();
 
     let selectedNodeActor = null;
     let inspectorSelection = this.hud.owner.getInspectorSelection();
@@ -482,22 +499,9 @@ JSTerm.prototype = {
       selectedNodeActor: selectedNodeActor,
     };
 
-    this.requestEvaluation(executeString, options).then(onResult, onResult);
+    const mappedString = await this.hud.owner.getMappedExpression(executeString);
+    this.requestEvaluation(mappedString, options).then(onResult, onResult);
 
-    // Append a new value in the history of executed code, or overwrite the most
-    // recent entry. The most recent entry may contain the last edited input
-    // value that was not evaluated yet.
-    this.history[this.historyIndex++] = executeString;
-    this.historyPlaceHolder = this.history.length;
-
-    if (this.history.length > this.inputHistoryCount) {
-      this.history.splice(0, this.history.length - this.inputHistoryCount);
-      this.historyIndex = this.historyPlaceHolder = this.history.length;
-    }
-    this.storeHistory();
-    WebConsoleUtils.usageCount++;
-    this.setInputValue("");
-    this.clearCompletion();
     return deferred.promise;
   },
 
@@ -1036,7 +1040,7 @@ JSTerm.prototype = {
       inputNode.inputField.scrollHeight : inputNode.scrollHeight;
 
     if (scrollHeight > 0) {
-      inputNode.style.height = scrollHeight + "px";
+      inputNode.style.height = (scrollHeight + this.inputBorderSize) + "px";
     }
   },
 

@@ -957,8 +957,7 @@ var PlacesMenuDNDHandler = {
   _isStaticContainer: function PMDH__isContainer(node) {
     let isMenu = node.localName == "menu" ||
                  (node.localName == "toolbarbutton" &&
-                  (node.getAttribute("type") == "menu" ||
-                   node.getAttribute("type") == "menu-button"));
+                  node.getAttribute("type") == "menu");
     let isStatic = !("_placesNode" in node) && node.lastChild &&
                    node.lastChild.hasAttribute("placespopup") &&
                    !node.parentNode.hasAttribute("placespopup");
@@ -1249,16 +1248,6 @@ var BookmarkingUI = {
   get anchor() {
     let action = PageActions.actionForID(PageActions.ACTION_ID_BOOKMARK);
     return BrowserPageActions.panelAnchorNodeForAction(action);
-  },
-
-  get notifier() {
-    delete this.notifier;
-    return this.notifier = document.getElementById("bookmarked-notification-anchor");
-  },
-
-  get dropmarkerNotifier() {
-    delete this.dropmarkerNotifier;
-    return this.dropmarkerNotifier = document.getElementById("bookmarked-notification-dropmarker-anchor");
   },
 
   get broadcaster() {

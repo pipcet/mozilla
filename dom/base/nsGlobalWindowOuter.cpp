@@ -1054,11 +1054,6 @@ nsGlobalWindowOuter::CleanUp()
   mChromeEventHandler = nullptr; // Forces Release
   mParentTarget = nullptr;
 
-  nsGlobalWindowInner* inner = GetCurrentInnerWindowInternal();
-  if (inner) {
-    inner->CleanUp();
-  }
-
   mArguments = nullptr;
 
   if (mIdleTimer) {
@@ -1855,6 +1850,15 @@ nsGlobalWindowOuter::SetNewDocument(nsIDocument* aDocument,
                                              currentInner->mPerformance->GetDOMTiming(),
                                              currentInner->mPerformance->GetChannel());
         }
+
+        // Rebind DETH objects to the new global created by document.open().
+        // XXX: Is this correct?  We should consider if the spec and our
+        //      implementation should change to match other browsers by
+        //      just reusing the current window.  (Bug 1449992)
+        currentInner->ForEachEventTargetObject(
+          [&] (DOMEventTargetHelper* aDETH, bool* aDoneOut) {
+            aDETH->BindToOwner(newInnerWindow->AsGlobal());
+          });
       }
 
       // Don't free objects on our current inner window if it's going to be
@@ -2596,10 +2600,10 @@ nsGlobalWindowOuter::GetNavigator()
   FORWARD_TO_INNER(Navigator, (), nullptr);
 }
 
-nsIDOMScreen*
+nsScreen*
 nsGlobalWindowOuter::GetScreen()
 {
-  FORWARD_TO_INNER(GetScreen, (), nullptr);
+  FORWARD_TO_INNER(GetScreen, (IgnoreErrors()), nullptr);
 }
 
 void
@@ -3708,10 +3712,9 @@ nsGlobalWindowOuter::CheckSecurityLeftAndTop(int32_t* aLeft, int32_t* aTop,
 
     nsCOMPtr<nsIBaseWindow> treeOwner = GetTreeOwnerWindow();
 
-    nsCOMPtr<nsIDOMScreen> screen = GetScreen();
+    RefPtr<nsScreen> screen = GetScreen();
 
     if (treeOwner && screen) {
-      int32_t screenLeft, screenTop, screenWidth, screenHeight;
       int32_t winLeft, winTop, winWidth, winHeight;
 
       // Get the window size
@@ -3726,9 +3729,9 @@ nsGlobalWindowOuter::CheckSecurityLeftAndTop(int32_t* aLeft, int32_t* aTop,
 
       // Get the screen dimensions
       // XXX This should use nsIScreenManager once it's fully fleshed out.
-      screen->GetAvailLeft(&screenLeft);
-      screen->GetAvailWidth(&screenWidth);
-      screen->GetAvailHeight(&screenHeight);
+      int32_t screenLeft = screen->GetAvailLeft(IgnoreErrors());
+      int32_t screenWidth = screen->GetAvailWidth(IgnoreErrors());
+      int32_t screenHeight = screen->GetAvailHeight(IgnoreErrors());
 #if defined(XP_MACOSX)
       /* The mac's coordinate system is different from the assumed Windows'
          system. It offsets by the height of the menubar so that a window
@@ -3737,9 +3740,9 @@ nsGlobalWindowOuter::CheckSecurityLeftAndTop(int32_t* aLeft, int32_t* aTop,
          the Avail... coordinates is overloaded. Here we allow a window
          to be placed at (0,0) because it does make sense to do so.
       */
-      screen->GetTop(&screenTop);
+      int32_t screenTop = screen->GetTop(IgnoreErrors());
 #else
-      screen->GetAvailTop(&screenTop);
+      int32_t screenTop = screen->GetAvailTop(IgnoreErrors());
 #endif
 
       if (aLeft) {
@@ -7535,18 +7538,24 @@ nsGlobalWindowOuter::SetBrowserDOMWindowOuter(nsIBrowserDOMWindow* aBrowserWindo
   mChromeFields.mBrowserDOMWindow = aBrowserWindow;
 }
 
-NS_IMETHODIMP
-nsGlobalWindowOuter::GetMessageManager(nsIMessageBroadcaster** aManager)
+ChromeMessageBroadcaster*
+nsGlobalWindowOuter::GetMessageManager()
 {
-  FORWARD_TO_INNER(GetMessageManager, (aManager), NS_ERROR_UNEXPECTED);
+  if (!mInnerWindow) {
+    NS_WARNING("No inner window available!");
+    return nullptr;
+  }
+  return GetCurrentInnerWindowInternal()->MessageManager();
 }
 
-NS_IMETHODIMP
-nsGlobalWindowOuter::GetGroupMessageManager(const nsAString& aGroup,
-                                            nsIMessageBroadcaster** aManager)
+ChromeMessageBroadcaster*
+nsGlobalWindowOuter::GetGroupMessageManager(const nsAString& aGroup)
 {
-  MOZ_RELEASE_ASSERT(IsChromeWindow());
-  FORWARD_TO_INNER(GetGroupMessageManager, (aGroup, aManager), NS_ERROR_UNEXPECTED);
+  if (!mInnerWindow) {
+    NS_WARNING("No inner window available!");
+    return nullptr;
+  }
+  return GetCurrentInnerWindowInternal()->GetGroupMessageManager(aGroup);
 }
 
 void

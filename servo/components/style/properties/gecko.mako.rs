@@ -66,6 +66,7 @@ use values::generics::column::ColumnCount;
 use values::generics::position::ZIndex;
 use values::generics::text::MozTabSize;
 use values::generics::transform::TransformStyle;
+use values::generics::url::UrlOrNone;
 use computed_values::border_style;
 
 pub mod style_structs {
@@ -937,10 +938,10 @@ def set_gecko_property(ffi_name, expr):
     #[allow(non_snake_case)]
     pub fn set_${ident}(&mut self, v: longhands::${ident}::computed_value::T) {
         match v {
-            Either::First(url) => {
+            UrlOrNone::Url(ref url) => {
                 self.gecko.${gecko_ffi_name}.set_move(url.url_value.clone())
             }
-            Either::Second(_none) => {
+            UrlOrNone::None => {
                 unsafe {
                     self.gecko.${gecko_ffi_name}.clear();
                 }
@@ -961,15 +962,14 @@ def set_gecko_property(ffi_name, expr):
     #[allow(non_snake_case)]
     pub fn clone_${ident}(&self) -> longhands::${ident}::computed_value::T {
         use values::specified::url::SpecifiedUrl;
-        use values::None_;
 
         if self.gecko.${gecko_ffi_name}.mRawPtr.is_null() {
-            Either::Second(None_)
+            UrlOrNone::none()
         } else {
             unsafe {
                 let ref gecko_url_value = *self.gecko.${gecko_ffi_name}.mRawPtr;
-                Either::First(SpecifiedUrl::from_url_value_data(&gecko_url_value._base)
-                        .expect("${gecko_ffi_name} could not convert to SpecifiedUrl"))
+                UrlOrNone::Url(SpecifiedUrl::from_url_value_data(&gecko_url_value._base)
+                               .expect("${gecko_ffi_name} could not convert to SpecifiedUrl"))
             }
         }
     }
@@ -1445,7 +1445,8 @@ impl Clone for ${style_struct.gecko_struct_name} {
         "length::LengthOrAuto": impl_style_coord,
         "length::LengthOrNormal": impl_style_coord,
         "length::NonNegativeLengthOrAuto": impl_style_coord,
-        "length::NonNegativeLengthOrNormal": impl_style_coord,
+        "length::NonNegativeLengthOrPercentageOrNormal": impl_style_coord,
+        "FlexBasis": impl_style_coord,
         "Length": impl_absolute_length,
         "LengthOrNormal": impl_style_coord,
         "LengthOrPercentage": impl_style_coord,
@@ -1468,7 +1469,7 @@ impl Clone for ${style_struct.gecko_struct_name} {
         "SVGWidth": impl_svg_length,
         "Transform": impl_transform,
         "TransformOrigin": impl_transform_origin,
-        "UrlOrNone": impl_css_url,
+        "url::UrlOrNone": impl_css_url,
     }
 
     def longhand_method(longhand):
@@ -1748,14 +1749,14 @@ fn static_assert() {
 
 <% skip_position_longhands = " ".join(x.ident for x in SIDES + GRID_LINES) %>
 <%self:impl_trait style_struct_name="Position"
-                  skip_longhands="${skip_position_longhands} z-index order align-content
-                                  justify-content align-self justify-self align-items
-                                  justify-items grid-auto-rows grid-auto-columns grid-auto-flow
-                                  grid-template-areas grid-template-rows grid-template-columns">
+                  skip_longhands="${skip_position_longhands} z-index order
+                                  align-content justify-content align-self
+                                  justify-self align-items justify-items
+                                  grid-auto-rows grid-auto-columns
+                                  grid-auto-flow grid-template-areas
+                                  grid-template-rows grid-template-columns">
     % for side in SIDES:
-    <% impl_split_style_coord("%s" % side.ident,
-                              "mOffset",
-                              side.index) %>
+    <% impl_split_style_coord(side.ident, "mOffset", side.index) %>
     % endfor
 
     pub fn set_z_index(&mut self, v: longhands::z_index::computed_value::T) {
@@ -4060,14 +4061,13 @@ fn static_assert() {
                   skip_longhands="list-style-image list-style-type quotes -moz-image-region">
 
     pub fn set_list_style_image(&mut self, image: longhands::list_style_image::computed_value::T) {
-        use values::Either;
         match image {
-            longhands::list_style_image::computed_value::T(Either::Second(_none)) => {
+            UrlOrNone::None => {
                 unsafe {
                     Gecko_SetListStyleImageNone(&mut self.gecko);
                 }
             }
-            longhands::list_style_image::computed_value::T(Either::First(ref url)) => {
+            UrlOrNone::Url(ref url) => {
                 unsafe {
                     Gecko_SetListStyleImageImageValue(&mut self.gecko, url.image_value.get());
                 }
@@ -4089,20 +4089,16 @@ fn static_assert() {
 
     pub fn clone_list_style_image(&self) -> longhands::list_style_image::computed_value::T {
         use values::specified::url::SpecifiedImageUrl;
-        use values::{Either, None_};
 
-        longhands::list_style_image::computed_value::T(
-            match self.gecko.mListStyleImage.mRawPtr.is_null() {
-                true => Either::Second(None_),
-                false => {
-                    unsafe {
-                        let ref gecko_image_request = *self.gecko.mListStyleImage.mRawPtr;
-                        Either::First(SpecifiedImageUrl::from_image_request(gecko_image_request)
-                                      .expect("mListStyleImage could not convert to SpecifiedImageUrl"))
-                    }
-                }
-            }
-        )
+        if self.gecko.mListStyleImage.mRawPtr.is_null() {
+            return UrlOrNone::None;
+        }
+
+        unsafe {
+            let ref gecko_image_request = *self.gecko.mListStyleImage.mRawPtr;
+            UrlOrNone::Url(SpecifiedImageUrl::from_image_request(gecko_image_request)
+                           .expect("mListStyleImage could not convert to SpecifiedImageUrl"))
+        }
     }
 
     pub fn set_list_style_type(&mut self, v: longhands::list_style_type::computed_value::T, device: &Device) {

@@ -119,9 +119,9 @@ class nsXPTParamInfo : public XPTParamDescriptor
 {
 // NO DATA - this a flyweight wrapper
 public:
-    MOZ_IMPLICIT nsXPTParamInfo(const XPTParamDescriptor& desc)
-        {*(XPTParamDescriptor*)this = desc;}
-
+    MOZ_IMPLICIT nsXPTParamInfo(const XPTParamDescriptor& aDesc)
+        : XPTParamDescriptor(aDesc)
+    {}
 
     bool IsIn() const {return !!(mFlags & kInMask);}
     bool IsOut() const {return !!(mFlags & kOutMask);}
@@ -185,8 +185,9 @@ class nsXPTMethodInfo : public XPTMethodDescriptor
 {
 // NO DATA - this a flyweight wrapper
 public:
-    MOZ_IMPLICIT nsXPTMethodInfo(const XPTMethodDescriptor& desc)
-        {*(XPTMethodDescriptor*)this = desc;}
+    MOZ_IMPLICIT nsXPTMethodInfo(const XPTMethodDescriptor& aDesc)
+        : XPTMethodDescriptor(aDesc)
+    {}
 
     bool IsGetter() const { return !!(mFlags & kGetterMask); }
     bool IsSetter() const { return !!(mFlags & kSetterMask); }
@@ -194,11 +195,11 @@ public:
     bool IsHidden() const { return !!(mFlags & kHiddenMask); }
     bool WantsOptArgc() const { return !!(mFlags & kOptArgcMask); }
     bool WantsContext() const { return !!(mFlags & kContextMask); }
-    const char* GetName() const { return mName; }
+    const char* GetName() const { return Name(); }
     uint8_t GetParamCount() const { return mNumArgs; }
     const nsXPTParamInfo GetParam(uint8_t idx) const {
         MOZ_ASSERT(idx < GetParamCount(), "bad arg");
-        return mParams[idx];
+        return Param(idx);
     }
 
 private:

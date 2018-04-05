@@ -1196,7 +1196,7 @@ Element::AttachShadow(const ShadowRootInit& aInit, ErrorResult& aError)
    *    then throw a "NotSupportedError" DOMException.
    */
   nsAtom* nameAtom = NodeInfo()->NameAtom();
-  if (!(nsContentUtils::IsCustomElementName(nameAtom) ||
+  if (!(nsContentUtils::IsCustomElementName(nameAtom, NodeInfo()->NamespaceID()) ||
         nameAtom == nsGkAtoms::article ||
         nameAtom == nsGkAtoms::aside ||
         nameAtom == nsGkAtoms::blockquote ||
@@ -1703,10 +1703,9 @@ Element::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
 
   UpdateEditableState(false);
 
-  // If we had a pre-existing XBL binding,
-  // we might have anonymous children that also need to be told that they are
-  // moving.
-  if (HasFlag(NODE_MAY_BE_IN_BINDING_MNGR) && !GetShadowRoot()) {
+  // If we had a pre-existing XBL binding, we might have anonymous children that
+  // also need to be told that they are moving.
+  if (HasFlag(NODE_MAY_BE_IN_BINDING_MNGR)) {
     nsXBLBinding* binding =
       OwnerDoc()->BindingManager()->GetBindingWithContent(this);
 
@@ -1768,8 +1767,7 @@ Element::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
   }
 
   // Call BindToTree on shadow root children.
-  ShadowRoot* shadowRoot = GetShadowRoot();
-  if (shadowRoot) {
+  if (ShadowRoot* shadowRoot = GetShadowRoot()) {
     shadowRoot->SetIsComposedDocParticipant(IsInComposedDoc());
     for (nsIContent* child = shadowRoot->GetFirstChild(); child;
          child = child->GetNextSibling()) {
@@ -1989,11 +1987,9 @@ Element::UnbindFromTree(bool aDeep, bool aNullParent)
   }
 
   if (document) {
-    // Notify XBL- & nsIAnonymousContentCreator-generated
-    // anonymous content that the document is changing.
-    // Unlike XBL, bindings for web components shadow DOM
-    // do not get uninstalled.
-    if (HasFlag(NODE_MAY_BE_IN_BINDING_MNGR) && !GetShadowRoot()) {
+    if (HasFlag(NODE_MAY_BE_IN_BINDING_MNGR)) {
+      // Notify XBL- & nsIAnonymousContentCreator-generated anonymous content
+      // that the document is changing.
       nsContentUtils::AddScriptRunner(
         new RemoveFromBindingManagerRunnable(
           document->BindingManager(), this, document));
@@ -2170,7 +2166,7 @@ Element::FindAttributeDependence(const nsAtom* aAttribute,
   for (uint32_t mapindex = 0; mapindex < aMapCount; ++mapindex) {
     for (const MappedAttributeEntry* map = aMaps[mapindex];
          map->attribute; ++map) {
-      if (aAttribute == *map->attribute) {
+      if (aAttribute == map->attribute) {
         return true;
       }
     }
@@ -2912,7 +2908,7 @@ Element::FindAttrValueIn(int32_t aNameSpaceID,
   const nsAttrValue* val = mAttrsAndChildren.GetAttr(aName, aNameSpaceID);
   if (val) {
     for (int32_t i = 0; aValues[i]; ++i) {
-      if (val->Equals(*aValues[i], aCaseSensitive)) {
+      if (val->Equals(aValues[i], aCaseSensitive)) {
         return i;
       }
     }
@@ -3427,16 +3423,16 @@ nsDOMTokenListPropertyDestructor(void *aObject, nsAtom *aProperty,
   NS_RELEASE(list);
 }
 
-static nsStaticAtom** sPropertiesToTraverseAndUnlink[] =
+static nsStaticAtom* const sPropertiesToTraverseAndUnlink[] =
   {
-    &nsGkAtoms::sandbox,
-    &nsGkAtoms::sizes,
-    &nsGkAtoms::dirAutoSetBy,
+    nsGkAtoms::sandbox,
+    nsGkAtoms::sizes,
+    nsGkAtoms::dirAutoSetBy,
     nullptr
   };
 
 // static
-nsStaticAtom***
+nsStaticAtom* const*
 Element::HTMLSVGPropertiesToTraverseAndUnlink()
 {
   return sPropertiesToTraverseAndUnlink;
@@ -3447,10 +3443,10 @@ Element::GetTokenList(nsAtom* aAtom,
                       const DOMTokenListSupportedTokenArray aSupportedTokens)
 {
 #ifdef DEBUG
-  nsStaticAtom*** props = HTMLSVGPropertiesToTraverseAndUnlink();
+  const nsStaticAtom* const* props = HTMLSVGPropertiesToTraverseAndUnlink();
   bool found = false;
   for (uint32_t i = 0; props[i]; ++i) {
-    if (*props[i] == aAtom) {
+    if (props[i] == aAtom) {
       found = true;
       break;
     }
@@ -4308,7 +4304,7 @@ Element::SetCustomElementData(CustomElementData* aData)
   #if DEBUG
     nsAtom* name = NodeInfo()->NameAtom();
     nsAtom* type = aData->GetCustomElementType();
-    if (nsContentUtils::IsCustomElementName(name)) {
+    if (nsContentUtils::IsCustomElementName(name, NodeInfo()->NamespaceID())) {
       MOZ_ASSERT(type == name);
     } else {
       MOZ_ASSERT(type != name);

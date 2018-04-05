@@ -838,8 +838,8 @@ pref("gfx.downloadable_fonts.otl_validation", true);
 // to render fonts (Linux/Gtk and Android).
 pref("gfx.downloadable_fonts.keep_color_bitmaps", false);
 
-// Whether to preserve OpenType variation tables in fonts (bypassing OTS)
-pref("gfx.downloadable_fonts.keep_variation_tables", true);
+// Whether to validate OpenType variation tables in fonts
+pref("gfx.downloadable_fonts.validate_variation_tables", true);
 
 #ifdef ANDROID
 pref("gfx.bundled_fonts.enabled", true);
@@ -873,8 +873,6 @@ pref("gfx.font_rendering.graphite.enabled", true);
 #ifdef XP_WIN
 pref("gfx.font_rendering.directwrite.use_gdi_table_loading", true);
 #endif
-
-pref("gfx.font_rendering.opentype_svg.enabled", true);
 
 #ifdef XP_WIN
 // comma separated list of backends to use in order of preference
@@ -2618,6 +2616,11 @@ pref("security.notification_enable_delay", 500);
 pref("security.csp.enable", true);
 pref("security.csp.experimentalEnabled", false);
 pref("security.csp.enableStrictDynamic", true);
+
+#if defined(DEBUG) && !defined(ANDROID)
+pref("csp.content_privileged_about_uris_without_csp", "blank,blocked,cache,certerror,checkerboard,credits,home,logo,neterror,newtab,printpreview,rights,srcdoc,studies");
+#endif
+
 #ifdef NIGHTLY_BUILD
 pref("security.csp.enable_violation_events", true);
 #else
@@ -2929,20 +2932,6 @@ pref("layout.selection.caret_style", 0);
 // pref to report CSS errors to the error console
 pref("layout.css.report_errors", true);
 
-// Should the :visited selector ever match (otherwise :link matches instead)?
-pref("layout.css.visited_links_enabled", true);
-
-// Pref to control whether @-moz-document rules are enabled in content pages.
-pref("layout.css.moz-document.content.enabled",  false);
-
-// Pref to control whether @-moz-document url-prefix() is parsed in content
-// pages. Only effective when layout.css.moz-document.content.enabled is false.
-#ifdef EARLY_BETA_OR_EARLIER
-pref("layout.css.moz-document.url-prefix-hack.enabled", false);
-#else
-pref("layout.css.moz-document.url-prefix-hack.enabled", true);
-#endif
-
 #ifdef NIGHTLY_BUILD
 pref("layout.css.getPropertyCSSValue.enabled", false);
 #else
@@ -3026,26 +3015,6 @@ pref("layout.css.float-logical-values.enabled", true);
 // Is support for the CSS4 image-orientation property enabled?
 pref("layout.css.image-orientation.enabled", true);
 
-// Is support for the font-display @font-face descriptor enabled?
-pref("layout.css.font-display.enabled", true);
-
-// Is support for variation fonts enabled?
-pref("layout.css.font-variations.enabled", true);
-
-// Is support for the frames() timing function enabled?
-#ifdef RELEASE_OR_BETA
-pref("layout.css.frames-timing.enabled", false);
-#else
-pref("layout.css.frames-timing.enabled", true);
-#endif
-
-// Are we emulating -moz-{inline}-box layout using CSS flexbox?
-// (This pref only takes effect in prerelease builds, so we only
-// bother specifying a default in prerelease builds as well.)
-#ifndef RELEASE_OR_BETA
-pref("layout.css.emulate-moz-box-with-flex", false);
-#endif
-
 // Is the paint-order property supported for HTML text?
 // (It is always supported for SVG.)
 pref("layout.css.paint-order.enabled", true);
@@ -3057,17 +3026,6 @@ pref("layout.css.prefixes.transitions", true);
 pref("layout.css.prefixes.animations", true);
 pref("layout.css.prefixes.box-sizing", true);
 pref("layout.css.prefixes.font-features", true);
-
-// Is -moz-prefixed gradient functions enabled?
-pref("layout.css.prefixes.gradients", true);
-
-// Are webkit-prefixed properties & property-values supported?
-pref("layout.css.prefixes.webkit", true);
-
-// Are "-webkit-{min|max}-device-pixel-ratio" media queries supported?
-// (Note: this pref has no effect if the master 'layout.css.prefixes.webkit'
-// pref is set to false.)
-pref("layout.css.prefixes.device-pixel-ratio-webkit", false);
 
 // Is support for background-blend-mode enabled?
 pref("layout.css.background-blend-mode.enabled", true);
@@ -3093,9 +3051,6 @@ pref("layout.css.all-shorthand.enabled", true);
 
 // Is support for CSS overflow-clip-box enabled for non-UA sheets?
 pref("layout.css.overflow-clip-box.enabled", false);
-
-// Is support for CSS "grid-template-{columns,rows}: subgrid X" enabled?
-pref("layout.css.grid-template-subgrid-value.enabled", false);
 
 // Is support for CSS contain enabled?
 pref("layout.css.contain.enabled", false);
@@ -3136,13 +3091,6 @@ pref("layout.css.shape-outside.enabled", false);
 
 // Is support for document.fonts enabled?
 pref("layout.css.font-loading-api.enabled", true);
-
-// Should stray control characters be rendered visibly?
-#ifdef RELEASE_OR_BETA
-pref("layout.css.control-characters.visible", false);
-#else
-pref("layout.css.control-characters.visible", true);
-#endif
 
 // Is support for column-span enabled?
 pref("layout.css.column-span.enabled", false);
@@ -3717,7 +3665,7 @@ pref("ui.mouse.radius.inputSource.touchOnly", true);
 
 #ifdef XP_WIN
 
-pref("font.name-list.emoji", "Segoe UI Emoji, EmojiOne Mozilla");
+pref("font.name-list.emoji", "Segoe UI Emoji, Twemoji Mozilla");
 
 pref("font.name-list.serif.ar", "Times New Roman");
 pref("font.name-list.sans-serif.ar", "Segoe UI, Tahoma, Arial");
@@ -4387,7 +4335,7 @@ pref("print.print_in_color", true);
 
 // fontconfig doesn't support emoji yet
 // https://lists.freedesktop.org/archives/fontconfig/2016-October/005842.html
-pref("font.name-list.emoji", "EmojiOne Mozilla");
+pref("font.name-list.emoji", "Twemoji Mozilla");
 
 pref("font.name-list.serif.ar", "serif");
 pref("font.name-list.sans-serif.ar", "sans-serif");
@@ -5128,11 +5076,6 @@ pref("alerts.useSystemBackend", true);
 
 // DOM full-screen API.
 pref("full-screen-api.enabled", false);
-#ifdef RELEASE_OR_BETA
-pref("full-screen-api.unprefix.enabled", false);
-#else
-pref("full-screen-api.unprefix.enabled", true);
-#endif
 pref("full-screen-api.allow-trusted-requests-only", true);
 // whether to prevent the top level widget from going fullscreen
 pref("full-screen-api.ignore-widgets", false);
@@ -5261,11 +5204,6 @@ pref("media.ondevicechange.fakeDeviceChangeEvent.enabled", false);
 // those platforms we don't handle touch events anyway so it's conceptually
 // a no-op.
 pref("layout.css.touch_action.enabled", true);
-
-// Enables some assertions in ComputedStyle that are too expensive
-// for general use, but might be useful to enable for specific tests.
-// This only has an effect in DEBUG-builds.
-pref("layout.css.expensive-style-struct-assertions.enabled", false);
 
 #if defined(MOZ_WIDGET_ANDROID)
 // Network Information API
@@ -5458,8 +5396,8 @@ pref("network.trr.confirmationNS", "example.com");
 // hardcode the resolution of the hostname in network.trr.uri instead of
 // relying on the system resolver to do it for you
 pref("network.trr.bootstrapAddress", "");
-// TRR blacklist entry expire time (in seconds). Default is 72 hours.
-pref("network.trr.blacklist-duration", 259200);
+// TRR blacklist entry expire time (in seconds). Default is 20 minutes.
+pref("network.trr.blacklist-duration", 1200);
 // Single TRR request timeout, in milliseconds
 pref("network.trr.request-timeout", 3000);
 // Allow AAAA entries to be used "early", before the A results are in
@@ -5634,10 +5572,6 @@ pref("layout.accessiblecaret.use_long_tap_injector", false);
 
 // By default, carets become tilt only when they are overlapping.
 pref("layout.accessiblecaret.always_tilt", false);
-
-// By default, carets always show when scrolling (either panning for zooming)
-// the page.
-pref("layout.accessiblecaret.always_show_when_scrolling", true);
 
 // Selection change notifications generated by Javascript hide
 // AccessibleCarets and close UI interaction by default.

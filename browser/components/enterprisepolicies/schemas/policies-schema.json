@@ -2,6 +2,34 @@
   "$schema": "http://json-schema.org/draft-04/schema#",
   "type": "object",
   "properties": {
+    "Authentication": {
+      "description": "Sites that support integrated authentication. See https://developer.mozilla.org/en-US/docs/Mozilla/Integrated_authentication",
+      "first_available": "60.0",
+      "enterprise_only": true,
+
+      "type": "object",
+      "properties": {
+        "SPNEGO" : {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "Delegated" : {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "NTLM" : {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+
     "BlockAboutAddons": {
       "description": "Block access to the Add-ons Mananger (about:addons).",
       "first_available": "60.0",
@@ -70,6 +98,18 @@
       }
     },
 
+    "Certificates": {
+      "description": "Whether or not to use built in certs.",
+      "first_available": "60.0",
+
+      "type": "object",
+      "properties": {
+        "ImportEnterpriseRoots": {
+          "type": "boolean"
+        }
+      }
+    },
+
     "Cookies": {
       "description": "Allow or deny websites to set cookies.",
       "first_available": "60.0",
@@ -88,6 +128,23 @@
           "items": {
             "type": "origin"
           }
+        },
+
+        "Default": {
+          "type": "boolean"
+        },
+
+        "AcceptThirdParty": {
+          "type": "string",
+          "enum": ["all", "none", "from-visited"]
+        },
+
+        "ExpireAtSessionEnd": {
+          "type": "boolean"
+        },
+
+        "Locked": {
+          "type": "boolean"
         }
       }
     },
@@ -149,6 +206,13 @@
       "type": "boolean"
     },
 
+    "DisableForgetButton": {
+      "description": "Prevents access to the \"Forget\" button.",
+      "first_available": "60.0",
+
+      "type": "boolean"
+    },
+
     "DisableFormHistory": {
       "description": "Don't remember search and form history.",
       "first_available": "60.0",
@@ -170,11 +234,34 @@
       "type": "boolean"
     },
 
+    "DisableProfileRefresh": {
+      "description": "Disables the \"Refresh Firefox\" button in about:support",
+      "first_available": "60.0",
+
+      "type": "boolean"
+    },
+
     "DisableSafeMode": {
       "description": "Prevents ability to restart in safe mode.",
       "first_available": "60.0",
 
       "type": "boolean"
+    },
+
+    "DisableSecurityBypass": {
+      "description": "Prevents the user from bypassing certain security warnings.",
+      "first_available": "60.0",
+
+      "type": "object",
+      "properties": {
+        "InvalidCertificate": {
+          "type": "boolean"
+        },
+
+        "SafeBrowsing": {
+          "type": "boolean"
+        }
+      }
     },
 
     "DisableSysAddonUpdate": {
@@ -276,6 +363,14 @@
           "items": {
             "type": "origin"
           }
+        },
+
+        "Default": {
+          "type": "boolean"
+        },
+
+        "Locked": {
+          "type": "boolean"
         }
       }
     },
@@ -314,6 +409,9 @@
           "items": {
             "type": "origin"
           }
+        },
+        "Default": {
+          "type": "boolean"
         }
       }
     },
@@ -325,7 +423,23 @@
       "type": "boolean"
     },
 
-    "Popups": {
+    "OverrideFirstRunPage": {
+      "description": "Override the first run page. Set this policy to blank if you want to disable the first run page.",
+      "first_available": "60.0",
+      "enterprise_only": true,
+
+      "type": "URLorEmpty"
+    },
+
+    "OverridePostUpdatePage": {
+      "description": "Override the post-update \"What's New\" page. Set this policy to blank if you want to disable the post-update page.",
+      "first_available": "60.0",
+      "enterprise_only": true,
+
+      "type": "URLorEmpty"
+    },
+
+    "PopupBlocking": {
       "description": "Allow or deny popup usage.",
       "first_available": "60.0",
 
@@ -336,6 +450,14 @@
           "items": {
             "type": "origin"
           }
+        },
+
+        "Default": {
+          "type": "boolean"
+        },
+
+        "Locked": {
+          "type": "boolean"
         }
       }
     },
@@ -405,9 +527,17 @@
       "type": "boolean"
     },
 
+    "SanitizeOnShutdown": {
+      "description": "Clears ALL browser data on shutdown.",
+      "first_available": "60.0",
+
+      "type": "boolean"
+    },
+
     "SearchBar": {
       "description": "Sets the default location of the search bar. Only applies on firtrun, but can be changed.",
       "first_available": "60.0",
+      "enterprise_only": true,
 
       "type": "string",
       "enum": ["unified", "separate"]
@@ -457,6 +587,29 @@
         },
         "PreventInstalls": {
           "type": "boolean"
+        }
+      }
+    },
+
+    "WebsiteFilter": {
+      "description": "Blocks websites from being visited. The parameters take an array of Match Patterns, as documented in https://developer.mozilla.org/en-US/Add-ons/WebExtensions/Match_patterns. Only http/https accesses are supported at the moment. The arrays are limited to 1000 entries each.",
+      "first_available": "60.0",
+      "enterprise_only": "true",
+
+      "type": "object",
+      "properties": {
+        "Block": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+
+        "Exceptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     }

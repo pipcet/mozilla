@@ -2553,6 +2553,12 @@ APZCTreeManager::SetLongTapEnabled(bool aLongTapEnabled)
 RefPtr<HitTestingTreeNode>
 APZCTreeManager::FindScrollThumbNode(const AsyncDragMetrics& aDragMetrics)
 {
+  if (!aDragMetrics.mDirection) {
+    // The AsyncDragMetrics has not been initialized yet - there will be
+    // no matching node, so don't bother searching the tree.
+    return RefPtr<HitTestingTreeNode>();
+  }
+
   RecursiveMutexAutoLock lock(mTreeLock);
 
   return DepthFirstSearch<ReverseIterator>(mRootNode.get(),
@@ -3191,18 +3197,15 @@ APZCTreeManager::ComputeTransformForScrollThumb(
     const Matrix4x4& contentTransform = aScrollableContentTransform;
     Matrix4x4 contentUntransform = contentTransform.Inverse();
 
-    AsyncTransformComponentMatrix asyncCompensation =
-        ViewAs<AsyncTransformComponentMatrix>(
-            contentTransform
-          * asyncUntransform
-          * contentUntransform);
+    compensation *= ViewAs<AsyncTransformComponentMatrix>(
+                        contentTransform
+                      * asyncUntransform
+                      * contentUntransform);
 
-    compensation = compensation * asyncCompensation;
-
-    // Pass the async compensation out to the caller so that it can use it
+    // Pass the total compensation out to the caller so that it can use it
     // to transform clip transforms as needed.
     if (aOutClipTransform) {
-      *aOutClipTransform = asyncCompensation;
+      *aOutClipTransform = compensation;
     }
   }
   transform = transform * compensation;

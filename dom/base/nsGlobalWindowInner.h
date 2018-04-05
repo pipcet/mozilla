@@ -504,16 +504,6 @@ public:
   virtual void DisableOrientationChangeListener() override;
 #endif
 
-  bool IsClosedOrClosing() {
-    return mCleanedUp;
-  }
-
-  bool
-  IsCleanedUp() const
-  {
-    return mCleanedUp;
-  }
-
   virtual uint32_t GetSerial() override {
     return mSerial;
   }
@@ -779,7 +769,6 @@ public:
     mozilla::dom::CallerType aCallerType,
     mozilla::ErrorResult& aError);
   nsScreen* GetScreen(mozilla::ErrorResult& aError);
-  nsIDOMScreen* GetScreen() override;
   void MoveTo(int32_t aXPos, int32_t aYPos,
               mozilla::dom::CallerType aCallerType,
               mozilla::ErrorResult& aError);
@@ -948,11 +937,8 @@ public:
   void Restore();
   void NotifyDefaultButtonLoaded(mozilla::dom::Element& aDefaultButton,
                                  mozilla::ErrorResult& aError);
-  mozilla::dom::ChromeMessageBroadcaster*
-    GetMessageManager(mozilla::ErrorResult& aError);
-  mozilla::dom::ChromeMessageBroadcaster*
-    GetGroupMessageManager(const nsAString& aGroup,
-                           mozilla::ErrorResult& aError);
+  mozilla::dom::ChromeMessageBroadcaster* MessageManager();
+  mozilla::dom::ChromeMessageBroadcaster* GetGroupMessageManager(const nsAString& aGroup);
   void BeginWindowMove(mozilla::dom::Event& aMouseDownEvent,
                        mozilla::dom::Element* aPanel,
                        mozilla::ErrorResult& aError);
@@ -1093,7 +1079,6 @@ protected:
 
   // Object Management
   virtual ~nsGlobalWindowInner();
-  void CleanUp();
 
   void FreeInnerObjects();
   nsGlobalWindowInner *CallerInnerWindow();
@@ -1424,8 +1409,6 @@ protected:
 #ifdef DEBUG
   nsCOMPtr<nsIURI> mLastOpenedURI;
 #endif
-
-  bool mCleanedUp;
 
   nsCOMPtr<nsIDOMOfflineResourceList> mApplicationCache;
 

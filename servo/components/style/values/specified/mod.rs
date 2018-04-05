@@ -11,12 +11,11 @@ use context::QuirksMode;
 use cssparser::{Parser, Token, serialize_identifier};
 use num_traits::One;
 use parser::{ParserContext, Parse};
-use self::url::{SpecifiedImageUrl, SpecifiedUrl};
 use std::f32;
 use std::fmt::{self, Write};
 use style_traits::{CssWriter, ParseError, StyleParseErrorKind, ToCss};
 use style_traits::values::specified::AllowedNumericType;
-use super::{Auto, CSSFloat, CSSInteger, Either, None_};
+use super::{Auto, CSSFloat, CSSInteger, Either};
 use super::computed::{Context, ToComputedValue};
 use super::generics::{GreaterThanOrEqualToOne, NonNegative};
 use super::generics::grid::{GridLine as GenericGridLine, TrackBreadth as GenericTrackBreadth};
@@ -55,8 +54,8 @@ pub use self::length::{FontRelativeLength, Length, LengthOrNumber};
 pub use self::length::{LengthOrPercentage, LengthOrPercentageOrAuto};
 pub use self::length::{LengthOrPercentageOrNone, MaxLength, MozLength};
 pub use self::length::{NoCalcLength, ViewportPercentageLength};
-pub use self::length::NonNegativeLengthOrPercentage;
-pub use self::list::{ListStyleImage, Quotes};
+pub use self::length::{NonNegativeLengthOrPercentage, NonNegativeLengthOrPercentageOrAuto};
+pub use self::list::Quotes;
 #[cfg(feature = "gecko")]
 pub use self::list::ListStyleType;
 pub use self::outline::OutlineStyle;
@@ -71,7 +70,8 @@ pub use self::svg::{SVGLength, SVGOpacity, SVGPaint, SVGPaintKind};
 pub use self::svg::{SVGPaintOrder, SVGStrokeDashArray, SVGWidth};
 pub use self::svg::MozContextProperties;
 pub use self::table::XSpan;
-pub use self::text::{InitialLetter, LetterSpacing, LineHeight, MozTabSize, TextAlign, TextEmphasisStyle};
+pub use self::text::{InitialLetter, LetterSpacing, LineHeight, MozTabSize, TextAlign};
+pub use self::text::{TextEmphasisStyle, TextEmphasisPosition};
 pub use self::text::{TextAlignKeyword, TextDecorationLine, TextOverflow, WordSpacing};
 pub use self::time::Time;
 pub use self::transform::{Rotate, Scale, TimingFunction, Transform};
@@ -113,14 +113,7 @@ pub mod text;
 pub mod time;
 pub mod transform;
 pub mod ui;
-
-/// Common handling for the specified value CSS url() values.
-pub mod url {
-#[cfg(feature = "servo")]
-pub use ::servo::url::{SpecifiedUrl, SpecifiedImageUrl};
-#[cfg(feature = "gecko")]
-pub use ::gecko::url::{SpecifiedUrl, SpecifiedImageUrl};
-}
+pub mod url;
 
 /// Parse a `<number>` value, with a given clamping mode.
 fn parse_number_with_clamping_mode<'i, 't>(
@@ -517,12 +510,6 @@ impl Parse for PositiveInteger {
         Integer::parse_positive(context, input).map(GreaterThanOrEqualToOne::<Integer>)
     }
 }
-
-#[allow(missing_docs)]
-pub type UrlOrNone = Either<SpecifiedUrl, None_>;
-
-/// The specified value of a `<url>` for image or `none`.
-pub type ImageUrlOrNone = Either<SpecifiedImageUrl, None_>;
 
 /// The specified value of a grid `<track-breadth>`
 pub type TrackBreadth = GenericTrackBreadth<LengthOrPercentage>;

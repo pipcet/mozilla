@@ -84,7 +84,7 @@ window._gBrowser = {
 
   _tabFilters: new Map(),
 
-  mIsBusy: false,
+  _isBusy: false,
 
   _outerWindowIDBrowserMap: new Map(),
 
@@ -990,8 +990,8 @@ window._gBrowser = {
 
     // If the new tab is busy, and our current state is not busy, then
     // we need to fire a start to all progress listeners.
-    if (newTab.hasAttribute("busy") && !this.mIsBusy) {
-      this.mIsBusy = true;
+    if (newTab.hasAttribute("busy") && !this._isBusy) {
+      this._isBusy = true;
       this._callProgressListeners(null, "onStateChange",
                                   [webProgress, null,
                                    Ci.nsIWebProgressListener.STATE_START |
@@ -1001,8 +1001,8 @@ window._gBrowser = {
 
     // If the new tab is not busy, and our current state is busy, then
     // we need to fire a stop to all progress listeners.
-    if (!newTab.hasAttribute("busy") && this.mIsBusy) {
-      this.mIsBusy = false;
+    if (!newTab.hasAttribute("busy") && this._isBusy) {
+      this._isBusy = false;
       this._callProgressListeners(null, "onStateChange",
                                   [webProgress, null,
                                    Ci.nsIWebProgressListener.STATE_STOP |
@@ -1868,13 +1868,13 @@ window._gBrowser = {
     let browserContainer = document.createElementNS(this._XUL_NS, "vbox");
     browserContainer.className = "browserContainer";
     browserContainer.appendChild(stack);
-    browserContainer.setAttribute("flex", "1");
+    browserContainer.setAttribute("flex", "10000");
 
     // Create the sidebar container
     let browserSidebarContainer = document.createElementNS(this._XUL_NS, "hbox");
     browserSidebarContainer.className = "browserSidebarContainer";
     browserSidebarContainer.appendChild(browserContainer);
-    browserSidebarContainer.setAttribute("flex", "1");
+    browserSidebarContainer.setAttribute("flex", "10000");
 
     // Add the Message and the Browser to the box
     let notificationbox = document.createElementNS(this._XUL_NS, "notificationbox");
@@ -3066,7 +3066,7 @@ window._gBrowser = {
         aOurTab.setAttribute("busy", "true");
         modifiedAttrs.push("busy");
         if (aOurTab.selected)
-          this.mIsBusy = true;
+          this._isBusy = true;
       }
 
       this._swapBrowserDocShells(aOurTab, otherBrowser, Ci.nsIBrowser.SWAP_DEFAULT, stateFlags);
@@ -3273,6 +3273,7 @@ window._gBrowser = {
         this.showTab(tab);
     }
 
+    this.tabContainer._updateHiddenTabsStatus();
     this.tabContainer._handleTabSelect(true);
   },
 
@@ -3282,13 +3283,14 @@ window._gBrowser = {
       this._visibleTabs = null; // invalidate cache
 
       this.tabContainer._updateCloseButtons();
+      this.tabContainer._updateHiddenTabsStatus();
 
       this.tabContainer._setPositionalAttributes();
 
       let event = document.createEvent("Events");
       event.initEvent("TabShow", true, false);
       aTab.dispatchEvent(event);
-      SessionStore.deleteTabValue(aTab, "hiddenBy");
+      SessionStore.deleteCustomTabValue(aTab, "hiddenBy");
     }
   },
 
@@ -3299,6 +3301,7 @@ window._gBrowser = {
       this._visibleTabs = null; // invalidate cache
 
       this.tabContainer._updateCloseButtons();
+      this.tabContainer._updateHiddenTabsStatus();
 
       this.tabContainer._setPositionalAttributes();
 
@@ -3306,7 +3309,7 @@ window._gBrowser = {
       event.initEvent("TabHide", true, false);
       aTab.dispatchEvent(event);
       if (aSource) {
-        SessionStore.setTabValue(aTab, "hiddenBy", aSource);
+        SessionStore.setCustomTabValue(aTab, "hiddenBy", aSource);
       }
     }
   },
@@ -4352,7 +4355,7 @@ class TabProgressListener {
         }
 
         if (this.mTab.selected) {
-          gBrowser.mIsBusy = true;
+          gBrowser._isBusy = true;
         }
       }
     } else if (aStateFlags & Ci.nsIWebProgressListener.STATE_STOP &&
@@ -4423,7 +4426,7 @@ class TabProgressListener {
         this.mBrowser.userTypedValue = null;
 
       if (this.mTab.selected)
-        gBrowser.mIsBusy = false;
+        gBrowser._isBusy = false;
     }
 
     if (ignoreBlank) {

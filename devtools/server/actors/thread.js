@@ -9,7 +9,8 @@
 const Services = require("Services");
 const { Cr } = require("chrome");
 const { ActorPool, GeneratedLocation } = require("devtools/server/actors/common");
-const { createValueGrip, longStringGrip } = require("devtools/server/actors/object");
+const { createValueGrip } = require("devtools/server/actors/object/utils");
+const { longStringGrip } = require("devtools/server/actors/object/long-string");
 const { ActorClassWithSpec } = require("devtools/shared/protocol");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const flags = require("devtools/shared/flags");
@@ -1536,7 +1537,9 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
       this.sources.getOriginalLocation(generatedLocation));
     const url = originalSourceActor ? originalSourceActor.url : null;
 
-    if (this.sources.isBlackBoxed(url)) {
+    // We ignore sources without a url because we do not
+    // want to pause at console evaluations or watch expressions.
+    if (!url || this.sources.isBlackBoxed(url)) {
       return undefined;
     }
 

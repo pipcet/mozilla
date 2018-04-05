@@ -148,7 +148,7 @@ class DownloadItem {
 }
 
 
-// DownloadMap maps back and forth betwen the numeric identifiers used in
+// DownloadMap maps back and forth between the numeric identifiers used in
 // the downloads WebExtension API and a Download object from the Downloads jsm.
 // TODO Bug 1247794: make id and extension info persistent
 const DownloadMap = new class extends EventEmitter {
@@ -519,13 +519,19 @@ this.downloads = class extends ExtensionAPI {
               return target;
             }
 
+            const window = Services.wm.getMostRecentWindow("navigator:browser");
+            const basename = OS.Path.basename(target);
+            const ext = basename.match(/\.([^.]+)$/);
+
             // Setup the file picker Save As dialog.
             const picker = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
-            const window = Services.wm.getMostRecentWindow("navigator:browser");
             picker.init(window, null, Ci.nsIFilePicker.modeSave);
             picker.displayDirectory = new FileUtils.File(dir);
             picker.appendFilters(Ci.nsIFilePicker.filterAll);
-            picker.defaultString = OS.Path.basename(target);
+            picker.defaultString = basename;
+
+            // Configure a default file extension, used as fallback on Windows.
+            picker.defaultExtension = ext && ext[1];
 
             // Open the dialog and resolve/reject with the result.
             return new Promise((resolve, reject) => {

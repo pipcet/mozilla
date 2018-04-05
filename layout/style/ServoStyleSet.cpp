@@ -104,7 +104,6 @@ ServoStyleSet::ServoStyleSet()
   , mAuthorStyleDisabled(false)
   , mStylistState(StylistState::NotDirty)
   , mUserFontSetUpdateGeneration(0)
-  , mUserFontCacheUpdateGeneration(0)
   , mNeedsRestyleAfterEnsureUniqueInner(false)
 {
 }
@@ -171,33 +170,19 @@ ServoStyleSet::Init(nsPresContext* aPresContext)
 
 template<typename Functor>
 void
-EnumerateShadowRootsInSubtree(const nsINode& aRoot, const Functor& aCb)
-{
-  for (const nsINode* cur = &aRoot; cur; cur = cur->GetNextNode()) {
-    if (!cur->IsElement()) {
-      continue;
-    }
-
-    auto* shadowRoot = cur->AsElement()->GetShadowRoot();
-    if (!shadowRoot) {
-      continue;
-    }
-
-    aCb(*shadowRoot);
-    EnumerateShadowRootsInSubtree(*shadowRoot, aCb);
-  }
-}
-
-// FIXME(emilio): We may want a faster way to do this.
-template<typename Functor>
-void
 EnumerateShadowRoots(const nsIDocument& aDoc, const Functor& aCb)
 {
   if (!aDoc.IsShadowDOMEnabled()) {
     return;
   }
 
-  EnumerateShadowRootsInSubtree(aDoc, aCb);
+  const nsIDocument::ShadowRootSet& shadowRoots = aDoc.ComposedShadowRoots();
+  for (auto iter = shadowRoots.ConstIter(); !iter.Done(); iter.Next()) {
+    ShadowRoot* root = iter.Get()->GetKey();
+    MOZ_ASSERT(root);
+    MOZ_DIAGNOSTIC_ASSERT(root->IsComposedDocParticipant());
+    aCb(*root);
+  }
 }
 
 void
@@ -467,25 +452,9 @@ ServoStyleSet::PreTraverseSync()
     // Ensure that the @font-face data is not stale
     uint64_t generation = userFontSet->GetGeneration();
     if (generation != mUserFontSetUpdateGeneration) {
+      mDocument->GetFonts()->CacheFontLoadability();
       presContext->DeviceContext()->UpdateFontCacheUserFonts(userFontSet);
       mUserFontSetUpdateGeneration = generation;
-    }
-
-    // Ensure that the FontFaceSet's cached document principal is up to date.
-    FontFaceSet* fontFaceSet =
-      static_cast<FontFaceSet::UserFontSet*>(userFontSet)->GetFontFaceSet();
-    fontFaceSet->UpdateStandardFontLoadPrincipal();
-    bool principalChanged = fontFaceSet->HasStandardFontLoadPrincipalChanged();
-
-    // Ensure that the user font cache holds up-to-date data on whether
-    // our font set is allowed to re-use fonts from the cache.
-    uint32_t cacheGeneration = gfxUserFontSet::UserFontCache::Generation();
-    if (principalChanged) {
-      gfxUserFontSet::UserFontCache::ClearAllowedFontSets(userFontSet);
-    }
-    if (cacheGeneration != mUserFontCacheUpdateGeneration || principalChanged) {
-      gfxUserFontSet::UserFontCache::UpdateAllowedFontSets(userFontSet);
-      mUserFontCacheUpdateGeneration = cacheGeneration;
     }
   }
 
@@ -1467,7 +1436,7 @@ ServoStyleSet::AppendFontFaceRules(nsTArray<nsFontFaceRuleContainer>& aArray)
   return true;
 }
 
-nsCSSCounterStyleRule*
+const RawServoCounterStyleRule*
 ServoStyleSet::CounterStyleRuleForName(nsAtom* aName)
 {
   MOZ_ASSERT(!StylistNeedsUpdate());

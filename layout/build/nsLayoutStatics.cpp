@@ -79,8 +79,6 @@
 #include "nsXULPrototypeCache.h"
 #include "nsXULTooltipListener.h"
 
-#include "inDOMView.h"
-
 #include "nsMenuBarListener.h"
 #endif
 
@@ -111,7 +109,6 @@
 #include "MediaPrefs.h"
 #include "mozilla/ServoBindings.h"
 #include "mozilla/StaticPresData.h"
-#include "mozilla/StylePrefs.h"
 #include "mozilla/dom/WebIDLGlobalNameHash.h"
 #include "mozilla/dom/ipc/IPCBlobInputStreamStorage.h"
 #include "mozilla/dom/U2FTokenManager.h"
@@ -220,8 +217,6 @@ nsLayoutStatics::Initialize()
     NS_ERROR("Could not initialize nsCCUncollectableMarker");
     return rv;
   }
-
-  StylePrefs::Init();
 
 #ifdef MOZ_XUL
   rv = nsXULPopupManager::Init();

@@ -265,6 +265,9 @@ public:
   // nsIDOMChromeWindow (only implemented on chrome windows)
   NS_DECL_NSIDOMCHROMEWINDOW
 
+  mozilla::dom::ChromeMessageBroadcaster* GetMessageManager();
+  mozilla::dom::ChromeMessageBroadcaster* GetGroupMessageManager(const nsAString& aGroup);
+
   nsresult
   OpenJS(const nsAString& aUrl, const nsAString& aName,
          const nsAString& aOptions, nsPIDOMWindowOuter **_retval);
@@ -636,7 +639,7 @@ public:
   already_AddRefed<mozilla::dom::MediaQueryList> MatchMediaOuter(
     const nsAString& aQuery,
     mozilla::dom::CallerType aCallerType);
-  nsIDOMScreen* GetScreen() override;
+  nsScreen* GetScreen();
   void MoveToOuter(int32_t aXPos, int32_t aYPos,
                    mozilla::dom::CallerType aCallerType,
                    mozilla::ErrorResult& aError);

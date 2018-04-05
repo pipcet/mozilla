@@ -11,10 +11,11 @@ XPCOMUtils.defineLazyServiceGetter(this, "gXulStore",
                                    "nsIXULStore");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
-  BookmarksPolicies: "resource:///modules/policies/BookmarksPolicies.jsm",
-  ProxyPolicies: "resource:///modules/policies/ProxyPolicies.jsm",
   AddonManager: "resource://gre/modules/AddonManager.jsm",
+  BookmarksPolicies: "resource:///modules/policies/BookmarksPolicies.jsm",
   CustomizableUI: "resource:///modules/CustomizableUI.jsm",
+  ProxyPolicies: "resource:///modules/policies/ProxyPolicies.jsm",
+  WebsiteFilter: "resource:///modules/policies/WebsiteFilter.jsm",
 });
 
 const PREF_LOGLEVEL           = "browser.policies.loglevel";
@@ -60,6 +61,20 @@ var EXPORTED_SYMBOLS = ["Policies"];
  * The callbacks will be bound to their parent policy object.
  */
 var Policies = {
+  "Authentication": {
+    onBeforeAddons(manager, param) {
+      if ("SPNEGO" in param) {
+        setAndLockPref("network.negotiate-auth.trusted-uris", param.SPNEGO.join(", "));
+      }
+      if ("Delegated" in param) {
+        setAndLockPref("network.negotiate-auth.delegation-uris", param.Delegated.join(", "));
+      }
+      if ("NTLM" in param) {
+        setAndLockPref("network.automatic-ntlm-auth.trusted-uris", param.NTLM.join(", "));
+      }
+    }
+  },
+
   "BlockAboutAddons": {
     onBeforeUIStartup(manager, param) {
       if (param) {
@@ -107,6 +122,14 @@ var Policies = {
     }
   },
 
+  "Certificates": {
+    onBeforeAddons(manager, param) {
+      if ("ImportEnterpriseRoots" in param) {
+        setAndLockPref("security.enterprise_roots.enabled", true);
+      }
+    }
+  },
+
   "Cookies": {
     onBeforeUIStartup(manager, param) {
       addAllowDenyPermissions("cookie", param.Allow, param.Block);
@@ -118,6 +141,48 @@ var Policies = {
             Services.cookies.removeCookiesWithOriginAttributes("{}", blocked.host);
           }
         });
+      }
+
+      if (param.Default !== undefined ||
+          param.AcceptThirdParty !== undefined ||
+          param.Locked) {
+        const ACCEPT_COOKIES = 0;
+        const REJECT_THIRD_PARTY_COOKIES = 1;
+        const REJECT_ALL_COOKIES = 2;
+        const REJECT_UNVISITED_THIRD_PARTY = 3;
+
+        let newCookieBehavior = ACCEPT_COOKIES;
+        if (param.Default !== undefined && !param.Default) {
+          newCookieBehavior = REJECT_ALL_COOKIES;
+        } else if (param.AcceptThirdParty) {
+          if (param.AcceptThirdParty == "none") {
+            newCookieBehavior = REJECT_THIRD_PARTY_COOKIES;
+          } else if (param.AcceptThirdParty == "from-visited") {
+            newCookieBehavior = REJECT_UNVISITED_THIRD_PARTY;
+          }
+        }
+
+        if (param.Locked) {
+          setAndLockPref("network.cookie.cookieBehavior", newCookieBehavior);
+        } else {
+          setDefaultPref("network.cookie.cookieBehavior", newCookieBehavior);
+        }
+      }
+
+      const KEEP_COOKIES_UNTIL_EXPIRATION = 0;
+      const KEEP_COOKIES_UNTIL_END_OF_SESSION = 2;
+
+      if (param.ExpireAtSessionEnd !== undefined || param.Locked) {
+        let newLifetimePolicy = KEEP_COOKIES_UNTIL_EXPIRATION;
+        if (param.ExpireAtSessionEnd) {
+          newLifetimePolicy = KEEP_COOKIES_UNTIL_END_OF_SESSION;
+        }
+
+        if (param.Locked) {
+          setAndLockPref("network.cookie.lifetimePolicy", newLifetimePolicy);
+        } else {
+          setDefaultPref("network.cookie.lifetimePolicy", newLifetimePolicy);
+        }
       }
     }
   },
@@ -192,6 +257,14 @@ var Policies = {
     }
   },
 
+  "DisableForgetButton": {
+    onProfileAfterChange(manager, param) {
+      if (param) {
+        setAndLockPref("privacy.panicButton.enabled", false);
+      }
+    }
+  },
+
   "DisableFormHistory": {
     onBeforeUIStartup(manager, param) {
       if (param) {
@@ -218,10 +291,31 @@ var Policies = {
     }
   },
 
+  "DisableProfileRefresh": {
+    onBeforeUIStartup(manager, param) {
+      if (param) {
+        manager.disallowFeature("profileRefresh");
+        setAndLockPref("browser.disableResetPrompt", true);
+      }
+    }
+  },
+
   "DisableSafeMode": {
     onBeforeUIStartup(manager, param) {
       if (param) {
         manager.disallowFeature("safeMode");
+      }
+    }
+  },
+
+  "DisableSecurityBypass": {
+    onBeforeUIStartup(manager, param) {
+      if ("InvalidCertificate" in param) {
+        setAndLockPref("security.certerror.hideAddException", param.InvalidCertificate);
+      }
+
+      if ("SafeBrowsing" in param) {
+        setAndLockPref("browser.safebrowsing.allowOverride", !param.SafeBrowsing);
       }
     }
   },
@@ -349,7 +443,12 @@ var Policies = {
           AddonManager.getAddonsByIDs(param.Uninstall, (addons) => {
             for (let addon of addons) {
               if (addon) {
-                addon.uninstall();
+                try {
+                  addon.uninstall();
+                } catch (e) {
+                  // This can fail for add-ons that can't be uninstalled.
+                  // Just ignore.
+                }
               }
             }
           });
@@ -366,6 +465,24 @@ var Policies = {
   "FlashPlugin": {
     onBeforeUIStartup(manager, param) {
       addAllowDenyPermissions("plugin:flash", param.Allow, param.Block);
+
+      const FLASH_NEVER_ACTIVATE = 0;
+      const FLASH_ASK_TO_ACTIVATE = 1;
+      const FLASH_ALWAYS_ACTIVATE = 2;
+
+      let flashPrefVal;
+      if (param.Default === undefined) {
+        flashPrefVal = FLASH_ASK_TO_ACTIVATE;
+      } else if (param.Default) {
+        flashPrefVal = FLASH_ALWAYS_ACTIVATE;
+      } else {
+        flashPrefVal = FLASH_NEVER_ACTIVATE;
+      }
+      if (param.Locked) {
+        setAndLockPref("plugin.state.flash", flashPrefVal);
+      } else if (param.Default !== undefined) {
+        setDefaultPref("plugin.state.flash", flashPrefVal);
+      }
     }
   },
 
@@ -401,7 +518,15 @@ var Policies = {
 
   "InstallAddons": {
     onBeforeUIStartup(manager, param) {
-      addAllowDenyPermissions("install", param.Allow, null);
+      if ("Allow" in param) {
+        addAllowDenyPermissions("install", param.Allow, null);
+      }
+      if ("Default" in param) {
+        setAndLockPref("xpinstall.enabled", param.Default);
+        if (!param.Default) {
+          manager.disallowFeature("about:debugging");
+        }
+      }
     }
   },
 
@@ -413,9 +538,37 @@ var Policies = {
     }
   },
 
-  "Popups": {
+  "OverrideFirstRunPage": {
+    onProfileAfterChange(manager, param) {
+      let url = param ? param.spec : "";
+      setAndLockPref("startup.homepage_welcome_url", url);
+    }
+  },
+
+  "OverridePostUpdatePage": {
+    onProfileAfterChange(manager, param) {
+      let url = param ? param.spec : "";
+      setAndLockPref("startup.homepage_override_url", url);
+      // The pref startup.homepage_override_url is only used
+      // as a fallback when the update.xml file hasn't provided
+      // a specific post-update URL.
+      manager.disallowFeature("postUpdateCustomPage");
+    }
+  },
+
+  "PopupBlocking": {
     onBeforeUIStartup(manager, param) {
       addAllowDenyPermissions("popup", param.Allow, null);
+
+      if (param.Locked) {
+        let blockValue = true;
+        if (param.Default !== undefined && !param.Default) {
+          blockValue = false;
+        }
+        setAndLockPref("dom.disable_open_during_load", blockValue);
+      } else if (param.Default !== undefined) {
+        setDefaultPref("dom.disable_open_during_load", !!param.Default);
+      }
     }
   },
 
@@ -433,6 +586,22 @@ var Policies = {
   "RememberPasswords": {
     onBeforeUIStartup(manager, param) {
       setAndLockPref("signon.rememberSignons", param);
+    }
+  },
+
+  "SanitizeOnShutdown": {
+    onBeforeUIStartup(manager, param) {
+      setAndLockPref("privacy.sanitize.sanitizeOnShutdown", param);
+      if (param) {
+        setAndLockPref("privacy.clearOnShutdown.cache", true);
+        setAndLockPref("privacy.clearOnShutdown.cookies", true);
+        setAndLockPref("privacy.clearOnShutdown.downloads", true);
+        setAndLockPref("privacy.clearOnShutdown.formdata", true);
+        setAndLockPref("privacy.clearOnShutdown.history", true);
+        setAndLockPref("privacy.clearOnShutdown.sessions", true);
+        setAndLockPref("privacy.clearOnShutdown.siteSettings", true);
+        setAndLockPref("privacy.clearOnShutdown.offlineApps", true);
+      }
     }
   },
 
@@ -509,7 +678,14 @@ var Policies = {
         }
       });
     }
-  }
+  },
+
+  "WebsiteFilter": {
+    onBeforeUIStartup(manager, param) {
+      this.filter = new WebsiteFilter(param.Block || [], param.Exceptions || []);
+    }
+  },
+
 };
 
 /*

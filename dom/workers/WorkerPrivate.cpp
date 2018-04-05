@@ -424,10 +424,14 @@ private:
       return false;
     }
 
-    // PerformanceStorage needs to be initialized on the worker thread before
-    // being used on main-thread. Let's be sure that it is created before any
+    // PerformanceStorage & PerformanceCounter both need to be initialized
+    // on the worker thread before being used on main-thread.
+    // Let's be sure that it is created before any
     // content loading.
     aWorkerPrivate->EnsurePerformanceStorage();
+#ifndef RELEASE_OR_BETA
+    aWorkerPrivate->EnsurePerformanceCounter();
+#endif
 
     ErrorResult rv;
     workerinternals::LoadMainScript(aWorkerPrivate, mScriptURL, WorkerScript, rv);
@@ -472,6 +476,15 @@ private:
 
     aWorkerPrivate->SetWorkerScriptExecutedSuccessfully();
     return true;
+  }
+
+  void
+  PostRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate, bool aRunResult) override
+  {
+    if (!aRunResult) {
+      aWorkerPrivate->CloseInternal();
+    }
+    WorkerRunnable::PostRun(aCx, aWorkerPrivate, aRunResult);
   }
 };
 
@@ -3297,19 +3310,6 @@ WorkerPrivate::AfterProcessNextEvent()
   MOZ_ASSERT(CycleCollectedJSContext::Get()->RecursionDepth());
 }
 
-void
-WorkerPrivate::MaybeDispatchLoadFailedRunnable()
-{
-  AssertIsOnWorkerThread();
-
-  nsCOMPtr<nsIRunnable> runnable = StealLoadFailedAsyncRunnable();
-  if (!runnable) {
-    return;
-  }
-
-  MOZ_ALWAYS_SUCCEEDS(DispatchToMainThread(runnable.forget()));
-}
-
 nsIEventTarget*
 WorkerPrivate::MainThreadEventTarget()
 {
@@ -4578,8 +4578,7 @@ WorkerPrivate::SetTimeout(JSContext* aCx,
   // If the worker is trying to call setTimeout/setInterval and the parent
   // thread has initiated the close process then just silently fail.
   if (currentStatus >= Closing) {
-    aRv.Throw(NS_ERROR_FAILURE);
-    return 0;
+    return timerId;
   }
 
   nsAutoPtr<TimeoutInfo> newInfo(new TimeoutInfo());
@@ -5215,15 +5214,19 @@ WorkerPrivate::DumpCrashInformation(nsACString& aString)
 }
 
 #ifndef RELEASE_OR_BETA
-PerformanceCounter*
-WorkerPrivate::GetPerformanceCounter()
+void
+WorkerPrivate::EnsurePerformanceCounter()
 {
   AssertIsOnWorkerThread();
-
   if (!mPerformanceCounter) {
     mPerformanceCounter = new PerformanceCounter(NS_ConvertUTF16toUTF8(mWorkerName));
   }
+}
 
+PerformanceCounter*
+WorkerPrivate::GetPerformanceCounter()
+{
+  MOZ_ASSERT(mPerformanceCounter);
   return mPerformanceCounter;
 }
 #endif

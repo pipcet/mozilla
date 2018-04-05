@@ -2259,6 +2259,21 @@ XULDocument::LoadOverlayInternal(nsIURI* aURI, bool aIsDynamic,
 {
     nsresult rv;
 
+    // XUL overlays are in the process of being removed. In a Firefox build,
+    // loading an overlay will cause a crash as they are no longer allowed.
+    // However, overlays are allowed in other applications (e.g. Thunderbird)
+    // while they work on removing them. See bug 1448162.
+#ifdef MOZ_CRASH_XUL_OVERLAYS
+    nsCString docSpec;
+    mCurrentPrototype->GetURI()->GetSpec(docSpec);
+    nsCString overlaySpec;
+    aURI->GetSpec(overlaySpec);
+    printf("Attempt to load overlay %s into %s\n",
+           overlaySpec.get(),
+           docSpec.get());
+    MOZ_CRASH("Attempt to load overlay");
+#endif
+
     *aShouldReturn = false;
     *aFailureFromContent = false;
 
@@ -3219,6 +3234,16 @@ XULDocument::OnScriptCompileComplete(JSScript* aScript, nsresult aStatus)
         *docp = doc->mNextSrcLoadWaiter;
         doc->mNextSrcLoadWaiter = nullptr;
 
+        if (aStatus == NS_BINDING_ABORTED && !scriptProto->HasScriptObject()) {
+            // If the previous doc load was aborted, we want to try loading
+            // again for the next doc. Otherwise, one abort would lead to all
+            // subsequent waiting docs to abort as well.
+            bool block = false;
+            doc->LoadScript(scriptProto, &block);
+            NS_RELEASE(doc);
+            return rv;
+        }
+
         // Execute only if we loaded and compiled successfully, then resume
         if (NS_SUCCEEDED(aStatus) && scriptProto->HasScriptObject()) {
             doc->ExecuteScript(scriptProto);
@@ -4107,7 +4132,7 @@ XULDocument::IsDocumentRightToLeft()
     Element* element = GetRootElement();
     if (element) {
         static Element::AttrValuesArray strings[] =
-            {&nsGkAtoms::ltr, &nsGkAtoms::rtl, nullptr};
+            {nsGkAtoms::ltr, nsGkAtoms::rtl, nullptr};
         switch (element->FindAttrValueIn(kNameSpaceID_None, nsGkAtoms::localedir,
                                          strings, eCaseMatters)) {
             case 0: return false;

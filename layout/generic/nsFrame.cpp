@@ -106,13 +106,14 @@
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/ServoStyleSet.h"
-#include "mozilla/css/ImageLoader.h"
 #include "mozilla/gfx/Tools.h"
 #include "nsPrintfCString.h"
 #include "ActiveLayerTracker.h"
 
 #include "nsITheme.h"
 #include "nsThemeConstants.h"
+
+#include "ImageLoader.h"
 
 using namespace mozilla;
 using namespace mozilla::css;
@@ -307,25 +308,6 @@ bool nsFrame::GetShowEventTargetFrameBorder()
  * means that you cannot perform logging before then.
  */
 mozilla::LazyLogModule nsFrame::sFrameLogModule("frame");
-
-static mozilla::LazyLogModule sStyleVerifyTreeLogModuleInfo("styleverifytree");
-
-static uint32_t gStyleVerifyTreeEnable = 0x55;
-
-bool
-nsFrame::GetVerifyStyleTreeEnable()
-{
-  if (gStyleVerifyTreeEnable == 0x55) {
-      gStyleVerifyTreeEnable = 0 != (int)((mozilla::LogModule*)sStyleVerifyTreeLogModuleInfo)->Level();
-  }
-  return gStyleVerifyTreeEnable;
-}
-
-void
-nsFrame::SetVerifyStyleTreeEnable(bool aEnabled)
-{
-  gStyleVerifyTreeEnable = aEnabled;
-}
 
 #endif
 
@@ -907,7 +889,7 @@ AddAndRemoveImageAssociations(nsFrame* aFrame,
 
   CompareLayers(aNewLayers, aOldLayers,
     [&imageLoader, aFrame](imgRequestProxy* aReq)
-    { imageLoader->AssociateRequestToFrame(aReq, aFrame); }
+    { imageLoader->AssociateRequestToFrame(aReq, aFrame, 0); }
   );
 }
 
@@ -1175,7 +1157,24 @@ nsFrame::DidSetComputedStyle(ComputedStyle* aOldComputedStyle)
       imageLoader->DisassociateRequestFromFrame(oldBorderImage, this);
     }
     if (newBorderImage) {
-      imageLoader->AssociateRequestToFrame(newBorderImage, this);
+      imageLoader->AssociateRequestToFrame(newBorderImage, this, 0);
+    }
+  }
+
+  imgIRequest* oldShapeImage =
+      aOldComputedStyle
+    ? aOldComputedStyle->StyleDisplay()->mShapeOutside.GetShapeImageData()
+    : nullptr;
+  imgIRequest* newShapeImage =
+    StyleDisplay()->mShapeOutside.GetShapeImageData();
+
+  if (oldShapeImage != newShapeImage) {
+    if (oldShapeImage && HasImageRequest()) {
+      imageLoader->DisassociateRequestFromFrame(oldShapeImage, this);
+    }
+    if (newShapeImage) {
+      imageLoader->AssociateRequestToFrame(newShapeImage, this,
+        ImageLoader::REQUEST_REQUIRES_REFLOW);
     }
   }
 
@@ -1189,7 +1188,6 @@ nsFrame::DidSetComputedStyle(ComputedStyle* aOldComputedStyle)
 
   RemoveStateBits(NS_FRAME_SIMPLE_EVENT_REGIONS |
                   NS_FRAME_SIMPLE_DISPLAYLIST);
-  this->MarkNeedsDisplayItemRebuild();
 
   mMayHaveRoundedCorners = true;
 }
@@ -3091,12 +3089,11 @@ nsIFrame::BuildDisplayListForStackingContext(nsDisplayListBuilder* aBuilder,
     if (aBuilder->ContainsBlendMode() != BuiltBlendContainer() &&
         aBuilder->IsRetainingDisplayList()) {
       SetBuiltBlendContainer(aBuilder->ContainsBlendMode());
-      aBuilder->MarkCurrentFrameModifiedDuringBuilding();
 
       // If we did a partial build then delete all the items we just built
       // and repeat building with the full area.
       if (!aBuilder->GetDirtyRect().Contains(aBuilder->GetVisibleRect())) {
-        aBuilder->SetDirtyRect(aBuilder->GetVisibleRect());
+        aBuilder->MarkCurrentFrameModifiedDuringBuilding();
         set.DeleteAll(aBuilder);
 
         if (eventRegions) {
@@ -5220,7 +5217,8 @@ nsIFrame::ContentOffsets nsFrame::CalcContentOffsetsFromFramePoint(const nsPoint
 }
 
 void
-nsIFrame::AssociateImage(const nsStyleImage& aImage, nsPresContext* aPresContext)
+nsIFrame::AssociateImage(const nsStyleImage& aImage, nsPresContext* aPresContext,
+                         uint32_t aImageLoaderFlags)
 {
   if (aImage.GetType() != eStyleImageType_Image) {
     return;
@@ -5230,12 +5228,11 @@ nsIFrame::AssociateImage(const nsStyleImage& aImage, nsPresContext* aPresContext
   if (!req) {
     return;
   }
-
   mozilla::css::ImageLoader* loader =
     aPresContext->Document()->StyleImageLoader();
 
   // If this fails there's not much we can do ...
-  loader->AssociateRequestToFrame(req, this);
+  loader->AssociateRequestToFrame(req, this, aImageLoaderFlags);
 }
 
 nsresult
@@ -5674,9 +5671,22 @@ nsFrame::ComputeSize(gfxContext*         aRenderingContext,
     // nsFrame::ComputeSizeWithIntrinsicDimensions().
     const nsStyleCoord* flexBasis = &(stylePos->mFlexBasis);
     if (flexBasis->GetUnit() != eStyleUnit_Auto) {
-      // Override whichever styleCoord is in flex container's main axis:
-      (flexMainAxis == eLogicalAxisInline ?
-       inlineStyleCoord : blockStyleCoord) = flexBasis;
+      // Replace our main-axis styleCoord pointer with a different one,
+      // depending on our flex-basis value.
+      auto& mainAxisCoord = (flexMainAxis == eLogicalAxisInline
+                             ? inlineStyleCoord : blockStyleCoord);
+      if (flexBasis->GetUnit() == eStyleUnit_Enumerated &&
+          flexBasis->GetIntValue() == NS_STYLE_FLEX_BASIS_CONTENT) {
+        // We have 'flex-basis: content', which is equivalent to
+        // 'flex-basis:auto; {main-size}: auto'. So, just swap in a dummy
+        // 'auto' value to use for the main size property:
+        static const nsStyleCoord autoStyleCoord(eStyleUnit_Auto);
+        mainAxisCoord = &autoStyleCoord;
+      } else {
+        // For all other flex-basis values, we just swap in the flex-basis
+        // itself for the main-size property here:
+        mainAxisCoord = flexBasis;
+      }
     }
   }
 
@@ -5916,9 +5926,23 @@ nsFrame::ComputeSizeWithIntrinsicDimensions(gfxContext*          aRenderingConte
       // inlineStyleCoord and blockStyleCoord in nsFrame::ComputeSize().
       const nsStyleCoord* flexBasis = &(stylePos->mFlexBasis);
       if (flexBasis->GetUnit() != eStyleUnit_Auto) {
-        // Override whichever styleCoord is in flex container's main axis:
-        (flexMainAxis == eLogicalAxisInline ?
-         inlineStyleCoord : blockStyleCoord) = flexBasis;
+        // Replace our main-axis styleCoord pointer with a different one,
+        // depending on our flex-basis value.
+        auto& mainAxisCoord = (flexMainAxis == eLogicalAxisInline
+                               ? inlineStyleCoord : blockStyleCoord);
+
+        if (flexBasis->GetUnit() == eStyleUnit_Enumerated &&
+            flexBasis->GetIntValue() == NS_STYLE_FLEX_BASIS_CONTENT) {
+          // We have 'flex-basis: content', which is equivalent to
+          // 'flex-basis:auto; {main-size}: auto'. So, just swap in a dummy
+          // 'auto' value to use for the main size property:
+          static const nsStyleCoord autoStyleCoord(eStyleUnit_Auto);
+          mainAxisCoord = &autoStyleCoord;
+        } else {
+          // For all other flex-basis values, we just swap in the flex-basis
+          // itself for the main-size property here:
+          mainAxisCoord = flexBasis;
+        }
       }
     }
   }
@@ -6992,13 +7016,15 @@ SchedulePaintInternal(nsIFrame* aDisplayRoot, nsIFrame* aFrame,
   }
 }
 
-static void InvalidateFrameInternal(nsIFrame *aFrame, bool aHasDisplayItem = true)
+static void InvalidateFrameInternal(nsIFrame *aFrame, bool aHasDisplayItem, bool aRebuildDisplayItems)
 {
   if (aHasDisplayItem) {
     aFrame->AddStateBits(NS_FRAME_NEEDS_PAINT);
   }
 
-  aFrame->MarkNeedsDisplayItemRebuild();
+  if (aRebuildDisplayItems) {
+    aFrame->MarkNeedsDisplayItemRebuild();
+  }
   SVGObserverUtils::InvalidateDirectRenderingObservers(aFrame);
   bool needsSchedulePaint = false;
   if (nsLayoutUtils::IsPopup(aFrame)) {
@@ -7038,13 +7064,11 @@ static void InvalidateFrameInternal(nsIFrame *aFrame, bool aHasDisplayItem = tru
 }
 
 void
-nsIFrame::InvalidateFrameSubtree(uint32_t aDisplayItemKey)
+nsIFrame::InvalidateFrameSubtree(bool aRebuildDisplayItems /* = true */)
 {
-  bool hasDisplayItem =
-    !aDisplayItemKey || FrameLayerBuilder::HasRetainedDataFor(this, aDisplayItemKey);
-  InvalidateFrame(aDisplayItemKey);
+  InvalidateFrame(0, aRebuildDisplayItems);
 
-  if (HasAnyStateBits(NS_FRAME_ALL_DESCENDANTS_NEED_PAINT) || !hasDisplayItem) {
+  if (HasAnyStateBits(NS_FRAME_ALL_DESCENDANTS_NEED_PAINT)) {
     return;
   }
 
@@ -7057,7 +7081,10 @@ nsIFrame::InvalidateFrameSubtree(uint32_t aDisplayItemKey)
   for (; !lists.IsDone(); lists.Next()) {
     nsFrameList::Enumerator childFrames(lists.CurrentList());
     for (; !childFrames.AtEnd(); childFrames.Next()) {
-      childFrames.get()->InvalidateFrameSubtree();
+      // Don't explicitly rebuild display items for our descendants,
+      // since we should be marked and it implicitly includes all
+      // descendants.
+      childFrames.get()->InvalidateFrameSubtree(false);
     }
   }
 }
@@ -7084,21 +7111,24 @@ nsIFrame::ClearInvalidationStateBits()
 }
 
 void
-nsIFrame::InvalidateFrame(uint32_t aDisplayItemKey)
+nsIFrame::InvalidateFrame(uint32_t aDisplayItemKey, bool aRebuildDisplayItems /* = true */)
 {
   bool hasDisplayItem =
     !aDisplayItemKey || FrameLayerBuilder::HasRetainedDataFor(this, aDisplayItemKey);
-  InvalidateFrameInternal(this, hasDisplayItem);
+  InvalidateFrameInternal(this, hasDisplayItem, aRebuildDisplayItems);
 }
 
 void
-nsIFrame::InvalidateFrameWithRect(const nsRect& aRect, uint32_t aDisplayItemKey)
+nsIFrame::InvalidateFrameWithRect(const nsRect& aRect, uint32_t aDisplayItemKey, bool aRebuildDisplayItems /* = true */)
 {
+  if (aRect.IsEmpty()) {
+    return;
+  }
   bool hasDisplayItem =
     !aDisplayItemKey || FrameLayerBuilder::HasRetainedDataFor(this, aDisplayItemKey);
   bool alreadyInvalid = false;
   if (!HasAnyStateBits(NS_FRAME_NEEDS_PAINT)) {
-    InvalidateFrameInternal(this, hasDisplayItem);
+    InvalidateFrameInternal(this, hasDisplayItem, aRebuildDisplayItems);
   } else {
     alreadyInvalid = true;
   }
@@ -9516,7 +9546,13 @@ nsIFrame::FinishAndStoreOverflow(nsOverflowAreas& aOverflowAreas,
   //
   // XXX Someone should document here why we revert the frame size before we
   // return rather than just leaving it set.
-  SetSize(aNewSize);
+  //
+  // We pass false here to avoid invalidating display items for this temporary
+  // change. We sometimes reflow frames multiple times, with the final size being
+  // the same as the initial. The single call to SetSize after reflow is done
+  // will take care of invalidating display items if the size has actually
+  // changed.
+  SetSize(aNewSize, false);
 
   // Nothing in here should affect scrollable overflow.
   aOverflowAreas.VisualOverflow() =
@@ -9570,7 +9606,7 @@ nsIFrame::FinishAndStoreOverflow(nsOverflowAreas& aOverflowAreas,
   }
 
   /* Revert the size change in case some caller is depending on this. */
-  SetSize(oldSize);
+  SetSize(oldSize, false);
 
   bool anyOverflowChanged;
   if (aOverflowAreas != nsOverflowAreas(bounds, bounds)) {
@@ -11007,14 +11043,19 @@ IsFrameScrolledOutOfView(nsIFrame* aTarget,
   }
 
   nsIFrame *scrollableParent = do_QueryFrame(scrollableFrame);
+  nsRect scrollableRect =
+    scrollableParent->GetVisualOverflowRectRelativeToSelf();
+  // We consider that the target is scrolled out if the scrollable frame is
+  // empty.
+  if (scrollableRect.IsEmpty()) {
+    return true;
+  }
 
   nsRect transformedRect =
     nsLayoutUtils::TransformFrameRectToAncestor(aTarget,
                                                 aTargetRect,
                                                 scrollableParent);
 
-  nsRect scrollableRect =
-    scrollableParent->GetVisualOverflowRectRelativeToSelf();
   if (transformedRect.IsEmpty()) {
     // If the transformed rect is empty it represents a line or a point that we
     // should check is outside the the scrollable rect.
