@@ -108,14 +108,6 @@ var Policies = {
     }
   },
 
-  "BlockSetDesktopBackground": {
-    onBeforeUIStartup(manager, param) {
-      if (param) {
-        manager.disallowFeature("setDesktopBackground", true);
-      }
-    }
-  },
-
   "Bookmarks": {
     onAllWindowsRestored(manager, param) {
       BookmarksPolicies.processBookmarks(param);
@@ -155,7 +147,7 @@ var Policies = {
         if (param.Default !== undefined && !param.Default) {
           newCookieBehavior = REJECT_ALL_COOKIES;
         } else if (param.AcceptThirdParty) {
-          if (param.AcceptThirdParty == "none") {
+          if (param.AcceptThirdParty == "never") {
             newCookieBehavior = REJECT_THIRD_PARTY_COOKIES;
           } else if (param.AcceptThirdParty == "from-visited") {
             newCookieBehavior = REJECT_UNVISITED_THIRD_PARTY;
@@ -183,14 +175,6 @@ var Policies = {
         } else {
           setDefaultPref("network.cookie.lifetimePolicy", newLifetimePolicy);
         }
-      }
-    }
-  },
-
-  "CreateMasterPassword": {
-    onBeforeUIStartup(manager, param) {
-      if (!param) {
-        manager.disallowFeature("createMasterPassword");
       }
     }
   },
@@ -273,6 +257,14 @@ var Policies = {
     }
   },
 
+  "DisableMasterPasswordCreation": {
+    onBeforeUIStartup(manager, param) {
+      if (param) {
+        manager.disallowFeature("createMasterPassword");
+      }
+    }
+  },
+
   "DisablePocket": {
     onBeforeAddons(manager, param) {
       if (param) {
@@ -287,6 +279,15 @@ var Policies = {
         manager.disallowFeature("privatebrowsing");
         manager.disallowFeature("about:privatebrowsing", true);
         setAndLockPref("browser.privatebrowsing.autostart", false);
+      }
+    }
+  },
+
+  "DisableProfileImport": {
+    onBeforeUIStartup(manager, param) {
+      if (param) {
+        manager.disallowFeature("profileImport");
+        setAndLockPref("browser.newtabpage.activity-stream.migrationExpired", true);
       }
     }
   },
@@ -320,7 +321,15 @@ var Policies = {
     }
   },
 
-  "DisableSysAddonUpdate": {
+  "DisableSetDesktopBackground": {
+    onBeforeUIStartup(manager, param) {
+      if (param) {
+        manager.disallowFeature("setDesktopBackground", true);
+      }
+    }
+  },
+
+  "DisableSystemAddonUpdate": {
     onBeforeAddons(manager, param) {
       if (param) {
         manager.disallowFeature("SysAddonUpdate");
@@ -333,6 +342,7 @@ var Policies = {
       if (param) {
         setAndLockPref("datareporting.healthreport.uploadEnabled", false);
         setAndLockPref("datareporting.policy.dataSubmissionEnabled", false);
+        manager.disallowFeature("about:telemetry");
       }
     }
   },
@@ -404,7 +414,7 @@ var Policies = {
               }
               url = Services.io.newFileURI(xpiFile).spec;
             }
-            AddonManager.getInstallForURL(url, null, "application/x-xpinstall").then(install => {
+            AddonManager.getInstallForURL(url, "application/x-xpinstall").then(install => {
               if (install.addon && install.addon.appDisabled) {
                 log.error(`Incompatible add-on - ${location}`);
                 install.cancel();
@@ -439,19 +449,18 @@ var Policies = {
         });
       }
       if ("Uninstall" in param) {
-        runOncePerModification("extensionsUninstall", JSON.stringify(param.Uninstall), () => {
-          AddonManager.getAddonsByIDs(param.Uninstall, (addons) => {
-            for (let addon of addons) {
-              if (addon) {
-                try {
-                  addon.uninstall();
-                } catch (e) {
-                  // This can fail for add-ons that can't be uninstalled.
-                  // Just ignore.
-                }
+        runOncePerModification("extensionsUninstall", JSON.stringify(param.Uninstall), async () => {
+          let addons = await AddonManager.getAddonsByIDs(param.Uninstall);
+          for (let addon of addons) {
+            if (addon) {
+              try {
+                addon.uninstall();
+              } catch (e) {
+                // This can fail for add-ons that can't be uninstalled.
+                // Just ignore.
               }
             }
-          });
+          }
         });
       }
       if ("Locked" in param) {
@@ -516,7 +525,7 @@ var Policies = {
     }
   },
 
-  "InstallAddons": {
+  "InstallAddonsPermission": {
     onBeforeUIStartup(manager, param) {
       if ("Allow" in param) {
         addAllowDenyPermissions("install", param.Allow, null);
@@ -535,6 +544,12 @@ var Policies = {
       if (param) {
         manager.disallowFeature("defaultBookmarks");
       }
+    }
+  },
+
+  "OfferToSaveLogins": {
+    onBeforeUIStartup(manager, param) {
+      setAndLockPref("signon.rememberSignons", param);
     }
   },
 
@@ -580,12 +595,6 @@ var Policies = {
       } else {
         ProxyPolicies.configureProxySettings(param, setDefaultPref);
       }
-    }
-  },
-
-  "RememberPasswords": {
-    onBeforeUIStartup(manager, param) {
-      setAndLockPref("signon.rememberSignons", param);
     }
   },
 

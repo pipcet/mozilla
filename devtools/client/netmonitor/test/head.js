@@ -5,7 +5,7 @@
 /* exported Toolbox, restartNetMonitor, teardown, waitForExplicitFinish,
    verifyRequestItemTarget, waitFor, testFilterButtons,
    performRequestsInContent, waitForNetworkEvents, selectIndexAndWaitForSourceEditor,
-   testColumnsAlignment, hideColumn, showColumn, performRequests */
+   testColumnsAlignment, hideColumn, showColumn, performRequests, waitForRequestData */
 
 "use strict";
 
@@ -18,8 +18,17 @@ const {
   getFormattedIPAndPort,
   getFormattedTime,
 } = require("devtools/client/netmonitor/src/utils/format-utils");
+
 const {
-  decodeUnicodeUrl,
+  getSortedRequests,
+  getRequestById
+} = require("devtools/client/netmonitor/src/selectors/index");
+
+const {
+  getUnicodeUrl,
+  getUnicodeHostname,
+} = require("devtools/client/shared/unicode-url");
+const {
   getFormattedProtocol,
   getUrlBaseName,
   getUrlHost,
@@ -75,6 +84,8 @@ const HTTPS_REDIRECT_SJS = EXAMPLE_URL + "sjs_https-redirect-test-server.sjs";
 const CORS_SJS_PATH = "/browser/devtools/client/netmonitor/test/sjs_cors-test-server.sjs";
 const HSTS_SJS = EXAMPLE_URL + "sjs_hsts-test-server.sjs";
 const METHOD_SJS = EXAMPLE_URL + "sjs_method-test-server.sjs";
+const SLOW_SJS = EXAMPLE_URL + "sjs_slow-test-server.sjs";
+const SET_COOKIE_SAME_SITE_SJS = EXAMPLE_URL + "sjs_set-cookie-same-site.sjs";
 
 const HSTS_BASE_URL = EXAMPLE_URL;
 const HSTS_PAGE_URL = CUSTOM_GET_URL;
@@ -152,13 +163,13 @@ function waitForTimelineMarkers(monitor) {
       info(`Got marker: ${marker.name}`);
       markers.push(marker);
       if (markers.length == 2) {
-        monitor.panelWin.off(EVENTS.TIMELINE_EVENT, handleTimelineEvent);
+        monitor.panelWin.api.off(EVENTS.TIMELINE_EVENT, handleTimelineEvent);
         info("Got two timeline markers, done waiting");
         resolve(markers);
       }
     }
 
-    monitor.panelWin.on(EVENTS.TIMELINE_EVENT, handleTimelineEvent);
+    monitor.panelWin.api.on(EVENTS.TIMELINE_EVENT, handleTimelineEvent);
   });
 }
 
@@ -209,14 +220,14 @@ function waitForAllRequestsFinished(monitor) {
       }
 
       // All requests are done - unsubscribe from events and resolve!
-      window.off(EVENTS.NETWORK_EVENT, onRequest);
-      window.off(EVENTS.PAYLOAD_READY, onTimings);
+      window.api.off(EVENTS.NETWORK_EVENT, onRequest);
+      window.api.off(EVENTS.PAYLOAD_READY, onTimings);
       info("All requests finished");
       resolve();
     }
 
-    window.on(EVENTS.NETWORK_EVENT, onRequest);
-    window.on(EVENTS.PAYLOAD_READY, onTimings);
+    window.api.on(EVENTS.NETWORK_EVENT, onRequest);
+    window.api.on(EVENTS.PAYLOAD_READY, onTimings);
   });
 }
 
@@ -245,12 +256,12 @@ let updatedTypes = [
 // Start collecting all networkEventUpdate event when panel is opened.
 // removeTab() should be called once all corresponded RECEIVED_* events finished.
 function startNetworkEventUpdateObserver(panelWin) {
-  updatingTypes.forEach((type) => panelWin.on(type, actor => {
+  updatingTypes.forEach((type) => panelWin.api.on(type, actor => {
     let key = actor + "-" + updatedTypes[updatingTypes.indexOf(type)];
     finishedQueue[key] = finishedQueue[key] ? finishedQueue[key] + 1 : 1;
   }));
 
-  updatedTypes.forEach((type) => panelWin.on(type, actor => {
+  updatedTypes.forEach((type) => panelWin.api.on(type, actor => {
     let key = actor + "-" + type;
     finishedQueue[key] = finishedQueue[key] ? finishedQueue[key] - 1 : -1;
   }));
@@ -386,14 +397,14 @@ function waitForNetworkEvents(monitor, getRequests) {
 
       // Wait until networkEvent & payloadReady finish for each request.
       if (networkEvent >= getRequests && payloadReady >= getRequests) {
-        panel.off(EVENTS.NETWORK_EVENT, onNetworkEvent);
-        panel.off(EVENTS.PAYLOAD_READY, onPayloadReady);
+        panel.api.off(EVENTS.NETWORK_EVENT, onNetworkEvent);
+        panel.api.off(EVENTS.PAYLOAD_READY, onPayloadReady);
         executeSoon(resolve);
       }
     }
 
-    panel.on(EVENTS.NETWORK_EVENT, onNetworkEvent);
-    panel.on(EVENTS.PAYLOAD_READY, onPayloadReady);
+    panel.api.on(EVENTS.NETWORK_EVENT, onNetworkEvent);
+    panel.api.on(EVENTS.PAYLOAD_READY, onPayloadReady);
   });
 }
 
@@ -410,10 +421,10 @@ function verifyRequestItemTarget(document, requestList, requestItem, method,
 
   let target = document.querySelectorAll(".request-list-item")[visibleIndex];
   // Bug 1414981 - Request URL should not show #hash
-  let unicodeUrl = decodeUnicodeUrl(url).split("#")[0];
+  let unicodeUrl = getUnicodeUrl(url.split("#")[0]);
   let name = getUrlBaseName(url);
   let query = getUrlQuery(url);
-  let host = getUrlHost(url);
+  let host = getUnicodeHostname(getUrlHost(url));
   let scheme = getUrlScheme(url);
   let {
     remoteAddress,
@@ -493,7 +504,8 @@ function verifyRequestItemTarget(document, requestList, requestItem, method,
     let value = target.querySelector(".requests-list-status-code")
                       .getAttribute("data-status-code");
     let codeValue = target.querySelector(".requests-list-status-code").textContent;
-    let tooltip = target.querySelector(".requests-list-status").getAttribute("title");
+    let tooltip = target.querySelector(".requests-list-status-code")
+                        .getAttribute("title");
     info("Displayed status: " + value);
     info("Displayed code: " + codeValue);
     info("Tooltip status: " + tooltip);
@@ -559,7 +571,7 @@ function verifyRequestItemTarget(document, requestList, requestItem, method,
 
 /**
  * Helper function for waiting for an event to fire before resolving a promise.
- * Example: waitFor(aMonitor.panelWin, EVENT_NAME);
+ * Example: waitFor(aMonitor.panelWin.api, EVENT_NAME);
  *
  * @param object subject
  *        The event emitter object that is being listened to.
@@ -733,7 +745,7 @@ async function showColumn(monitor, column) {
  */
 async function selectIndexAndWaitForSourceEditor(monitor, index) {
   let document = monitor.panelWin.document;
-  let onResponseContent = monitor.panelWin.once(EVENTS.RECEIVED_RESPONSE_CONTENT);
+  let onResponseContent = monitor.panelWin.api.once(EVENTS.RECEIVED_RESPONSE_CONTENT);
   // Select the request first, as it may try to fetch whatever is the current request's
   // responseContent if we select the ResponseTab first.
   EventUtils.sendMouseEvent({ type: "mousedown" },
@@ -759,4 +771,31 @@ async function performRequests(monitor, tab, count) {
     content.wrappedJSObject.performRequests(requestCount);
   });
   await wait;
+}
+
+/**
+ * Wait for lazy fields to be loaded in a request.
+ *
+ * @param Object Store redux store containing request list.
+ * @param array fields array of strings which contain field names to be checked
+ * on the request.
+ */
+function waitForRequestData(store, fields, id) {
+  return waitUntil(() => {
+    let item;
+    if (id) {
+      item = getRequestById(store.getState(), id);
+    } else {
+      item = getSortedRequests(store.getState()).get(0);
+    }
+    if (!item) {
+      return false;
+    }
+    for (const field of fields) {
+      if (!item[field]) {
+        return false;
+      }
+    }
+    return true;
+  });
 }

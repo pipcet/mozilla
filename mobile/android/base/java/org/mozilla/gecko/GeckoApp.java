@@ -40,6 +40,7 @@ import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.util.ViewUtil;
 import org.mozilla.gecko.widget.ActionModePresenter;
 import org.mozilla.gecko.widget.AnchoredPopup;
+import org.mozilla.geckoview.GeckoRuntime;
 import org.mozilla.geckoview.GeckoSession;
 import org.mozilla.geckoview.GeckoSessionSettings;
 import org.mozilla.geckoview.GeckoView;
@@ -122,7 +123,6 @@ public abstract class GeckoApp extends GeckoActivity
     public static final String ACTION_ALERT_CALLBACK       = "org.mozilla.gecko.ALERT_CALLBACK";
     public static final String ACTION_HOMESCREEN_SHORTCUT  = "org.mozilla.gecko.BOOKMARK";
     public static final String ACTION_WEBAPP               = "org.mozilla.gecko.WEBAPP";
-    public static final String ACTION_DEBUG                = "org.mozilla.gecko.DEBUG";
     public static final String ACTION_LAUNCH_SETTINGS      = "org.mozilla.gecko.SETTINGS";
     public static final String ACTION_LOAD                 = "org.mozilla.gecko.LOAD";
     public static final String ACTION_INIT_PW              = "org.mozilla.gecko.INIT_PW";
@@ -686,12 +686,6 @@ public abstract class GeckoApp extends GeckoActivity
                 finish();
             }
 
-        } else if ("Accessibility:Ready".equals(event)) {
-            GeckoAccessibility.updateAccessibilitySettings(this);
-
-        } else if ("Accessibility:Event".equals(event)) {
-            GeckoAccessibility.sendAccessibilityEvent(mLayerView, message);
-
         } else if ("Contact:Add".equals(event)) {
             final String email = message.getString("email");
             final String phone = message.getString("phone");
@@ -1003,6 +997,18 @@ public abstract class GeckoApp extends GeckoActivity
             return;
         }
 
+        // To prevent races, register startup events before launching the Gecko thread.
+        EventDispatcher.getInstance().registerGeckoThreadListener(this,
+                "Gecko:Ready",
+                null);
+
+        EventDispatcher.getInstance().registerUiThreadListener(this,
+                "Gecko:CorruptAPK",
+                "Update:Check",
+                "Update:Download",
+                "Update:Install",
+                null);
+
         if (sAlreadyLoaded) {
             // This happens when the GeckoApp activity is destroyed by Android
             // without killing the entire application (see Bug 769269).
@@ -1010,15 +1016,14 @@ public abstract class GeckoApp extends GeckoActivity
             // also happen if we're not the first activity to run within a session.
             mIsRestoringActivity = true;
             Telemetry.addToHistogram("FENNEC_RESTORING_ACTIVITY", 1);
-
         } else {
             final String action = intent.getAction();
             final String[] args = GeckoApplication.getDefaultGeckoArgs();
-            final int flags = ACTION_DEBUG.equals(action) ? GeckoThread.FLAG_DEBUGGING : 0;
 
             sAlreadyLoaded = true;
-            GeckoThread.initMainProcess(/* profile */ null, args,
-                                        intent.getExtras(), flags);
+            if (GeckoApplication.getRuntime() == null) {
+                GeckoApplication.createRuntime(this, intent);
+            }
 
             // Speculatively pre-fetch the profile in the background.
             ThreadUtils.postToBackgroundThread(new Runnable() {
@@ -1034,21 +1039,6 @@ public abstract class GeckoApp extends GeckoActivity
                 GeckoThread.speculativeConnect(uri);
             }
         }
-
-        // To prevent races, register startup events before launching the Gecko thread.
-        EventDispatcher.getInstance().registerGeckoThreadListener(this,
-            "Accessibility:Ready",
-            "Gecko:Ready",
-            null);
-
-        EventDispatcher.getInstance().registerUiThreadListener(this,
-            "Gecko:CorruptAPK",
-            "Update:Check",
-            "Update:Download",
-            "Update:Install",
-            null);
-
-        GeckoThread.launch();
 
         Bundle stateBundle = IntentUtils.getBundleExtraSafe(getIntent(), EXTRA_STATE_BUNDLE);
         if (stateBundle != null) {
@@ -1079,18 +1069,16 @@ public abstract class GeckoApp extends GeckoActivity
         mLayerView = (GeckoView) findViewById(R.id.layer_view);
 
         final GeckoSession session = new GeckoSession();
-        // If the view already has a session, we need to ensure it is closed.
-        if (mLayerView.getSession() != null) {
-            mLayerView.getSession().close();
-        }
-        mLayerView.setSession(session);
-        mLayerView.setOverScrollMode(View.OVER_SCROLL_NEVER);
-
         session.getSettings().setString(GeckoSessionSettings.CHROME_URI,
                                         "chrome://browser/content/browser.xul");
         session.setContentDelegate(this);
 
-        GeckoAccessibility.setDelegate(mLayerView);
+        // If the view already has a session, we need to ensure it is closed.
+        if (mLayerView.getSession() != null) {
+            mLayerView.getSession().close();
+        }
+        mLayerView.setSession(session, GeckoApplication.getRuntime());
+        mLayerView.setOverScrollMode(View.OVER_SCROLL_NEVER);
 
         getAppEventDispatcher().registerGeckoThreadListener(this,
             "Locale:Set",
@@ -1098,7 +1086,6 @@ public abstract class GeckoApp extends GeckoActivity
             null);
 
         getAppEventDispatcher().registerUiThreadListener(this,
-            "Accessibility:Event",
             "Contact:Add",
             "DevToolsAuth:Scan",
             "DOMFullScreen:Start",
@@ -1465,7 +1452,7 @@ public abstract class GeckoApp extends GeckoActivity
         final String passedUri = getIntentURI(intent);
 
         final boolean intentHasURL = passedUri != null;
-        final boolean isAboutHomeURL = intentHasURL && AboutPages.isAboutHome(passedUri);
+        final boolean isAboutHomeURL = intentHasURL && AboutPages.isDefaultHomePage(passedUri);
         final boolean isAssistIntent = Intent.ACTION_ASSIST.equals(action);
         final boolean needsNewForegroundTab = intentHasURL || isAssistIntent;
 
@@ -2088,7 +2075,6 @@ public abstract class GeckoApp extends GeckoActivity
         }
 
         EventDispatcher.getInstance().unregisterGeckoThreadListener(this,
-            "Accessibility:Ready",
             "Gecko:Ready",
             null);
 
@@ -2105,7 +2091,6 @@ public abstract class GeckoApp extends GeckoActivity
             null);
 
         getAppEventDispatcher().unregisterUiThreadListener(this,
-            "Accessibility:Event",
             "Contact:Add",
             "DevToolsAuth:Scan",
             "DOMFullScreen:Start",

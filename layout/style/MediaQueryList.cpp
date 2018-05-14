@@ -12,7 +12,6 @@
 #include "mozilla/dom/EventTarget.h"
 #include "mozilla/dom/EventTargetBinding.h"
 #include "nsPresContext.h"
-#include "nsCSSParser.h"
 #include "nsIDocument.h"
 
 #define ONCHANGE_STRING NS_LITERAL_STRING("change")
@@ -46,7 +45,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(MediaQueryList,
                                                 DOMEventTargetHelper)
   if (tmp->mDocument) {
-    tmp->remove();
+    static_cast<LinkedListElement<MediaQueryList>*>(tmp)->remove();
     NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocument)
   }
   tmp->Disconnect();
@@ -91,20 +90,15 @@ MediaQueryList::AddListener(EventListener* aListener, ErrorResult& aRv)
 }
 
 void
-MediaQueryList::AddEventListener(const nsAString& aType,
-                                 EventListener* aCallback,
-                                 const AddEventListenerOptionsOrBoolean& aOptions,
-                                 const dom::Nullable<bool>& aWantsUntrusted,
-                                 ErrorResult& aRv)
+MediaQueryList::EventListenerAdded(nsAtom* aType)
 {
-  if (!mMatchesValid) {
-    MOZ_ASSERT(!HasListeners(),
-               "when listeners present, must keep mMatches current");
+  // HasListeners() might still be false if the added thing wasn't a
+  // listener we care about.
+  if (!mMatchesValid && HasListeners()) {
     RecomputeMatches();
   }
 
-  DOMEventTargetHelper::AddEventListener(aType, aCallback, aOptions,
-                                         aWantsUntrusted, aRv);
+  DOMEventTargetHelper::EventListenerAdded(aType);
 }
 
 void
@@ -202,8 +196,7 @@ MediaQueryList::MaybeNotify()
     MediaQueryListEvent::Constructor(this, ONCHANGE_STRING, init);
   event->SetTrusted(true);
 
-  bool dummy;
-  DispatchEvent(event, &dummy);
+  DispatchEvent(*event);
 }
 
 } // namespace dom

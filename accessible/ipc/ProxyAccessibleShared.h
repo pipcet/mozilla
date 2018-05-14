@@ -62,7 +62,7 @@ bool IsSearchbox() const;
 
 nsAtom* LandmarkRole() const;
 
-nsStaticAtom* ARIARoleAtom() const;
+nsAtom* ARIARoleAtom() const;
 
 int32_t GetLevelInternal();
 void ScrollTo(uint32_t aScrollType);
@@ -253,6 +253,7 @@ ProxyAccessible* FocusedChild();
 ProxyAccessible* ChildAtPoint(int32_t aX, int32_t aY,
     Accessible::EWhichChildAtPoint aWhichChild);
 nsIntRect Bounds();
+nsIntRect BoundsInCSSPixels();
 
 void Language(nsString& aLocale);
 void DocType(nsString& aType);

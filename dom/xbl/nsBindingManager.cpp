@@ -16,7 +16,7 @@
 #include "nsString.h"
 #include "plstr.h"
 #include "nsIContent.h"
-#include "nsIDOMElement.h"
+#include "nsIContentInlines.h"
 #include "nsIDocument.h"
 #include "nsContentUtils.h"
 #include "nsIPresShell.h"
@@ -202,7 +202,7 @@ nsBindingManager::RemovedFromDocumentInternal(nsIContent* aContent,
                                               nsIDocument* aOldDocument,
                                               DestructorHandling aDestructorHandling)
 {
-  NS_PRECONDITION(aOldDocument != nullptr, "no old document");
+  MOZ_ASSERT(aOldDocument != nullptr, "no old document");
 
   RefPtr<nsXBLBinding> binding = aContent->GetXBLBinding();
   if (binding) {
@@ -298,7 +298,7 @@ nsBindingManager::LoadBindingDocument(nsIDocument* aBoundDoc,
                                       nsIURI* aURL,
                                       nsIPrincipal* aOriginPrincipal)
 {
-  NS_PRECONDITION(aURL, "Must have a URI to load!");
+  MOZ_ASSERT(aURL, "Must have a URI to load!");
 
   // First we need to load our binding.
   nsXBLService* xblService = nsXBLService::GetInstance();
@@ -471,7 +471,7 @@ nsBindingManager::ExecuteDetachedHandlers()
 nsresult
 nsBindingManager::PutXBLDocumentInfo(nsXBLDocumentInfo* aDocumentInfo)
 {
-  NS_PRECONDITION(aDocumentInfo, "Must have a non-null documentinfo!");
+  MOZ_ASSERT(aDocumentInfo, "Must have a non-null documentinfo!");
 
   if (!mDocumentTable) {
     mDocumentTable = new nsRefPtrHashtable<nsURIHashKey,nsXBLDocumentInfo>();
@@ -502,7 +502,7 @@ nsBindingManager::GetXBLDocumentInfo(nsIURI* aURL)
 nsresult
 nsBindingManager::PutLoadingDocListener(nsIURI* aURL, nsIStreamListener* aListener)
 {
-  NS_PRECONDITION(aListener, "Must have a non-null listener!");
+  MOZ_ASSERT(aListener, "Must have a non-null listener!");
 
   if (!mLoadingDocTable) {
     mLoadingDocTable =
@@ -667,26 +667,27 @@ nsBindingManager::GetBindingImplementation(nsIContent* aContent, REFNSIID aIID,
 
 
 bool
-nsBindingManager::EnumerateBoundContentBindings(
-  const BoundContentBindingCallback& aCallback) const
+nsBindingManager::EnumerateBoundContentProtoBindings(
+  const BoundContentProtoBindingCallback& aCallback) const
 {
   if (!mBoundContentSet) {
     return true;
   }
 
-  nsTHashtable<nsPtrHashKey<nsXBLBinding>> bindings;
+  nsTHashtable<nsPtrHashKey<nsXBLPrototypeBinding>> bindings;
   for (auto iter = mBoundContentSet->Iter(); !iter.Done(); iter.Next()) {
     nsIContent* boundContent = iter.Get()->GetKey();
     for (nsXBLBinding* binding = boundContent->GetXBLBinding();
          binding;
          binding = binding->GetBaseBinding()) {
+      nsXBLPrototypeBinding* proto = binding->PrototypeBinding();
       // If we have already invoked the callback with a binding, we
       // should have also invoked it for all its base bindings, so we
       // don't need to continue this loop anymore.
-      if (!bindings.EnsureInserted(binding)) {
+      if (!bindings.EnsureInserted(proto)) {
         break;
       }
-      if (!aCallback(binding)) {
+      if (!aCallback(proto)) {
         return false;
       }
     }
@@ -698,8 +699,8 @@ nsBindingManager::EnumerateBoundContentBindings(
 void
 nsBindingManager::AppendAllSheets(nsTArray<StyleSheet*>& aArray)
 {
-  EnumerateBoundContentBindings([&aArray](nsXBLBinding* aBinding) {
-    aBinding->PrototypeBinding()->AppendStyleSheetsTo(aArray);
+  EnumerateBoundContentProtoBindings([&aArray](nsXBLPrototypeBinding* aProto) {
+    aProto->AppendStyleSheetsTo(aArray);
     return true;
   });
 }
@@ -785,7 +786,7 @@ nsBindingManager::ContentAppended(nsIContent* aFirstNewContent)
       first = false;
       for (nsIContent* child = aFirstNewContent; child;
            child = child->GetNextSibling()) {
-        point->AppendInsertedChild(child);
+        point->AppendInsertedChild(child, true);
       }
     } else {
       InsertAppendedContent(point, aFirstNewContent);

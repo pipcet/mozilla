@@ -128,8 +128,7 @@ CompositionTransaction::DoTransaction()
     if (replaceableLength < mReplaceLength) {
       int32_t remainLength = mReplaceLength - replaceableLength;
       nsCOMPtr<nsINode> node = mTextNode->GetNextSibling();
-      while (node && node->IsNodeOfType(nsINode::eTEXT) &&
-             remainLength > 0) {
+      while (node && node->IsText() && remainLength > 0) {
         Text* text = static_cast<Text*>(node.get());
         uint32_t textLength = text->TextLength();
         text->DeleteData(0, remainLength, IgnoreErrors());
@@ -245,7 +244,7 @@ CompositionTransaction::SetIMESelection(EditorBase& aEditorBase,
 
   nsresult rv = NS_OK;
   for (uint32_t i = 0; i < ArrayLength(kIMESelections); ++i) {
-    RefPtr<Selection> selectionOfIME = selCon->GetDOMSelection(kIMESelections[i]);
+    RefPtr<Selection> selectionOfIME = selCon->GetSelection(kIMESelections[i]);
     if (!selectionOfIME) {
       continue;
     }
@@ -316,7 +315,7 @@ CompositionTransaction::SetIMESelection(EditorBase& aEditorBase,
 
     // Set the range of the clause to selection.
     RefPtr<Selection> selectionOfIME =
-      selCon->GetDOMSelection(ToRawSelectionType(textRange.mRangeType));
+      selCon->GetSelection(ToRawSelectionType(textRange.mRangeType));
     if (!selectionOfIME) {
       NS_WARNING("Failed to get IME selection");
       break;

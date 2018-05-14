@@ -95,17 +95,15 @@ public:
 
   /* Scrollbar info */
 
-  void SetScrollbarData(FrameMetrics::ViewID aScrollViewId,
-                        const uint64_t& aScrollbarAnimationId,
-                        const ScrollThumbData& aThumbData,
-                        const Maybe<ScrollDirection>& aScrollContainerDirection);
+  void SetScrollbarData(const uint64_t& aScrollbarAnimationId,
+                        const ScrollbarData& aScrollbarData);
   bool MatchesScrollDragMetrics(const AsyncDragMetrics& aDragMetrics) const;
   bool IsScrollbarNode() const;  // Scroll thumb or scrollbar container layer.
   // This can only be called if IsScrollbarNode() is true
   ScrollDirection GetScrollbarDirection() const;
   bool IsScrollThumbNode() const;  // Scroll thumb container layer.
   FrameMetrics::ViewID GetScrollTargetId() const;
-  const ScrollThumbData& GetScrollThumbData() const;
+  const ScrollbarData& GetScrollbarData() const;
   const uint64_t& GetScrollbarAnimationId() const;
 
   /* Fixed pos info */
@@ -141,20 +139,13 @@ private:
 
   LayersId mLayersId;
 
-  // This is set for both scroll track and scroll thumb Container layers, and
-  // represents the scroll id of the scroll frame scrolled by the scrollbar.
-  FrameMetrics::ViewID mScrollViewId;
-
   // This is only set to non-zero if WebRender is enabled, and only for HTTNs
   // where IsScrollThumbNode() returns true. It holds the animation id that we
   // use to move the thumb node to reflect async scrolling.
   uint64_t mScrollbarAnimationId;
 
-  // This is set for scroll thumb Container layers only.
-  ScrollThumbData mScrollThumbData;
-
-  // This is set for scroll track Container layers only.
-  Maybe<ScrollDirection> mScrollbarContainerDirection;
+  // This is set for scrollbar Container and Thumb layers.
+  ScrollbarData mScrollbarData;
 
   FrameMetrics::ViewID mFixedPosTarget;
 

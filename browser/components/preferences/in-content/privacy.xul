@@ -23,7 +23,7 @@
   <vbox id="passwordSettings">
     <hbox id="savePasswordsBox">
       <checkbox id="savePasswords"
-                data-l10n-id="forms-remember-logins"
+                data-l10n-id="forms-ask-to-save-logins"
                 preference="signon.rememberSignons"
                 onsyncfrompreference="return gPrivacyPane.readSavePasswords();"
                 flex="1" />
@@ -33,7 +33,11 @@
                 class="accessory-button"
                 data-l10n-id="forms-exceptions"
                 preference="pref.privacy.disable_button.view_passwords_exceptions"
-                searchkeywords="&address2.label;"/>
+                search-l10n-ids="
+                  permissions-address,
+                  permissions-exceptions-saved-logins-window.title,
+                  permissions-exceptions-saved-logins-desc,
+                "/>
       </hbox>
     </hbox>
     <hbox id="showPasswordBox" pack="end">
@@ -66,19 +70,18 @@
   <hbox align="center">
     <label id="historyModeLabel"
            control="historyMode"
-           accesskey="&historyHeader2.pre.accesskey;">&historyHeader2.pre.label;
-    </label>
+           data-l10n-id="history-remember-label"/>
     <!-- Please don't remove the wrapping hbox/vbox/box for these elements. It's used to properly compute the search tooltip position. -->
     <hbox>
       <menulist id="historyMode">
         <menupopup>
-          <menuitem label="&historyHeader.remember.label;"
+          <menuitem data-l10n-id="history-remember-option-all"
                     value="remember"
                     search-l10n-ids="history-remember-description"/>
-          <menuitem label="&historyHeader.dontremember.label;"
+          <menuitem data-l10n-id="history-remember-option-never"
                     value="dontremember"
                     search-l10n-ids="history-dontremember-description"/>
-          <menuitem label="&historyHeader.custom.label;"
+          <menuitem data-l10n-id="history-remember-option-custom"
                     value="custom"
                     search-l10n-ids="
                       history-private-browsing-permanent.label,
@@ -89,7 +92,6 @@
         </menupopup>
       </menulist>
     </hbox>
-    <label>&historyHeader.post.label;</label>
   </hbox>
   <hbox>
     <deck id="historyPane" flex="1">
@@ -129,38 +131,38 @@
                         preference="privacy.sanitize.sanitizeOnShutdown"
                         data-l10n-id="history-clear-on-close-option"
                         flex="1" />
-              <!-- Please don't remove the wrapping hbox/vbox/box for these elements. It's used to properly compute the search tooltip position. -->
-              <hbox>
-                <button id="clearDataSettings"
-                        class="accessory-button"
-                        data-l10n-id="history-clear-on-close-settings"
-                        searchkeywords="&clearDataSettings3.label;
-                                        &historySection.label;
-                                        &itemHistoryAndDownloads.label;
-                                        &itemCookies.label;
-                                        &itemActiveLogins.label;
-                                        &itemCache.label;
-                                        &itemFormSearchHistory.label;
-                                        &dataSection.label;
-                                        &itemSitePreferences.label;
-                                        &itemOfflineApps.label;"/>
-              </hbox>
             </hbox>
           </vbox>
         </vbox>
       </vbox>
     </deck>
-    <vbox align="end">
+    <vbox id="historyButtons" align="end">
       <button id="clearHistoryButton"
               class="accessory-button"
               icon="clear"
               data-l10n-id="history-clear-button"/>
+      <!-- Please don't remove the wrapping hbox/vbox/box for these elements. It's used to properly compute the search tooltip position. -->
+      <hbox>
+        <button id="clearDataSettings"
+                class="accessory-button"
+                data-l10n-id="history-clear-on-close-settings"
+                searchkeywords="&clearDataSettings3.label;
+                                &historySection.label;
+                                &itemHistoryAndDownloads.label;
+                                &itemCookies.label;
+                                &itemActiveLogins.label;
+                                &itemCache.label;
+                                &itemFormSearchHistory.label;
+                                &dataSection.label;
+                                &itemSitePreferences.label;
+                                &itemOfflineApps.label;"/>
+      </hbox>
     </vbox>
   </hbox>
 </groupbox>
 
 <!-- Site Data -->
-<groupbox id="siteDataGroup" hidden="true" data-category="panePrivacy" data-hidden-from-search="true">
+<groupbox id="siteDataGroup" data-category="panePrivacy" hidden="true">
   <caption><label data-l10n-id="sitedata-header"/></caption>
 
   <hbox data-subcategory="sitedata" align="baseline">
@@ -226,32 +228,37 @@
         <button id="clearSiteDataButton"
             class="accessory-button"
             icon="clear"
-            searchkeywords="&clearSiteData.label;
-                            &clearCache.label;"
+            search-l10n-ids="clear-site-data-cookies, clear-site-data-cache"
             data-l10n-id="sitedata-clear"/>
       </hbox>
       <hbox>
         <button id="siteDataSettings"
                 class="accessory-button"
                 data-l10n-id="sitedata-settings"
-                searchkeywords="&window2.title;
-                                &hostCol.label;
-                                &cookiesCol.label;
-                                &usageCol.label;"/>
+                search-l10n-ids="
+                  site-data-settings-window.title,
+                  site-data-column-host.label,
+                  site-data-column-cookies.label,
+                  site-data-column-storage.label,
+                  site-data-settings-description,
+                  site-data-remove-all.label,
+                "/>
       </hbox>
       <hbox>
         <button id="cookieExceptions"
                 class="accessory-button"
                 data-l10n-id="sitedata-cookies-exceptions"
                 preference="pref.privacy.disable_button.cookie_exceptions"
-                searchkeywords="&address2.label;
-                                &block.label;
-                                &session.label;
-                                &allow.label;
-                                &removepermission2.label;
-                                &removeallpermissions2.label;
-                                &button.cancel.label;
-                                &button.ok.label;"/>
+                search-l10n-ids="
+                  permissions-address,
+                  permissions-block.label,
+                  permissions-allow.label,
+                  permissions-remove.label,
+                  permissions-remove-all.label,
+                  permissions-button-cancel.label,
+                  permissions-button-ok.label,
+                  permissions-exceptions-cookie-desc,
+                " />
       </hbox>
     </vbox>
   </hbox>
@@ -279,8 +286,8 @@
   <vbox>
     <hbox align="start">
       <vbox flex="1">
-        <description data-l10n-id="tracking-description">
-          <a id="trackingProtectionLearnMore" target="_blank" class="learnMore text-link"/>
+        <description data-l10n-id="tracking-desc">
+          <html:a id="trackingProtectionLearnMore" data-l10n-name="learn-more" target="_blank" class="learnMore text-link"/>
         </description>
       </vbox>
       <spacer flex="1"/>
@@ -335,10 +342,14 @@
                   hidden="true"
                   data-l10n-id="tracking-exceptions"
                   preference="pref.privacy.disable_button.tracking_protection_exceptions"
-                  searchkeywords="&removepermission2.label;
-                                  &removeallpermissions2.label;
-                                  &button.cancel.label;
-                                  &button.ok.label;"/>
+                  search-l10n-ids="
+                    permissions-remove.label,
+                    permissions-remove-all.label,
+                    permissions-button-cancel.label,
+                    permissions-button-ok.label,
+                    permissions-exceptions-tracking-protection-window.title,
+                    permissions-exceptions-tracking-protection-desc,
+                  "/>
         </hbox>
         <!-- Please don't remove the wrapping hbox/vbox/box for these elements. It's used to properly compute the search tooltip position. -->
         <hbox>
@@ -347,7 +358,7 @@
                   flex="1"
                   data-l10n-id="tracking-change-block-list"
                   preference="pref.privacy.disable_button.change_blocklist"
-                  searchkeywords="&button.cancel.label; &button.ok.label;"/>
+                  search-l10n-ids="blocklist-window.title, blocklist-desc, blocklist-button-cancel.label, blocklist-button-ok.label"/>
         </hbox>
       </vbox>
     </hbox>
@@ -390,10 +401,16 @@
           <button id="locationSettingsButton"
                   class="accessory-button"
                   data-l10n-id="permissions-location-settings"
-                  searchkeywords="&removepermission2.label;
-                                  &removeallpermissions2.label;
-                                  &button.cancel.label;
-                                  &button.ok.label;"/>
+                  search-l10n-ids="
+                    permissions-remove.label,
+                    permissions-remove-all.label,
+                    permissions-button-cancel.label,
+                    permissions-button-ok.label,
+                    permissions-site-location-window.title,
+                    permissions-site-location-desc,
+                    permissions-site-location-disable-label,
+                    permissions-site-location-disable-desc,
+                  " />
         </hbox>
       </row>
 
@@ -407,10 +424,16 @@
           <button id="cameraSettingsButton"
                   class="accessory-button"
                   data-l10n-id="permissions-camera-settings"
-                  searchkeywords="&removepermission2.label;
-                                  &removeallpermissions2.label;
-                                  &button.cancel.label;
-                                  &button.ok.label;"/>
+                  search-l10n-ids="
+                    permissions-remove.label,
+                    permissions-remove-all.label,
+                    permissions-button-cancel.label,
+                    permissions-button-ok.label,
+                    permissions-site-camera-window.title,
+                    permissions-site-camera-desc,
+                    permissions-site-camera-disable-label,
+                    permissions-site-camera-disable-desc,
+                  " />
         </hbox>
       </row>
 
@@ -424,10 +447,16 @@
           <button id="microphoneSettingsButton"
                   class="accessory-button"
                   data-l10n-id="permissions-microphone-settings"
-                  searchkeywords="&removepermission2.label;
-                                  &removeallpermissions2.label;
-                                  &button.cancel.label;
-                                  &button.ok.label;"/>
+                  search-l10n-ids="
+                    permissions-remove.label,
+                    permissions-remove-all.label,
+                    permissions-button-cancel.label,
+                    permissions-button-ok.label,
+                    permissions-site-microphone-window.title,
+                    permissions-site-microphone-desc,
+                    permissions-site-microphone-disable-label,
+                    permissions-site-microphone-disable-desc,
+                  " />
         </hbox>
       </row>
 
@@ -446,10 +475,16 @@
           <button id="notificationSettingsButton"
                   class="accessory-button"
                   data-l10n-id="permissions-notification-settings"
-                  searchkeywords="&removepermission2.label;
-                                  &removeallpermissions2.label;
-                                  &button.cancel.label;
-                                  &button.ok.label;"/>
+                  search-l10n-ids="
+                    permissions-remove.label,
+                    permissions-remove-all.label,
+                    permissions-button-cancel.label,
+                    permissions-button-ok.label,
+                    permissions-site-notification-window.title,
+                    permissions-site-notification-desc,
+                    permissions-site-notification-disable-label,
+                    permissions-site-notification-disable-desc,
+                  " />
         </hbox>
       </row>
     </rows>
@@ -472,7 +507,13 @@
       <button id="popupPolicyButton"
               class="accessory-button"
               data-l10n-id="permissions-block-popups-exceptions"
-              searchkeywords="&address2.label; &button.cancel.label; &button.ok.label;"/>
+              search-l10n-ids="
+                permissions-address,
+                permissions-button-cancel.label,
+                permissions-button-ok.label,
+                permissions-exceptions-popup-window.title,
+                permissions-exceptions-popup-desc,
+              " />
     </hbox>
   </hbox>
 
@@ -487,12 +528,16 @@
       <button id="addonExceptions"
               class="accessory-button"
               data-l10n-id="permissions-addon-exceptions"
-              searchkeywords="&address2.label;
-                              &allow.label;
-                              &removepermission2.label;
-                              &removeallpermissions2.label;
-                              &button.cancel.label;
-                              &button.ok.label;"/>
+              search-l10n-ids="
+                permissions-address,
+                permissions-allow.label,
+                permissions-remove.label,
+                permissions-remove-all.label,
+                permissions-button-cancel.label,
+                permissions-button-ok.label,
+                permissions-exceptions-addons-window.title,
+                permissions-exceptions-addons-desc,
+              " />
     </hbox>
   </hbox>
 
@@ -533,6 +578,18 @@
       <label id="FHRLearnMore"
              class="learnMore text-link"
              data-l10n-id="collection-health-report-link"/>
+      <vbox class="indent">
+        <hbox align="center">
+          <checkbox id="optOutStudiesEnabled"
+                    class="tail-with-learn-more"
+                    data-l10n-id="collection-studies"/>
+          <label id="viewShieldStudies"
+                 href="about:studies"
+                 useoriginprincipal="true"
+                 class="learnMore text-link"
+                 data-l10n-id="collection-studies-link"/>
+        </hbox>
+      </vbox>
     </description>
 #ifndef MOZ_TELEMETRY_REPORTING
   <description id="TelemetryDisabledDesc"

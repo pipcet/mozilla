@@ -12,7 +12,7 @@
     <content clickthrough="never">
       <children/>
     </content>
-    <implementation type="application/javascript" implements="nsIObserver, nsIDOMEventListener, nsIBrowser">
+    <implementation type="application/javascript" implements="nsIObserver, nsIBrowser">
       <property name="autoscrollEnabled">
         <getter>
           <![CDATA[
@@ -1248,10 +1248,7 @@
             let maxY = (top.value + height.value) / scaleFactor - 0.5 * POPUP_SIZE;
             let popupX = Math.max(minX, Math.min(maxX, screenX));
             let popupY = Math.max(minY, Math.min(maxY, screenY));
-            this._autoScrollPopup.showPopup(document.documentElement,
-                                            popupX,
-                                            popupY,
-                                            "popup", null, null);
+            this._autoScrollPopup.openPopupAtScreen(popupX, popupY);
             this._ignoreMouseEvents = true;
             this._scrolling = true;
             this._startX = screenX;

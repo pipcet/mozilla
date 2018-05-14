@@ -410,8 +410,8 @@ nsNativeTheme::GetScrollbarButtonType(nsIFrame* aFrame)
     return 0;
 
   static Element::AttrValuesArray strings[] =
-    {nsGkAtoms::scrollbarDownBottom, nsGkAtoms::scrollbarDownTop,
-     nsGkAtoms::scrollbarUpBottom, nsGkAtoms::scrollbarUpTop,
+    {&nsGkAtoms::scrollbarDownBottom, &nsGkAtoms::scrollbarDownTop,
+     &nsGkAtoms::scrollbarUpBottom, &nsGkAtoms::scrollbarUpTop,
      nullptr};
 
   nsIContent* content = aFrame->GetContent();
@@ -439,7 +439,7 @@ nsNativeTheme::GetTreeSortDirection(nsIFrame* aFrame)
     return eTreeSortDirection_Natural;
 
   static Element::AttrValuesArray strings[] =
-    {nsGkAtoms::descending, nsGkAtoms::ascending, nullptr};
+    {&nsGkAtoms::descending, &nsGkAtoms::ascending, nullptr};
 
   nsIContent* content = aFrame->GetContent();
   if (content->IsElement()) {
@@ -588,7 +588,7 @@ nsNativeTheme::IsVerticalProgress(nsIFrame* aFrame)
 bool
 nsNativeTheme::IsVerticalMeter(nsIFrame* aFrame)
 {
-  NS_PRECONDITION(aFrame, "You have to pass a non-null aFrame");
+  MOZ_ASSERT(aFrame, "You have to pass a non-null aFrame");
   switch (aFrame->StyleDisplay()->mOrient) {
     case StyleOrient::Horizontal:
       return false;

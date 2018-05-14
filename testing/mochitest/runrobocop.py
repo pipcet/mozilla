@@ -47,7 +47,7 @@ class RobocopTestRunner(MochitestDesktop):
         verbose = False
         if options.log_tbpl_level == 'debug' or options.log_mach_level == 'debug':
             verbose = True
-        self.device = ADBAndroid(adb=options.adbPath,
+        self.device = ADBAndroid(adb=options.adbPath or 'adb',
                                  device=options.deviceSerial,
                                  test_root=options.remoteTestRoot,
                                  verbose=verbose)
@@ -331,11 +331,8 @@ class RobocopTestRunner(MochitestDesktop):
             if printLogcat:
                 logcat = self.device.get_logcat(
                     filter_out_regexps=fennecLogcatFilters)
-                self.log.info(
-                    '\n' +
-                    ''.join(logcat).decode(
-                        'utf-8',
-                        'replace'))
+                for l in logcat:
+                    self.log.info(l.decode('utf-8', 'replace'))
             self.log.info("Device info:")
             devinfo = self.device.get_info()
             for category in devinfo:

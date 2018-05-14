@@ -149,7 +149,7 @@ class RemoteReftest(RefTest):
         if options.log_tbpl_level == 'debug' or options.log_mach_level == 'debug':
             verbose = True
             print "set verbose!"
-        self.device = ADBAndroid(adb=options.adb_path,
+        self.device = ADBAndroid(adb=options.adb_path or 'adb',
                                  device=options.deviceSerial,
                                  test_root=options.remoteTestRoot,
                                  verbose=verbose)
@@ -315,7 +315,7 @@ class RemoteReftest(RefTest):
 
         try:
             self.device.push(profileDir, options.remoteProfile)
-            self.device.chmod(options.remoteProfile, recursive=True)
+            self.device.chmod(options.remoteProfile, recursive=True, root=True)
         except Exception:
             print "Automation Error: Failed to copy profiledir to device"
             raise
@@ -328,7 +328,7 @@ class RemoteReftest(RefTest):
         if len(os.listdir(profileDir)) > 0:
             try:
                 self.device.push(profileDir, options.remoteProfile)
-                self.device.chmod(options.remoteProfile, recursive=True)
+                self.device.chmod(options.remoteProfile, recursive=True, root=True)
             except Exception:
                 print "Automation Error: Failed to copy extra files to device"
                 raise
@@ -337,7 +337,8 @@ class RemoteReftest(RefTest):
         try:
             if printLogcat:
                 logcat = self.device.get_logcat(filter_out_regexps=fennecLogcatFilters)
-                print ''.join(logcat)
+                for l in logcat:
+                    print "%s\n" % l.decode('utf-8', 'replace')
             print "Device info:"
             devinfo = self.device.get_info()
             for category in devinfo:

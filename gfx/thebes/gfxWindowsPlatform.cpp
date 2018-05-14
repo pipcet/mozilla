@@ -439,7 +439,7 @@ gfxWindowsPlatform::HandleDeviceReset()
 }
 
 BackendPrefsData
-gfxWindowsPlatform::GetBackendPrefs()
+gfxWindowsPlatform::GetBackendPrefs() const
 {
   BackendPrefsData data;
 
@@ -570,6 +570,10 @@ gfxWindowsPlatform::CreatePlatformFontList()
         DisableD2D(FeatureStatus::Failed, "Failed to initialize fonts",
                    NS_LITERAL_CSTRING("FEATURE_FAILURE_FONT_FAIL"));
     }
+
+    // Ensure this is false, even if the Windows version was recent enough to
+    // permit it, as we're using GDI fonts.
+    mHasVariationFontSupport = false;
 
     pfl = new gfxGDIFontList();
 
@@ -2062,4 +2066,11 @@ gfxWindowsPlatform::SupportsPluginDirectDXGIDrawing()
     return false;
   }
   return true;
+}
+
+bool
+gfxWindowsPlatform::CheckVariationFontSupport()
+{
+  // Variation font support is only available on Fall Creators Update or later.
+  return IsWin10FallCreatorsUpdateOrLater();
 }

@@ -12,7 +12,7 @@
 #include "mozilla/ComputedTiming.h"
 #include "mozilla/EffectCompositor.h" // For EffectCompositor::CascadeLevel
 #include "mozilla/dom/Animation.h"
-#include "mozilla/dom/KeyframeEffectReadOnly.h"
+#include "mozilla/dom/KeyframeEffect.h"
 #include "AnimationCommon.h"
 #include "nsISupportsImpl.h"
 
@@ -23,10 +23,8 @@ class nsCSSPropertyIDSet;
 namespace mozilla {
 class ComputedStyle;
 enum class CSSPseudoElementType : uint8_t;
-class GeckoComputedStyle;
 struct Keyframe;
 struct StyleTransition;
-class ComputedStyle;
 } // namespace mozilla
 
 /*****************************************************************************
@@ -35,7 +33,7 @@ class ComputedStyle;
 
 namespace mozilla {
 
-struct ElementPropertyTransition : public dom::KeyframeEffectReadOnly
+struct ElementPropertyTransition : public dom::KeyframeEffect
 {
   ElementPropertyTransition(nsIDocument* aDocument,
                             Maybe<OwningAnimationTarget>& aTarget,
@@ -43,7 +41,7 @@ struct ElementPropertyTransition : public dom::KeyframeEffectReadOnly
                             AnimationValue aStartForReversingTest,
                             double aReversePortion,
                             const KeyframeEffectParams& aEffectOptions)
-    : dom::KeyframeEffectReadOnly(aDocument, aTarget, aTiming, aEffectOptions)
+    : dom::KeyframeEffect(aDocument, aTarget, aTiming, aEffectOptions)
     , mStartForReversingTest(aStartForReversingTest)
     , mReversePortion(aReversePortion)
   { }
@@ -172,7 +170,7 @@ public:
     mOwningElement = OwningElementRef();
   }
 
-  void SetEffectFromStyle(AnimationEffectReadOnly* aEffect);
+  void SetEffectFromStyle(AnimationEffect* aEffect);
 
   void Tick() override;
 
@@ -310,11 +308,10 @@ public:
   {
   }
 
-  NS_INLINE_DECL_REFCOUNTING(nsTransitionManager)
+  ~nsTransitionManager() final = default;
 
   typedef mozilla::AnimationCollection<mozilla::dom::CSSTransition>
     CSSTransitionCollection;
-
 
   /**
    * Update transitions for stylo.
@@ -322,12 +319,10 @@ public:
   bool UpdateTransitions(
     mozilla::dom::Element *aElement,
     mozilla::CSSPseudoElementType aPseudoType,
-    const mozilla::ComputedStyle* aOldStyle,
-    const mozilla::ComputedStyle* aNewStyle);
-
+    const mozilla::ComputedStyle& aOldStyle,
+    const mozilla::ComputedStyle& aNewStyle);
 
 protected:
-  virtual ~nsTransitionManager() {}
 
   typedef nsTArray<RefPtr<mozilla::dom::CSSTransition>>
     OwningCSSTransitionPtrArray;
@@ -337,25 +332,23 @@ protected:
   // as needed. aDisp and aElement must be non-null.
   // aElementTransitions is the collection of current transitions, and it
   // could be a nullptr if we don't have any transitions.
-  template<typename StyleType> bool
-  DoUpdateTransitions(const nsStyleDisplay& aDisp,
-                      mozilla::dom::Element* aElement,
-                      mozilla::CSSPseudoElementType aPseudoType,
-                      CSSTransitionCollection*& aElementTransitions,
-                      StyleType aOldStyle,
-                      StyleType aNewStyle);
+  bool DoUpdateTransitions(const nsStyleDisplay& aDisp,
+                           mozilla::dom::Element* aElement,
+                           mozilla::CSSPseudoElementType aPseudoType,
+                           CSSTransitionCollection*& aElementTransitions,
+                           const mozilla::ComputedStyle& aOldStyle,
+                           const mozilla::ComputedStyle& aNewStyle);
 
-  template<typename StyleType> void
-  ConsiderInitiatingTransition(nsCSSPropertyID aProperty,
-                               const nsStyleDisplay& aStyleDisplay,
-                               uint32_t transitionIdx,
-                               mozilla::dom::Element* aElement,
-                               mozilla::CSSPseudoElementType aPseudoType,
-                               CSSTransitionCollection*& aElementTransitions,
-                               StyleType aOldStyle,
-                               StyleType aNewStyle,
-                               bool* aStartedAny,
-                               nsCSSPropertyIDSet* aWhichStarted);
+  void ConsiderInitiatingTransition(nsCSSPropertyID aProperty,
+                                    const nsStyleDisplay& aStyleDisplay,
+                                    uint32_t transitionIdx,
+                                    mozilla::dom::Element* aElement,
+                                    mozilla::CSSPseudoElementType aPseudoType,
+                                    CSSTransitionCollection*& aElementTransitions,
+                                    const mozilla::ComputedStyle& aOldStyle,
+                                    const mozilla::ComputedStyle& aNewStyle,
+                                    bool* aStartedAny,
+                                    nsCSSPropertyIDSet* aWhichStarted);
 
 };
 

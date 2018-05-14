@@ -10,6 +10,7 @@
  */
 
 const expressionSelectors = {
+  plusIcon: ".watch-expressions-pane button.plus",
   input: "input.input-expression"
 };
 
@@ -22,19 +23,13 @@ function getValue(dbg, index) {
 }
 
 async function addExpression(dbg, input) {
+  const plusIcon = findElementWithSelector(dbg, expressionSelectors.plusIcon);
+  if(plusIcon) {
+    plusIcon.click();
+  }
+
   const evaluation = waitForDispatch(dbg, "EVALUATE_EXPRESSION");
   findElementWithSelector(dbg, expressionSelectors.input).focus();
-  type(dbg, input);
-  pressKey(dbg, "Enter");
-  await evaluation;
-}
-
-async function editExpression(dbg, input) {
-  info("updating the expression");
-  dblClickElement(dbg, "expressionNode", 1);
-  // Position cursor reliably at the end of the text.
-  const evaluation = waitForDispatch(dbg, "EVALUATE_EXPRESSION");
-  pressKey(dbg, "End");
   type(dbg, input);
   pressKey(dbg, "Enter");
   await evaluation;
@@ -43,14 +38,14 @@ async function editExpression(dbg, input) {
 add_task(async function() {
   const dbg = await initDebugger("doc-script-switching.html");
 
-  await togglePauseOnExceptions(dbg, true, false);
+  await togglePauseOnExceptions(dbg, true, true);
 
   // add a good expression, 2 bad expressions, and another good one
+  log(`Adding location`);
   await addExpression(dbg, "location");
   await addExpression(dbg, "foo.bar");
   await addExpression(dbg, "foo.batt");
   await addExpression(dbg, "2");
-
   // check the value of
   is(getValue(dbg, 2), "(unavailable)");
   is(getValue(dbg, 3), "(unavailable)");

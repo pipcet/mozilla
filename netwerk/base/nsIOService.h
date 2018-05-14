@@ -32,7 +32,11 @@
 #define NS_IPC_IOSERVICE_SET_CONNECTIVITY_TOPIC "ipc:network:set-connectivity"
 
 static const char gScheme[][sizeof("moz-safe-about")] =
-    {"chrome", "file", "http", "https", "jar", "data", "about", "moz-safe-about", "resource"};
+    {"chrome", "file", "http", "https", "jar", "data", "about", "moz-safe-about", "resource",
+     "moz-extension", "page-icon", "blob"};
+
+static const char gForcedExternalSchemes[][sizeof("moz-nullprincipal")] =
+    {"place", "fake-favicon-uri", "favicon", "moz-nullprincipal"};
 
 class nsINetworkLinkService;
 class nsIPrefBranch;
@@ -94,6 +98,8 @@ public:
 
     static bool IsDataURIUniqueOpaqueOrigin();
     static bool BlockToplevelDataUriNavigations();
+
+    static bool BlockFTPSubresources();
 
     // Used to count the total number of HTTP requests made
     void IncrementRequestNumber() { mTotalRequests++; }
@@ -196,6 +202,8 @@ private:
 
     static bool                          sIsDataURIUniqueOpaqueOrigin;
     static bool                          sBlockToplevelDataUriNavigations;
+
+    static bool                          sBlockFTPSubresources;
 
     uint32_t mTotalRequests;
     uint32_t mCacheWon;

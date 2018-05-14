@@ -500,7 +500,7 @@ HTMLImageElement::AfterMaybeChangeAttr(int32_t aNamespaceID, nsAtom* aName,
   }
 }
 
-nsresult
+void
 HTMLImageElement::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
   // We handle image element with attribute ismap in its corresponding frame
@@ -510,7 +510,7 @@ HTMLImageElement::GetEventTargetParent(EventChainPreVisitor& aVisitor)
   if (mouseEvent && mouseEvent->IsLeftClickEvent() && IsMap()) {
     mouseEvent->mFlags.mMultipleActionsPrevented = true;
   }
-  return nsGenericHTMLElement::GetEventTargetParent(aVisitor);
+  nsGenericHTMLElement::GetEventTargetParent(aVisitor);
 }
 
 bool
@@ -865,7 +865,7 @@ HTMLImageElement::GetForm() const
 void
 HTMLImageElement::SetForm(HTMLFormElement* aForm)
 {
-  NS_PRECONDITION(aForm, "Don't pass null here");
+  MOZ_ASSERT(aForm, "Don't pass null here");
   NS_ASSERTION(!mForm,
                "We don't support switching from one non-null form to another.");
 

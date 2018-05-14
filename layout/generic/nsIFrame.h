@@ -25,6 +25,7 @@
 
 #include "CaretAssociationHint.h"
 #include "FrameProperties.h"
+#include "LayoutConstants.h"
 #include "mozilla/layout/FrameChildList.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/SmallPointerArray.h"
@@ -113,6 +114,10 @@ class Layer;
 class LayerManager;
 } // namespace layers
 
+namespace dom {
+class Selection;
+} // namespace dom
+
 } // namespace mozilla
 
 /**
@@ -140,29 +145,11 @@ typedef uint32_t nsSplittableType;
 #define NS_FRAME_IS_NOT_SPLITTABLE(type)\
   (0 == ((type) & NS_FRAME_SPLITTABLE))
 
-#define NS_INTRINSIC_WIDTH_UNKNOWN nscoord_MIN
-
 //----------------------------------------------------------------------
 
 #define NS_SUBTREE_DIRTY(_frame)  \
   (((_frame)->GetStateBits() &      \
     (NS_FRAME_IS_DIRTY | NS_FRAME_HAS_DIRTY_CHILDREN)) != 0)
-
-/**
- * Constant used to indicate an unconstrained size.
- *
- * @see #Reflow()
- */
-#define NS_UNCONSTRAINEDSIZE NS_MAXSIZE
-
-#define NS_INTRINSICSIZE    NS_UNCONSTRAINEDSIZE
-#define NS_AUTOHEIGHT       NS_UNCONSTRAINEDSIZE
-// +1 is to avoid clamped huge margin values being processed as auto margins
-#define NS_AUTOMARGIN       (NS_UNCONSTRAINEDSIZE + 1)
-#define NS_AUTOOFFSET       NS_UNCONSTRAINEDSIZE
-// NOTE: there are assumptions all over that these have the same value, namely NS_UNCONSTRAINEDSIZE
-//       if any are changed to be a value other than NS_UNCONSTRAINEDSIZE
-//       at least update AdjustComputedHeight/Width and test ad nauseum
 
 // 1 million CSS pixels less than our max app unit measure.
 // For reflowing with an "infinite" available inline space per [css-sizing].
@@ -635,7 +622,7 @@ public:
   }
 
   nsPresContext* PresContext() const {
-    return Style()->PresContext();
+    return Style()->PresContextForFrame();
   }
 
   nsIPresShell* PresShell() const {
@@ -1170,10 +1157,10 @@ public:
                                  aContainerSize - mRect.Size());
   }
 
-  virtual nsPoint GetPositionOfChildIgnoringScrolling(nsIFrame* aChild)
+  virtual nsPoint GetPositionOfChildIgnoringScrolling(const nsIFrame* aChild)
   { return aChild->GetPosition(); }
 
-  nsPoint GetPositionIgnoringScrolling();
+  nsPoint GetPositionIgnoringScrolling() const;
 
   typedef AutoTArray<nsDisplayItem*, 4> DisplayItemArray;
 
@@ -2355,23 +2342,27 @@ public:
   /**
    * Return the horizontal components of padding, border, and margin
    * that contribute to the intrinsic width that applies to the parent.
+   * @param aPercentageBasis the percentage basis to use for padding/margin -
+   *   i.e. the Containing Block's inline-size
    */
   struct IntrinsicISizeOffsetData {
     nscoord hPadding, hBorder, hMargin;
-    float hPctPadding, hPctMargin;
 
     IntrinsicISizeOffsetData()
       : hPadding(0), hBorder(0), hMargin(0)
-      , hPctPadding(0.0f), hPctMargin(0.0f)
     {}
   };
-  virtual IntrinsicISizeOffsetData IntrinsicISizeOffsets() = 0;
+  virtual IntrinsicISizeOffsetData
+  IntrinsicISizeOffsets(nscoord aPercentageBasis = NS_UNCONSTRAINEDSIZE) = 0;
 
   /**
    * Return the bsize components of padding, border, and margin
    * that contribute to the intrinsic width that applies to the parent.
+   * @param aPercentageBasis the percentage basis to use for padding/margin -
+   *   i.e. the Containing Block's inline-size
    */
-  IntrinsicISizeOffsetData IntrinsicBSizeOffsets();
+  IntrinsicISizeOffsetData
+  IntrinsicBSizeOffsets(nscoord aPercentageBasis = NS_UNCONSTRAINEDSIZE);
 
   virtual mozilla::IntrinsicSize GetIntrinsicSize() = 0;
 
@@ -2722,6 +2713,12 @@ public:
    * aOther.
    */
   nsPoint GetOffsetTo(const nsIFrame* aOther) const;
+
+  /**
+   * Just like GetOffsetTo, but treats all scrollframes as scrolled to
+   * their origin.
+   */
+  nsPoint GetOffsetToIgnoringScrolling(const nsIFrame* aOther) const;
 
   /**
    * Get the offset between the coordinate systems of |this| and aOther
@@ -3373,7 +3370,7 @@ public:
   virtual ComputedStyle* GetParentComputedStyle(nsIFrame** aProviderFrame) const = 0;
 
   /**
-   * Called by ServoRestyleManager to update the style of anonymous boxes
+   * Called by RestyleManager to update the style of anonymous boxes
    * directly associated with this frame.
    *
    * The passed-in ServoRestyleState can be used to create new ComputedStyles as
@@ -3409,7 +3406,7 @@ protected:
 
 public:
   // A helper both for UpdateStyleOfChildAnonBox, and to update frame-backed
-  // pseudo-elements in ServoRestyleManager.
+  // pseudo-elements in RestyleManager.
   //
   // This gets a ComputedStyle that will be the new style for `aChildFrame`, and
   // takes care of updating it, calling CalcStyleDifference, and adding to the
@@ -3498,7 +3495,7 @@ public:
    * Overridable function to determine whether this frame should be considered
    * "in" the given non-null aSelection for visibility purposes.
    */
-  virtual bool IsVisibleInSelection(nsISelection* aSelection);
+  virtual bool IsVisibleInSelection(mozilla::dom::Selection* aSelection);
 
   /**
    * Determines if this frame has a container effect that requires
@@ -3751,13 +3748,6 @@ public:
 
   nsresult XULRedraw(nsBoxLayoutState& aState);
   virtual nsresult XULRelayoutChildAtOrdinal(nsIFrame* aChild)=0;
-
-#ifdef DEBUG_LAYOUT
-  virtual nsresult SetXULDebug(nsBoxLayoutState& aState, bool aDebug)=0;
-  virtual nsresult GetXULDebug(bool& aDebug)=0;
-
-  virtual nsresult XULDumpBox(FILE* out)=0;
-#endif
 
   static bool AddXULPrefSize(nsIFrame* aBox, nsSize& aSize, bool& aWidth, bool& aHeightSet);
   static bool AddXULMinSize(nsBoxLayoutState& aState, nsIFrame* aBox,
@@ -4832,7 +4822,7 @@ template<bool IsLessThanOrEqual(nsIFrame*, nsIFrame*)>
 /* static */ nsIFrame*
 nsIFrame::SortedMerge(nsIFrame *aLeft, nsIFrame *aRight)
 {
-  NS_PRECONDITION(aLeft && aRight, "SortedMerge must have non-empty lists");
+  MOZ_ASSERT(aLeft && aRight, "SortedMerge must have non-empty lists");
 
   nsIFrame *result;
   // Unroll first iteration to avoid null-check 'result' inside the loop.
@@ -4880,7 +4870,7 @@ template<bool IsLessThanOrEqual(nsIFrame*, nsIFrame*)>
 /* static */ nsIFrame*
 nsIFrame::MergeSort(nsIFrame *aSource)
 {
-  NS_PRECONDITION(aSource, "MergeSort null arg");
+  MOZ_ASSERT(aSource, "MergeSort null arg");
 
   nsIFrame *sorted[32] = { nullptr };
   nsIFrame **fill = &sorted[0];

@@ -7,6 +7,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/CSSPrimitiveValueBinding.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/EventTarget.h"
 #include "mozilla/mozalloc.h"
 #include "nsAString.h"
 #include "nsCOMPtr.h"
@@ -18,7 +19,6 @@
 #include "nsAtom.h"
 #include "nsIContent.h"
 #include "nsID.h"
-#include "nsIDOMEventTarget.h"
 #include "nsIDOMWindow.h"
 #include "nsIDocument.h"
 #include "nsIDocumentObserver.h"
@@ -41,7 +41,6 @@
 #include "nsROCSSPrimitiveValue.h"
 
 class nsIDOMEventListener;
-class nsISelection;
 
 namespace mozilla {
 
@@ -243,9 +242,8 @@ HTMLEditor::RemoveListenerAndDeleteRef(const nsAString& aEvent,
                                        ManualNACPtr aElement,
                                        nsIPresShell* aShell)
 {
-  nsCOMPtr<nsIDOMEventTarget> evtTarget(do_QueryInterface(aElement));
-  if (evtTarget) {
-    evtTarget->RemoveEventListener(aEvent, aListener, aUseCapture);
+  if (aElement) {
+    aElement->RemoveEventListener(aEvent, aListener, aUseCapture);
   }
   DeleteRefToAnonymousNode(Move(aElement), aShell);
 }
@@ -303,7 +301,7 @@ HTMLEditor::DeleteRefToAnonymousNode(ManualNACPtr aContent,
 // handles, a grabber and/or inline table editing UI need to be displayed
 // or refreshed
 NS_IMETHODIMP
-HTMLEditor::CheckSelectionStateForAnonymousButtons(nsISelection* aSelection)
+HTMLEditor::CheckSelectionStateForAnonymousButtons(Selection* aSelection)
 {
   NS_ENSURE_ARG_POINTER(aSelection);
 
@@ -491,7 +489,7 @@ HTMLEditor::GetPositionAndDimensions(Element& aElement,
   } else {
     mResizedObjectIsAbsolutelyPositioned = false;
     RefPtr<nsGenericHTMLElement> htmlElement =
-      nsGenericHTMLElement::FromNode(&aElement);
+      nsGenericHTMLElement::FromNode(aElement);
     if (!htmlElement) {
       return NS_ERROR_NULL_POINTER;
     }

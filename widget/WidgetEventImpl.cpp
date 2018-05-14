@@ -16,7 +16,6 @@
 #include "mozilla/dom/KeyboardEventBinding.h"
 #include "nsContentUtils.h"
 #include "nsIContent.h"
-#include "nsIDOMEventTarget.h"
 #include "nsPrintfCString.h"
 
 namespace mozilla {
@@ -526,7 +525,7 @@ WidgetEvent::IsBlockedForFingerprintingResistance() const
  ******************************************************************************/
 
 static dom::EventTarget*
-GetTargetForDOMEvent(nsIDOMEventTarget* aTarget)
+GetTargetForDOMEvent(dom::EventTarget* aTarget)
 {
   return aTarget ? aTarget->GetTargetForDOMEvent() : nullptr;
 }

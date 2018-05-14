@@ -219,8 +219,6 @@ impl Transaction {
     /// Supplies a new frame to WebRender.
     ///
     /// Non-blocking, it notifies a worker process which processes the display list.
-    /// When it's done and a RenderNotifier has been set in `webrender::Renderer`,
-    /// [new_frame_ready()][notifier] gets called.
     ///
     /// Note: Scrolling doesn't require an own Frame.
     ///
@@ -236,8 +234,6 @@ impl Transaction {
     /// * `preserve_frame_state`: If a previous frame exists which matches this pipeline
     ///                           id, this setting determines if frame state (such as scrolling
     ///                           position) should be preserved for this new display list.
-    ///
-    /// [notifier]: trait.RenderNotifier.html#tymethod.new_frame_ready
     pub fn set_display_list(
         &mut self,
         epoch: Epoch,
@@ -284,13 +280,8 @@ impl Transaction {
     ///
     /// WebRender looks for the layer closest to the user
     /// which has `ScrollPolicy::Scrollable` set.
-    pub fn scroll(
-        &mut self,
-        scroll_location: ScrollLocation,
-        cursor: WorldPoint,
-        phase: ScrollEventPhase,
-    ) {
-        self.frame_ops.push(FrameMsg::Scroll(scroll_location, cursor, phase));
+    pub fn scroll(&mut self, scroll_location: ScrollLocation, cursor: WorldPoint) {
+        self.frame_ops.push(FrameMsg::Scroll(scroll_location, cursor));
     }
 
     pub fn scroll_node_with_id(
@@ -314,11 +305,13 @@ impl Transaction {
         self.frame_ops.push(FrameMsg::SetPan(pan));
     }
 
-    pub fn tick_scrolling_bounce_animations(&mut self) {
-        self.frame_ops.push(FrameMsg::TickScrollingBounce);
-    }
-
-    /// Generate a new frame.
+    /// Generate a new frame. When it's done and a RenderNotifier has been set
+    /// in `webrender::Renderer`, [new_frame_ready()][notifier] gets called.
+    /// Note that the notifier is called even if the frame generation was a
+    /// no-op; the arguments passed to `new_frame_ready` will provide information
+    /// as to what happened.
+    ///
+    /// [notifier]: trait.RenderNotifier.html#tymethod.new_frame_ready
     pub fn generate_frame(&mut self) {
         self.generate_frame = true;
     }
@@ -329,10 +322,23 @@ impl Transaction {
         self.frame_ops.push(FrameMsg::UpdateDynamicProperties(properties));
     }
 
+    /// Add to the list of animated property bindings that should be used to
+    /// resolve bindings in the current display list. This is a convenience method
+    /// so the caller doesn't have to figure out all the dynamic properties before
+    /// setting them on the transaction but can do them incrementally.
+    pub fn append_dynamic_properties(&mut self, properties: DynamicProperties) {
+        self.frame_ops.push(FrameMsg::AppendDynamicProperties(properties));
+    }
+
     /// Enable copying of the output of this pipeline id to
     /// an external texture for callers to consume.
     pub fn enable_frame_output(&mut self, pipeline_id: PipelineId, enable: bool) {
         self.frame_ops.push(FrameMsg::EnableFrameOutput(pipeline_id, enable));
+    }
+
+    /// Consumes this object and just returns the frame ops.
+    pub fn get_frame_ops(self) -> Vec<FrameMsg> {
+        self.frame_ops
     }
 
     fn finalize(self) -> (TransactionMsg, Vec<Payload>) {
@@ -487,11 +493,11 @@ pub enum FrameMsg {
     HitTest(Option<PipelineId>, WorldPoint, HitTestFlags, MsgSender<HitTestResult>),
     SetPan(DeviceIntPoint),
     EnableFrameOutput(PipelineId, bool),
-    Scroll(ScrollLocation, WorldPoint, ScrollEventPhase),
+    Scroll(ScrollLocation, WorldPoint),
     ScrollNodeWithId(LayoutPoint, ExternalScrollId, ScrollClamping),
-    TickScrollingBounce,
     GetScrollNodeState(MsgSender<Vec<ScrollNodeState>>),
     UpdateDynamicProperties(DynamicProperties),
+    AppendDynamicProperties(DynamicProperties),
 }
 
 impl fmt::Debug for SceneMsg {
@@ -516,10 +522,10 @@ impl fmt::Debug for FrameMsg {
             FrameMsg::SetPan(..) => "FrameMsg::SetPan",
             FrameMsg::Scroll(..) => "FrameMsg::Scroll",
             FrameMsg::ScrollNodeWithId(..) => "FrameMsg::ScrollNodeWithId",
-            FrameMsg::TickScrollingBounce => "FrameMsg::TickScrollingBounce",
             FrameMsg::GetScrollNodeState(..) => "FrameMsg::GetScrollNodeState",
             FrameMsg::EnableFrameOutput(..) => "FrameMsg::EnableFrameOutput",
             FrameMsg::UpdateDynamicProperties(..) => "FrameMsg::UpdateDynamicProperties",
+            FrameMsg::AppendDynamicProperties(..) => "FrameMsg::AppendDynamicProperties",
         })
     }
 }
@@ -622,6 +628,8 @@ pub enum ApiMsg {
     /// Wakes the render backend's event loop up. Needed when an event is communicated
     /// through another channel.
     WakeUp,
+    WakeSceneBuilder,
+    FlushSceneBuilder(MsgSender<()>),
     ShutDown,
 }
 
@@ -641,6 +649,8 @@ impl fmt::Debug for ApiMsg {
             ApiMsg::DebugCommand(..) => "ApiMsg::DebugCommand",
             ApiMsg::ShutDown => "ApiMsg::ShutDown",
             ApiMsg::WakeUp => "ApiMsg::WakeUp",
+            ApiMsg::WakeSceneBuilder => "ApiMsg::WakeSceneBuilder",
+            ApiMsg::FlushSceneBuilder(..) => "ApiMsg::FlushSceneBuilder",
         })
     }
 }
@@ -949,6 +959,19 @@ impl RenderApi {
         rx.recv().unwrap()
     }
 
+    pub fn wake_scene_builder(&self) {
+        self.send_message(ApiMsg::WakeSceneBuilder);
+    }
+
+    /// Block until a round-trip to the scene builder thread has completed. This
+    /// ensures that any transactions (including ones deferred to the scene
+    /// builder thread) have been processed.
+    pub fn flush_scene_builder(&self) {
+        let (tx, rx) = channel::msg_channel().unwrap();
+        self.send_message(ApiMsg::FlushSceneBuilder(tx));
+        rx.recv().unwrap(); // block until done
+    }
+
     /// Save a capture of the current frame state for debugging.
     pub fn save_capture(&self, path: PathBuf, bits: CaptureBits) {
         let msg = ApiMsg::DebugCommand(DebugCommand::SaveCapture(path, bits));
@@ -979,17 +1002,6 @@ impl Drop for RenderApi {
         let msg = ApiMsg::ClearNamespace(self.namespace_id);
         let _ = self.api_sender.send(msg);
     }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
-pub enum ScrollEventPhase {
-    /// The user started scrolling.
-    Start,
-    /// The user performed a scroll. The Boolean flag indicates whether the user's fingers are
-    /// down, if a touchpad is in use. (If false, the event is a touchpad fling.)
-    Move(bool),
-    /// The user ended scrolling.
-    End,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1104,7 +1116,7 @@ pub struct DynamicProperties {
 pub trait RenderNotifier: Send {
     fn clone(&self) -> Box<RenderNotifier>;
     fn wake_up(&self);
-    fn new_document_ready(&self, DocumentId, scrolled: bool, composite_needed: bool);
+    fn new_frame_ready(&self, DocumentId, scrolled: bool, composite_needed: bool);
     fn external_event(&self, _evt: ExternalEvent) {
         unimplemented!()
     }

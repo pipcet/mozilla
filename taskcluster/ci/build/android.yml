@@ -20,6 +20,9 @@ android-api-16/debug:
             - name: public/android/maven
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
+            - name: public/build/geckoview-androidTest.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/outputs/apk/androidTest/officialWithGeckoBinariesNoMinApi/debug/geckoview-official-withGeckoBinaries-noMinApi-debug-androidTest.apk
+              type: file
             - name: public/build/geckoview_example.apk
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
@@ -31,7 +34,6 @@ android-api-16/debug:
         actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
-            - disable_signing.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
         custom-build-variant-cfg: api-16-debug
@@ -71,6 +73,9 @@ android-x86/opt:
             - name: public/android/maven
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
+            - name: public/build/geckoview-androidTest.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/outputs/apk/androidTest/officialWithGeckoBinariesNoMinApi/debug/geckoview-official-withGeckoBinaries-noMinApi-debug-androidTest.apk
+              type: file
             - name: public/build/geckoview_example.apk
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
@@ -82,7 +87,6 @@ android-x86/opt:
         actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
-            - disable_signing.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
         custom-build-variant-cfg: x86
@@ -127,6 +131,9 @@ android-x86-nightly/opt:
             - name: public/android/maven
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
+            - name: public/build/geckoview-androidTest.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/outputs/apk/androidTest/officialWithGeckoBinariesNoMinApi/debug/geckoview-official-withGeckoBinaries-noMinApi-debug-androidTest.apk
+              type: file
             - name: public/build/geckoview_example.apk
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
@@ -138,7 +145,6 @@ android-x86-nightly/opt:
         actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
-            - disable_signing.py
             - taskcluster_nightly.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
@@ -174,6 +180,9 @@ android-api-16/opt:
             - name: public/android/maven
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
+            - name: public/build/geckoview-androidTest.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/outputs/apk/androidTest/officialWithGeckoBinariesNoMinApi/debug/geckoview-official-withGeckoBinaries-noMinApi-debug-androidTest.apk
+              type: file
             - name: public/build/geckoview_example.apk
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
@@ -185,7 +194,6 @@ android-api-16/opt:
         actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
-            - disable_signing.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
         custom-build-variant-cfg: api-16
@@ -232,7 +240,6 @@ android-api-16-without-google-play-services/opt:
         actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
-            - disable_signing.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
         custom-build-variant-cfg: api-16-without-google-play-services
@@ -273,6 +280,9 @@ android-api-16-nightly/opt:
             - name: public/android/maven
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
+            - name: public/build/geckoview-androidTest.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/outputs/apk/androidTest/officialWithGeckoBinariesNoMinApi/debug/geckoview-official-withGeckoBinaries-noMinApi-debug-androidTest.apk
+              type: file
             - name: public/build/geckoview_example.apk
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
@@ -284,7 +294,6 @@ android-api-16-nightly/opt:
         actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
-            - disable_signing.py
             - taskcluster_nightly.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
@@ -320,6 +329,9 @@ android-aarch64/opt:
             - name: public/android/maven
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
+            - name: public/build/geckoview-androidTest.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/outputs/apk/androidTest/officialWithGeckoBinariesNoMinApi/debug/geckoview-official-withGeckoBinaries-noMinApi-debug-androidTest.apk
+              type: file
             - name: public/build/geckoview_example.apk
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
@@ -331,7 +343,6 @@ android-aarch64/opt:
         actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
-            - disable_signing.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true
         custom-build-variant-cfg: aarch64
@@ -371,6 +382,9 @@ android-aarch64-nightly/opt:
             - name: public/android/maven
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/maven/
               type: directory
+            - name: public/build/geckoview-androidTest.apk
+              path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview/outputs/apk/androidTest/officialWithGeckoBinariesNoMinApi/debug/geckoview-official-withGeckoBinaries-noMinApi-debug-androidTest.apk
+              type: file
             - name: public/build/geckoview_example.apk
               path: /builds/worker/workspace/build/src/obj-firefox/gradle/build/mobile/android/geckoview_example/outputs/apk/officialWithGeckoBinariesNoMinApi/debug/geckoview_example-official-withGeckoBinaries-noMinApi-debug.apk
               type: file
@@ -382,7 +396,6 @@ android-aarch64-nightly/opt:
         actions: [get-secrets build multi-l10n update]
         config:
             - builds/releng_base_android_64_builds.py
-            - disable_signing.py
             - taskcluster_nightly.py
         script: "mozharness/scripts/fx_desktop_build.py"
         secrets: true

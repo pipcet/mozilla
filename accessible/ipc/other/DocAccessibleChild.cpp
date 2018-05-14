@@ -293,7 +293,7 @@ DocAccessibleChild::RecvARIARoleAtom(const uint64_t& aID, nsString* aRole)
   }
 
   if (const nsRoleMapEntry* roleMap = acc->ARIARoleMap()) {
-    if (nsStaticAtom* roleAtom = roleMap->roleAtom) {
+    if (nsAtom* roleAtom = *(roleMap->roleAtom)) {
       roleAtom->ToString(*aRole);
     }
   }
@@ -1974,6 +1974,30 @@ DocAccessibleChild::RecvExtents(const uint64_t& aID,
         screenRect.y -= winCoords.y;
       }
 
+      *aX = screenRect.x;
+      *aY = screenRect.y;
+      *aWidth = screenRect.width;
+      *aHeight = screenRect.height;
+    }
+  }
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+DocAccessibleChild::RecvExtentsInCSSPixels(const uint64_t& aID,
+                                           int32_t* aX,
+                                           int32_t* aY,
+                                           int32_t* aWidth,
+                                           int32_t* aHeight)
+{
+  *aX = 0;
+  *aY = 0;
+  *aWidth = 0;
+  *aHeight = 0;
+  Accessible* acc = IdToAccessible(aID);
+  if (acc && !acc->IsDefunct()) {
+    nsIntRect screenRect = acc->BoundsInCSSPixels();
+    if (!screenRect.IsEmpty()) {
       *aX = screenRect.x;
       *aY = screenRect.y;
       *aWidth = screenRect.width;

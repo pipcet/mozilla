@@ -118,7 +118,7 @@ getUpdateRequirements(const RefPtr<nsNavHistoryQuery>& aQuery,
     domainBasedItems = true;
 
   if (aOptions->ResultType() ==
-        nsINavHistoryQueryOptions::RESULTS_AS_TAG_QUERY)
+        nsINavHistoryQueryOptions::RESULTS_AS_TAGS_ROOT)
       return QUERYUPDATE_COMPLEX_WITH_BOOKMARKS;
 
   if (aOptions->ResultType() ==
@@ -133,7 +133,10 @@ getUpdateRequirements(const RefPtr<nsNavHistoryQuery>& aQuery,
   // and we are not a bookmark query we must requery. This
   // is because we can't generally know if any given addition/change causes
   // the item to be in the top N items in the database.
-  if (aOptions->MaxResults() > 0)
+  uint16_t sortingMode = aOptions->SortingMode();
+  if (aOptions->MaxResults() > 0 &&
+      sortingMode != nsINavHistoryQueryOptions::SORT_BY_DATE_ASCENDING &&
+      sortingMode != nsINavHistoryQueryOptions::SORT_BY_DATE_DESCENDING)
     return QUERYUPDATE_COMPLEX;
 
   if (domainBasedItems)
@@ -1952,7 +1955,7 @@ nsNavHistoryQueryResultNode::IsContainersQuery()
   uint16_t resultType = Options()->ResultType();
   return resultType == nsINavHistoryQueryOptions::RESULTS_AS_DATE_QUERY ||
          resultType == nsINavHistoryQueryOptions::RESULTS_AS_DATE_SITE_QUERY ||
-         resultType == nsINavHistoryQueryOptions::RESULTS_AS_TAG_QUERY ||
+         resultType == nsINavHistoryQueryOptions::RESULTS_AS_TAGS_ROOT ||
          resultType == nsINavHistoryQueryOptions::RESULTS_AS_SITE_QUERY ||
          resultType == nsINavHistoryQueryOptions::RESULTS_AS_ROOTS_QUERY ||
          resultType == nsINavHistoryQueryOptions::RESULTS_AS_LEFT_PANE_QUERY;
@@ -2026,16 +2029,21 @@ nsNavHistoryQueryResultNode::GetHasChildren(bool* aHasChildren)
   uint16_t resultType = mOptions->ResultType();
 
   // Tags are always populated, otherwise they are removed.
-  if (resultType == nsINavHistoryQueryOptions::RESULTS_AS_TAG_CONTENTS ||
-      // AllBookmarks also always has children.
-      resultType == nsINavHistoryQueryOptions::RESULTS_AS_ROOTS_QUERY ||
+  if (mQuery->Tags().Length() == 1 && mParent &&
+      mParent->mOptions->ResultType() == nsINavHistoryQueryOptions::RESULTS_AS_TAGS_ROOT) {
+    *aHasChildren = true;
+    return NS_OK;
+  }
+
+  // AllBookmarks and the left pane folder also always have children.
+  if (resultType == nsINavHistoryQueryOptions::RESULTS_AS_ROOTS_QUERY ||
       resultType == nsINavHistoryQueryOptions::RESULTS_AS_LEFT_PANE_QUERY) {
     *aHasChildren = true;
     return NS_OK;
   }
 
   // For tag containers query we must check if we have any tag
-  if (resultType == nsINavHistoryQueryOptions::RESULTS_AS_TAG_QUERY) {
+  if (resultType == nsINavHistoryQueryOptions::RESULTS_AS_TAGS_ROOT) {
     nsCOMPtr<nsITaggingService> tagging =
       do_GetService(NS_TAGGINGSERVICE_CONTRACTID);
     if (tagging) {
@@ -2051,7 +2059,8 @@ nsNavHistoryQueryResultNode::GetHasChildren(bool* aHasChildren)
       resultType == nsINavHistoryQueryOptions::RESULTS_AS_SITE_QUERY) {
     nsNavHistory* history = nsNavHistory::GetHistoryService();
     NS_ENSURE_TRUE(history, NS_ERROR_OUT_OF_MEMORY);
-    return history->GetHasHistoryEntries(aHasChildren);
+    *aHasChildren = history->hasHistoryEntries();
+    return NS_OK;
   }
 
   //XXX: For other containers queries we must:
@@ -2278,7 +2287,7 @@ nsNavHistoryQueryResultNode::Refresh()
   // query could cause a major slowdown.  We should not refresh nested
   // queries, since we will already refresh the parent one.
   // The only exception to this, is if the parent query is of QUERYUPDATE_NONE,
-  // this can be the case for the RESULTS_AS_TAG_QUERY
+  // this can be the case for the RESULTS_AS_TAGS_ROOT
   // under RESULTS_AS_LEFT_PANE_QUERY.
   if (!mExpanded) {
     ClearChildren(true);
@@ -2431,6 +2440,10 @@ nsNavHistoryQueryResultNode::OnVisit(nsIURI* aURI, int64_t aVisitId,
 {
   if (aHidden && !mOptions->IncludeHidden())
     return NS_OK;
+  // Skip the notification if the query is filtered by specific transition types
+  // and this visit has a different one.
+  if (mTransitions.Length() > 0 && !mTransitions.Contains(aTransitionType))
+    return NS_OK;
 
   nsNavHistoryResult* result = GetResult();
   NS_ENSURE_STATE(result);
@@ -2491,11 +2504,6 @@ nsNavHistoryQueryResultNode::OnVisit(nsIURI* aURI, int64_t aVisitId,
     }
 
     case QUERYUPDATE_SIMPLE: {
-      // If the query is filtered by some transitions, skip the
-      // update if aTransitionType doesn't match any of them.
-      if (mTransitions.Length() > 0 && !mTransitions.Contains(aTransitionType))
-        return NS_OK;
-
       // The history service can tell us whether the new item should appear
       // in the result.  We first have to construct a node for it to check.
       RefPtr<nsNavHistoryResultNode> addition;
@@ -2509,6 +2517,25 @@ nsNavHistoryQueryResultNode::OnVisit(nsIURI* aURI, int64_t aVisitId,
       addition->mTransitionType = aTransitionType;
       if (!evaluateQueryForNode(mQuery, mOptions, addition))
         return NS_OK; // don't need to include in our query
+
+      // Optimization for a common case: if the query has maxResults and is
+      // sorted by date, get the current boundaries and check if the added visit
+      // would fit.
+      // Later, we may have to remove the last child to respect maxResults.
+      if (mOptions->MaxResults() &&
+          static_cast<uint32_t>(mChildren.Count()) >= mOptions->MaxResults()) {
+        uint16_t sortType = GetSortType();
+        if (sortType == nsINavHistoryQueryOptions::SORT_BY_DATE_ASCENDING &&
+            aTime > std::max(mChildren[0]->mTime,
+                             mChildren[mChildren.Count() -1]->mTime)) {
+          return NS_OK;
+        }
+        if (sortType == nsINavHistoryQueryOptions::SORT_BY_DATE_DESCENDING &&
+            aTime < std::min(mChildren[0]->mTime,
+                             mChildren[mChildren.Count() -1]->mTime)) {
+          return NS_OK;
+        }
+      }
 
       if (mOptions->ResultType() == nsNavHistoryQueryOptions::RESULTS_AS_VISIT) {
         // If this is a visit type query, just insert the new visit.  We never
@@ -2532,6 +2559,12 @@ nsNavHistoryQueryResultNode::OnVisit(nsIURI* aURI, int64_t aVisitId,
           rv = InsertSortedChild(addition);
           NS_ENSURE_SUCCESS(rv, rv);
         }
+      }
+
+      // Trim the children if necessary.
+      if (mOptions->MaxResults() &&
+          static_cast<uint32_t>(mChildren.Count()) > mOptions->MaxResults()) {
+        mChildren.RemoveObjectAt(mChildren.Count() - 1);
       }
 
       if (aAdded)
@@ -2590,8 +2623,7 @@ nsNavHistoryQueryResultNode::OnTitleChanged(nsIURI* aURI,
   NS_ConvertUTF16toUTF8 newTitle(aPageTitle);
 
   bool onlyOneEntry =
-    mOptions->ResultType() == nsINavHistoryQueryOptions::RESULTS_AS_URI ||
-    mOptions->ResultType() == nsINavHistoryQueryOptions::RESULTS_AS_TAG_CONTENTS;
+    mOptions->ResultType() == nsINavHistoryQueryOptions::RESULTS_AS_URI;
 
   // See if our query has any search term matching.
   if (mHasSearchTerms) {
@@ -2685,10 +2717,9 @@ nsNavHistoryQueryResultNode::OnDeleteURI(nsIURI* aURI,
     return NS_OK;
   }
 
-  bool onlyOneEntry = (mOptions->ResultType() ==
-                         nsINavHistoryQueryOptions::RESULTS_AS_URI ||
-                       mOptions->ResultType() ==
-                         nsINavHistoryQueryOptions::RESULTS_AS_TAG_CONTENTS);
+  bool onlyOneEntry =
+    mOptions->ResultType() == nsINavHistoryQueryOptions::RESULTS_AS_URI;
+
   nsAutoCString spec;
   nsresult rv = aURI->GetSpec(spec);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -2748,10 +2779,8 @@ nsNavHistoryQueryResultNode::OnPageChanged(nsIURI* aURI,
 
   switch (aChangedAttribute) {
     case nsINavHistoryObserver::ATTRIBUTE_FAVICON: {
-      bool onlyOneEntry = (mOptions->ResultType() ==
-                             nsINavHistoryQueryOptions::RESULTS_AS_URI ||
-                           mOptions->ResultType() ==
-                             nsINavHistoryQueryOptions::RESULTS_AS_TAG_CONTENTS);
+      bool onlyOneEntry =
+        mOptions->ResultType() == nsINavHistoryQueryOptions::RESULTS_AS_URI;
       UpdateURIs(true, onlyOneEntry, false, spec, setFaviconCallback,
                  nullptr);
       break;
@@ -2770,8 +2799,9 @@ nsNavHistoryQueryResultNode::OnDeleteVisits(nsIURI* aURI,
                                             uint16_t aReason,
                                             uint32_t aTransitionType)
 {
-  NS_PRECONDITION(mOptions->QueryType() == nsINavHistoryQueryOptions::QUERY_TYPE_HISTORY,
-                  "Bookmarks queries should not get a OnDeleteVisits notification");
+  MOZ_ASSERT(mOptions->QueryType() == nsINavHistoryQueryOptions::QUERY_TYPE_HISTORY,
+             "Bookmarks queries should not get a OnDeleteVisits notification");
+
   if (aVisitTime == 0) {
     // All visits for this uri have been removed, but the uri won't be removed
     // from the databse, most likely because it's a bookmark.  For a history
@@ -2800,11 +2830,8 @@ nsNavHistoryQueryResultNode::NotifyIfTagsChanged(nsIURI* aURI)
   nsAutoCString spec;
   nsresult rv = aURI->GetSpec(spec);
   NS_ENSURE_SUCCESS(rv, rv);
-  bool onlyOneEntry = (mOptions->ResultType() ==
-                         nsINavHistoryQueryOptions::RESULTS_AS_URI ||
-                       mOptions->ResultType() ==
-                         nsINavHistoryQueryOptions::RESULTS_AS_TAG_CONTENTS
-                         );
+  bool onlyOneEntry =
+    mOptions->ResultType() == nsINavHistoryQueryOptions::RESULTS_AS_URI;
 
   // Find matching URI nodes.
   RefPtr<nsNavHistoryResultNode> node;
@@ -4683,12 +4710,11 @@ nsNavHistoryResult::OnVisit(nsIURI* aURI, int64_t aVisitId, PRTime aTime,
   ENUMERATE_HISTORY_OBSERVERS(OnVisit(aURI, aVisitId, aTime, aTransitionType,
                                       aHidden, &added));
 
-  // When we add visits through UpdatePlaces, we don't bother telling
-  // the world that the title 'changed' from nothing to the first title
-  // we ever see for a history entry. Our consumers here might still
-  // care, though, so we have to tell them - but only for the first
-  // visit we add. For subsequent changes, updateplaces will dispatch
-  // ontitlechanged notifications as normal.
+  // When we add visits, we don't bother telling the world that the title
+  // 'changed' from nothing to the first title we ever see for a history entry.
+  // Our consumers here might still care, though, so we have to tell them, but
+  // only for the first visit we add. Subsequent changes will get an usual
+  // ontitlechanged notification.
   if (!aLastKnownTitle.IsVoid() && aVisitCount == 1) {
     ENUMERATE_HISTORY_OBSERVERS(OnTitleChanged(aURI, aLastKnownTitle, aGUID));
   }

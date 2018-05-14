@@ -288,8 +288,8 @@ var AllPages = {
     this._addObserver = function() {};
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
-                                         Ci.nsISupportsWeakReference])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver,
+                                          Ci.nsISupportsWeakReference])
 };
 
 /**
@@ -616,8 +616,7 @@ var PlacesProvider = {
 
     // Execute the query.
     let query = PlacesUtils.history.getNewQuery();
-    let db = PlacesUtils.history.QueryInterface(Ci.nsPIPlacesDatabase);
-    db.asyncExecuteLegacyQuery(query, options, callback);
+    PlacesUtils.history.asyncExecuteLegacyQuery(query, options, callback);
   },
 
   /**
@@ -730,8 +729,8 @@ var PlacesProvider = {
     }
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsINavHistoryObserver,
-                                         Ci.nsISupportsWeakReference]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsINavHistoryObserver,
+                                          Ci.nsISupportsWeakReference]),
 };
 
 /**
@@ -953,6 +952,7 @@ var ActivityStreamProvider = {
                   // status "0" means not archived or deleted
                   .filter(item => item.status === "0")
                   .map(item => ({
+                    date_added: item.time_added * 1000,
                     description: item.excerpt,
                     preview_image_url: item.image && item.image.src,
                     title: item.resolved_title,
@@ -986,6 +986,7 @@ var ActivityStreamProvider = {
         h.guid,
         preview_image_url,
         b.title,
+        b.dateAdded / 1000 AS date_added,
         url
       FROM moz_bookmarks b
       JOIN moz_bookmarks p
@@ -1002,7 +1003,7 @@ var ActivityStreamProvider = {
     `;
 
     return this._processHighlights(await this.executePlacesQuery(sqlQuery, {
-      columns: this._highlightsColumns,
+      columns: [...this._highlightsColumns, "date_added"],
       params: this._getCommonParams(options, {
         dateAddedThreshold: (Date.now() - options.bookmarkSecondsAgo * 1000) * 1000
       })
@@ -1931,8 +1932,8 @@ var Links = {
     this._addObserver = function() {};
   },
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
-                                         Ci.nsISupportsWeakReference])
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver,
+                                          Ci.nsISupportsWeakReference])
 };
 
 Links.compareLinks = Links.compareLinks.bind(Links);

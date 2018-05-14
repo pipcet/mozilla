@@ -777,6 +777,9 @@ class InterpreterFrame
     void setHasCachedSavedFrame() {
         flags_ |= HAS_CACHED_SAVED_FRAME;
     }
+    void clearHasCachedSavedFrame() {
+        flags_ &= ~HAS_CACHED_SAVED_FRAME;
+    }
 
   public:
     void trace(JSTracer* trc, Value* sp, jsbytecode* pc);
@@ -1195,7 +1198,7 @@ struct DefaultHasher<AbstractFramePtr> {
 //   recently. When we find a cache hit, we check the entry's SavedFrame's
 //   compartment against the current compartment; if they do not match, we flush
 //   the entire cache. This means that it is not always true that, if a frame's
-//   bit it set, it must have an entry in the cache. But we can still assert
+//   bit is set, it must have an entry in the cache. But we can still assert
 //   that, if a frame's bit is set and the cache is not completely empty, the
 //   frame will have an entry. When the cache is flushed, it will be repopulated
 //   immediately with the new capture's frames.
@@ -1248,6 +1251,7 @@ class LiveSavedFrameCache
 
         struct HasCachedMatcher;
         struct SetHasCachedMatcher;
+        struct ClearHasCachedMatcher;
 
       public:
         // If iter's frame is of a type that can be cached, construct a FramePtr
@@ -1259,6 +1263,7 @@ class LiveSavedFrameCache
 
         inline bool hasCachedSavedFrame() const;
         inline void setHasCachedSavedFrame();
+        inline void clearHasCachedSavedFrame();
 
         // Return true if this FramePtr refers to an interpreter frame.
         inline bool isInterpreterFrame() const { return ptr.is<InterpreterFrame*>(); }
@@ -2066,7 +2071,7 @@ class FrameIter
     const char* filename() const;
     const char16_t* displayURL() const;
     unsigned computeLine(uint32_t* column = nullptr) const;
-    JSAtom* functionDisplayAtom() const;
+    JSAtom* maybeFunctionDisplayAtom() const;
     bool mutedErrors() const;
 
     bool hasScript() const { return !isWasm(); }
@@ -2077,6 +2082,7 @@ class FrameIter
 
     inline bool wasmDebugEnabled() const;
     inline wasm::Instance* wasmInstance() const;
+    inline uint32_t wasmFuncIndex() const;
     inline unsigned wasmBytecodeOffset() const;
     void wasmUpdateBytecodeOffset();
 
@@ -2341,7 +2347,7 @@ inline wasm::Instance*
 FrameIter::wasmInstance() const
 {
     MOZ_ASSERT(!done());
-    MOZ_ASSERT(isWasm() && wasmDebugEnabled());
+    MOZ_ASSERT(isWasm());
     return wasmFrame().instance();
 }
 
@@ -2351,6 +2357,14 @@ FrameIter::wasmBytecodeOffset() const
     MOZ_ASSERT(!done());
     MOZ_ASSERT(isWasm());
     return wasmFrame().lineOrBytecode();
+}
+
+inline uint32_t
+FrameIter::wasmFuncIndex() const
+{
+    MOZ_ASSERT(!done());
+    MOZ_ASSERT(isWasm());
+    return wasmFrame().funcIndex();
 }
 
 inline bool

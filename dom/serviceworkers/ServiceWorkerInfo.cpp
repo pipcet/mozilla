@@ -118,7 +118,7 @@ namespace {
 class ChangeStateUpdater final : public Runnable
 {
 public:
-  ChangeStateUpdater(const nsTArray<RefPtr<ServiceWorker>>& aInstances,
+  ChangeStateUpdater(const nsTArray<ServiceWorker*>& aInstances,
                      ServiceWorkerState aState)
     : Runnable("dom::ChangeStateUpdater")
     , mState(aState)
@@ -176,11 +176,6 @@ ServiceWorkerInfo::UpdateState(ServiceWorkerState aState)
   MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(r.forget()));
   if (State() == ServiceWorkerState::Redundant) {
     serviceWorkerScriptCache::PurgeCache(mPrincipal, mCacheName);
-
-    // Break the ref-cycle with the binding objects.  We won't need to
-    // fire any more events and they should be able to GC once content
-    // script no longer references them.
-    mInstances.Clear();
   }
 }
 
@@ -256,46 +251,18 @@ ServiceWorkerInfo::RemoveServiceWorker(ServiceWorker* aWorker)
     workerURL.Equals(NS_ConvertUTF8toUTF16(mDescriptor.ScriptURL())));
 #endif
 
-  // If the binding layer initiates this call by disconnecting the global,
-  // then we will find an entry in mInstances here.  If the worker transitions
-  // to redundant and we clear mInstances, then we will not find an entry
-  // here.
-  mInstances.RemoveElement(aWorker);
+  DebugOnly<bool> removed = mInstances.RemoveElement(aWorker);
+  MOZ_ASSERT(removed);
 }
 
 void
-ServiceWorkerInfo::PostMessage(nsIGlobalObject* aGlobal,
-                               JSContext* aCx, JS::Handle<JS::Value> aMessage,
-                               const Sequence<JSObject*>& aTransferable,
-                               ErrorResult& aRv)
+ServiceWorkerInfo::PostMessage(ipc::StructuredCloneData&& aData,
+                               const ClientInfo& aClientInfo,
+                               const ClientState& aClientState)
 {
-  MOZ_ASSERT(NS_IsMainThread());
-
-  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal);
-  if (NS_WARN_IF(!window || !window->GetExtantDoc())) {
-    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
-    return;
-  }
-
-  auto storageAllowed = nsContentUtils::StorageAllowedForWindow(window);
-  if (storageAllowed != nsContentUtils::StorageAccess::eAllow) {
-    ServiceWorkerManager::LocalizeAndReportToAllClients(
-      Scope(), "ServiceWorkerPostMessageStorageError",
-      nsTArray<nsString> { NS_ConvertUTF8toUTF16(Scope()) });
-    aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
-    return;
-  }
-
-  Maybe<ClientInfo> clientInfo = window->GetClientInfo();
-  Maybe<ClientState> clientState = window->GetClientState();
-  if (NS_WARN_IF(clientInfo.isNothing() || clientState.isNothing())) {
-    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
-    return;
-  }
-
-  aRv = mServiceWorkerPrivate->SendMessageEvent(aCx, aMessage, aTransferable,
-                                                ClientInfoAndState(clientInfo.ref().ToIPC(),
-                                                                   clientState.ref().ToIPC()));
+  mServiceWorkerPrivate->SendMessageEvent(Move(aData),
+                                          ClientInfoAndState(aClientInfo.ToIPC(),
+                                                             aClientState.ToIPC()));
 }
 
 void

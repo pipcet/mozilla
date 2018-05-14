@@ -4,7 +4,7 @@
 
 "use strict";
 
-const {Ci, Cu} = require("chrome");
+const {Cc, Ci, Cu} = require("chrome");
 
 const Services = require("Services");
 const protocol = require("devtools/shared/protocol");
@@ -33,9 +33,6 @@ loader.lazyRequireGetter(this, "WalkerSearch", "devtools/server/actors/utils/wal
 
 loader.lazyServiceGetter(this, "eventListenerService",
   "@mozilla.org/eventlistenerservice;1", "nsIEventListenerService");
-
-loader.lazyServiceGetter(this, "DOMParser",
-  "@mozilla.org/xmlextras/domparser;1", "nsIDOMParser");
 
 // Minimum delay between two "new-mutations" events.
 const MUTATIONS_THROTTLING_DELAY = 100;
@@ -1259,7 +1256,7 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       return;
     }
 
-    let parsedDOM = DOMParser.parseFromString(value, "text/html");
+    let parsedDOM = new DOMParser().parseFromString(value, "text/html");
     let rawNode = node.rawNode;
     let parentNode = rawNode.parentNode;
 
@@ -2013,6 +2010,30 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     }
 
     return this._ref(offsetParent);
+  },
+
+  /**
+   * Returns true if accessibility service is running and the node has a
+   * corresponding valid accessible object.
+   */
+  hasAccessibilityProperties: async function(node) {
+    if (isNodeDead(node) || !Services.appinfo.accessibilityEnabled) {
+      return false;
+    }
+
+    const accService = Cc["@mozilla.org/accessibilityService;1"].getService(
+      Ci.nsIAccessibilityService);
+    let acc = accService.getAccessibleFor(node.rawNode);
+    // If node does not have an accessible object, but has an inline text child,
+    // try to retrieve an accessible object for the child instead.
+    if (!acc || acc.indexInParent < 0) {
+      const inlineTextChild = this.inlineTextChild(node);
+      if (inlineTextChild) {
+        acc = accService.getAccessibleFor(inlineTextChild.rawNode);
+      }
+    }
+
+    return acc && acc.indexInParent > -1;
   },
 });
 

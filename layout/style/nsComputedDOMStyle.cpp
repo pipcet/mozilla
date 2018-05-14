@@ -9,6 +9,7 @@
 #include "nsComputedDOMStyle.h"
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/FontPropertyTypes.h"
 #include "mozilla/Preferences.h"
 
 #include "nsError.h"
@@ -38,8 +39,7 @@
 #include "mozilla/EffectSet.h"
 #include "mozilla/IntegerRange.h"
 #include "mozilla/ServoStyleSet.h"
-#include "mozilla/ServoRestyleManager.h"
-#include "mozilla/RestyleManagerInlines.h"
+#include "mozilla/RestyleManager.h"
 #include "imgIRequest.h"
 #include "nsLayoutUtils.h"
 #include "nsCSSKeywords.h"
@@ -88,7 +88,7 @@ already_AddRefed<CSSValue>
 GetBackgroundList(T nsStyleImageLayers::Layer::* aMember,
                   uint32_t nsStyleImageLayers::* aCount,
                   const nsStyleImageLayers& aLayers,
-                  const nsCSSProps::KTableEntry aTable[])
+                  const nsCSSKTableEntry aTable[])
 {
   RefPtr<nsDOMCSSValueList> valueList = GetROCSSValueList(true);
 
@@ -151,8 +151,7 @@ DocumentNeedsRestyle(
   // For Servo, we need to process the restyle-hint-invalidations first, to
   // expand LaterSiblings hint, so that we can look whether ancestors need
   // restyling.
-  ServoRestyleManager* restyleManager =
-    presContext->RestyleManager()->AsServo();
+  RestyleManager* restyleManager = presContext->RestyleManager();
   restyleManager->ProcessAllPendingAttributeAndStateInvalidations();
 
   if (!presContext->EffectCompositor()->HasPendingStyleUpdates() &&
@@ -187,7 +186,7 @@ struct ComputedStyleMap
     bool IsLayoutFlushNeeded() const
     {
       return nsCSSProps::PropHasFlags(mProperty,
-                                      CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH);
+                                      CSSPropFlags::GetCSNeedsLayoutFlush);
     }
 
     bool IsEnabled() const
@@ -502,6 +501,7 @@ nsComputedDOMStyle::DoGetComputedStyleNoFlush(Element* aElement,
                                               StyleType aStyleType)
 {
   MOZ_ASSERT(aElement, "NULL element");
+
   // If the content has a pres shell, we must use it.  Otherwise we'd
   // potentially mix rule trees by using the wrong pres shell's style
   // set.  Using the pres shell from the content also means that any
@@ -519,6 +519,14 @@ nsComputedDOMStyle::DoGetComputedStyleNoFlush(Element* aElement,
 
   CSSPseudoElementType pseudoType = GetPseudoType(aPseudo);
   if (aPseudo && pseudoType >= CSSPseudoElementType::Count) {
+    return nullptr;
+  }
+
+  if (aElement->IsInNativeAnonymousSubtree() && !aElement->IsInComposedDoc()) {
+    // Normal web content can't access NAC, but Accessibility, DevTools and
+    // Editor use this same API and this may get called for anonymous content.
+    // Computing the style of a pseudo-element that doesn't have a parent doesn't
+    // really make sense.
     return nullptr;
   }
 
@@ -748,13 +756,6 @@ nsIDocument*
 nsComputedDOMStyle::DocToUpdate()
 {
   MOZ_CRASH("called nsComputedDOMStyle::DocToUpdate");
-}
-
-void
-nsComputedDOMStyle::GetCSSParsingEnvironment(CSSParsingEnvironment& aCSSParseEnv,
-                                             nsIPrincipal* aSubjectPrincipal)
-{
-  MOZ_CRASH("called nsComputedDOMStyle::GetCSSParsingEnvironment");
 }
 
 nsDOMCSSDeclaration::ServoCSSParsingEnvironment
@@ -987,16 +988,6 @@ nsComputedDOMStyle::ClearCurrentStyleSources()
 }
 
 already_AddRefed<CSSValue>
-nsComputedDOMStyle::GetPropertyCSSValue(const nsAString& aPropertyName,
-                                        ErrorResult& aRv)
-{
-  if (nsCOMPtr<nsIDocument> document = do_QueryReferent(mDocumentWeak)) {
-    document->WarnOnceAbout(nsIDocument::eGetPropertyCSSValue);
-  }
-  return GetPropertyCSSValueWithoutWarning(aPropertyName, aRv);
-}
-
-already_AddRefed<CSSValue>
 nsComputedDOMStyle::GetPropertyCSSValueWithoutWarning(
   const nsAString& aPropertyName,
   ErrorResult& aRv)
@@ -1187,7 +1178,7 @@ void
 nsComputedDOMStyle::SetValueFromComplexColor(nsROCSSPrimitiveValue* aValue,
                                              const StyleComplexColor& aColor)
 {
-  SetToRGBAColor(aValue, StyleColor()->CalcComplexColor(aColor));
+  SetToRGBAColor(aValue, aColor.CalcColor(mComputedStyle));
 }
 
 already_AddRefed<CSSValue>
@@ -1240,21 +1231,6 @@ nsComputedDOMStyle::DoGetColumnWidth()
   // XXX fix the auto case. When we actually have a column frame, I think
   // we should return the computed column width.
   SetValueToCoord(val, StyleColumn()->mColumnWidth, true);
-  return val.forget();
-}
-
-already_AddRefed<CSSValue>
-nsComputedDOMStyle::DoGetColumnGap()
-{
-  RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
-
-  const nsStyleColumn* column = StyleColumn();
-  if (column->mColumnGap.GetUnit() == eStyleUnit_Normal) {
-    val->SetIdent(eCSSKeyword_normal);
-  } else {
-    SetValueToCoord(val, StyleColumn()->mColumnGap, true);
-  }
-
   return val.forget();
 }
 
@@ -1384,9 +1360,13 @@ nsComputedDOMStyle::DoGetContent()
         break;
       }
       case eStyleContentType_Attr: {
+        // XXXbholley: We don't correctly serialize namespaces here. Doing so
+        // would require either storing the prefix on the nsStyleContentAttr,
+        // or poking at the namespaces in the stylesheet to map from the
+        // namespace URL.
         nsAutoString str;
         nsStyleUtil::AppendEscapedCSSIdent(
-          nsDependentString(data.GetString()), str);
+          nsDependentString(data.GetAttr()->mName->GetUTF16String()), str);
         val->SetString(str, CSSPrimitiveValueBinding::CSS_ATTR);
         break;
       }
@@ -1616,7 +1596,7 @@ nsComputedDOMStyle::DoGetTranslate()
       switch (nsStyleTransformMatrix::TransformFunctionOf(aData)) {
         /* translate : <length-percentage> */
         case eCSSKeyword_translatex: {
-          NS_PRECONDITION(aData->Count() == 2, "Invalid array!");
+          MOZ_ASSERT(aData->Count() == 2, "Invalid array!");
           float tx = ProcessTranslatePart(aData->Item(1),
                                           &refBox,
                                           &TransformReferenceBox::Width);
@@ -1626,7 +1606,7 @@ nsComputedDOMStyle::DoGetTranslate()
         }
         /* translate : <length-percentage> <length-percentage> */
         case eCSSKeyword_translate: {
-          NS_PRECONDITION(aData->Count() == 3, "Invalid array!");
+          MOZ_ASSERT(aData->Count() == 3, "Invalid array!");
           float tx = ProcessTranslatePart(aData->Item(1),
                                           &refBox,
                                           &TransformReferenceBox::Width);
@@ -1645,7 +1625,7 @@ nsComputedDOMStyle::DoGetTranslate()
         }
         /* translate : <length-percentage> <length-percentage> <length>*/
         case eCSSKeyword_translate3d: {
-          NS_PRECONDITION(aData->Count() == 4, "Invalid array!");
+          MOZ_ASSERT(aData->Count() == 4, "Invalid array!");
           float tx = ProcessTranslatePart(aData->Item(1),
                                           &refBox,
                                           &TransformReferenceBox::Width);
@@ -1686,12 +1666,12 @@ nsComputedDOMStyle::DoGetScale()
       switch (nsStyleTransformMatrix::TransformFunctionOf(aData)) {
         /* scale : <number> */
         case eCSSKeyword_scalex:
-          NS_PRECONDITION(aData->Count() == 2, "Invalid array!");
+          MOZ_ASSERT(aData->Count() == 2, "Invalid array!");
           aResult.AppendFloat(aData->Item(1).GetFloatValue());
           break;
         /* scale : <number> <number>*/
         case eCSSKeyword_scale: {
-          NS_PRECONDITION(aData->Count() == 3, "Invalid array!");
+          MOZ_ASSERT(aData->Count() == 3, "Invalid array!");
           aResult.AppendFloat(aData->Item(1).GetFloatValue());
 
           float sy = aData->Item(2).GetFloatValue();
@@ -1703,7 +1683,7 @@ nsComputedDOMStyle::DoGetScale()
         }
         /* scale : <number> <number> <number> */
         case eCSSKeyword_scale3d: {
-          NS_PRECONDITION(aData->Count() == 4, "Invalid array!");
+          MOZ_ASSERT(aData->Count() == 4, "Invalid array!");
           aResult.AppendFloat(aData->Item(1).GetFloatValue());
 
           float sy = aData->Item(2).GetFloatValue();
@@ -1734,7 +1714,7 @@ nsComputedDOMStyle::DoGetRotate()
       switch (nsStyleTransformMatrix::TransformFunctionOf(aData)) {
         /* rotate : <angle> */
         case eCSSKeyword_rotate: {
-          NS_PRECONDITION(aData->Count() == 2, "Invalid array!");
+          MOZ_ASSERT(aData->Count() == 2, "Invalid array!");
           float theta = aData->Item(1).GetAngleValueInDegrees();
           aResult.AppendFloat(theta);
           aResult.AppendLiteral("deg");
@@ -1742,7 +1722,7 @@ nsComputedDOMStyle::DoGetRotate()
         }
         /* rotate : <number> <number> <number> <angle> */
         case eCSSKeyword_rotate3d: {
-          NS_PRECONDITION(aData->Count() == 5, "Invalid array!");
+          MOZ_ASSERT(aData->Count() == 5, "Invalid array!");
           float rx = aData->Item(1).GetFloatValue();
           float ry = aData->Item(2).GetFloatValue();
           float rz = aData->Item(3).GetFloatValue();
@@ -1949,19 +1929,47 @@ nsComputedDOMStyle::DoGetFontStretch()
 {
   RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
 
-  val->SetIdent(nsCSSProps::ValueToKeywordEnum(StyleFont()->mFont.stretch,
-                                               nsCSSProps::kFontStretchKTable));
+  const nsStyleFont* font = StyleFont();
 
+  // Chrome does not return keywords, so neither do we.
+  // See w3c/csswg-drafts#2605 for discussion though.
+  float stretch = font->mFont.stretch.Percentage();
+  MOZ_ASSERT(stretch >= 0.f,
+             "unexpected font-stretch value");
+  val->SetPercent(stretch / 100.f);
   return val.forget();
 }
 
 already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetFontStyle()
 {
+  const nsStyleFont* font = StyleFont();
+  const FontSlantStyle& style = font->mFont.style;
+
+  // FIXME(emilio): Once we get rid of GetPropertyCSSValue, this can, at least,
+  // get unified with nsStyleUtil::AppendFontSlantStyle.
+  //
   RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
-  val->SetIdent(nsCSSProps::ValueToKeywordEnum(StyleFont()->mFont.style,
-                                               nsCSSProps::kFontStyleKTable));
-  return val.forget();
+  if (style.IsNormal() || style.IsItalic()) {
+    auto keyword = style.IsNormal() ? eCSSKeyword_normal : eCSSKeyword_italic;
+    val->SetIdent(keyword);
+    return val.forget();
+  }
+
+  float angle = style.ObliqueAngle();
+  val->SetIdent(eCSSKeyword_oblique);
+  if (angle == FontSlantStyle::kDefaultAngle) {
+    return val.forget();
+  }
+
+  RefPtr<nsDOMCSSValueList> valueList = GetROCSSValueList(false);
+  valueList->AppendCSSValue(val.forget());
+
+  RefPtr<nsROCSSPrimitiveValue> angleVal = new nsROCSSPrimitiveValue;
+  angleVal->SetDegree(angle);
+  valueList->AppendCSSValue(angleVal.forget());
+
+  return valueList.forget();
 }
 
 already_AddRefed<CSSValue>
@@ -1971,8 +1979,9 @@ nsComputedDOMStyle::DoGetFontWeight()
 
   const nsStyleFont* font = StyleFont();
 
-  uint16_t weight = font->mFont.weight;
-  NS_ASSERTION(weight % 100 == 0, "unexpected value of font-weight");
+  float weight = font->mFont.weight.ToFloat();
+  MOZ_ASSERT(1.0f <= weight && weight <= 1000.0f,
+             "unexpected font-weight value");
   val->SetNumber(weight);
 
   return val.forget();
@@ -2080,9 +2089,11 @@ nsComputedDOMStyle::DoGetFontSynthesis()
   } else {
     nsAutoString valueStr;
 
-    nsStyleUtil::AppendBitmaskCSSValue(eCSSProperty_font_synthesis,
-      intValue, NS_FONT_SYNTHESIS_WEIGHT,
-      NS_FONT_SYNTHESIS_STYLE, valueStr);
+    nsStyleUtil::AppendBitmaskCSSValue(nsCSSProps::kFontSynthesisKTable,
+                                       intValue,
+                                       NS_FONT_SYNTHESIS_WEIGHT,
+                                       NS_FONT_SYNTHESIS_STYLE,
+                                       valueStr);
     val->SetString(valueStr);
   }
 
@@ -2135,7 +2146,8 @@ nsComputedDOMStyle::DoGetFontVariantAlternates()
   // first, include enumerated values
   nsAutoString valueStr;
 
-  nsStyleUtil::AppendBitmaskCSSValue(eCSSProperty_font_variant_alternates,
+  nsStyleUtil::AppendBitmaskCSSValue(
+    nsCSSProps::kFontVariantAlternatesKTable,
     intValue & NS_FONT_VARIANT_ALTERNATES_ENUMERATED_MASK,
     NS_FONT_VARIANT_ALTERNATES_HISTORICAL,
     NS_FONT_VARIANT_ALTERNATES_HISTORICAL, valueStr);
@@ -2180,9 +2192,11 @@ nsComputedDOMStyle::DoGetFontVariantEastAsian()
   } else {
     nsAutoString valueStr;
 
-    nsStyleUtil::AppendBitmaskCSSValue(eCSSProperty_font_variant_east_asian,
-      intValue, NS_FONT_VARIANT_EAST_ASIAN_JIS78,
-      NS_FONT_VARIANT_EAST_ASIAN_RUBY, valueStr);
+    nsStyleUtil::AppendBitmaskCSSValue(nsCSSProps::kFontVariantEastAsianKTable,
+                                       intValue,
+                                       NS_FONT_VARIANT_EAST_ASIAN_JIS78,
+                                       NS_FONT_VARIANT_EAST_ASIAN_RUBY,
+                                       valueStr);
     val->SetString(valueStr);
   }
 
@@ -2203,9 +2217,11 @@ nsComputedDOMStyle::DoGetFontVariantLigatures()
   } else {
     nsAutoString valueStr;
 
-    nsStyleUtil::AppendBitmaskCSSValue(eCSSProperty_font_variant_ligatures,
-      intValue, NS_FONT_VARIANT_LIGATURES_NONE,
-      NS_FONT_VARIANT_LIGATURES_NO_CONTEXTUAL, valueStr);
+    nsStyleUtil::AppendBitmaskCSSValue(nsCSSProps::kFontVariantLigaturesKTable,
+                                       intValue,
+                                       NS_FONT_VARIANT_LIGATURES_NONE,
+                                       NS_FONT_VARIANT_LIGATURES_NO_CONTEXTUAL,
+                                       valueStr);
     val->SetString(valueStr);
   }
 
@@ -2224,9 +2240,11 @@ nsComputedDOMStyle::DoGetFontVariantNumeric()
   } else {
     nsAutoString valueStr;
 
-    nsStyleUtil::AppendBitmaskCSSValue(eCSSProperty_font_variant_numeric,
-      intValue, NS_FONT_VARIANT_NUMERIC_LINING,
-      NS_FONT_VARIANT_NUMERIC_ORDINAL, valueStr);
+    nsStyleUtil::AppendBitmaskCSSValue(nsCSSProps::kFontVariantNumericKTable,
+                                       intValue,
+                                       NS_FONT_VARIANT_NUMERIC_LINING,
+                                       NS_FONT_VARIANT_NUMERIC_ORDINAL,
+                                       valueStr);
     val->SetString(valueStr);
   }
 
@@ -3271,7 +3289,7 @@ already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetGridAutoFlow()
 {
   nsAutoString str;
-  nsStyleUtil::AppendBitmaskCSSValue(eCSSProperty_grid_auto_flow,
+  nsStyleUtil::AppendBitmaskCSSValue(nsCSSProps::kGridAutoFlowKTable,
                                      StylePosition()->mGridAutoFlow,
                                      NS_STYLE_GRID_AUTO_FLOW_ROW,
                                      NS_STYLE_GRID_AUTO_FLOW_DENSE,
@@ -3388,18 +3406,28 @@ nsComputedDOMStyle::DoGetGridRowEnd()
 }
 
 already_AddRefed<CSSValue>
-nsComputedDOMStyle::DoGetGridColumnGap()
+nsComputedDOMStyle::DoGetColumnGap()
 {
   RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
-  SetValueToCoord(val, StylePosition()->mGridColumnGap, true);
+  const auto& columnGap = StylePosition()->mColumnGap;
+  if (columnGap.GetUnit() == eStyleUnit_Normal) {
+    val->SetIdent(eCSSKeyword_normal);
+  } else {
+    SetValueToCoord(val, columnGap, true);
+  }
   return val.forget();
 }
 
 already_AddRefed<CSSValue>
-nsComputedDOMStyle::DoGetGridRowGap()
+nsComputedDOMStyle::DoGetRowGap()
 {
   RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
-  SetValueToCoord(val, StylePosition()->mGridRowGap, true);
+  const auto& rowGap = StylePosition()->mRowGap;
+  if (rowGap.GetUnit() == eStyleUnit_Normal) {
+    val->SetIdent(eCSSKeyword_normal);
+  } else {
+    SetValueToCoord(val, rowGap, true);
+  }
   return val.forget();
 }
 
@@ -4172,9 +4200,11 @@ nsComputedDOMStyle::DoGetTextDecorationLine()
     // Clear the OVERRIDE_ALL bits -- we don't want these to appear in
     // the computed style.
     intValue &= ~NS_STYLE_TEXT_DECORATION_LINE_OVERRIDE_ALL;
-    nsStyleUtil::AppendBitmaskCSSValue(eCSSProperty_text_decoration_line,
-      intValue, NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE,
-      NS_STYLE_TEXT_DECORATION_LINE_BLINK, decorationLineString);
+    nsStyleUtil::AppendBitmaskCSSValue(nsCSSProps::kTextDecorationLineKTable,
+                                       intValue,
+                                       NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE,
+                                       NS_STYLE_TEXT_DECORATION_LINE_BLINK,
+                                       decorationLineString);
     val->SetString(decorationLineString);
   }
 
@@ -5021,7 +5051,7 @@ nsComputedDOMStyle::DoGetContain()
   } else {
     nsAutoString valueStr;
 
-    nsStyleUtil::AppendBitmaskCSSValue(eCSSProperty_contain,
+    nsStyleUtil::AppendBitmaskCSSValue(nsCSSProps::kContainKTable,
                                        mask, NS_STYLE_CONTAIN_LAYOUT,
                                        NS_STYLE_CONTAIN_PAINT, valueStr);
     val->SetString(valueStr);
@@ -5111,16 +5141,22 @@ nsComputedDOMStyle::DoGetOverflow()
 {
   const nsStyleDisplay* display = StyleDisplay();
 
-  if (display->mOverflowX != display->mOverflowY) {
-    // No value to return.  We can't express this combination of
-    // values as a shorthand.
-    return nullptr;
+  RefPtr<nsROCSSPrimitiveValue> overflowX = new nsROCSSPrimitiveValue;
+  overflowX->SetIdent(
+    nsCSSProps::ValueToKeywordEnum(display->mOverflowX,
+                                   nsCSSProps::kOverflowKTable));
+  if (display->mOverflowX == display->mOverflowY) {
+    return overflowX.forget();
   }
+  RefPtr<nsDOMCSSValueList> valueList = GetROCSSValueList(false);
+  valueList->AppendCSSValue(overflowX.forget());
 
-  RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
-  val->SetIdent(nsCSSProps::ValueToKeywordEnum(display->mOverflowX,
-                                               nsCSSProps::kOverflowKTable));
-  return val.forget();
+  RefPtr<nsROCSSPrimitiveValue> overflowY= new nsROCSSPrimitiveValue;
+  overflowY->SetIdent(
+    nsCSSProps::ValueToKeywordEnum(display->mOverflowY,
+                                   nsCSSProps::kOverflowKTable));
+  valueList->AppendCSSValue(overflowY.forget());
+  return valueList.forget();
 }
 
 already_AddRefed<CSSValue>
@@ -5225,9 +5261,11 @@ nsComputedDOMStyle::DoGetTouchAction()
   // to be in conjunction with other values.
   // But there are all checks in CSSParserImpl::ParseTouchAction
   nsAutoString valueStr;
-  nsStyleUtil::AppendBitmaskCSSValue(eCSSProperty_touch_action, intValue,
-    NS_STYLE_TOUCH_ACTION_NONE, NS_STYLE_TOUCH_ACTION_MANIPULATION,
-    valueStr);
+  nsStyleUtil::AppendBitmaskCSSValue(nsCSSProps::kTouchActionKTable,
+                                     intValue,
+                                     NS_STYLE_TOUCH_ACTION_NONE,
+                                     NS_STYLE_TOUCH_ACTION_MANIPULATION,
+                                     valueStr);
   val->SetString(valueStr);
   return val.forget();
 }
@@ -5634,9 +5672,13 @@ nsComputedDOMStyle::GetLineHeightCoord(nscoord& aCoord)
     }
   }
 
+  nsPresContext* presContext = mPresShell->GetPresContext();
+
   // lie about font size inflation since we lie about font size (since
   // the inflation only applies to text)
-  aCoord = ReflowInput::CalcLineHeight(mContent, mComputedStyle,
+  aCoord = ReflowInput::CalcLineHeight(mContent,
+                                       mComputedStyle,
+                                       presContext,
                                        blockHeight, 1.0f);
 
   // CalcLineHeight uses font->mFont.size, but we want to use
@@ -5645,7 +5687,7 @@ nsComputedDOMStyle::GetLineHeightCoord(nscoord& aCoord)
   const nsStyleFont* font = StyleFont();
   float fCoord = float(aCoord);
   if (font->mAllowZoom) {
-    fCoord /= mPresShell->GetPresContext()->EffectiveTextZoom();
+    fCoord /= presContext->EffectiveTextZoom();
   }
   if (font->mFont.size != font->mSize) {
     fCoord = fCoord * (float(font->mSize) / float(font->mFont.size));
@@ -5720,7 +5762,7 @@ nsComputedDOMStyle::SetValueToCoord(nsROCSSPrimitiveValue* aValue,
                                     nscoord aMinAppUnits,
                                     nscoord aMaxAppUnits)
 {
-  NS_PRECONDITION(aValue, "Must have a value to work with");
+  MOZ_ASSERT(aValue, "Must have a value to work with");
 
   switch (aCoord.GetUnit()) {
     case eStyleUnit_Normal:
@@ -5831,7 +5873,7 @@ nsComputedDOMStyle::StyleCoordToNSCoord(const nsStyleCoord& aCoord,
                                         nscoord aDefaultValue,
                                         bool aClampNegativeCalc)
 {
-  NS_PRECONDITION(aPercentageBaseGetter, "Must have a percentage base getter");
+  MOZ_ASSERT(aPercentageBaseGetter, "Must have a percentage base getter");
   if (aCoord.GetUnit() == eStyleUnit_Coord) {
     return aCoord.GetCoordValue();
   }
@@ -6555,6 +6597,14 @@ nsComputedDOMStyle::DoGetShapeImageThreshold()
 }
 
 already_AddRefed<CSSValue>
+nsComputedDOMStyle::DoGetShapeMargin()
+{
+  RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
+  SetValueToCoord(val, StyleDisplay()->mShapeMargin, true);
+  return val.forget();
+}
+
+already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetShapeOutside()
 {
   return GetShapeSource(StyleDisplay()->mShapeOutside,
@@ -7160,19 +7210,23 @@ nsComputedDOMStyle::RegisterPrefChangeCallbacks()
 {
   // Note that this will register callbacks for all properties with prefs, not
   // just those that are implemented on computed style objects, as it's not
-  // easy to grab specific property data from nsCSSPropList.h based on the
+  // easy to grab specific property data from ServoCSSPropList.h based on the
   // entries iterated in nsComputedDOMStylePropertyList.h.
   ComputedStyleMap* data = GetComputedStyleMap();
 #define REGISTER_CALLBACK(pref_)                                             \
   if (pref_[0]) {                                                            \
     Preferences::RegisterCallback(MarkComputedStyleMapDirty, pref_, data);   \
   }
-#define CSS_PROP(prop_, id_, method_, flags_, pref_, ...) \
+#define CSS_PROP_LONGHAND(prop_, id_, method_, flags_, pref_) \
   REGISTER_CALLBACK(pref_)
-#define CSS_PROP_LIST_INCLUDE_LOGICAL
-#include "nsCSSPropList.h"
-#undef CSS_PROP_LIST_INCLUDE_LOGICAL
-#undef CSS_PROP
+#define CSS_PROP_SHORTHAND(prop_, id_, method_, flags_, pref_) \
+  REGISTER_CALLBACK(pref_)
+#define CSS_PROP_ALIAS(prop_, aliasid_, id_, method_, pref_) \
+  REGISTER_CALLBACK(pref_)
+#include "mozilla/ServoCSSPropList.h"
+#undef CSS_PROP_ALIAS
+#undef CSS_PROP_SHORTHAND
+#undef CSS_PROP_LONGHAND
 #undef REGISTER_CALLBACK
 }
 
@@ -7184,11 +7238,15 @@ nsComputedDOMStyle::UnregisterPrefChangeCallbacks()
   if (pref_[0]) {                                                              \
     Preferences::UnregisterCallback(MarkComputedStyleMapDirty, pref_, data);   \
   }
-#define CSS_PROP(prop_, id_, method_, flags_, pref_, ...) \
+#define CSS_PROP_LONGHAND(prop_, id_, method_, flags_, pref_) \
   UNREGISTER_CALLBACK(pref_)
-#define CSS_PROP_LIST_INCLUDE_LOGICAL
-#include "nsCSSPropList.h"
-#undef CSS_PROP_LIST_INCLUDE_LOGICAL
-#undef CSS_PROP
+#define CSS_PROP_SHORTHAND(prop_, id_, method_, flags_, pref_) \
+  UNREGISTER_CALLBACK(pref_)
+#define CSS_PROP_ALIAS(prop_, aliasid_, id_, method_, pref_) \
+  UNREGISTER_CALLBACK(pref_)
+#include "mozilla/ServoCSSPropList.h"
+#undef CSS_PROP_ALIAS
+#undef CSS_PROP_SHORTHAND
+#undef CSS_PROP_LONGHAND
 #undef UNREGISTER_CALLBACK
 }

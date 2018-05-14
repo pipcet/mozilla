@@ -112,12 +112,13 @@ impl Example for App {
 
             builder.push_stacking_context(
                 &LayoutPrimitiveInfo::new(doc.content_rect),
-                ScrollPolicy::Fixed,
+                None,
                 None,
                 TransformStyle::Flat,
                 None,
                 MixBlendMode::Normal,
                 Vec::new(),
+                GlyphRasterSpace::Screen,
             );
             builder.push_rect(
                 &LayoutPrimitiveInfo::new(local_rect),

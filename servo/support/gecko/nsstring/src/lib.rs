@@ -553,11 +553,20 @@ macro_rules! define_string_types {
             hdr: $StringRepr,
         }
 
+        unsafe impl Send for $String {}
+        unsafe impl Sync for $String {}
+
         impl $String {
             pub fn new() -> $String {
                 $String {
                     hdr: $StringRepr::new(ClassFlags::NULL_TERMINATED),
                 }
+            }
+
+            /// Converts this String into a StringRepr, which will leak if the
+            /// repr is not passed to something that knows how to free it.
+            pub fn into_repr(mut self) -> $StringRepr {
+                mem::replace(&mut self.hdr, $StringRepr::new(ClassFlags::NULL_TERMINATED))
             }
         }
 

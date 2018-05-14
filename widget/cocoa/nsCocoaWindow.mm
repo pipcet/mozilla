@@ -23,7 +23,6 @@
 #include "nsToolkit.h"
 #include "nsIDOMWindow.h"
 #include "nsPIDOMWindow.h"
-#include "nsIDOMElement.h"
 #include "nsThreadUtils.h"
 #include "nsMenuBarX.h"
 #include "nsMenuUtilsX.h"
@@ -554,10 +553,11 @@ nsCocoaWindow::CreatePopupContentView(const LayoutDeviceIntRect &aRect,
     return rv;
   }
 
-  ChildView* newContentView = (ChildView*)mPopupContentView->GetNativeData(NS_NATIVE_WIDGET);
-  [newContentView setFrame:NSZeroRect];
-  [newContentView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-  [[mWindow contentView] addSubview:newContentView];
+  NSView* contentView = [mWindow contentView];
+  ChildView* childView = (ChildView*)mPopupContentView->GetNativeData(NS_NATIVE_WIDGET);
+  [childView setFrame:[contentView bounds]];
+  [childView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+  [contentView addSubview:childView];
 
   return NS_OK;
 
@@ -1705,6 +1705,10 @@ nsCocoaWindow::UpdateBounds()
   }
   mBounds =
     nsCocoaUtils::CocoaRectToGeckoRectDevPix(frame, BackingScaleFactor());
+
+  if (mPopupContentView) {
+    mPopupContentView->UpdateBoundsFromView();
+  }
 }
 
 LayoutDeviceIntRect
@@ -1826,6 +1830,7 @@ nsCocoaWindow::BackingScaleFactorChanged()
   if (presShell) {
     presShell->BackingScaleFactorChanged();
   }
+  mWidgetListener->UIResolutionChanged();
 }
 
 int32_t
@@ -2284,6 +2289,12 @@ nsCocoaWindow::SetWindowTransform(const gfx::Matrix& aTransform)
 
   if (!mWindow) {
     return;
+  }
+
+  // Calling CGSSetWindowTransform when the window is not visible results in
+  // misplacing the window into doubled x,y coordinates (see bug 1448132).
+  if (![mWindow isVisible] || NSIsEmptyRect([mWindow frame])) {
+      return;
   }
 
   if (gfxPrefs::WindowTransformsDisabled()) {

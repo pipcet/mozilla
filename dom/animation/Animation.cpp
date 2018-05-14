@@ -88,7 +88,7 @@ namespace {
 // ---------------------------------------------------------------------------
 /* static */ already_AddRefed<Animation>
 Animation::Constructor(const GlobalObject& aGlobal,
-                       AnimationEffectReadOnly* aEffect,
+                       AnimationEffect* aEffect,
                        const Optional<AnimationTimeline*>& aTimeline,
                        ErrorResult& aRv)
 {
@@ -125,7 +125,7 @@ Animation::SetId(const nsAString& aId)
 }
 
 void
-Animation::SetEffect(AnimationEffectReadOnly* aEffect)
+Animation::SetEffect(AnimationEffect* aEffect)
 {
   SetEffectNoUpdate(aEffect);
   PostUpdate();
@@ -133,7 +133,7 @@ Animation::SetEffect(AnimationEffectReadOnly* aEffect)
 
 // https://drafts.csswg.org/web-animations/#setting-the-target-effect
 void
-Animation::SetEffectNoUpdate(AnimationEffectReadOnly* aEffect)
+Animation::SetEffectNoUpdate(AnimationEffect* aEffect)
 {
   RefPtr<Animation> kungFuDeathGrip(this);
 
@@ -159,7 +159,7 @@ Animation::SetEffectNoUpdate(AnimationEffectReadOnly* aEffect)
     }
 
     // Break links with the old effect and then drop it.
-    RefPtr<AnimationEffectReadOnly> oldEffect = mEffect;
+    RefPtr<AnimationEffect> oldEffect = mEffect;
     mEffect = nullptr;
     oldEffect->SetAnimation(nullptr);
 
@@ -169,7 +169,7 @@ Animation::SetEffectNoUpdate(AnimationEffectReadOnly* aEffect)
 
   if (aEffect) {
     // Break links from the new effect to its previous animation, if any.
-    RefPtr<AnimationEffectReadOnly> newEffect = aEffect;
+    RefPtr<AnimationEffect> newEffect = aEffect;
     Animation* prevAnim = aEffect->GetAnimation();
     if (prevAnim) {
       prevAnim->SetEffect(nullptr);
@@ -703,7 +703,7 @@ Animation::Tick()
   }
 
   // Update layers if we are newly finished.
-  KeyframeEffectReadOnly* keyframeEffect = mEffect->AsKeyframeEffect();
+  KeyframeEffect* keyframeEffect = mEffect->AsKeyframeEffect();
   if (keyframeEffect &&
       !keyframeEffect->Properties().IsEmpty() &&
       !mFinishedAtLastComposeStyle &&
@@ -908,9 +908,9 @@ Animation::ShouldBeSynchronizedWithMainThread(
     return false;
   }
 
-  KeyframeEffectReadOnly* keyframeEffect = mEffect
-                                           ? mEffect->AsKeyframeEffect()
-                                           : nullptr;
+  KeyframeEffect* keyframeEffect = mEffect
+                                   ? mEffect->AsKeyframeEffect()
+                                   : nullptr;
   if (!keyframeEffect) {
     return false;
   }
@@ -1020,15 +1020,14 @@ Animation::WillComposeStyle()
 
   MOZ_ASSERT(mEffect);
 
-  KeyframeEffectReadOnly* keyframeEffect = mEffect->AsKeyframeEffect();
+  KeyframeEffect* keyframeEffect = mEffect->AsKeyframeEffect();
   if (keyframeEffect) {
     keyframeEffect->WillComposeStyle();
   }
 }
 
-template<typename ComposeAnimationResult>
 void
-Animation::ComposeStyle(ComposeAnimationResult&& aComposeResult,
+Animation::ComposeStyle(RawServoAnimationValueMap& aComposeResult,
                         const nsCSSPropertyIDSet& aPropertiesToSkip)
 {
   if (!mEffect) {
@@ -1086,10 +1085,9 @@ Animation::ComposeStyle(ComposeAnimationResult&& aComposeResult,
       }
     }
 
-    KeyframeEffectReadOnly* keyframeEffect = mEffect->AsKeyframeEffect();
+    KeyframeEffect* keyframeEffect = mEffect->AsKeyframeEffect();
     if (keyframeEffect) {
-      keyframeEffect->ComposeStyle(Forward<ComposeAnimationResult>(aComposeResult),
-                                   aPropertiesToSkip);
+      keyframeEffect->ComposeStyle(aComposeResult, aPropertiesToSkip);
     }
   }
 
@@ -1412,7 +1410,7 @@ Animation::UpdateEffect()
   if (mEffect) {
     UpdateRelevance();
 
-    KeyframeEffectReadOnly* keyframeEffect = mEffect->AsKeyframeEffect();
+    KeyframeEffect* keyframeEffect = mEffect->AsKeyframeEffect();
     if (keyframeEffect) {
       keyframeEffect->NotifyAnimationTimingUpdated();
     }
@@ -1420,11 +1418,12 @@ Animation::UpdateEffect()
 }
 
 void
-Animation::FlushStyle() const
+Animation::FlushUnanimatedStyle() const
 {
   nsIDocument* doc = GetRenderedDocument();
   if (doc) {
-    doc->FlushPendingNotifications(FlushType::Style);
+    doc->FlushPendingNotifications(
+      ChangesToFlush(FlushType::Style, false /* flush animations */));
   }
 }
 
@@ -1435,7 +1434,7 @@ Animation::PostUpdate()
     return;
   }
 
-  KeyframeEffectReadOnly* keyframeEffect = mEffect->AsKeyframeEffect();
+  KeyframeEffect* keyframeEffect = mEffect->AsKeyframeEffect();
   if (!keyframeEffect) {
     return;
   }
@@ -1657,12 +1656,6 @@ Animation::IsRunningOnCompositor() const
          mEffect->AsKeyframeEffect()->IsRunningOnCompositor();
 }
 
-
-template
-void
-Animation::ComposeStyle<RawServoAnimationValueMap&>(
-  RawServoAnimationValueMap& aAnimationValues,
-  const nsCSSPropertyIDSet& aPropertiesToSkip);
 
 } // namespace dom
 } // namespace mozilla

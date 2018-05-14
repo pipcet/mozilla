@@ -91,52 +91,9 @@ LIRGenerator::visitIsConstructing(MIsConstructing* ins)
     define(new(alloc()) LIsConstructing(), ins);
 }
 
-static void
-TryToUseImplicitInterruptCheck(MIRGraph& graph, MBasicBlock* backedge)
-{
-    // Implicit interrupt checks require JIT async interrupt support.
-    if (!jit::HaveAsyncInterrupt() || JitOptions.ionInterruptWithoutSignals)
-        return;
-
-    // To avoid triggering expensive interrupts (backedge patching) in
-    // requestMajorGC and requestMinorGC, use an implicit interrupt check only
-    // if the loop body can not trigger GC or affect GC state like the store
-    // buffer. We do this by checking there are no safepoints attached to LIR
-    // instructions inside the loop.
-
-    MBasicBlockIterator block = graph.begin(backedge->loopHeaderOfBackedge());
-    LInterruptCheck* check = nullptr;
-    while (true) {
-        LBlock* lir = block->lir();
-        for (LInstructionIterator iter = lir->begin(); iter != lir->end(); iter++) {
-            if (iter->isInterruptCheck()) {
-                if (!check) {
-                    MOZ_ASSERT(*block == backedge->loopHeaderOfBackedge());
-                    check = iter->toInterruptCheck();
-                }
-                continue;
-            }
-
-            MOZ_ASSERT_IF(iter->isPostWriteBarrierO() || iter->isPostWriteBarrierV() || iter->isPostWriteBarrierS(),
-                          iter->safepoint());
-
-            if (iter->safepoint())
-                return;
-        }
-        if (*block == backedge)
-            break;
-        block++;
-    }
-
-    check->setImplicit();
-}
-
 void
 LIRGenerator::visitGoto(MGoto* ins)
 {
-    if (!gen->compilingWasm() && ins->block()->isLoopBackedge())
-        TryToUseImplicitInterruptCheck(graph, ins->block());
-
     add(new(alloc()) LGoto(ins->target()));
 }
 
@@ -1468,6 +1425,22 @@ LIRGenerator::visitRound(MRound* ins)
 }
 
 void
+LIRGenerator::visitTrunc(MTrunc* ins)
+{
+    MIRType type = ins->input()->type();
+    MOZ_ASSERT(IsFloatingPointType(type));
+
+    LInstructionHelper<1, 1, 0>* lir;
+    if (type == MIRType::Double)
+        lir = new (alloc()) LTrunc(useRegister(ins->input()));
+    else
+        lir = new (alloc()) LTruncF(useRegister(ins->input()));
+
+    assignSnapshot(lir, Bailout_Round);
+    define(lir, ins);
+}
+
+void
 LIRGenerator::visitNearbyInt(MNearbyInt* ins)
 {
     MIRType inputType = ins->input()->type();
@@ -1679,6 +1652,28 @@ LIRGenerator::visitPow(MPow* ins)
                                  tempFixed(CallTempReg0));
     }
     defineReturn(lir, ins);
+}
+
+void
+LIRGenerator::visitSign(MSign* ins)
+{
+    if (ins->type() == ins->input()->type()) {
+        LInstructionHelper<1, 1, 0>* lir;
+        if (ins->type() == MIRType::Int32) {
+            lir = new(alloc()) LSignI(useRegister(ins->input()));
+        } else {
+            MOZ_ASSERT(ins->type() == MIRType::Double);
+            lir = new(alloc()) LSignD(useRegister(ins->input()));
+        }
+        define(lir, ins);
+    } else {
+        MOZ_ASSERT(ins->type() == MIRType::Int32);
+        MOZ_ASSERT(ins->input()->type() == MIRType::Double);
+
+        auto* lir = new(alloc()) LSignDI(useRegister(ins->input()), tempDouble());
+        assignSnapshot(lir, Bailout_PrecisionLoss);
+        define(lir, ins);
+    }
 }
 
 void
@@ -4552,6 +4547,16 @@ LIRGenerator::visitHasClass(MHasClass* ins)
     MOZ_ASSERT(ins->object()->type() == MIRType::Object);
     MOZ_ASSERT(ins->type() == MIRType::Boolean);
     define(new(alloc()) LHasClass(useRegister(ins->object())), ins);
+}
+
+void
+LIRGenerator::visitGuardToClass(MGuardToClass* ins)
+{
+    MOZ_ASSERT(ins->object()->type() == MIRType::Object);
+    MOZ_ASSERT(ins->type() == MIRType::ObjectOrNull|| ins->type() == MIRType::Object);
+    LGuardToClass* lir = new(alloc()) LGuardToClass(useRegister(ins->object()), temp());
+    assignSnapshot(lir, Bailout_TypeBarrierO);
+    define(lir, ins);
 }
 
 void

@@ -25,7 +25,6 @@
 #include "nsIContentViewer.h"
 #include "nsIDocument.h"
 #include "nsIDocumentEncoder.h"
-#include "nsIDOMDocumentFragment.h"
 #include "nsIDOMWindow.h"
 #include "nsIDOMDocument.h"
 #include "nsMappedAttributes.h"
@@ -49,7 +48,7 @@
 #include "nsContainerFrame.h"
 #include "nsStyleUtil.h"
 
-#include "nsPresState.h"
+#include "mozilla/PresState.h"
 #include "nsILayoutHistoryState.h"
 
 #include "nsHTMLParts.h"
@@ -58,7 +57,6 @@
 #include "nsString.h"
 #include "nsUnicharUtils.h"
 #include "nsGkAtoms.h"
-#include "nsIDOMEvent.h"
 #include "nsDOMCSSDeclaration.h"
 #include "nsITextControlFrame.h"
 #include "nsIForm.h"
@@ -110,7 +108,6 @@ NS_IMPL_ADDREF_INHERITED(nsGenericHTMLElement, nsGenericHTMLElementBase)
 NS_IMPL_RELEASE_INHERITED(nsGenericHTMLElement, nsGenericHTMLElementBase)
 
 NS_INTERFACE_MAP_BEGIN(nsGenericHTMLElement)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMElement)
   NS_INTERFACE_MAP_ENTRY(nsIDOMNode)
 NS_INTERFACE_MAP_END_INHERITING(nsGenericHTMLElementBase)
 
@@ -171,6 +168,27 @@ static const nsAttrValue::EnumTable kDirTable[] = {
   { "auto", eDir_Auto },
   { nullptr, 0 }
 };
+
+void
+nsGenericHTMLElement::AddToNameTable(nsAtom* aName)
+{
+  MOZ_ASSERT(HasName(), "Node doesn't have name?");
+  nsIDocument* doc = GetUncomposedDoc();
+  if (doc && !IsInAnonymousSubtree()) {
+    doc->AddToNameTable(this, aName);
+  }
+}
+
+void
+nsGenericHTMLElement::RemoveFromNameTable()
+{
+  if (HasName() && CanHaveName(NodeInfo()->NameAtom())) {
+    if (nsIDocument* doc = GetUncomposedDoc()) {
+      doc->RemoveFromNameTable(this,
+                               GetParsedAttr(nsGkAtoms::name)->GetAtomValue());
+    }
+  }
+}
 
 void
 nsGenericHTMLElement::GetAccessKeyLabel(nsString& aLabel)
@@ -315,7 +333,7 @@ nsGenericHTMLElement::Spellcheck()
   for (node = this; node; node = node->GetParent()) {
     if (node->IsHTMLElement()) {
       static Element::AttrValuesArray strings[] =
-        {nsGkAtoms::_true, nsGkAtoms::_false, nullptr};
+        {&nsGkAtoms::_true, &nsGkAtoms::_false, nullptr};
       switch (node->AsElement()->FindAttrValueIn(kNameSpaceID_None,
                                                  nsGkAtoms::spellcheck, strings,
                                                  eCaseMatters)) {
@@ -526,8 +544,8 @@ bool
 nsGenericHTMLElement::CheckHandleEventForAnchorsPreconditions(
                         EventChainVisitor& aVisitor)
 {
-  NS_PRECONDITION(nsCOMPtr<Link>(do_QueryObject(this)),
-                  "should be called only when |this| implements |Link|");
+  MOZ_ASSERT(nsCOMPtr<Link>(do_QueryObject(this)),
+             "should be called only when |this| implements |Link|");
 
   if (!aVisitor.mPresContext) {
     // We need a pres context to do link stuff. Some events (e.g. mutation
@@ -546,17 +564,16 @@ nsGenericHTMLElement::CheckHandleEventForAnchorsPreconditions(
          IsHTMLElement(nsGkAtoms::area);
 }
 
-nsresult
+void 
 nsGenericHTMLElement::GetEventTargetParentForAnchors(EventChainPreVisitor& aVisitor)
 {
-  nsresult rv = nsGenericHTMLElementBase::GetEventTargetParent(aVisitor);
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsGenericHTMLElementBase::GetEventTargetParent(aVisitor);
 
   if (!CheckHandleEventForAnchorsPreconditions(aVisitor)) {
-    return NS_OK;
+    return;
   }
 
-  return GetEventTargetParentForLinks(aVisitor);
+  GetEventTargetParentForLinks(aVisitor);
 }
 
 nsresult
@@ -572,7 +589,7 @@ nsGenericHTMLElement::PostHandleEventForAnchors(EventChainPostVisitor& aVisitor)
 bool
 nsGenericHTMLElement::IsHTMLLink(nsIURI** aURI) const
 {
-  NS_PRECONDITION(aURI, "Must provide aURI out param");
+  MOZ_ASSERT(aURI, "Must provide aURI out param");
 
   *aURI = GetHrefURIForAnchors().take();
   // We promise out param is non-null if we return true, so base rv on it
@@ -922,11 +939,7 @@ nsGenericHTMLElement::ParseBackgroundAttribute(int32_t aNamespaceID,
     if (NS_FAILED(rv)) {
       return false;
     }
-
-    mozilla::css::URLValue *url =
-      new mozilla::css::URLValue(uri, aValue, baseURI, doc->GetDocumentURI(),
-                                 NodePrincipal());
-    aResult.SetTo(url, &aValue);
+    aResult.SetTo(uri, &aValue);
     return true;
   }
 
@@ -1222,49 +1235,49 @@ nsGenericHTMLElement::MapCommonAttributesInto(const nsMappedAttributes* aAttribu
 
 /* static */ const nsGenericHTMLElement::MappedAttributeEntry
 nsGenericHTMLElement::sCommonAttributeMap[] = {
-  { nsGkAtoms::contenteditable },
-  { nsGkAtoms::lang },
-  { nsGkAtoms::hidden },
+  { &nsGkAtoms::contenteditable },
+  { &nsGkAtoms::lang },
+  { &nsGkAtoms::hidden },
   { nullptr }
 };
 
 /* static */ const Element::MappedAttributeEntry
 nsGenericHTMLElement::sImageMarginSizeAttributeMap[] = {
-  { nsGkAtoms::width },
-  { nsGkAtoms::height },
-  { nsGkAtoms::hspace },
-  { nsGkAtoms::vspace },
+  { &nsGkAtoms::width },
+  { &nsGkAtoms::height },
+  { &nsGkAtoms::hspace },
+  { &nsGkAtoms::vspace },
   { nullptr }
 };
 
 /* static */ const Element::MappedAttributeEntry
 nsGenericHTMLElement::sImageAlignAttributeMap[] = {
-  { nsGkAtoms::align },
+  { &nsGkAtoms::align },
   { nullptr }
 };
 
 /* static */ const Element::MappedAttributeEntry
 nsGenericHTMLElement::sDivAlignAttributeMap[] = {
-  { nsGkAtoms::align },
+  { &nsGkAtoms::align },
   { nullptr }
 };
 
 /* static */ const Element::MappedAttributeEntry
 nsGenericHTMLElement::sImageBorderAttributeMap[] = {
-  { nsGkAtoms::border },
+  { &nsGkAtoms::border },
   { nullptr }
 };
 
 /* static */ const Element::MappedAttributeEntry
 nsGenericHTMLElement::sBackgroundAttributeMap[] = {
-  { nsGkAtoms::background },
-  { nsGkAtoms::bgcolor },
+  { &nsGkAtoms::background },
+  { &nsGkAtoms::bgcolor },
   { nullptr }
 };
 
 /* static */ const Element::MappedAttributeEntry
 nsGenericHTMLElement::sBackgroundColorAttributeMap[] = {
-  { nsGkAtoms::bgcolor },
+  { &nsGkAtoms::bgcolor },
   { nullptr }
 };
 
@@ -1275,11 +1288,11 @@ nsGenericHTMLElement::MapImageAlignAttributeInto(const nsMappedAttributes* aAttr
   const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::align);
   if (value && value->Type() == nsAttrValue::eEnum) {
     int32_t align = value->GetEnumValue();
-    if (!aData->PropertyIsSet(eCSSProperty_float_)) {
+    if (!aData->PropertyIsSet(eCSSProperty_float)) {
       if (align == NS_STYLE_TEXT_ALIGN_LEFT) {
-        aData->SetKeywordValue(eCSSProperty_float_, StyleFloat::Left);
+        aData->SetKeywordValue(eCSSProperty_float, StyleFloat::Left);
       } else if (align == NS_STYLE_TEXT_ALIGN_RIGHT) {
-        aData->SetKeywordValue(eCSSProperty_float_, StyleFloat::Right);
+        aData->SetKeywordValue(eCSSProperty_float, StyleFloat::Right);
       }
     }
     if (!aData->PropertyIsSet(eCSSProperty_vertical_align)) {
@@ -1670,7 +1683,7 @@ nsGenericHTMLFormElement::SaveSubtreeState()
 void
 nsGenericHTMLFormElement::SetForm(HTMLFormElement* aForm)
 {
-  NS_PRECONDITION(aForm, "Don't pass null here");
+  MOZ_ASSERT(aForm, "Don't pass null here");
   NS_ASSERTION(!mForm,
                "We don't support switching from one non-null form to another.");
 
@@ -1932,7 +1945,7 @@ nsGenericHTMLFormElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                             aNotify);
 }
 
-nsresult
+void
 nsGenericHTMLFormElement::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
   if (aVisitor.mEvent->IsTrusted() && (aVisitor.mEvent->mMessage == eFocus ||
@@ -1941,7 +1954,7 @@ nsGenericHTMLFormElement::GetEventTargetParent(EventChainPreVisitor& aVisitor)
     // PreHandleEvent to prevent it breaks event target chain creation.
     aVisitor.mWantsPreHandleEvent = true;
   }
-  return nsGenericHTMLElement::GetEventTargetParent(aVisitor);
+  nsGenericHTMLElement::GetEventTargetParent(aVisitor);
 }
 
 nsresult
@@ -2210,8 +2223,8 @@ void
 nsGenericHTMLFormElement::UpdateFormOwner(bool aBindToTree,
                                           Element* aFormIdElement)
 {
-  NS_PRECONDITION(!aBindToTree || !aFormIdElement,
-                  "aFormIdElement shouldn't be set if aBindToTree is true!");
+  MOZ_ASSERT(!aBindToTree || !aFormIdElement,
+             "aFormIdElement shouldn't be set if aBindToTree is true!");
 
   bool needStateUpdate = false;
   if (!aBindToTree) {
@@ -2556,7 +2569,7 @@ nsGenericHTMLElement::PerformAccesskey(bool aKeyCausesActivation,
 
     // Return true if the element became the current focus within its window.
     nsPIDOMWindowOuter* window = OwnerDoc()->GetWindow();
-    focused = (window && window->GetFocusedNode());
+    focused = (window && window->GetFocusedElement());
   }
 
   if (aKeyCausesActivation) {
@@ -2757,7 +2770,7 @@ nsGenericHTMLFormElementWithState::GenerateStateKey()
   return NS_OK;
 }
 
-nsPresState*
+PresState*
 nsGenericHTMLFormElementWithState::GetPrimaryPresState()
 {
   if (mStateKey.IsEmpty()) {
@@ -2771,10 +2784,11 @@ nsGenericHTMLFormElementWithState::GetPrimaryPresState()
   }
 
   // Get the pres state for this key, if it doesn't exist, create one.
-  nsPresState* result = history->GetState(mStateKey);
+  PresState* result = history->GetState(mStateKey);
   if (!result) {
-    result = new nsPresState();
-    history->AddState(mStateKey, result);
+    UniquePtr<PresState> newState = NewPresState();
+    result = newState.get();
+    history->AddState(mStateKey, Move(newState));
   }
 
   return result;
@@ -2816,9 +2830,8 @@ nsGenericHTMLFormElementWithState::RestoreFormControlState()
     return false;
   }
 
-  nsPresState *state;
   // Get the pres state for this key
-  state = history->GetState(mStateKey);
+  PresState* state = history->GetState(mStateKey);
   if (state) {
     bool result = RestoreState(state);
     history->RemoveState(mStateKey);

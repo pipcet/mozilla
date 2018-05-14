@@ -199,7 +199,6 @@ public:
   {
   }
 
-#if DEBUG
   bool IsUpgradeReaction()
   {
     return mIsUpgradeReaction;
@@ -207,7 +206,6 @@ public:
 
 protected:
   bool mIsUpgradeReaction = false;
-#endif
 };
 
 // https://html.spec.whatwg.org/multipage/scripting.html#custom-element-reactions-stack
@@ -421,7 +419,8 @@ private:
 
   typedef nsRefPtrHashtable<nsRefPtrHashKey<nsAtom>, CustomElementDefinition>
     DefinitionMap;
-  typedef nsClassHashtable<nsRefPtrHashKey<nsAtom>, nsTArray<nsWeakPtr>>
+  typedef nsClassHashtable<nsRefPtrHashKey<nsAtom>,
+                           nsTHashtable<nsRefPtrHashKey<nsIWeakReference>>>
     CandidateMap;
   typedef JS::GCHashMap<JS::Heap<JSObject*>,
                         RefPtr<nsAtom>,

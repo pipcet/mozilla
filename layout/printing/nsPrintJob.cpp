@@ -79,7 +79,6 @@ static const char kPrintingPromptService[] = "@mozilla.org/embedcomp/printingpro
 #include "nsIDOMDocument.h"
 #include "nsIDocumentObserver.h"
 #include "nsISelectionListener.h"
-#include "nsISelectionPrivate.h"
 #include "nsContentCID.h"
 #include "nsLayoutCID.h"
 #include "nsContentUtils.h"
@@ -388,7 +387,7 @@ static void
 MapContentForPO(const UniquePtr<nsPrintObject>& aPO,
                 nsIContent* aContent)
 {
-  NS_PRECONDITION(aPO && aContent, "Null argument");
+  MOZ_ASSERT(aPO && aContent, "Null argument");
 
   nsIDocument* doc = aContent->GetComposedDoc();
 
@@ -2351,7 +2350,7 @@ nsPrintJob::ReflowPrintObject(const UniquePtr<nsPrintObject>& aPO)
     // The SVG document only loads minimal-xul.css, so it doesn't apply other
     // styles. We should add ua.css for applying style which related to print.
     auto cache = nsLayoutStylesheetCache::Singleton();
-    styleSet->PrependStyleSheet(SheetType::Agent, cache->UASheet()->AsServo());
+    styleSet->PrependStyleSheet(SheetType::Agent, cache->UASheet());
   }
 
   aPO->mPresShell = aPO->mDocument->CreateShell(aPO->mPresContext,
@@ -2540,7 +2539,7 @@ GetCorrespondingNodeInDocument(const nsINode* aNode, nsIDocument* aDoc)
     indexArray.AppendElement(index);
     child = parent;
   }
-  MOZ_ASSERT(child->IsNodeOfType(nsINode::eDOCUMENT));
+  MOZ_ASSERT(child->IsDocument());
 
   nsINode* correspondingNode = aDoc;
   for (int32_t i = indexArray.Length() - 1; i >= 0; --i) {
@@ -2631,7 +2630,7 @@ DeleteUnselectedNodes(nsIDocument* aOrigDoc, nsIDocument* aDoc)
     selection->AddRange(*lastRange, IgnoreErrors());
   }
 
-  selection->DeleteFromDocument();
+  selection->DeleteFromDocument(IgnoreErrors());
   return NS_OK;
 }
 

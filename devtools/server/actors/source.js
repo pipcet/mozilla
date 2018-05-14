@@ -404,10 +404,6 @@ let SourceActor = ActorClassWithSpec(sourceSpec, {
         if (loadFromCache &&
           webNav.currentDocumentChannel instanceof Ci.nsICacheInfoChannel) {
           cacheKey = webNav.currentDocumentChannel.cacheKey;
-          assert(
-            cacheKey,
-            "Could not fetch the cacheKey from the related document."
-          );
         }
       }
 
@@ -666,11 +662,12 @@ let SourceActor = ActorClassWithSpec(sourceSpec, {
    * Handler for the "setPausePoints" packet.
    *
    * @param Array pausePoints
-   *        A list of pausePoint objects
+   *        A dictionary of pausePoint objects
    *
-   *        type PausePoint = {
-   *          location: { line: number, column: number }
-   *          types: { breakpoint: boolean, stepOver: boolean }
+   *        type PausePoints = {
+   *          line: {
+   *            column: { break?: boolean, step?: boolean }
+   *          }
    *        }
    */
   setPausePoints: function(pausePoints) {

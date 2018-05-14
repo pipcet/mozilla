@@ -71,7 +71,7 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
     objectMetadataTable(nullptr),
     innerViews(zone),
     lazyArrayBuffers(nullptr),
-    wasm(zone->runtimeFromActiveCooperatingThread()),
+    wasm(zone->runtimeFromMainThread()),
     nonSyntacticLexicalEnvironments_(nullptr),
     gcIncomingGrayPointers(nullptr),
     debugModeBits(0),
@@ -91,7 +91,6 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
     iterResultTemplate_(nullptr),
     lcovOutput()
 {
-    PodArrayZero(sawDeprecatedLanguageExtension);
     runtime_->numCompartments++;
     MOZ_ASSERT_IF(creationOptions_.mergeable(),
                   creationOptions_.invisibleToDebugger());
@@ -99,10 +98,8 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
 
 JSCompartment::~JSCompartment()
 {
-    reportTelemetry();
-
     // Write the code coverage information in a file.
-    JSRuntime* rt = runtimeFromActiveCooperatingThread();
+    JSRuntime* rt = runtimeFromMainThread();
     if (rt->lcovOutput().isEnabled())
         rt->lcovOutput().writeLCovResult(lcovOutput);
 
@@ -177,14 +174,12 @@ JSRuntime::createJitRuntime(JSContext* cx)
         return nullptr;
     }
 
-    jit::JitRuntime* jrt = cx->new_<jit::JitRuntime>(cx->runtime());
+    jit::JitRuntime* jrt = cx->new_<jit::JitRuntime>();
     if (!jrt)
         return nullptr;
 
-    // Protect jitRuntime_ from being observed (by jit::InterruptRunningCode)
-    // while it is being initialized. Unfortunately, initialization depends on
-    // jitRuntime_ being non-null, so we can't just wait to assign jitRuntime_.
-    JitRuntime::AutoPreventBackedgePatching apbp(cx->runtime(), jrt);
+    // Unfortunately, initialization depends on jitRuntime_ being non-null, so
+    // we can't just wait to assign jitRuntime_.
     jitRuntime_ = jrt;
 
     AutoEnterOOMUnsafeRegion noOOM;
@@ -1038,6 +1033,19 @@ JSCompartment::setAllocationMetadataBuilder(const js::AllocationMetadataBuilder 
 }
 
 void
+JSCompartment::forgetAllocationMetadataBuilder()
+{
+    // Unlike setAllocationMetadataBuilder, we don't have to discard all JIT
+    // code here (code is still valid, just a bit slower because it doesn't do
+    // inline GC allocations when a metadata builder is present), but we do want
+    // to cancel off-thread Ion compilations to avoid races when Ion calls
+    // hasAllocationMetadataBuilder off-thread.
+    CancelOffThreadIonCompile(this);
+
+    allocationMetadataBuilder = nullptr;
+}
+
+void
 JSCompartment::clearObjectMetadata()
 {
     js_delete(objectMetadataTable);
@@ -1082,10 +1090,10 @@ static bool
 AddLazyFunctionsForCompartment(JSContext* cx, AutoObjectVector& lazyFunctions, AllocKind kind)
 {
     // Find all live root lazy functions in the compartment: those which have a
-    // source object, indicating that they have a parent, and which do not have
-    // an uncompiled enclosing script. The last condition is so that we don't
-    // compile lazy scripts whose enclosing scripts failed to compile,
-    // indicating that the lazy script did not escape the script.
+    // non-lazy enclosing script, and which do not have an uncompiled enclosing
+    // script. The last condition is so that we don't compile lazy scripts
+    // whose enclosing scripts failed to compile, indicating that the lazy
+    // script did not escape the script.
     //
     // Some LazyScripts have a non-null |JSScript* script| pointer. We still
     // want to delazify in that case: this pointer is weak so the JSScript
@@ -1105,7 +1113,7 @@ AddLazyFunctionsForCompartment(JSContext* cx, AutoObjectVector& lazyFunctions, A
 
         if (fun->isInterpretedLazy()) {
             LazyScript* lazy = fun->lazyScriptOrNull();
-            if (lazy && lazy->sourceObject() && !lazy->hasUncompiledEnclosingScript()) {
+            if (lazy && !lazy->isEnclosingScriptLazy() && !lazy->hasUncompletedEnclosingScript()) {
                 if (!lazyFunctions.append(fun))
                     return false;
             }
@@ -1171,7 +1179,7 @@ JSCompartment::updateDebuggerObservesFlag(unsigned flag)
                flag == DebuggerObservesAsmJS ||
                flag == DebuggerObservesBinarySource);
 
-    GlobalObject* global = zone()->runtimeFromActiveCooperatingThread()->gc.isForegroundSweeping()
+    GlobalObject* global = zone()->runtimeFromMainThread()->gc.isForegroundSweeping()
                            ? unsafeUnbarrieredMaybeGlobal()
                            : maybeGlobal();
     const GlobalObject::DebuggerVector* v = global->getDebuggers();
@@ -1335,35 +1343,6 @@ JSCompartment::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
             *scriptCountsMapArg += r.front().value()->sizeOfIncludingThis(mallocSizeOf);
         }
     }
-}
-
-void
-JSCompartment::reportTelemetry()
-{
-    // Only report telemetry for web content, not chrome JS.
-    if (isSystem_)
-        return;
-
-    // Hazard analysis can't tell that the telemetry callbacks don't GC.
-    JS::AutoSuppressGCAnalysis nogc;
-
-    // Call back into Firefox's Telemetry reporter.
-    for (size_t i = 0; i < size_t(DeprecatedLanguageExtension::Count); i++) {
-        if (sawDeprecatedLanguageExtension[i])
-            runtime_->addTelemetry(JS_TELEMETRY_DEPRECATED_LANGUAGE_EXTENSIONS_IN_CONTENT, i);
-    }
-}
-
-void
-JSCompartment::addTelemetry(const char* filename, DeprecatedLanguageExtension e)
-{
-    // Only report telemetry for web content, not chrome JS.
-    if (isSystem_)
-        return;
-    if (!filename || strncmp(filename, "http", 4) != 0)
-        return;
-
-    sawDeprecatedLanguageExtension[size_t(e)] = true;
 }
 
 HashNumber

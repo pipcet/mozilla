@@ -40,11 +40,13 @@ This is a list of list-pairs, for ordering.
 SIGNING_SCOPE_ALIAS_TO_PROJECT = [[
     'all-nightly-branches', set([
         'mozilla-central',
+        'comm-central',
     ])
 ], [
     'all-release-branches', set([
         'mozilla-beta',
         'mozilla-release',
+        'comm-beta',
     ])
 ]]
 
@@ -74,6 +76,7 @@ BEETMOVER_SCOPE_ALIAS_TO_PROJECT = [[
         'mozilla-central',
         'mozilla-beta',
         'mozilla-release',
+        'comm-central',
     ])
 ], [
     'all-release-branches', set([
@@ -165,6 +168,7 @@ This is a list of list-pairs, for ordering.
 BALROG_SCOPE_ALIAS_TO_PROJECT = [[
     'nightly', set([
         'mozilla-central',
+        'comm-central'
     ])
 ], [
     'beta', set([
@@ -441,7 +445,7 @@ def get_release_config(config):
 def get_signing_cert_scope_per_platform(build_platform, is_nightly, config):
     if 'devedition' in build_platform:
         return get_devedition_signing_cert_scope(config)
-    elif is_nightly or build_platform in ('linux64-source', 'linux64-fennec-source'):
+    elif is_nightly or build_platform in ('firefox-source', 'fennec-source'):
         return get_signing_cert_scope(config)
     else:
         return add_scope_prefix(config, 'signing:cert:dep-signing')

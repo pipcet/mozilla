@@ -35,7 +35,6 @@ from ..frontend.data import (
     ComputedFlags,
     ConfigFileSubstitution,
     ContextDerived,
-    ContextWrapped,
     Defines,
     DirectoryTraversal,
     ExternalLibrary,
@@ -51,7 +50,6 @@ from ..frontend.data import (
     HostSources,
     InstallationTarget,
     JARManifest,
-    JavaJarData,
     Library,
     Linkable,
     LocalInclude,
@@ -64,7 +62,7 @@ from ..frontend.data import (
     RustLibrary,
     HostRustLibrary,
     RustProgram,
-    RustTest,
+    RustTests,
     SharedLibrary,
     SimpleProgram,
     Sources,
@@ -620,8 +618,8 @@ class RecursiveMakeBackend(CommonBackend):
             build_target = self._build_target_for_obj(obj)
             self._compile_graph[build_target]
 
-        elif isinstance(obj, RustTest):
-            self._process_rust_test(obj, backend_file)
+        elif isinstance(obj, RustTests):
+            self._process_rust_tests(obj, backend_file)
 
         elif isinstance(obj, Program):
             self._process_program(obj, backend_file)
@@ -652,17 +650,6 @@ class RecursiveMakeBackend(CommonBackend):
 
         elif isinstance(obj, InstallationTarget):
             self._process_installation_target(obj, backend_file)
-
-        elif isinstance(obj, ContextWrapped):
-            # Process a rich build system object from the front-end
-            # as-is.  Please follow precedent and handle CamelCaseData
-            # in a function named _process_camel_case_data.  At some
-            # point in the future, this unwrapping process may be
-            # automated.
-            if isinstance(obj.wrapped, JavaJarData):
-                self._process_java_jar_data(obj.wrapped, backend_file)
-            else:
-                return False
 
         elif isinstance(obj, RustLibrary):
             self.backend_input_files.add(obj.cargo_file)
@@ -1131,10 +1118,10 @@ class RecursiveMakeBackend(CommonBackend):
                                         'HOST_RUST_PROGRAMS',
                                         'HOST_RUST_CARGO_PROGRAMS')
 
-    def _process_rust_test(self, obj, backend_file):
+    def _process_rust_tests(self, obj, backend_file):
         self._no_skip['check'].add(backend_file.relobjdir)
         backend_file.write_once('CARGO_FILE := $(srcdir)/Cargo.toml\n')
-        backend_file.write_once('RUST_TEST := %s\n' % obj.name)
+        backend_file.write_once('RUST_TESTS := %s\n' % ' '.join(obj.names))
         backend_file.write_once('RUST_TEST_FEATURES := %s\n' % ' '.join(obj.features))
 
     def _process_simple_program(self, obj, backend_file):
@@ -1294,8 +1281,9 @@ class RecursiveMakeBackend(CommonBackend):
             self.environment.topobjdir), obj.KIND)
 
     def _process_linked_libraries(self, obj, backend_file):
-        def pretty_relpath(lib):
-            return '$(DEPTH)/%s' % mozpath.relpath(lib.objdir, topobjdir)
+        def pretty_relpath(lib, name):
+            return os.path.normpath(mozpath.join(mozpath.relpath(lib.objdir, obj.objdir),
+                                                 name))
 
         topobjdir = mozpath.normsep(obj.topobjdir)
         # This will create the node even if there aren't any linked libraries.
@@ -1366,11 +1354,11 @@ class RecursiveMakeBackend(CommonBackend):
                 write_obj_deps(obj_target, objs_ref, pgo_objs_ref)
 
         for lib in shared_libs:
-            backend_file.write_once('SHARED_LIBS += %s/%s\n' %
-                                    (pretty_relpath(lib), lib.import_name))
+            backend_file.write_once('SHARED_LIBS += %s\n' %
+                                    pretty_relpath(lib, lib.import_name))
         for lib in static_libs:
-            backend_file.write_once('STATIC_LIBS += %s/%s\n' %
-                                    (pretty_relpath(lib), lib.import_name))
+            backend_file.write_once('STATIC_LIBS += %s\n' %
+                                    pretty_relpath(lib, lib.import_name))
         for lib in os_libs:
             if obj.KIND == 'target':
                 backend_file.write_once('OS_LIBS += %s\n' % lib)
@@ -1382,8 +1370,8 @@ class RecursiveMakeBackend(CommonBackend):
                 self._compile_graph[build_target].add(
                     self._build_target_for_obj(lib))
             if isinstance(lib, (HostLibrary, HostRustLibrary)):
-                backend_file.write_once('HOST_LIBS += %s/%s\n' %
-                                        (pretty_relpath(lib), lib.import_name))
+                backend_file.write_once('HOST_LIBS += %s\n' %
+                                        pretty_relpath(lib, lib.import_name))
 
         # We have to link any Rust libraries after all intermediate static
         # libraries have been listed to ensure that the Rust libraries are
@@ -1408,8 +1396,8 @@ class RecursiveMakeBackend(CommonBackend):
         # TODO: see bug 1310063 for checking dependencies are set up correctly.
 
         direct_linked = direct_linked[0]
-        backend_file.write('RUST_STATIC_LIB_FOR_SHARED_LIB := %s/%s\n' %
-                           (pretty_relpath(direct_linked), direct_linked.import_name))
+        backend_file.write('RUST_STATIC_LIB_FOR_SHARED_LIB := %s\n' %
+                           pretty_relpath(direct_linked, direct_linked.import_name))
 
     def _process_final_target_files(self, obj, files, backend_file):
         target = obj.install_target

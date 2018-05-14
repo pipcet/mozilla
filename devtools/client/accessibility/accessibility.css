@@ -104,6 +104,7 @@ body {
 .description img {
   margin-right: 12px;
   flex-basis: 42px;
+  flex-shrink: 0;
   -moz-context-properties: fill;
   fill: var(--grey-40);
 }
@@ -305,6 +306,7 @@ body {
 
 .accessible .tree .objectBox-node .open-inspector{
   width: 17px;
+  cursor: pointer;
 }
 
 .accessible .tree .objectBox-object,

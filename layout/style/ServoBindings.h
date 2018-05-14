@@ -54,7 +54,7 @@ namespace mozilla {
   struct LangGroupFontPrefs;
   class SeenPtrs;
   class ComputedStyle;
-  class ServoStyleSheet;
+  class StyleSheet;
   class ServoElementSnapshotTable;
 }
 using mozilla::FontFamilyList;
@@ -86,10 +86,8 @@ namespace mozilla {
 
 #define STYLE_STRUCT(name_) \
   const nsStyle##name_* ServoComputedData::GetStyle##name_() const { return &name_.mPtr->gecko; }
-#define STYLE_STRUCT_LIST_IGNORE_VARIABLES
 #include "nsStyleStructList.h"
 #undef STYLE_STRUCT
-#undef STYLE_STRUCT_LIST_IGNORE_VARIABLES
 
 #define NS_DECL_THREADSAFE_FFI_REFCOUNTING(class_, name_)                     \
   void Gecko_AddRef##name_##ArbitraryThread(class_* aPtr);                    \
@@ -174,15 +172,24 @@ void Gecko_ConstructStyleChildrenIterator(RawGeckoElementBorrowed aElement,
 void Gecko_DestroyStyleChildrenIterator(RawGeckoStyleChildrenIteratorBorrowedMut aIterator);
 RawGeckoNodeBorrowedOrNull Gecko_GetNextStyleChild(RawGeckoStyleChildrenIteratorBorrowedMut it);
 
-mozilla::ServoStyleSheet*
+NS_DECL_THREADSAFE_FFI_REFCOUNTING(mozilla::css::SheetLoadDataHolder, SheetLoadDataHolder);
+
+void Gecko_StyleSheet_FinishAsyncParse(mozilla::css::SheetLoadDataHolder* data,
+                                       RawServoStyleSheetContentsStrong sheet_contents);
+
+mozilla::StyleSheet*
 Gecko_LoadStyleSheet(mozilla::css::Loader* loader,
-                     mozilla::ServoStyleSheet* parent,
+                     mozilla::StyleSheet* parent,
                      mozilla::css::SheetLoadData* parent_load_data,
                      mozilla::css::LoaderReusableStyleSheets* reusable_sheets,
-                     RawGeckoURLExtraData* base_url_data,
-                     const uint8_t* url_bytes,
-                     uint32_t url_length,
+                     ServoBundledURI url,
                      RawServoMediaListStrong media_list);
+
+void
+Gecko_LoadStyleSheetAsync(mozilla::css::SheetLoadDataHolder* parent_data,
+                          ServoBundledURI url,
+                          RawServoMediaListStrong media_list,
+                          RawServoImportRuleStrong import_rule);
 
 // Selector Matching.
 uint64_t Gecko_ElementState(RawGeckoElementBorrowed element);
@@ -404,7 +411,7 @@ mozilla::CSSPseudoElementType Gecko_GetImplementedPseudo(RawGeckoElementBorrowed
 // they wrap the value in a struct.
 uint32_t Gecko_CalcStyleDifference(ComputedStyleBorrowed old_style,
                                    ComputedStyleBorrowed new_style,
-                                   bool* any_style_changed,
+                                   bool* any_style_struct_changed,
                                    bool* reset_only_changed);
 
 // Get an element snapshot for a given element from the table.
@@ -567,6 +574,9 @@ void Gecko_CSSValue_SetKeyword(nsCSSValueBorrowedMut css_value, nsCSSKeyword key
 void Gecko_CSSValue_SetPercentage(nsCSSValueBorrowedMut css_value, float percent);
 void Gecko_CSSValue_SetPixelLength(nsCSSValueBorrowedMut aCSSValue, float aLen);
 void Gecko_CSSValue_SetCalc(nsCSSValueBorrowedMut css_value, nsStyleCoord::CalcValue calc);
+void Gecko_CSSValue_SetFontStretch(nsCSSValueBorrowedMut css_value, float stretch);
+void Gecko_CSSValue_SetFontSlantStyle(nsCSSValueBorrowedMut css_value, float style);
+void Gecko_CSSValue_SetFontWeight(nsCSSValueBorrowedMut css_value, float weight);
 void Gecko_CSSValue_SetFunction(nsCSSValueBorrowedMut css_value, int32_t len);
 void Gecko_CSSValue_SetString(nsCSSValueBorrowedMut css_value,
                               const uint8_t* string, uint32_t len, nsCSSUnit unit);
@@ -585,6 +595,22 @@ void Gecko_CSSValue_SetPairList(nsCSSValueBorrowedMut css_value, uint32_t len);
 void Gecko_CSSValue_InitSharedList(nsCSSValueBorrowedMut css_value, uint32_t len);
 void Gecko_CSSValue_Drop(nsCSSValueBorrowedMut css_value);
 NS_DECL_THREADSAFE_FFI_REFCOUNTING(nsCSSValueSharedList, CSSValueSharedList);
+
+float Gecko_FontStretch_ToFloat(mozilla::FontStretch aStretch);
+void Gecko_FontStretch_SetFloat(mozilla::FontStretch* aStretch,
+                                float aFloatValue);
+float Gecko_FontSlantStyle_ToFloat(mozilla::FontSlantStyle aStyle);
+void Gecko_FontSlantStyle_SetNormal(mozilla::FontSlantStyle*);
+void Gecko_FontSlantStyle_SetItalic(mozilla::FontSlantStyle*);
+void Gecko_FontSlantStyle_SetOblique(mozilla::FontSlantStyle*, float angle_degrees);
+void Gecko_FontSlantStyle_Get(mozilla::FontSlantStyle,
+                              bool* normal,
+                              bool* italic,
+                              float* oblique_angle);
+
+float Gecko_FontWeight_ToFloat(mozilla::FontWeight aWeight);
+void Gecko_FontWeight_SetFloat(mozilla::FontWeight* aWeight,
+                               float aFloatValue);
 
 void Gecko_nsStyleFont_SetLang(nsStyleFont* font, nsAtom* atom);
 void Gecko_nsStyleFont_CopyLangFrom(nsStyleFont* aFont, const nsStyleFont* aSource);
@@ -618,11 +644,11 @@ void InitializeServo();
 void ShutdownServo();
 void AssertIsMainThreadOrServoLangFontPrefsCacheLocked();
 
-mozilla::ServoStyleSheet* Gecko_StyleSheet_Clone(
-    const mozilla::ServoStyleSheet* aSheet,
-    const mozilla::ServoStyleSheet* aNewParentSheet);
-void Gecko_StyleSheet_AddRef(const mozilla::ServoStyleSheet* aSheet);
-void Gecko_StyleSheet_Release(const mozilla::ServoStyleSheet* aSheet);
+mozilla::StyleSheet* Gecko_StyleSheet_Clone(
+    const mozilla::StyleSheet* aSheet,
+    const mozilla::StyleSheet* aNewParentSheet);
+void Gecko_StyleSheet_AddRef(const mozilla::StyleSheet* aSheet);
+void Gecko_StyleSheet_Release(const mozilla::StyleSheet* aSheet);
 
 nsCSSKeyword Gecko_LookupCSSKeyword(const uint8_t* string, uint32_t len);
 const char* Gecko_CSSKeywordString(nsCSSKeyword keyword, uint32_t* len);
@@ -635,10 +661,6 @@ nscolor Gecko_GetLookAndFeelSystemColor(int32_t color_id,
                                         RawGeckoPresContextBorrowed pres_context);
 
 void Gecko_AddPropertyToSet(nsCSSPropertyIDSetBorrowedMut, nsCSSPropertyID);
-
-// Register a namespace and get a namespace id.
-// Returns -1 on error (OOM)
-int32_t Gecko_RegisterNamespace(nsAtom* ns);
 
 // Style-struct management.
 #define STYLE_STRUCT(name)                                            \
@@ -674,7 +696,7 @@ void Gecko_AnnotateCrashReport(const char* key_str, const char* value_str);
 #include "mozilla/ServoBindingList.h"
 #undef SERVO_BINDING_FUNC
 
-mozilla::css::ErrorReporter* Gecko_CreateCSSErrorReporter(mozilla::ServoStyleSheet* sheet,
+mozilla::css::ErrorReporter* Gecko_CreateCSSErrorReporter(mozilla::StyleSheet* sheet,
                                                           mozilla::css::Loader* loader,
                                                           nsIURI* uri);
 void Gecko_DestroyCSSErrorReporter(mozilla::css::ErrorReporter* reporter);

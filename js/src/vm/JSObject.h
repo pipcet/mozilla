@@ -34,10 +34,6 @@ class RelocationOverlay;
 
 /******************************************************************************/
 
-extern const Class IntlClass;
-extern const Class JSONClass;
-extern const Class MathClass;
-
 class GlobalObject;
 class NewObjectCache;
 
@@ -47,7 +43,7 @@ enum class IntegrityLevel {
 };
 
 // Forward declarations, required for later friend declarations.
-bool PreventExtensions(JSContext* cx, JS::HandleObject obj, JS::ObjectOpResult& result, IntegrityLevel level = IntegrityLevel::Sealed);
+bool PreventExtensions(JSContext* cx, JS::HandleObject obj, JS::ObjectOpResult& result);
 bool SetImmutablePrototype(JSContext* cx, JS::HandleObject obj, bool* succeeded);
 
 }  /* namespace js */
@@ -102,7 +98,7 @@ class JSObject : public js::gc::Cell
     friend class js::NewObjectCache;
     friend class js::Nursery;
     friend class js::gc::RelocationOverlay;
-    friend bool js::PreventExtensions(JSContext* cx, JS::HandleObject obj, JS::ObjectOpResult& result, js::IntegrityLevel level);
+    friend bool js::PreventExtensions(JSContext* cx, JS::HandleObject obj, JS::ObjectOpResult& result);
     friend bool js::SetImmutablePrototype(JSContext* cx, JS::HandleObject obj,
                                           bool* succeeded);
 
@@ -188,7 +184,6 @@ class JSObject : public js::gc::Cell
     }
 
     inline bool isBoundFunction() const;
-    inline bool hasSpecialEquality() const;
 
     // A "qualified" varobj is the object on which "qualified" variable
     // declarations (i.e., those defined with "var") are kept.
@@ -647,22 +642,6 @@ JSObject::writeBarrierPost(void* cellp, JSObject* prev, JSObject* next)
         buffer->unputCell(static_cast<js::gc::Cell**>(cellp));
 }
 
-class JSValueArray {
-  public:
-    const js::Value* array;
-    size_t length;
-
-    JSValueArray(const js::Value* v, size_t c) : array(v), length(c) {}
-};
-
-class ValueArray {
-  public:
-    js::Value* array;
-    size_t length;
-
-    ValueArray(js::Value* v, size_t c) : array(v), length(c) {}
-};
-
 namespace js {
 
 /*** Standard internal methods ********************************************************************
@@ -707,16 +686,13 @@ IsExtensible(JSContext* cx, HandleObject obj, bool* extensible);
  * ES6 [[PreventExtensions]]. Attempt to change the [[Extensible]] bit on |obj|
  * to false.  Indicate success or failure through the |result| outparam, or
  * actual error through the return value.
- *
- * The `level` argument is SM-specific. `obj` should have an integrity level of
- * at least `level`.
  */
 extern bool
-PreventExtensions(JSContext* cx, HandleObject obj, ObjectOpResult& result, IntegrityLevel level);
+PreventExtensions(JSContext* cx, HandleObject obj, ObjectOpResult& result);
 
 /* Convenience function. As above, but throw on failure. */
 extern bool
-PreventExtensions(JSContext* cx, HandleObject obj, IntegrityLevel level = IntegrityLevel::Sealed);
+PreventExtensions(JSContext* cx, HandleObject obj);
 
 /*
  * ES6 [[GetOwnProperty]]. Get a description of one of obj's own properties.
@@ -1046,7 +1022,7 @@ GetThisValueOfWith(JSObject* env);
 
 /* * */
 
-typedef JSObject* (*ClassInitializerOp)(JSContext* cx, JS::HandleObject obj);
+using ClassInitializerOp = JSObject* (*)(JSContext* cx, Handle<GlobalObject*> global);
 
 } /* namespace js */
 

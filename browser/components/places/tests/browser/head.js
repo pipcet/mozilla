@@ -65,43 +65,6 @@ function promiseClipboard(aPopulateClipboardFn, aFlavor) {
   });
 }
 
-/**
- * Waits for all pending async statements on the default connection, before
- * proceeding with aCallback.
- *
- * @param aCallback
- *        Function to be called when done.
- * @param aScope
- *        Scope for the callback.
- * @param aArguments
- *        Arguments array for the callback.
- *
- * @note The result is achieved by asynchronously executing a query requiring
- *       a write lock.  Since all statements on the same connection are
- *       serialized, the end of this write operation means that all writes are
- *       complete.  Note that WAL makes so that writers don't block readers, but
- *       this is a problem only across different connections.
- */
-function waitForAsyncUpdates(aCallback, aScope, aArguments) {
-  let scope = aScope || this;
-  let args = aArguments || [];
-  let db = PlacesUtils.history.QueryInterface(Ci.nsPIPlacesDatabase)
-                              .DBConnection;
-  let begin = db.createAsyncStatement("BEGIN EXCLUSIVE");
-  begin.executeAsync();
-  begin.finalize();
-
-  let commit = db.createAsyncStatement("COMMIT");
-  commit.executeAsync({
-    handleResult() {},
-    handleError() {},
-    handleCompletion(aReason) {
-      aCallback.apply(scope, args);
-    }
-  });
-  commit.finalize();
-}
-
 function synthesizeClickOnSelectedTreeCell(aTree, aOptions) {
   let tbo = aTree.treeBoxObject;
   if (tbo.view.selection.count != 1)
@@ -209,7 +172,7 @@ var withBookmarksDialog = async function(autoCancel, openFn, taskFn, closeFn,
         let win = subject.QueryInterface(Ci.nsIDOMWindow);
         win.addEventListener("load", function() {
           ok(win.location.href.startsWith(dialogUrl),
-             "The bookmark properties dialog is open");
+             "The bookmark properties dialog is open: " + win.location.href);
           // This is needed for the overlay.
           waitForFocus(() => {
             resolve(win);
@@ -255,19 +218,14 @@ var withBookmarksDialog = async function(autoCancel, openFn, taskFn, closeFn,
   try {
     await taskFn(dialogWin);
   } finally {
-    if (!closed && !autoCancel) {
-      // Give the dialog a little time to close itself in the manually closing
-      // case.
-      await BrowserTestUtils.waitForCondition(() => closed,
-        "The test should have closed the dialog!");
-    }
-    if (!closed) {
+    if (!closed && autoCancel) {
       info("withBookmarksDialog: canceling the dialog");
-
       doc.documentElement.cancelDialog();
-
       await closePromise;
     }
+    // Give the dialog a little time to close itself.
+    await BrowserTestUtils.waitForCondition(() => closed,
+                                            "The dialog should be closed!");
   }
 };
 

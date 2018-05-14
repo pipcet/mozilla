@@ -55,6 +55,7 @@ use properties::{PropertyDeclaration, PropertyDeclarationBlock, PropertyDeclarat
 use rule_tree::StrongRuleNode;
 use selector_parser::PseudoElement;
 use servo_arc::{Arc, RawOffsetArc};
+use std::marker::PhantomData;
 use std::mem::{forget, uninitialized, transmute, zeroed};
 use std::{cmp, ops, ptr};
 use values::{self, CustomIdent, Either, KeyframesName, None_};
@@ -1803,7 +1804,7 @@ fn static_assert() {
     }
 
     pub fn set_computed_justify_items(&mut self, v: values::specified::JustifyItems) {
-        debug_assert_ne!(v.0, ::values::specified::align::AlignFlags::AUTO);
+        debug_assert_ne!(v.0, ::values::specified::align::AlignFlags::LEGACY);
         self.gecko.mJustifyItems = v.into();
     }
 
@@ -2598,13 +2599,49 @@ fn static_assert() {
     }
 
     pub fn set_font_weight(&mut self, v: longhands::font_weight::computed_value::T) {
-        self.gecko.mFont.weight = v.0;
+        unsafe { bindings::Gecko_FontWeight_SetFloat(&mut self.gecko.mFont.weight, v.0) };
     }
     ${impl_simple_copy('font_weight', 'mFont.weight')}
 
     pub fn clone_font_weight(&self) -> longhands::font_weight::computed_value::T {
-        debug_assert!(self.gecko.mFont.weight <= ::std::u16::MAX);
-        longhands::font_weight::computed_value::T(self.gecko.mFont.weight)
+        let weight: f32 = unsafe {
+            bindings::Gecko_FontWeight_ToFloat(self.gecko.mFont.weight)
+        };
+        longhands::font_weight::computed_value::T(weight)
+    }
+
+    pub fn set_font_stretch(&mut self, v: longhands::font_stretch::computed_value::T) {
+        unsafe { bindings::Gecko_FontStretch_SetFloat(&mut self.gecko.mFont.stretch, (v.0).0) };
+    }
+    ${impl_simple_copy('font_stretch', 'mFont.stretch')}
+    pub fn clone_font_stretch(&self) -> longhands::font_stretch::computed_value::T {
+        use values::computed::Percentage;
+        use values::generics::NonNegative;
+
+        let stretch =
+            unsafe { bindings::Gecko_FontStretch_ToFloat(self.gecko.mFont.stretch) };
+        debug_assert!(stretch >= 0.);
+
+        NonNegative(Percentage(stretch))
+    }
+
+    pub fn set_font_style(&mut self, v: longhands::font_style::computed_value::T) {
+        use values::generics::font::FontStyle;
+        let s = &mut self.gecko.mFont.style;
+        unsafe {
+            match v {
+                FontStyle::Normal => bindings::Gecko_FontSlantStyle_SetNormal(s),
+                FontStyle::Italic => bindings::Gecko_FontSlantStyle_SetItalic(s),
+                FontStyle::Oblique(ref angle) => {
+                    bindings::Gecko_FontSlantStyle_SetOblique(s, angle.0.degrees())
+                }
+            }
+        }
+    }
+    ${impl_simple_copy('font_style', 'mFont.style')}
+    pub fn clone_font_style(&self) -> longhands::font_style::computed_value::T {
+        use values::computed::font::FontStyle;
+        FontStyle::from_gecko(self.gecko.mFont.style)
     }
 
     ${impl_simple_type_with_conversion("font_synthesis", "mFont.synthesis")}
@@ -4071,10 +4108,6 @@ fn static_assert() {
                 unsafe {
                     Gecko_SetListStyleImageImageValue(&mut self.gecko, url.image_value.get());
                 }
-                // We don't need to record this struct as uncacheable, like when setting
-                // background-image to a url() value, since only properties in reset structs
-                // are re-used from the applicable declaration cache, and the List struct
-                // is an inherited struct.
             }
         }
     }
@@ -5229,7 +5262,7 @@ clip-path
     }
 </%self:impl_trait>
 
-<%self:impl_trait style_struct_name="Pointing"
+<%self:impl_trait style_struct_name="InheritedUI"
                   skip_longhands="cursor caret-color">
     pub fn set_cursor(&mut self, v: longhands::cursor::computed_value::T) {
         use style_traits::cursor::CursorKind;
@@ -5289,11 +5322,6 @@ clip-path
                 );
             }
 
-            // We don't need to record this struct as uncacheable, like when setting
-            // background-image to a url() value, since only properties in reset structs
-            // are re-used from the applicable declaration cache, and the Pointing struct
-            // is an inherited struct.
-
             match v.images[i].hotspot {
                 Some((x, y)) => {
                     self.gecko.mCursorImages[i].mHaveHotspot = true;
@@ -5319,7 +5347,7 @@ clip-path
     }
 
     pub fn clone_cursor(&self) -> longhands::cursor::computed_value::T {
-        use values::computed::pointing::CursorImage;
+        use values::computed::ui::CursorImage;
         use style_traits::cursor::CursorKind;
         use values::specified::url::SpecifiedImageUrl;
 
@@ -5429,6 +5457,7 @@ clip-path
         use values::computed::counters::{Content, ContentItem};
         use values::generics::CounterStyleOrNone;
         use gecko_bindings::structs::nsStyleContentData;
+        use gecko_bindings::structs::nsStyleContentAttr;
         use gecko_bindings::structs::nsStyleContentType;
         use gecko_bindings::structs::nsStyleContentType::*;
         use gecko_bindings::bindings::Gecko_ClearAndResizeStyleContents;
@@ -5505,14 +5534,19 @@ clip-path
                             self.gecko.mContents[i].mType = eStyleContentType_Attr;
                             unsafe {
                                 // NB: we share allocators, so doing this is fine.
-                                *self.gecko.mContents[i].mContent.mString.as_mut() = match attr.namespace {
-                                    Some((_, ns)) => {
-                                        as_utf16_and_forget(&format!("{}|{}", ns, attr.attribute))
+                                let maybe_ns = attr.namespace.clone();
+                                let attr_struct = Box::new(nsStyleContentAttr {
+                                    mName: structs::RefPtr {
+                                        mRawPtr: attr.attribute.clone().into_addrefed(),
+                                        _phantom_0: PhantomData,
                                     },
-                                    None => {
-                                        as_utf16_and_forget(&attr.attribute)
-                                    }
-                                };
+                                    mNamespaceURL: structs::RefPtr {
+                                        mRawPtr: maybe_ns.map_or(ptr::null_mut(), |x| (x.1).0.into_addrefed()),
+                                        _phantom_0: PhantomData,
+                                    },
+                                });
+                                *self.gecko.mContents[i].mContent.mAttr.as_mut() =
+                                    Box::into_raw(attr_struct);
                             }
                         }
                         ContentItem::OpenQuote
@@ -5569,7 +5603,7 @@ clip-path
     }
 
     pub fn clone_content(&self) -> longhands::content::computed_value::T {
-        use Atom;
+        use {Atom, Namespace};
         use gecko::conversions::string_from_chars_pointer;
         use gecko_bindings::structs::nsStyleContentType::*;
         use values::computed::counters::{Content, ContentItem};
@@ -5600,19 +5634,17 @@ clip-path
                         ContentItem::String(string.into_boxed_str())
                     },
                     eStyleContentType_Attr => {
-                        let gecko_chars = unsafe { gecko_content.mContent.mString.as_ref() };
-                        let string = unsafe { string_from_chars_pointer(*gecko_chars) };
-                        let (namespace, attribute) =
-                            match string.find('|') {
-                                None => (None, string),
-                                Some(index) => {
-                                    let (_, val) = string.split_at(index);
-                                    // FIXME: We should give NamespaceId as well to make Attr
-                                    // struct. However, there is no field for it in Gecko.
-                                    debug_assert!(false, "Attr with namespace does not support yet");
-                                    (None, val.to_string())
-                                }
+                        let (namespace, attribute) = unsafe {
+                            let s = &**gecko_content.mContent.mAttr.as_ref();
+                            let ns = if s.mNamespaceURL.mRawPtr.is_null() {
+                                None
+                            } else {
+                                // FIXME(bholley): We don't have any way to get the prefix here. :-(
+                                let prefix = atom!("");
+                                Some((prefix, Namespace(Atom::from_raw(s.mNamespaceURL.mRawPtr))))
                             };
+                            (ns, Atom::from_raw(s.mName.mRawPtr))
+                        };
                         ContentItem::Attr(Attr { namespace, attribute })
                     },
                     eStyleContentType_Counter | eStyleContentType_Counters => {
@@ -5656,9 +5688,9 @@ clip-path
         ) {
             unsafe {
                 bindings::Gecko_ClearAndResizeCounter${counter_property}s(&mut self.gecko, v.len() as u32);
-                for (i, &(ref name, value)) in v.iter().enumerate() {
-                    self.gecko.m${counter_property}s[i].mCounter.assign(name.0.as_slice());
-                    self.gecko.m${counter_property}s[i].mValue = value;
+                for (i, ref pair) in v.iter().enumerate() {
+                    self.gecko.m${counter_property}s[i].mCounter.assign(pair.name.0.as_slice());
+                    self.gecko.m${counter_property}s[i].mValue = pair.value;
                 }
             }
         }
@@ -5676,12 +5708,16 @@ clip-path
         pub fn clone_counter_${counter_property.lower()}(
             &self
         ) -> longhands::counter_${counter_property.lower()}::computed_value::T {
+            use values::generics::counters::CounterPair;
             use values::CustomIdent;
             use gecko_string_cache::Atom;
 
             longhands::counter_${counter_property.lower()}::computed_value::T::new(
                 self.gecko.m${counter_property}s.iter().map(|ref gecko_counter| {
-                    (CustomIdent(Atom::from(gecko_counter.mCounter.to_string())), gecko_counter.mValue)
+                    CounterPair {
+                        name: CustomIdent(Atom::from(gecko_counter.mCounter.to_string())),
+                        value: gecko_counter.mValue,
+                    }
                 }).collect()
             )
         }

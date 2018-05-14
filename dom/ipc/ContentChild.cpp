@@ -69,9 +69,7 @@
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/net/CookieServiceChild.h"
 #include "mozilla/net/CaptivePortalService.h"
-#ifndef RELEASE_OR_BETA
 #include "mozilla/PerformanceUtils.h"
-#endif
 #include "mozilla/plugins/PluginInstanceParent.h"
 #include "mozilla/plugins/PluginModuleParent.h"
 #include "mozilla/widget/ScreenManager.h"
@@ -546,7 +544,6 @@ ContentChild::ContentChild()
 #endif
  , mIsAlive(true)
  , mShuttingDown(false)
- , mShutdownTimeout(0)
 {
   // This process is a content process, so it's clearly running in
   // multiprocess mode!
@@ -561,12 +558,6 @@ ContentChild::ContentChild()
     sShutdownCanary = new ShutdownCanary();
     ClearOnShutdown(&sShutdownCanary, ShutdownPhase::Shutdown);
   }
-  // If a shutdown message is received from within a nested event loop, we set
-  // the timeout for the nested event loop to half the ForceKillTimer timeout
-  // (in ms) to leave enough time to send the FinishShutdown message to the
-  // parent.
-  mShutdownTimeout =
-    Preferences::GetInt("dom.ipc.tabs.shutdownTimeoutSecs", 5) * 1000 / 2;
 }
 
 #ifdef _MSC_VER
@@ -614,6 +605,7 @@ ContentChild::RecvSetXPCOMProcessAttributes(const XPCOMInitData& aXPCOMInit,
 bool
 ContentChild::Init(MessageLoop* aIOLoop,
                    base::ProcessId aParentPid,
+                   const char* aParentBuildID,
                    IPC::Channel* aChannel,
                    uint64_t aChildID,
                    bool aIsForBrowser)
@@ -682,10 +674,15 @@ ContentChild::Init(MessageLoop* aIOLoop,
   GetIPCChannel()->SetChannelFlags(MessageChannel::REQUIRE_A11Y_REENTRY);
 #endif
 
-  // This must be sent before any IPDL message, which may hit sentinel
+  // This must be checked before any IPDL message, which may hit sentinel
   // errors due to parent and content processes having different
   // versions.
-  GetIPCChannel()->SendBuildID();
+  MessageChannel* channel = GetIPCChannel();
+  if (channel && !channel->SendBuildIDsMatchMessage(aParentBuildID)) {
+    // We need to quit this process if the buildID doesn't match the parent's.
+    // This can occur when an update occurred in the background.
+    ProcessChild::QuickExit();
+  }
 
 #ifdef MOZ_X11
   if (!gfxPlatform::IsHeadless()) {
@@ -1389,15 +1386,11 @@ ContentChild::GetResultForRenderingInitFailure(base::ProcessId aOtherPid)
 mozilla::ipc::IPCResult
 ContentChild::RecvRequestPerformanceMetrics()
 {
-#ifndef RELEASE_OR_BETA
+  MOZ_ASSERT(mozilla::dom::DOMPrefs::SchedulerLoggingEnabled());
   nsTArray<PerformanceInfo> info;
   CollectPerformanceInfo(info);
   SendAddPerformanceMetrics(info);
   return IPC_OK();
-#endif
-#ifdef RELEASE_OR_BETA
-  return IPC_OK();
-#endif
 }
 
 mozilla::ipc::IPCResult
@@ -2542,15 +2535,14 @@ ContentChild::RecvAsyncMessage(const nsString& aMsg,
 }
 
 mozilla::ipc::IPCResult
-ContentChild::RecvGeolocationUpdate(const GeoPosition& somewhere)
+ContentChild::RecvGeolocationUpdate(nsIDOMGeoPosition* aPosition)
 {
   nsCOMPtr<nsIGeolocationUpdate> gs =
     do_GetService("@mozilla.org/geolocation/service;1");
   if (!gs) {
     return IPC_OK();
   }
-  nsCOMPtr<nsIDOMGeoPosition> position = somewhere;
-  gs->Update(position);
+  gs->Update(aPosition);
   return IPC_OK();
 }
 
@@ -3020,32 +3012,28 @@ ContentChild::RecvShutdown()
 void
 ContentChild::ShutdownInternal()
 {
-  CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("IPCShutdownState"),
-                                     NS_LITERAL_CSTRING("RecvShutdown"));
-
   // If we receive the shutdown message from within a nested event loop, we want
   // to wait for that event loop to finish. Otherwise we could prematurely
   // terminate an "unload" or "pagehide" event handler (which might be doing a
-  // sync XHR, for example). However, we need to strike a balance and shut down
-  // within a reasonable amount of time (mShutdownTimeout) or the ForceKillTimer
-  // in the parent will execute and kill us hard.
+  // sync XHR, for example).
+  CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("IPCShutdownState"),
+                                     NS_LITERAL_CSTRING("RecvShutdown"));
+
+  MOZ_ASSERT(NS_IsMainThread());
+  RefPtr<nsThread> mainThread = nsThreadManager::get().GetCurrentThread();
   // Note that we only have to check the recursion count for the current
   // cooperative thread. Since the Shutdown message is not labeled with a
   // SchedulerGroup, there can be no other cooperative threads doing work while
   // we're running.
-  MOZ_ASSERT(NS_IsMainThread());
-  RefPtr<nsThread> mainThread = nsThreadManager::get().GetCurrentThread();
-  if (mainThread && mainThread->RecursionDepth() > 1 && mShutdownTimeout > 0) {
+  if (mainThread && mainThread->RecursionDepth() > 1) {
     // We're in a nested event loop. Let's delay for an arbitrary period of
     // time (100ms) in the hopes that the event loop will have finished by
     // then.
-    int32_t delay = 100;
     MessageLoop::current()->PostDelayedTask(
       NewRunnableMethod(
         "dom::ContentChild::RecvShutdown", this,
         &ContentChild::ShutdownInternal),
-      delay);
-    mShutdownTimeout -= delay;
+      100);
     return;
   }
 
@@ -3451,8 +3439,7 @@ ContentChild::RecvGetFilesResponse(const nsID& aUUID,
 }
 
 /* static */ void
-ContentChild::FatalErrorIfNotUsingGPUProcess(const char* const aProtocolName,
-                                             const char* const aErrorMsg,
+ContentChild::FatalErrorIfNotUsingGPUProcess(const char* const aErrorMsg,
                                              base::ProcessId aOtherPid)
 {
   // If we're communicating with the same process or the UI process then we
@@ -3460,11 +3447,9 @@ ContentChild::FatalErrorIfNotUsingGPUProcess(const char* const aProtocolName,
   // must be the GPU process and it crashing shouldn't be fatal for us.
   if (aOtherPid == base::GetCurrentProcId() ||
       (GetSingleton() && GetSingleton()->OtherPid() == aOtherPid)) {
-    mozilla::ipc::FatalError(aProtocolName, aErrorMsg, false);
+    mozilla::ipc::FatalError(aErrorMsg, false);
   } else {
-    nsAutoCString formattedMessage("IPDL error [");
-    formattedMessage.AppendASCII(aProtocolName);
-    formattedMessage.AppendLiteral(R"(]: ")");
+    nsAutoCString formattedMessage("IPDL error: \"");
     formattedMessage.AppendASCII(aErrorMsg);
     formattedMessage.AppendLiteral(R"(".)");
     NS_WARNING(formattedMessage.get());

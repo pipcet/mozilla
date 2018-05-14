@@ -68,6 +68,7 @@
 #include "nsXBLBinding.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/dom/DOMStringList.h"
+#include "mozilla/dom/EventTarget.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "nsDeckFrame.h"
@@ -149,7 +150,7 @@ MustBeAccessible(nsIContent* aContent, DocAccessible* aDocument)
  */
 #ifdef MOZ_XUL
 Accessible*
-CreateMenupopupAccessible(nsIContent* aContent, Accessible* aContext)
+CreateMenupopupAccessible(Element* aElement, Accessible* aContext)
 {
 #ifdef MOZ_ACCESSIBILITY_ATK
     // ATK considers this node to be redundant when within menubars, and it makes menu
@@ -157,12 +158,12 @@ CreateMenupopupAccessible(nsIContent* aContent, Accessible* aContext)
     // XXX In the future we will should this for consistency across the nsIAccessible
     // implementations on each platform for a consistent scripting environment, but
     // then strip out redundant accessibles in the AccessibleWrap class for each platform.
-    nsIContent *parent = aContent->GetParent();
+    nsIContent *parent = aElement->GetParent();
     if (parent && parent->IsXULElement(nsGkAtoms::menu))
       return nullptr;
 #endif
 
-    return new XULMenupopupAccessible(aContent, aContext->Document());
+    return new XULMenupopupAccessible(aElement, aContext->Document());
 }
 #endif
 
@@ -170,130 +171,107 @@ CreateMenupopupAccessible(nsIContent* aContent, Accessible* aContext)
 // Accessible constructors
 
 static Accessible*
-New_HTMLLink(nsIContent* aContent, Accessible* aContext)
+New_HTMLLink(Element* aElement, Accessible* aContext)
 {
   // Only some roles truly enjoy life as HTMLLinkAccessibles, for details
   // see closed bug 494807.
-  const nsRoleMapEntry* roleMapEntry = aria::GetRoleMap(aContent->AsElement());
+  const nsRoleMapEntry* roleMapEntry = aria::GetRoleMap(aElement);
   if (roleMapEntry && roleMapEntry->role != roles::NOTHING &&
       roleMapEntry->role != roles::LINK) {
-    return new HyperTextAccessibleWrap(aContent, aContext->Document());
+    return new HyperTextAccessibleWrap(aElement, aContext->Document());
   }
 
-  return new HTMLLinkAccessible(aContent, aContext->Document());
+  return new HTMLLinkAccessible(aElement, aContext->Document());
 }
 
-static Accessible* New_HyperText(nsIContent* aContent, Accessible* aContext)
-  { return new HyperTextAccessibleWrap(aContent, aContext->Document()); }
+static Accessible* New_HyperText(Element* aElement, Accessible* aContext)
+  { return new HyperTextAccessibleWrap(aElement, aContext->Document()); }
 
-static Accessible* New_HTMLFigcaption(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLFigcaptionAccessible(aContent, aContext->Document()); }
+static Accessible* New_HTMLFigcaption(Element* aElement, Accessible* aContext)
+  { return new HTMLFigcaptionAccessible(aElement, aContext->Document()); }
 
-static Accessible* New_HTMLFigure(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLFigureAccessible(aContent, aContext->Document()); }
+static Accessible* New_HTMLFigure(Element* aElement, Accessible* aContext)
+  { return new HTMLFigureAccessible(aElement, aContext->Document()); }
 
-static Accessible* New_HTMLHeaderOrFooter(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLHeaderOrFooterAccessible(aContent, aContext->Document()); }
+static Accessible* New_HTMLHeaderOrFooter(Element* aElement, Accessible* aContext)
+  { return new HTMLHeaderOrFooterAccessible(aElement, aContext->Document()); }
 
-static Accessible* New_HTMLLegend(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLLegendAccessible(aContent, aContext->Document()); }
+static Accessible* New_HTMLLegend(Element* aElement, Accessible* aContext)
+  { return new HTMLLegendAccessible(aElement, aContext->Document()); }
 
-static Accessible* New_HTMLOption(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLSelectOptionAccessible(aContent, aContext->Document()); }
+static Accessible* New_HTMLOption(Element* aElement, Accessible* aContext)
+  { return new HTMLSelectOptionAccessible(aElement, aContext->Document()); }
 
-static Accessible* New_HTMLOptgroup(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLSelectOptGroupAccessible(aContent, aContext->Document()); }
+static Accessible* New_HTMLOptgroup(Element* aElement, Accessible* aContext)
+  { return new HTMLSelectOptGroupAccessible(aElement, aContext->Document()); }
 
-static Accessible* New_HTMLList(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLListAccessible(aContent, aContext->Document()); }
+static Accessible* New_HTMLList(Element* aElement, Accessible* aContext)
+  { return new HTMLListAccessible(aElement, aContext->Document()); }
 
 static Accessible*
-New_HTMLListitem(nsIContent* aContent, Accessible* aContext)
+New_HTMLListitem(Element* aElement, Accessible* aContext)
 {
   // If list item is a child of accessible list then create an accessible for
   // it unconditionally by tag name. nsBlockFrame creates the list item
   // accessible for other elements styled as list items.
-  if (aContext->IsList() && aContext->GetContent() == aContent->GetParent())
-    return new HTMLLIAccessible(aContent, aContext->Document());
+  if (aContext->IsList() && aContext->GetContent() == aElement->GetParent())
+    return new HTMLLIAccessible(aElement, aContext->Document());
 
   return nullptr;
 }
 
 static Accessible*
-New_HTMLDefinition(nsIContent* aContent, Accessible* aContext)
+New_HTMLDefinition(Element* aElement, Accessible* aContext)
 {
   if (aContext->IsList())
-    return new HyperTextAccessibleWrap(aContent, aContext->Document());
+    return new HyperTextAccessibleWrap(aElement, aContext->Document());
   return nullptr;
 }
 
-static Accessible* New_HTMLLabel(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLLabelAccessible(aContent, aContext->Document()); }
+static Accessible* New_HTMLLabel(Element* aElement, Accessible* aContext)
+  { return new HTMLLabelAccessible(aElement, aContext->Document()); }
 
-static Accessible* New_HTMLInput(nsIContent* aContent, Accessible* aContext)
+static Accessible* New_HTMLInput(Element* aElement, Accessible* aContext)
 {
-  if (!aContent->IsElement()) {
-    return nullptr;
-  }
-
-  Element* element = aContent->AsElement();
-  if (element->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+  if (aElement->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
                            nsGkAtoms::checkbox, eIgnoreCase)) {
-    return new HTMLCheckboxAccessible(aContent, aContext->Document());
+    return new HTMLCheckboxAccessible(aElement, aContext->Document());
   }
-  if (element->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+  if (aElement->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
                            nsGkAtoms::radio, eIgnoreCase)) {
-    return new HTMLRadioButtonAccessible(aContent, aContext->Document());
+    return new HTMLRadioButtonAccessible(aElement, aContext->Document());
   }
-  if (element->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+  if (aElement->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
                            nsGkAtoms::time, eIgnoreCase)) {
-    return new EnumRoleAccessible<roles::GROUPING>(aContent, aContext->Document());
+    return new EnumRoleAccessible<roles::GROUPING>(aElement, aContext->Document());
   }
-  if (element->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+  if (aElement->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
                            nsGkAtoms::date, eIgnoreCase)) {
-    return new EnumRoleAccessible<roles::DATE_EDITOR>(aContent, aContext->Document());
+    return new EnumRoleAccessible<roles::DATE_EDITOR>(aElement, aContext->Document());
   }
   return nullptr;
 }
 
-static Accessible* New_HTMLOutput(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLOutputAccessible(aContent, aContext->Document()); }
+static Accessible* New_HTMLOutput(Element* aElement, Accessible* aContext)
+  { return new HTMLOutputAccessible(aElement, aContext->Document()); }
 
-static Accessible* New_HTMLProgress(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLProgressMeterAccessible(aContent, aContext->Document()); }
+static Accessible* New_HTMLProgress(Element* aElement, Accessible* aContext)
+  { return new HTMLProgressMeterAccessible(aElement, aContext->Document()); }
 
-static Accessible* New_HTMLSummary(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLSummaryAccessible(aContent, aContext->Document()); }
-
-static Accessible*
-New_HTMLTableAccessible(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLTableAccessible(aContent, aContext->Document()); }
+static Accessible* New_HTMLSummary(Element* aElement, Accessible* aContext)
+  { return new HTMLSummaryAccessible(aElement, aContext->Document()); }
 
 static Accessible*
-New_HTMLTableRowAccessible(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLTableRowAccessible(aContent, aContext->Document()); }
+New_HTMLTableAccessible(Element* aElement, Accessible* aContext)
+  { return new HTMLTableAccessible(aElement, aContext->Document()); }
 
 static Accessible*
-New_HTMLTableCellAccessible(nsIContent* aContent, Accessible* aContext)
-  { return new HTMLTableCellAccessible(aContent, aContext->Document()); }
+New_HTMLTableRowAccessible(Element* aElement, Accessible* aContext)
+  { return new HTMLTableRowAccessible(aElement, aContext->Document()); }
 
 static Accessible*
-New_HTMLTableHeaderCell(nsIContent* aContent, Accessible* aContext)
-{
-  if (aContext->IsTableRow() && aContext->GetContent() == aContent->GetParent())
-    return new HTMLTableHeaderCellAccessibleWrap(aContent, aContext->Document());
-  return nullptr;
-}
-
-static Accessible*
-New_HTMLTableHeaderCellIfScope(nsIContent* aContent, Accessible* aContext)
-{
-  if (aContext->IsTableRow() && aContext->GetContent() == aContent->GetParent() &&
-      aContent->IsElement() &&
-      aContent->AsElement()->HasAttr(kNameSpaceID_None, nsGkAtoms::scope))
-    return new HTMLTableHeaderCellAccessibleWrap(aContent, aContext->Document());
-  return nullptr;
-}
+New_HTMLTableCellAccessible(Element* aElement, Accessible* aContext)
+  { return new HTMLTableCellAccessible(aElement, aContext->Document()); }
 
 /**
  * Cached value of the PREF_ACCESSIBILITY_FORCE_DISABLED preference.
@@ -304,16 +282,16 @@ static int32_t sPlatformDisabledState = 0;
 // Markup maps array.
 
 #define Attr(name, value) \
-  { nsGkAtoms::name, nsGkAtoms::value }
+  { &nsGkAtoms::name, &nsGkAtoms::value }
 
 #define AttrFromDOM(name, DOMAttrName) \
-  { nsGkAtoms::name, nullptr, nsGkAtoms::DOMAttrName }
+  { &nsGkAtoms::name, nullptr, &nsGkAtoms::DOMAttrName }
 
 #define AttrFromDOMIf(name, DOMAttrName, DOMAttrValue) \
-  { nsGkAtoms::name, nullptr,  nsGkAtoms::DOMAttrName, nsGkAtoms::DOMAttrValue }
+  { &nsGkAtoms::name, nullptr,  &nsGkAtoms::DOMAttrName, &nsGkAtoms::DOMAttrValue }
 
 #define MARKUPMAP(atom, new_func, r, ... ) \
-  { nsGkAtoms::atom, new_func, static_cast<a11y::role>(r), { __VA_ARGS__ } },
+  { &nsGkAtoms::atom, new_func, static_cast<a11y::role>(r), { __VA_ARGS__ } },
 
 static const HTMLMarkupMapInfo sHTMLMarkupMapList[] = {
   #include "MarkupMap.h"
@@ -323,13 +301,13 @@ static const HTMLMarkupMapInfo sHTMLMarkupMapList[] = {
 
 #ifdef MOZ_XUL
 #define XULMAP(atom, ...) \
-  { nsGkAtoms::atom, __VA_ARGS__ },
+  { &nsGkAtoms::atom, __VA_ARGS__ },
 
 #define XULMAP_TYPE(atom, new_type) \
 XULMAP( \
   atom, \
-  [](nsIContent* aContent, Accessible* aContext) -> Accessible* { \
-    return new new_type(aContent, aContext->Document()); \
+  [](Element* aElement, Accessible* aContext) -> Accessible* { \
+    return new new_type(aElement, aContext->Document()); \
   } \
 )
 
@@ -381,7 +359,7 @@ nsAccessibilityService::ListenersChanged(nsIArray* aEventChanges)
   for (uint32_t i = 0 ; i < targetCount ; i++) {
     nsCOMPtr<nsIEventListenerChange> change = do_QueryElementAt(aEventChanges, i);
 
-    nsCOMPtr<nsIDOMEventTarget> target;
+    RefPtr<EventTarget> target;
     change->GetTarget(getter_AddRefs(target));
     nsCOMPtr<nsIContent> node(do_QueryInterface(target));
     if (!node || !node->IsHTMLElement()) {
@@ -631,7 +609,6 @@ nsAccessibilityService::DeckPanelSwitched(nsIPresShell* aPresShell,
 
 void
 nsAccessibilityService::ContentRangeInserted(nsIPresShell* aPresShell,
-                                             nsIContent* aContainer,
                                              nsIContent* aStartChild,
                                              nsIContent* aEndChild)
 {
@@ -639,7 +616,7 @@ nsAccessibilityService::ContentRangeInserted(nsIPresShell* aPresShell,
 #ifdef A11Y_LOG
   if (logging::IsEnabled(logging::eTree)) {
     logging::MsgBegin("TREE", "content inserted; doc: %p", document);
-    logging::Node("container", aContainer);
+    logging::Node("container", aStartChild->GetParent());
     for (nsIContent* child = aStartChild; child != aEndChild;
          child = child->GetNextSibling()) {
       logging::Node("content", child);
@@ -650,7 +627,7 @@ nsAccessibilityService::ContentRangeInserted(nsIPresShell* aPresShell,
 #endif
 
   if (document) {
-    document->ContentInserted(aContainer, aStartChild, aEndChild);
+    document->ContentInserted(aStartChild->GetParent(), aStartChild, aEndChild);
   }
 }
 
@@ -1051,11 +1028,10 @@ nsAccessibilityService::CreateAccessible(nsINode* aNode,
   MOZ_ASSERT(!document->GetAccessible(aNode),
              "We already have an accessible for this node.");
 
-  if (aNode->IsNodeOfType(nsINode::eDOCUMENT)) {
+  if (aNode->IsDocument()) {
     // If it's document node then ask accessible document loader for
     // document accessible, otherwise return null.
-    nsCOMPtr<nsIDocument> document(do_QueryInterface(aNode));
-    return GetDocAccessible(document);
+    return GetDocAccessible(aNode->AsDocument());
   }
 
   // We have a content node.
@@ -1110,7 +1086,7 @@ nsAccessibilityService::CreateAccessible(nsINode* aNode,
   RefPtr<Accessible> newAcc;
 
   // Create accessible for visible text frames.
-  if (content->IsNodeOfType(nsINode::eTEXT)) {
+  if (content->IsText()) {
     nsIFrame::RenderedText text = frame->GetRenderedText(0,
         UINT32_MAX, nsIFrame::TextOffsetType::OFFSETS_IN_CONTENT_TEXT,
         nsIFrame::TrailingWhitespace::DONT_TRIM_TRAILING_WHITESPACE);
@@ -1178,7 +1154,7 @@ nsAccessibilityService::CreateAccessible(nsINode* aNode,
       const HTMLMarkupMapInfo* markupMap =
         mHTMLMarkupMap.Get(content->NodeInfo()->NameAtom());
       if (markupMap && markupMap->new_func)
-        newAcc = markupMap->new_func(content, aContext);
+        newAcc = markupMap->new_func(content->AsElement(), aContext);
 
       if (!newAcc) // try by frame accessible type.
         newAcc = CreateAccessibleByFrameType(frame, content, aContext);
@@ -1241,7 +1217,7 @@ nsAccessibilityService::CreateAccessible(nsINode* aNode,
     const XULMarkupMapInfo* xulMap =
       mXULMarkupMap.Get(content->NodeInfo()->NameAtom());
     if (xulMap && xulMap->new_func) {
-      newAcc = xulMap->new_func(content, aContext);
+      newAcc = xulMap->new_func(content->AsElement(), aContext);
     }
 #endif
 
@@ -1273,7 +1249,7 @@ nsAccessibilityService::CreateAccessible(nsINode* aNode,
       const HTMLMarkupMapInfo* markupMap =
         mHTMLMarkupMap.Get(content->NodeInfo()->NameAtom());
       if (markupMap && markupMap->new_func)
-        newAcc = markupMap->new_func(content, aContext);
+        newAcc = markupMap->new_func(content->AsElement(), aContext);
 
       // Fall back to text when encountering Content MathML.
       if (!newAcc && !content->IsAnyOfMathMLElements(nsGkAtoms::annotation_,
@@ -1350,11 +1326,11 @@ nsAccessibilityService::Init()
   eventListenerService->AddListenerChangeListener(this);
 
   for (uint32_t i = 0; i < ArrayLength(sHTMLMarkupMapList); i++)
-    mHTMLMarkupMap.Put(sHTMLMarkupMapList[i].tag, &sHTMLMarkupMapList[i]);
+    mHTMLMarkupMap.Put(*sHTMLMarkupMapList[i].tag, &sHTMLMarkupMapList[i]);
 
 #ifdef MOZ_XUL
   for (uint32_t i = 0; i < ArrayLength(sXULMarkupMapList); i++)
-    mXULMarkupMap.Put(sXULMarkupMapList[i].tag, &sXULMarkupMapList[i]);
+    mXULMarkupMap.Put(*sXULMarkupMapList[i].tag, &sXULMarkupMapList[i]);
 #endif
 
 #ifdef A11Y_LOG
@@ -1616,10 +1592,10 @@ nsAccessibilityService::MarkupAttributes(const nsIContent* aContent,
       if (info->DOMAttrValue) {
         if (aContent->IsElement() &&
             aContent->AsElement()->AttrValueIs(kNameSpaceID_None,
-                                               info->DOMAttrName,
-                                               info->DOMAttrValue,
+                                               *info->DOMAttrName,
+                                               *info->DOMAttrValue,
                                                eCaseMatters)) {
-          nsAccUtils::SetAccAttr(aAttributes, info->name, info->DOMAttrValue);
+          nsAccUtils::SetAccAttr(aAttributes, *info->name, *info->DOMAttrValue);
         }
         continue;
       }
@@ -1627,16 +1603,16 @@ nsAccessibilityService::MarkupAttributes(const nsIContent* aContent,
       nsAutoString value;
 
       if (aContent->IsElement()) {
-        aContent->AsElement()->GetAttr(kNameSpaceID_None, info->DOMAttrName, value);
+        aContent->AsElement()->GetAttr(kNameSpaceID_None, *info->DOMAttrName, value);
       }
 
       if (!value.IsEmpty())
-        nsAccUtils::SetAccAttr(aAttributes, info->name, value);
+        nsAccUtils::SetAccAttr(aAttributes, *info->name, value);
 
       continue;
     }
 
-    nsAccUtils::SetAccAttr(aAttributes, info->name, info->value);
+    nsAccUtils::SetAccAttr(aAttributes, *info->name, *info->value);
   }
 }
 

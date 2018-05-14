@@ -544,20 +544,9 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     // Common interface.
     /////////////////////////////////////////////////////////////////
 
-    CodeOffsetJump jumpWithPatch(RepatchLabel* label, Label* documentation = nullptr) {
+    CodeOffsetJump jumpWithPatch(RepatchLabel* label) {
         JmpSrc src = jmpSrc(label);
         return CodeOffsetJump(size(), addPatchableJump(src, Relocation::HARDCODED));
-    }
-
-    CodeOffsetJump jumpWithPatch(RepatchLabel* label, Condition cond,
-                                 Label* documentation = nullptr)
-    {
-        JmpSrc src = jSrc(cond, label);
-        return CodeOffsetJump(size(), addPatchableJump(src, Relocation::HARDCODED));
-    }
-
-    CodeOffsetJump backedgeJump(RepatchLabel* label, Label* documentation = nullptr) {
-        return jumpWithPatch(label);
     }
 
     void movePtr(Register src, Register dest) {
@@ -894,11 +883,6 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     Register extractObject(const ValueOperand& value, Register scratch) {
         MOZ_ASSERT(scratch != ScratchReg);
         unboxObject(value, scratch);
-        return scratch;
-    }
-    Register extractString(const ValueOperand& value, Register scratch) {
-        MOZ_ASSERT(scratch != ScratchReg);
-        unboxString(value, scratch);
         return scratch;
     }
     Register extractSymbol(const ValueOperand& value, Register scratch) {

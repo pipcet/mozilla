@@ -502,8 +502,8 @@ FuncCast(F* funcPtr, ABIFunctionType abiType)
     return pf;
 }
 
-void*
-wasm::AddressOf(SymbolicAddress imm, ABIFunctionType* abiType)
+static void*
+AddressOf(SymbolicAddress imm, ABIFunctionType* abiType)
 {
     switch (imm) {
       case SymbolicAddress::HandleDebugTrap:
@@ -536,6 +536,9 @@ wasm::AddressOf(SymbolicAddress imm, ABIFunctionType* abiType)
       case SymbolicAddress::CallImport_F64:
         *abiType = Args_General4;
         return FuncCast(Instance::callImport_f64, *abiType);
+      case SymbolicAddress::CallImport_Ref:
+        *abiType = Args_General4;
+        return FuncCast(Instance::callImport_ref, *abiType);
       case SymbolicAddress::CoerceInPlace_ToInt32:
         *abiType = Args_General1;
         return FuncCast(CoerceInPlace_ToInt32, *abiType);
@@ -664,6 +667,12 @@ wasm::AddressOf(SymbolicAddress imm, ABIFunctionType* abiType)
       case SymbolicAddress::Wake:
         *abiType = Args_General3;
         return FuncCast(Instance::wake, *abiType);
+      case SymbolicAddress::MemCopy:
+        *abiType = Args_General4;
+        return FuncCast(Instance::memCopy, *abiType);
+      case SymbolicAddress::MemFill:
+        *abiType = Args_General4;
+        return FuncCast(Instance::memFill, *abiType);
 #if defined(JS_CODEGEN_MIPS32)
       case SymbolicAddress::js_jit_gAtomic64Lock:
         return &js::jit::gAtomic64Lock;
@@ -690,6 +699,7 @@ wasm::NeedsBuiltinThunk(SymbolicAddress sym)
       case SymbolicAddress::CallImport_I32:
       case SymbolicAddress::CallImport_I64:
       case SymbolicAddress::CallImport_F64:
+      case SymbolicAddress::CallImport_Ref:
       case SymbolicAddress::CoerceInPlace_ToInt32:    // GenerateImportJitExit
       case SymbolicAddress::CoerceInPlace_ToNumber:
 #if defined(JS_CODEGEN_MIPS32)
@@ -739,6 +749,8 @@ wasm::NeedsBuiltinThunk(SymbolicAddress sym)
       case SymbolicAddress::Wake:
       case SymbolicAddress::CoerceInPlace_JitEntry:
       case SymbolicAddress::ReportInt64JSCall:
+      case SymbolicAddress::MemCopy:
+      case SymbolicAddress::MemFill:
         return true;
       case SymbolicAddress::Limit:
         break;

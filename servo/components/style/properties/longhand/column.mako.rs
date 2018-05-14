@@ -30,20 +30,6 @@ ${helpers.predefined_type(
 )}
 
 
-<%
-# FIXME(#20498): Servo should support percentages in column-gap.
-col_gap_type = "NonNegativeLengthOrPercentageOrNormal" if product == "gecko" else "NonNegativeLengthOrNormal"
-%>
-${helpers.predefined_type(
-    "column-gap",
-    "length::%s" % col_gap_type,
-    "Either::Second(Normal)",
-    extra_prefixes="moz",
-    servo_pref="layout.columns.enabled",
-    animation_value_type=col_gap_type,
-    spec="https://drafts.csswg.org/css-multicol/#propdef-column-gap",
-    servo_restyle_damage = "reflow",
-)}
 
 ${helpers.single_keyword("column-fill", "balance auto", extra_prefixes="moz",
                          products="gecko", animation_value_type="discrete",
@@ -76,7 +62,7 @@ ${helpers.single_keyword("column-span", "none all",
                          products="gecko", animation_value_type="discrete",
                          gecko_pref="layout.css.column-span.enabled",
                          spec="https://drafts.csswg.org/css-multicol/#propdef-column-span",
-                         extra_prefixes="moz")}
+                         extra_prefixes="moz:layout.css.column-span.enabled")}
 
 ${helpers.single_keyword("column-rule-style",
                          "none hidden dotted dashed solid double groove ridge inset outset",

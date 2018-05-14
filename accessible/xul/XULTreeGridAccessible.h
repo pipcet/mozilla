@@ -30,7 +30,7 @@ public:
     { mGenericTypes |= eTable; }
 
   // TableAccessible
-  virtual uint32_t ColCount() override;
+  virtual uint32_t ColCount() const override;
   virtual uint32_t RowCount() override;
   virtual Accessible* CellAt(uint32_t aRowIndex, uint32_t aColumnIndex) override;
   virtual void ColDescription(uint32_t aColIdx, nsString& aDescription) override;
@@ -126,7 +126,8 @@ public:
   // Accessible
   virtual void Shutdown() override;
   virtual TableCellAccessible* AsTableCell() override { return this; }
-  virtual nsIntRect Bounds() const override;
+  virtual nsRect BoundsInAppUnits() const override;
+  virtual nsIntRect BoundsInCSSPixels() const override;
   virtual ENameValueFlag Name(nsString& aName) override;
   virtual Accessible* FocusedChild() override;
   virtual already_AddRefed<nsIPersistentProperties> NativeAttributes() override;
@@ -162,7 +163,8 @@ protected:
   // Accessible
   virtual Accessible* GetSiblingAtOffset(int32_t aOffset,
                                          nsresult* aError = nullptr) const override;
-  virtual void DispatchClickEvent(nsIContent* aContent, uint32_t aActionIndex) override;
+  virtual void DispatchClickEvent(nsIContent* aContent,
+                                  uint32_t aActionIndex) const override;
 
   // XULTreeGridCellAccessible
 

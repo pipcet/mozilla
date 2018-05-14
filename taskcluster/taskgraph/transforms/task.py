@@ -30,15 +30,13 @@ from taskgraph.util.schema import (
 )
 from taskgraph.util.scriptworker import (
     BALROG_ACTIONS,
-    get_balrog_action_scope,
-    get_balrog_server_scope,
     get_release_config,
 )
 from voluptuous import Any, Required, Optional, Extra
 from taskgraph import GECKO, MAX_DEPENDENCIES
 from ..util import docker as dockerutil
 
-RUN_TASK = os.path.join(GECKO, 'taskcluster', 'docker', 'recipes', 'run-task')
+RUN_TASK = os.path.join(GECKO, 'taskcluster', 'scripts', 'run-task')
 
 
 @memoize
@@ -171,9 +169,7 @@ task_description_schema = Schema({
     # release promotion product that this task belongs to.
     Required('shipping-product'): Any(
         None,
-        'devedition',
-        'fennec',
-        'firefox',
+        basestring
     ),
 
     # Coalescing provides the facility for tasks to be superseded by the same
@@ -378,27 +374,7 @@ task_description_schema = Schema({
 
         # optional features
         Required('chain-of-trust'): bool,
-    }, {
-        Required('implementation'): 'buildbot-bridge',
-
-        # see
-        # https://github.com/mozilla/buildbot-bridge/blob/master/bbb/schemas/payload.yml
-        Required('buildername'): basestring,
-        Required('sourcestamp'): {
-            'branch': basestring,
-            Optional('revision'): basestring,
-            Optional('repository'): basestring,
-            Optional('project'): basestring,
-        },
-        Required('properties'): {
-            'product': basestring,
-            Optional('build_number'): int,
-            Optional('release_promotion'): bool,
-            Optional('generate_bz2_blob'): bool,
-            Optional('tuxedo_server_url'): optionally_keyed_by('project', basestring),
-            Optional('release_eta'): basestring,
-            Extra: taskref_or_string,  # additional properties are allowed
-        },
+        Optional('taskcluster-proxy'): bool,
     }, {
         Required('implementation'): 'native-engine',
         Required('os'): Any('macosx', 'linux'),
@@ -458,10 +434,12 @@ task_description_schema = Schema({
         Required('implementation'): 'beetmover',
 
         # the maximum time to run, in seconds
-        Required('max-run-time'): int,
+        Required('max-run-time', default=600): int,
 
         # locale key, if this is a locale beetmover job
         Optional('locale'): basestring,
+
+        Optional('partner-public'): bool,
 
         Required('release-properties'): {
             'app-name': basestring,
@@ -497,6 +475,7 @@ task_description_schema = Schema({
         Required('balrog-action'): Any(*BALROG_ACTIONS),
         Optional('product'): basestring,
         Optional('platforms'): [basestring],
+        Optional('release-eta'): basestring,
         Optional('channel-names'): optionally_keyed_by('project', [basestring]),
         Optional('require-mirrors'): bool,
         Optional('publish-rules'): optionally_keyed_by('project', [int]),
@@ -547,6 +526,14 @@ task_description_schema = Schema({
         Optional('rollout-percentage'): Any(int, None),
     }, {
         Required('implementation'): 'push-snap',
+        Required('upstream-artifacts'): [{
+            Required('taskId'): taskref_or_string,
+            Required('taskType'): basestring,
+            Required('paths'): [basestring],
+        }],
+    }, {
+        Required('implementation'): 'sign-and-push-addons',
+        Required('channel'): Any('listed', 'unlisted'),
         Required('upstream-artifacts'): [{
             Required('taskId'): taskref_or_string,
             Required('taskType'): basestring,
@@ -608,25 +595,9 @@ V2_L10N_TEMPLATES = [
 # the roots of the treeherder routes
 TREEHERDER_ROUTE_ROOT = 'tc-treeherder'
 
-# Which repository repository revision to use when reporting results to treeherder.
-DEFAULT_BRANCH_REV_PARAM = 'head_rev'
-BRANCH_REV_PARAM = {
-    'comm-esr45': 'comm_head_rev',
-    'comm-esr52': 'comm_head_rev',
-    'comm-beta': 'comm_head_rev',
-    'comm-central': 'comm_head_rev',
-    'comm-aurora': 'comm_head_rev',
-    'try-comm-central': 'comm_head_rev',
-}
-
 
 def get_branch_rev(config):
-    return config.params[
-        BRANCH_REV_PARAM.get(
-            config.params['project'],
-            DEFAULT_BRANCH_REV_PARAM
-        )
-    ]
+    return config.params['{}head_rev'.format(config.graph_config['project-repo-param-prefix'])]
 
 
 COALESCE_KEY = '{project}.{job-identifier}'
@@ -653,7 +624,6 @@ BRANCH_PRIORITIES = {
     'birch': 'very-low',
     'cedar': 'very-low',
     'cypress': 'very-low',
-    'date': 'very-low',
     'elm': 'very-low',
     'fig': 'very-low',
     'gum': 'very-low',
@@ -707,7 +677,7 @@ def superseder_url(config, task):
     )
 
 
-UNSUPPORTED_PRODUCT_ERROR = """\
+UNSUPPORTED_INDEX_PRODUCT_ERROR = """\
 The gecko-v2 product {product} is not in the list of configured products in
 `taskcluster/ci/config.yml'.
 """
@@ -716,7 +686,7 @@ The gecko-v2 product {product} is not in the list of configured products in
 def verify_index(config, index):
     product = index['product']
     if product not in config.graph_config['index']['products']:
-        raise Exception(UNSUPPORTED_PRODUCT_ERROR.format(product=product))
+        raise Exception(UNSUPPORTED_INDEX_PRODUCT_ERROR.format(product=product))
 
 
 @payload_builder('docker-worker')
@@ -959,6 +929,9 @@ def build_generic_worker_payload(config, task, task_def):
     if worker.get('chain-of-trust'):
         features['chainOfTrust'] = True
 
+    if worker.get('taskcluster-proxy'):
+        features['taskclusterProxy'] = True
+
     if features:
         task_def['payload']['features'] = features
 
@@ -1019,6 +992,8 @@ def build_beetmover_payload(config, task, task_def):
     }
     if worker.get('locale'):
         task_def['payload']['locale'] = worker['locale']
+    if worker.get('partner-public'):
+        task_def['payload']['is_partner_repack_public'] = worker['partner-public']
     if release_config:
         task_def['payload'].update(release_config)
 
@@ -1040,10 +1015,6 @@ def build_beetmover_cdns_payload(config, task, task_def):
 def build_balrog_payload(config, task, task_def):
     worker = task['worker']
     release_config = get_release_config(config)
-
-    server_scope = get_balrog_server_scope(config)
-    action_scope = get_balrog_action_scope(config, action=worker['balrog-action'])
-    task_def['scopes'] = [server_scope, action_scope]
 
     if worker['balrog-action'] == 'submit-locale':
         task_def['payload'] = {
@@ -1076,7 +1047,7 @@ def build_balrog_payload(config, task, task_def):
         else:  # schedule / ship
             task_def['payload'].update({
                 'publish_rules': worker['publish-rules'],
-                'release_eta': config.params.get('release_eta') or '',
+                'release_eta': worker.get('release-eta', config.params.get('release_eta')) or '',
             })
 
 
@@ -1105,7 +1076,7 @@ def build_push_apk_payload(config, task, task_def):
 
     task_def['payload'] = {
         'commit': worker['commit'],
-        'upstreamArtifacts':  worker['upstream-artifacts'],
+        'upstreamArtifacts': worker['upstream-artifacts'],
         'google_play_track': worker['google-play-track'],
     }
 
@@ -1128,6 +1099,16 @@ def build_ship_it_payload(config, task, task_def):
 
     task_def['payload'] = {
         'release_name': worker['release-name']
+    }
+
+
+@payload_builder('sign-and-push-addons')
+def build_sign_and_push_addons_payload(config, task, task_def):
+    worker = task['worker']
+
+    task_def['payload'] = {
+        'channel': worker['channel'],
+        'upstreamArtifacts': worker['upstream-artifacts'],
     }
 
 
@@ -1204,29 +1185,6 @@ def build_macosx_engine_payload(config, task, task_def):
         raise Exception('needs-sccache not supported in native-engine')
 
 
-@payload_builder('buildbot-bridge')
-def build_buildbot_bridge_payload(config, task, task_def):
-    task['extra'].pop('treeherder', None)
-    worker = task['worker']
-
-    if worker['properties'].get('tuxedo_server_url'):
-        resolve_keyed_by(
-            worker, 'properties.tuxedo_server_url', worker['buildername'],
-            **config.params
-        )
-
-    task_def['payload'] = {
-        'buildername': worker['buildername'],
-        'sourcestamp': worker['sourcestamp'],
-        'properties': worker['properties'],
-    }
-    task_def.setdefault('scopes', [])
-    if worker['properties'].get('release_promotion'):
-        task_def['scopes'].append(
-            "project:releng:buildbot-bridge:builder-name:{}".format(worker['buildername'])
-        )
-
-
 transforms = TransformSequence()
 
 
@@ -1281,12 +1239,25 @@ def task_name_from_label(config, tasks):
         yield task
 
 
+UNSUPPORTED_SHIPPING_PRODUCT_ERROR = """\
+The shipping product {product} is not in the list of configured products in
+`taskcluster/ci/config.yml'.
+"""
+
+
+def validate_shipping_product(config, product):
+    if product not in config.graph_config['release-promotion']['products']:
+        raise Exception(UNSUPPORTED_SHIPPING_PRODUCT_ERROR.format(product=product))
+
+
 @transforms.add
 def validate(config, tasks):
     for task in tasks:
         validate_schema(
             task_description_schema, task,
             "In task {!r}:".format(task.get('label', '?no-label?')))
+        if task['shipping-product'] is not None:
+            validate_shipping_product(config, task['shipping-product'])
         yield task
 
 
@@ -1503,6 +1474,7 @@ def build_task(config, tasks):
         extra['parent'] = os.environ.get('TASK_ID', '')
         task_th = task.get('treeherder')
         if task_th:
+            extra.setdefault('treeherder-platform', task_th['platform'])
             treeherder = extra.setdefault('treeherder', {})
 
             machine_platform, collection = task_th['platform'].split('/', 1)
@@ -1537,7 +1509,7 @@ def build_task(config, tasks):
             )
 
         if 'expires-after' not in task:
-            task['expires-after'] = '28 days' if config.params['project'] == 'try' else '1 year'
+            task['expires-after'] = '28 days' if config.params.is_try() else '1 year'
 
         if 'deadline-after' not in task:
             task['deadline-after'] = '1 day'

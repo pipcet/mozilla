@@ -106,10 +106,6 @@ button {
   -moz-binding: url("chrome://global/content/bindings/button.xml#button");
 }
 
-button[type="repeat"] {
-  -moz-binding: url("chrome://global/content/bindings/button.xml#button-repeat");
-}
-
 button[type="menu"] {
   -moz-binding: url("chrome://global/content/bindings/button.xml#menu");
 }
@@ -142,6 +138,7 @@ toolbarbutton.badged-button[type="menu"] {
   -moz-binding: url("chrome://global/content/bindings/toolbarbutton.xml#toolbarbutton-badged-menu");
 }
 
+toolbarbutton:not([type="menu"]) > .toolbarbutton-menu-dropmarker,
 toolbar[mode="icons"] .toolbarbutton-text,
 toolbar[mode="icons"] .toolbarbutton-multiline-text,
 toolbar[mode="text"] .toolbarbutton-icon,
@@ -271,7 +268,6 @@ menulist {
 /******* toolbar *******/
 
 toolbox {
-  -moz-appearance: toolbox;
   -moz-box-orient: vertical;
 }
 
@@ -317,12 +313,6 @@ toolbarpaletteitem {
 toolbarpaletteitem[place="palette"] {
   -moz-box-orient: vertical;
   -moz-binding: url("chrome://global/content/bindings/toolbar.xml#toolbarpaletteitem-palette");
-}
-
-/********* menubar ***********/
-
-menubar {
-  -moz-binding: url("chrome://global/content/bindings/toolbar.xml#menubar");
 }
 
 /********* menu ***********/
@@ -833,6 +823,12 @@ menulist > menupopup > menuitem {
   -moz-binding: url("chrome://global/content/bindings/menu.xml#menuitem-iconic-noaccel");
 }
 
+html|*.menulist-editable-input {
+  -moz-appearance: none !important;
+  background: transparent ! important;
+  -moz-box-flex: 1;
+}
+
 dropmarker {
   -moz-binding: url("chrome://global/content/bindings/general.xml#dropmarker");
 }
@@ -892,13 +888,9 @@ autorepeatbutton {
 
 /********** stringbundle **********/
 
+stringbundle,
 stringbundleset {
-  visibility: collapse;
-}
-
-stringbundle {
-  -moz-binding: url("chrome://global/content/bindings/stringbundle.xml#stringbundle");
-  visibility: collapse;
+  display: none;
 }
 
 /********** dialog **********/
@@ -964,12 +956,6 @@ findbar {
 
 .findbar-textbox {
   -moz-binding: url("chrome://global/content/bindings/findbar.xml#findbar-textbox");
-}
-
-
-/*********** filefield ************/
-filefield {
-  -moz-binding: url("chrome://global/content/bindings/filefield.xml#filefield");
 }
 
 /*********** tabmodalprompt ************/

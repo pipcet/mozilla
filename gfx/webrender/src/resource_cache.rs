@@ -4,7 +4,7 @@
 
 use api::{AddFont, BlobImageData, BlobImageResources, ResourceUpdate, ResourceUpdates};
 use api::{BlobImageDescriptor, BlobImageError, BlobImageRenderer, BlobImageRequest};
-use api::{ClearCache, ColorF, DevicePoint, DeviceUintRect, DeviceUintSize};
+use api::{ClearCache, ColorF, DevicePoint, DeviceUintPoint, DeviceUintRect, DeviceUintSize};
 use api::{Epoch, FontInstanceKey, FontKey, FontTemplate};
 use api::{ExternalImageData, ExternalImageType};
 use api::{FontInstanceOptions, FontInstancePlatformOptions, FontVariation};
@@ -24,10 +24,12 @@ use glyph_cache::GlyphCache;
 use glyph_cache::GlyphCacheEntry;
 use glyph_rasterizer::{FontInstance, GlyphFormat, GlyphRasterizer, GlyphRequest};
 use gpu_cache::{GpuCache, GpuCacheAddress, GpuCacheHandle};
+use gpu_types::UvRectKind;
 use internal_types::{FastHashMap, FastHashSet, SourceTexture, TextureUpdateList};
 use profiler::{ResourceProfileCounters, TextureCacheProfileCounters};
 use render_backend::FrameId;
-use render_task::{RenderTaskCache, RenderTaskCacheKey, RenderTaskId, RenderTaskTree};
+use render_task::{RenderTaskCache, RenderTaskCacheKey, RenderTaskId};
+use render_task::{RenderTaskCacheEntry, RenderTaskCacheEntryHandle, RenderTaskTree};
 use std::collections::hash_map::Entry::{self, Occupied, Vacant};
 use std::cmp;
 use std::fmt::Debug;
@@ -108,8 +110,6 @@ pub struct ImageTiling {
     pub tile_size: TileSize,
 }
 
-pub type TiledImageMap = FastHashMap<ImageKey, ImageTiling>;
-
 #[derive(Default)]
 struct ImageTemplates {
     images: FastHashMap<ImageKey, ImageResource>,
@@ -146,6 +146,29 @@ pub struct ResourceClassCache<K: Hash + Eq, V, U: Default> {
     resources: FastHashMap<K, V>,
     pub user_data: U,
 }
+
+pub fn intersect_for_tile(
+    dirty: DeviceUintRect,
+    width: u32,
+    height: u32,
+    tile_size: TileSize,
+    tile_offset: TileOffset,
+
+) -> Option<DeviceUintRect> {
+        dirty.intersection(&DeviceUintRect::new(
+            DeviceUintPoint::new(
+                tile_offset.x as u32 * tile_size as u32,
+                tile_offset.y as u32 * tile_size as u32
+            ),
+            DeviceUintSize::new(width, height),
+        )).map(|mut r| {
+                // we can't translate by a negative size so do it manually
+                r.origin.x -= tile_offset.x as u32 * tile_size as u32;
+                r.origin.y -= tile_offset.y as u32 * tile_size as u32;
+                r
+            })
+}
+
 
 impl<K, V, U> ResourceClassCache<K, V, U>
 where
@@ -211,6 +234,16 @@ pub struct ImageRequest {
     pub key: ImageKey,
     pub rendering: ImageRendering,
     pub tile: Option<TileOffset>,
+}
+
+impl ImageRequest {
+    pub fn with_tile(&self, offset: TileOffset) -> Self {
+        ImageRequest {
+            key: self.key,
+            rendering: self.rendering,
+            tile: Some(offset),
+        }
+    }
 }
 
 impl Into<BlobImageRequest> for ImageRequest {
@@ -323,14 +356,16 @@ impl ResourceCache {
         gpu_cache: &mut GpuCache,
         render_tasks: &mut RenderTaskTree,
         user_data: Option<[f32; 3]>,
+        is_opaque: bool,
         mut f: F,
-    ) -> CacheItem where F: FnMut(&mut RenderTaskTree) -> (RenderTaskId, bool) {
+    ) -> RenderTaskCacheEntryHandle where F: FnMut(&mut RenderTaskTree) -> RenderTaskId {
         self.cached_render_tasks.request_render_task(
             key,
             &mut self.texture_cache,
             gpu_cache,
             render_tasks,
             user_data,
+            is_opaque,
             |render_task_tree| Ok(f(render_task_tree))
         ).expect("Failed to request a render task from the resource cache!")
     }
@@ -482,7 +517,8 @@ impl ResourceCache {
             data,
             epoch: Epoch(0),
             tiling,
-            dirty_rect: None,
+            dirty_rect: Some(DeviceUintRect::new(DeviceUintPoint::zero(),
+                                                 DeviceUintSize::new(descriptor.width, descriptor.height))),
         };
 
         self.resources.image_templates.insert(image_key, resource);
@@ -597,7 +633,7 @@ impl ResourceCache {
         };
 
         let needs_upload = self.texture_cache
-            .request(&mut entry.as_mut().unwrap().texture_cache_handle, gpu_cache);
+            .request(&entry.as_ref().unwrap().texture_cache_handle, gpu_cache);
 
         if !needs_upload && !needs_update {
             return;
@@ -620,6 +656,13 @@ impl ResourceCache {
                             tile_offset.x as f32 * tile_size as f32,
                             tile_offset.y as f32 * tile_size as f32,
                         );
+
+                        if let Some(dirty) = template.dirty_rect {
+                            if intersect_for_tile(dirty, w, h, tile_size, tile_offset).is_none() {
+                                // don't bother requesting unchanged tiles
+                                return
+                            }
+                        }
 
                         (offset, w, h)
                     }
@@ -809,6 +852,17 @@ impl ResourceCache {
         }
     }
 
+    pub fn get_cached_render_task(
+        &self,
+        handle: &RenderTaskCacheEntryHandle,
+    ) -> &RenderTaskCacheEntry {
+        self.cached_render_tasks.get_cache_entry(handle)
+    }
+
+    pub fn get_texture_cache_item(&self, handle: &TextureCacheHandle) -> CacheItem {
+        self.texture_cache.get(handle)
+    }
+
     pub fn get_image_properties(&self, image_key: ImageKey) -> Option<ImageProperties> {
         let image_template = &self.resources.image_templates.get(image_key);
 
@@ -832,33 +886,11 @@ impl ResourceCache {
         })
     }
 
-    pub fn get_tiled_image_map(&self) -> TiledImageMap {
-        self.resources
-            .image_templates
-            .images
-            .iter()
-            .filter_map(|(&key, template)| {
-                template.tiling.map(|tile_size| {
-                    (
-                        key,
-                        ImageTiling {
-                            image_size: DeviceUintSize::new(
-                                template.descriptor.width,
-                                template.descriptor.height,
-                            ),
-                            tile_size,
-                        },
-                    )
-                })
-            })
-            .collect()
-    }
-
     pub fn begin_frame(&mut self, frame_id: FrameId) {
         debug_assert_eq!(self.state, State::Idle);
         self.state = State::AddResources;
         self.texture_cache.begin_frame(frame_id);
-        self.cached_glyphs.begin_frame(&mut self.texture_cache, &self.cached_render_tasks);
+        self.cached_glyphs.begin_frame(&self.texture_cache, &self.cached_render_tasks);
         self.cached_render_tasks.begin_frame(&mut self.texture_cache);
         self.current_frame_id = frame_id;
     }
@@ -885,6 +917,12 @@ impl ResourceCache {
 
         // Apply any updates of new / updated images (incl. blobs) to the texture cache.
         self.update_texture_cache(gpu_cache);
+        render_tasks.prepare_for_render();
+        self.cached_render_tasks.update(
+            gpu_cache,
+            &mut self.texture_cache,
+            render_tasks,
+        );
         self.texture_cache.end_frame(texture_cache_profile);
     }
 
@@ -892,6 +930,7 @@ impl ResourceCache {
         for request in self.pending_image_requests.drain() {
             let image_template = self.resources.image_templates.get_mut(request.key).unwrap();
             debug_assert!(image_template.data.uses_texture_cache());
+            let mut dirty_rect = image_template.dirty_rect;
 
             let image_data = match image_template.data {
                 ImageData::Raw(..) | ImageData::External(..) => {
@@ -933,6 +972,13 @@ impl ResourceCache {
 
                 let (actual_width, actual_height) =
                     compute_tile_size(image_descriptor, tile_size, tile);
+
+                if let Some(dirty) = dirty_rect {
+                    dirty_rect = intersect_for_tile(dirty, actual_width, actual_height, tile_size, tile);
+                    if dirty_rect.is_none() {
+                        continue
+                    }
+                }
 
                 // The tiled image could be stored on the CPU as one large image or be
                 // already broken up into tiles. This affects the way we compute the stride
@@ -994,9 +1040,10 @@ impl ResourceCache {
                 filter,
                 Some(image_data),
                 [0.0; 3],
-                image_template.dirty_rect,
+                dirty_rect,
                 gpu_cache,
                 None,
+                UvRectKind::Rect,
             );
             image_template.dirty_rect = None;
         }
@@ -1045,6 +1092,10 @@ impl ResourceCache {
             .retain(|key, _| key.0 != namespace);
         self.cached_glyphs
             .clear_fonts(|font| font.font_key.0 == namespace);
+
+        if let Some(ref mut r) = self.blob_image_renderer {
+            r.clear_namespace(namespace);
+        }
     }
 }
 

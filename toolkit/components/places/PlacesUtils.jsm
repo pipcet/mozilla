@@ -13,11 +13,9 @@ ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 XPCOMUtils.defineLazyModuleGetters(this, {
   Services: "resource://gre/modules/Services.jsm",
   NetUtil: "resource://gre/modules/NetUtil.jsm",
-  OS: "resource://gre/modules/osfile.jsm",
   Sqlite: "resource://gre/modules/Sqlite.jsm",
   Bookmarks: "resource://gre/modules/Bookmarks.jsm",
   History: "resource://gre/modules/History.jsm",
-  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
   PlacesSyncUtils: "resource://gre/modules/PlacesSyncUtils.jsm",
 });
 
@@ -146,7 +144,6 @@ function serializeNode(aNode, aIsLivemark) {
   data.instanceId = PlacesUtils.instanceId;
 
   let guid = aNode.bookmarkGuid;
-  let grandParentId;
 
   // Some nodes, e.g. the unfiled/menu/toolbar ones can have a virtual guid, so
   // we ignore any that are a folder shortcut. These will be handled below.
@@ -155,11 +152,6 @@ function serializeNode(aNode, aIsLivemark) {
     if (aNode.parent) {
       data.parent = aNode.parent.itemId;
       data.parentGuid = aNode.parent.bookmarkGuid;
-    }
-
-    let grandParent = aNode.parent && aNode.parent.parent;
-    if (grandParent) {
-      grandParentId = grandParent.itemId;
     }
 
     data.dateAdded = aNode.dateAdded;
@@ -172,46 +164,24 @@ function serializeNode(aNode, aIsLivemark) {
 
   if (PlacesUtils.nodeIsURI(aNode)) {
     // Check for url validity.
-    NetUtil.newURI(aNode.uri);
-
-    // Tag root accepts only folder nodes, not URIs.
-    if (data.parent == PlacesUtils.tagsFolderId)
-      throw new Error("Unexpected node type");
-
+    new URL(aNode.uri);
     data.type = PlacesUtils.TYPE_X_MOZ_PLACE;
     data.uri = aNode.uri;
-
     if (aNode.tags)
       data.tags = aNode.tags;
-  } else if (PlacesUtils.nodeIsContainer(aNode)) {
-    // Tag containers accept only uri nodes.
-    if (grandParentId == PlacesUtils.tagsFolderId)
-      throw new Error("Unexpected node type");
-
-    let concreteId = PlacesUtils.getConcreteItemId(aNode);
-    if (concreteId != -1) {
-      // This is a bookmark or a tag container.
-      if (PlacesUtils.nodeIsQuery(aNode) || concreteId != aNode.itemId) {
-        // This is a folder shortcut.
-        data.type = PlacesUtils.TYPE_X_MOZ_PLACE;
-        data.uri = aNode.uri;
-        data.concreteId = concreteId;
-        data.concreteGuid = PlacesUtils.getConcreteItemGuid(aNode);
-      } else {
-        // This is a bookmark folder.
-        data.type = PlacesUtils.TYPE_X_MOZ_PLACE_CONTAINER;
-      }
-    } else {
-      // This is a grouped container query, dynamically generated.
+  } else if (PlacesUtils.nodeIsFolder(aNode)) {
+    if (aNode.type == Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER_SHORTCUT) {
       data.type = PlacesUtils.TYPE_X_MOZ_PLACE;
       data.uri = aNode.uri;
+      data.concreteId = PlacesUtils.getConcreteItemId(aNode);
+      data.concreteGuid = PlacesUtils.getConcreteItemGuid(aNode);
+    } else {
+      data.type = PlacesUtils.TYPE_X_MOZ_PLACE_CONTAINER;
     }
+  } else if (PlacesUtils.nodeIsQuery(aNode)) {
+    data.type = PlacesUtils.TYPE_X_MOZ_PLACE;
+    data.uri = aNode.uri;
   } else if (PlacesUtils.nodeIsSeparator(aNode)) {
-    // Tag containers don't accept separators.
-    if (data.parent == PlacesUtils.tagsFolderId ||
-        grandParentId == PlacesUtils.tagsFolderId)
-      throw new Error("Unexpected node type");
-
     data.type = PlacesUtils.TYPE_X_MOZ_PLACE_SEPARATOR;
   }
 
@@ -354,7 +324,6 @@ var PlacesUtils = {
 
   LMANNO_FEEDURI: "livemark/feedURI",
   LMANNO_SITEURI: "livemark/siteURI",
-  READ_ONLY_ANNO: "placesInternal/READ_ONLY",
   CHARSET_ANNO: "URIProperties/characterSet",
   // Deprecated: This is only used for supporting import from older datasets.
   MOBILE_ROOT_ANNO: "mobile/bookmarksRoot",
@@ -723,7 +692,7 @@ var PlacesUtils = {
   SYNC_BOOKMARK_VALIDATORS,
   SYNC_CHANGE_RECORD_VALIDATORS,
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver]),
 
   _shutdownFunctions: [],
   registerShutdownFunction: function PU_registerShutdownFunction(aFunc) {
@@ -783,14 +752,14 @@ var PlacesUtils = {
   nodeIsTagQuery: function PU_nodeIsTagQuery(aNode) {
     if (aNode.type != Ci.nsINavHistoryResultNode.RESULT_TYPE_QUERY)
       return false;
-    // Direct child of RESULTS_AS_TAG_QUERY.
+    // Direct child of RESULTS_AS_TAGS_ROOT.
     let parent = aNode.parent;
     if (parent && PlacesUtils.asQuery(parent).queryOptions.resultType ==
-                    Ci.nsINavHistoryQueryOptions.RESULTS_AS_TAG_QUERY)
+                    Ci.nsINavHistoryQueryOptions.RESULTS_AS_TAGS_ROOT)
       return true;
     // We must also support the right pane of the Library, when the tag query
     // is the root node. Unfortunately this is also valid for any tag query
-    // selected in the left pane that is not a direct child of RESULTS_AS_TAG_QUERY.
+    // selected in the left pane that is not a direct child of RESULTS_AS_TAGS_ROOT.
     if (!parent && aNode == aNode.parentResult.root &&
         PlacesUtils.asQuery(aNode).query.tags.length == 1)
       return true;
@@ -844,8 +813,6 @@ var PlacesUtils = {
    * @param aNode
    *        a result node.
    * @return the concrete item-guid for aNode.
-   * @note unlike getConcreteItemId, this doesn't allow retrieving the guid of a
-   *       ta container.
    */
   getConcreteItemGuid(aNode) {
     if (aNode.type == Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER_SHORTCUT)
@@ -1558,29 +1525,6 @@ var PlacesUtils = {
     });
   },
 
-  /**
-   * Gets the favicon link url (moz-anno:) for a given page url.
-   *
-   * @param aPageURL url of the page to lookup the favicon for.
-   * @resolves to the nsIURL of the favicon link
-   * @rejects if the given url has no associated favicon.
-   */
-  promiseFaviconLinkUrl(aPageUrl) {
-    return new Promise((resolve, reject) => {
-      if (!(aPageUrl instanceof Ci.nsIURI))
-        aPageUrl = NetUtil.newURI(aPageUrl);
-
-      PlacesUtils.favicons.getFaviconURLForPage(aPageUrl, uri => {
-        if (uri) {
-          uri = PlacesUtils.favicons.getFaviconLinkForIcon(uri);
-          resolve(uri);
-        } else {
-          reject("favicon not found for uri");
-        }
-      });
-    });
-  },
-
    /**
    * Returns the passed URL with a #size ref for the specified size and
    * devicePixelRatio.
@@ -1756,7 +1700,7 @@ var PlacesUtils = {
       }
 
       switch (type) {
-        case Ci.nsINavBookmarksService.TYPE_BOOKMARK:
+        case PlacesUtils.bookmarks.TYPE_BOOKMARK:
           item.type = PlacesUtils.TYPE_X_MOZ_PLACE;
           // If this throws due to an invalid url, the item will be skipped.
           item.uri = NetUtil.newURI(aRow.getResultByName("url")).spec;
@@ -1767,7 +1711,7 @@ var PlacesUtils = {
             item.postData = entry.postData;
           }
           break;
-        case Ci.nsINavBookmarksService.TYPE_FOLDER:
+        case PlacesUtils.bookmarks.TYPE_FOLDER:
           item.type = PlacesUtils.TYPE_X_MOZ_PLACE_CONTAINER;
           // Mark root folders.
           if (itemId == PlacesUtils.placesRootId)
@@ -1781,11 +1725,11 @@ var PlacesUtils = {
           else if (itemId == PlacesUtils.mobileFolderId)
             item.root = "mobileFolder";
           break;
-        case Ci.nsINavBookmarksService.TYPE_SEPARATOR:
+        case PlacesUtils.bookmarks.TYPE_SEPARATOR:
           item.type = PlacesUtils.TYPE_X_MOZ_PLACE_SEPARATOR;
           break;
         default:
-          Cu.reportError("Unexpected bookmark type");
+          Cu.reportError(`Unexpected bookmark type ${type}`);
           break;
       }
       return item;
@@ -1907,9 +1851,7 @@ var PlacesUtils = {
 
 XPCOMUtils.defineLazyGetter(PlacesUtils, "history", function() {
   let hs = Cc["@mozilla.org/browser/nav-history-service;1"]
-             .getService(Ci.nsINavHistoryService)
-             .QueryInterface(Ci.nsIBrowserHistory)
-             .QueryInterface(Ci.nsPIPlacesDatabase);
+             .getService(Ci.nsINavHistoryService);
   return Object.freeze(new Proxy(hs, {
     get(target, name) {
       let property, object;
@@ -1927,10 +1869,6 @@ XPCOMUtils.defineLazyGetter(PlacesUtils, "history", function() {
     }
   }));
 });
-
-XPCOMUtils.defineLazyServiceGetter(PlacesUtils, "asyncHistory",
-                                   "@mozilla.org/browser/history;1",
-                                   "mozIAsyncHistory");
 
 XPCOMUtils.defineLazyServiceGetter(PlacesUtils, "favicons",
                                    "@mozilla.org/browser/favicon-service;1",
@@ -2739,7 +2677,7 @@ var GuidHelper = {
           this.updateCache(aParentId, aParentGuid);
         },
 
-        QueryInterface: XPCOMUtils.generateQI(Ci.nsINavBookmarkObserver),
+        QueryInterface: ChromeUtils.generateQI([Ci.nsINavBookmarkObserver]),
 
         onBeginUpdateBatch() {},
         onEndUpdateBatch() {},

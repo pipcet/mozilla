@@ -11,6 +11,7 @@
 #include "mtransport/runnable_utils.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
+#include "mozilla/layers/SharedSurfacesParent.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/webrender/RendererOGL.h"
 #include "mozilla/webrender/RenderTextureHost.h"
@@ -67,6 +68,7 @@ RenderThread::Start()
 #ifdef XP_WIN
   widget::WinCompositorWindowThread::Start();
 #endif
+  layers::SharedSurfacesParent::Initialize();
 }
 
 // static
@@ -95,11 +97,19 @@ RenderThread::ShutDown()
 #endif
 }
 
+extern void ClearAllBlobImageResources();
+
 void
 RenderThread::ShutDownTask(layers::SynchronousTask* aTask)
 {
   layers::AutoCompleteTask complete(aTask);
   MOZ_ASSERT(IsInRenderThread());
+
+  // Releasing on the render thread will allow us to avoid dispatching to remove
+  // remaining textures from the texture map.
+  layers::SharedSurfacesParent::Shutdown();
+
+  ClearAllBlobImageResources();
 }
 
 // static
@@ -182,7 +192,7 @@ RenderThread::NewFrameReady(wr::WindowId aWindowId)
   }
 
   UpdateAndRender(aWindowId);
-  DecPendingFrameCount(aWindowId);
+  FrameRenderingComplete(aWindowId);
 }
 
 void
@@ -232,17 +242,19 @@ RenderThread::RunEvent(wr::WindowId aWindowId, UniquePtr<RendererEvent> aEvent)
 
 static void
 NotifyDidRender(layers::CompositorBridgeParentBase* aBridge,
-                wr::WrPipelineInfo* aInfo,
+                wr::WrPipelineInfo aInfo,
                 TimeStamp aStart,
                 TimeStamp aEnd)
 {
-  wr::WrPipelineId pipeline;
-  wr::WrEpoch epoch;
-  while (wr_pipeline_info_next_epoch(aInfo, &pipeline, &epoch)) {
-    aBridge->NotifyDidCompositeToPipeline(pipeline, epoch, aStart, aEnd);
+  for (uintptr_t i = 0; i < aInfo.epochs.length; i++) {
+    aBridge->NotifyPipelineRendered(
+        aInfo.epochs.data[i].pipeline_id,
+        aInfo.epochs.data[i].epoch,
+        aStart,
+        aEnd);
   }
-  while (wr_pipeline_info_next_removed_pipeline(aInfo, &pipeline)) {
-    aBridge->NotifyPipelineRemoved(pipeline);
+  for (uintptr_t i = 0; i < aInfo.removed_pipelines.length; i++) {
+    aBridge->NotifyPipelineRemoved(aInfo.removed_pipelines.data[i]);
   }
 
   wr_pipeline_info_delete(aInfo);
@@ -372,6 +384,25 @@ RenderThread::IncPendingFrameCount(wr::WindowId aWindowId)
 }
 
 void
+RenderThread::DecPendingFrameCount(wr::WindowId aWindowId)
+{
+  MutexAutoLock lock(mFrameCountMapLock);
+  // Get the old count.
+  WindowInfo info;
+  if (!mWindowInfos.Get(AsUint64(aWindowId), &info)) {
+    MOZ_ASSERT(false);
+    return;
+  }
+  MOZ_ASSERT(info.mPendingCount > 0);
+  if (info.mPendingCount <= 0) {
+    return;
+  }
+  // Update pending frame count.
+  info.mPendingCount = info.mPendingCount - 1;
+  mWindowInfos.Put(AsUint64(aWindowId), info);
+}
+
+void
 RenderThread::IncRenderingFrameCount(wr::WindowId aWindowId)
 {
   MutexAutoLock lock(mFrameCountMapLock);
@@ -387,7 +418,7 @@ RenderThread::IncRenderingFrameCount(wr::WindowId aWindowId)
 }
 
 void
-RenderThread::DecPendingFrameCount(wr::WindowId aWindowId)
+RenderThread::FrameRenderingComplete(wr::WindowId aWindowId)
 {
   MutexAutoLock lock(mFrameCountMapLock);
   // Get the old count.
@@ -447,6 +478,16 @@ RenderThread::UnregisterExternalImage(uint64_t aExternalImageId)
 }
 
 void
+RenderThread::UnregisterExternalImageDuringShutdown(uint64_t aExternalImageId)
+{
+  MOZ_ASSERT(IsInRenderThread());
+  MutexAutoLock lock(mRenderTextureMapLock);
+  MOZ_ASSERT(mHasShutdown);
+  MOZ_ASSERT(mRenderTextures.GetWeak(aExternalImageId));
+  mRenderTextures.Remove(aExternalImageId);
+}
+
+void
 RenderThread::DeferredRenderTextureHostDestroy(RefPtr<RenderTextureHost>)
 {
   // Do nothing. Just decrease the ref-count of RenderTextureHost.
@@ -501,12 +542,12 @@ extern "C" {
 static void NewFrameReady(mozilla::wr::WrWindowId aWindowId)
 {
   mozilla::wr::RenderThread::Get()->IncRenderingFrameCount(aWindowId);
-  mozilla::wr::RenderThread::Get()->NewFrameReady(mozilla::wr::WindowId(aWindowId));
+  mozilla::wr::RenderThread::Get()->NewFrameReady(aWindowId);
 }
 
 void wr_notifier_wake_up(mozilla::wr::WrWindowId aWindowId)
 {
-  mozilla::wr::RenderThread::Get()->WakeUp(mozilla::wr::WindowId(aWindowId));
+  mozilla::wr::RenderThread::Get()->WakeUp(aWindowId);
 }
 
 void wr_notifier_new_frame_ready(mozilla::wr::WrWindowId aWindowId)
@@ -514,15 +555,9 @@ void wr_notifier_new_frame_ready(mozilla::wr::WrWindowId aWindowId)
   NewFrameReady(aWindowId);
 }
 
-void wr_notifier_new_scroll_frame_ready(mozilla::wr::WrWindowId aWindowId, bool aCompositeNeeded)
+void wr_notifier_nop_frame_done(mozilla::wr::WrWindowId aWindowId)
 {
-  // If we sent a transaction that contained both scrolling updates and a
-  // GenerateFrame, we can get this function called with aCompositeNeeded=true
-  // instead of wr_notifier_new_frame_ready. In that case we want to update the
-  // rendering.
-  if (aCompositeNeeded) {
-    NewFrameReady(aWindowId);
-  }
+  mozilla::wr::RenderThread::Get()->DecPendingFrameCount(aWindowId);
 }
 
 void wr_notifier_external_event(mozilla::wr::WrWindowId aWindowId, size_t aRawEvent)
@@ -531,6 +566,15 @@ void wr_notifier_external_event(mozilla::wr::WrWindowId aWindowId, size_t aRawEv
     reinterpret_cast<mozilla::wr::RendererEvent*>(aRawEvent));
   mozilla::wr::RenderThread::Get()->RunEvent(mozilla::wr::WindowId(aWindowId),
                                              mozilla::Move(evt));
+}
+
+void wr_schedule_render(mozilla::wr::WrWindowId aWindowId)
+{
+  RefPtr<mozilla::layers::CompositorBridgeParent> cbp =
+      mozilla::layers::CompositorBridgeParent::GetCompositorBridgeParentFromWindowId(aWindowId);
+  if (cbp) {
+    cbp->ScheduleRenderOnCompositorThread();
+  }
 }
 
 } // extern C

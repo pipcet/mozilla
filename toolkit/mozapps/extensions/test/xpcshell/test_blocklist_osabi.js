@@ -261,7 +261,7 @@ async function loadBlocklist(file) {
 
   Services.prefs.setCharPref("extensions.blocklist.url",
                              "http://example.com/data/" + file);
-  Services.blocklist.QueryInterface(Ci.nsITimerCallback).notify(null);
+  Blocklist.notify();
 
   return blocklistUpdated;
 }
@@ -286,13 +286,17 @@ add_task(async function test_1() {
   await loadBlocklist("test_bug393285.xml");
 
   let addons = await getAddons(ADDON_IDS);
+  async function isBlocklisted(addon, appVer, toolkitVer) {
+    let state = await Blocklist.getAddonBlocklistState(addon, appVer, toolkitVer);
+    return state != Services.blocklist.STATE_NOT_BLOCKED;
+  }
   for (let [id, options] of Object.entries(ADDONS)) {
     for (let blocklisted of options.blocklisted || []) {
-      ok(Services.blocklist.isAddonBlocklisted(addons.get(id), ...blocklisted),
+      ok(await isBlocklisted(addons.get(id), ...blocklisted),
          `Add-on ${id} should be blocklisted in app/platform version ${blocklisted}`);
     }
     for (let notBlocklisted of options.notBlocklisted || []) {
-      ok(!Services.blocklist.isAddonBlocklisted(addons.get(id), ...notBlocklisted),
+      ok(!(await isBlocklisted(addons.get(id), ...notBlocklisted)),
          `Add-on ${id} should not be blocklisted in app/platform version ${notBlocklisted}`);
     }
   }

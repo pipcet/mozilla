@@ -57,7 +57,7 @@ class nsCanvasFrame;
 class nsCaret;
 namespace mozilla {
 class AccessibleCaretEventHub;
-class ServoStyleSheet;
+class StyleSheet;
 } // namespace mozilla
 class nsFrameSelection;
 class nsFrameManager;
@@ -65,12 +65,10 @@ class nsILayoutHistoryState;
 class nsIReflowCallback;
 class nsIDOMNode;
 class nsCSSFrameConstructor;
-class nsISelection;
 template<class E> class nsCOMArray;
 class AutoWeakFrame;
 class WeakFrame;
 class nsIScrollableFrame;
-class nsIDOMEvent;
 class nsDisplayList;
 class nsDisplayListBuilder;
 class nsPIDOMWindowOuter;
@@ -96,6 +94,7 @@ class EventStates;
 
 namespace dom {
 class Element;
+class Event;
 class HTMLSlotElement;
 class Touch;
 class Selection;
@@ -830,17 +829,23 @@ public:
 
   /**
    * Determine if a rectangle specified in the frame's coordinate system
-   * intersects the viewport "enough" to be considered visible.
+   * intersects "enough" with the viewport to be considered visible. This
+   * is not a strict test against the viewport -- it's a test against
+   * the intersection of the viewport and the frame's ancestor scrollable
+   * frames. If it doesn't intersect enough, return a value indicating
+   * which direction the frame's topmost ancestor scrollable frame would
+   * need to be scrolled to bring the frame into view.
    * @param aFrame frame that aRect coordinates are specified relative to
    * @param aRect rectangle in twips to test for visibility
-   * @param aMinTwips is the minimum distance in from the edge of the viewport
-   *                  that an object must be to be counted visible
+   * @param aMinTwips is the minimum distance in from the edge of the
+   *                  visible area that an object must be to be counted
+   *                  visible
    * @return nsRectVisibility_kVisible if the rect is visible
    *         nsRectVisibility_kAboveViewport
    *         nsRectVisibility_kBelowViewport
    *         nsRectVisibility_kLeftOfViewport
-   *         nsRectVisibility_kRightOfViewport rectangle is outside the viewport
-   *         in the specified direction
+   *         nsRectVisibility_kRightOfViewport rectangle is outside the
+   *         topmost ancestor scrollable frame in the specified direction
    */
   virtual nsRectVisibility GetRectVisibility(nsIFrame *aFrame,
                                              const nsRect &aRect,
@@ -945,8 +950,8 @@ public:
    * @note The caller must have a strong reference to the PresShell.
    */
   virtual nsresult HandleDOMEventWithTarget(nsIContent* aTargetContent,
-                                                        nsIDOMEvent* aEvent,
-                                                        nsEventStatus* aStatus) = 0;
+                                            mozilla::dom::Event* aEvent,
+                                            nsEventStatus* aStatus) = 0;
 
   /**
    * Return whether or not the event is valid to be dispatched
@@ -1007,13 +1012,13 @@ public:
    * Get the set of agent style sheets for this presentation
    */
   virtual nsresult GetAgentStyleSheets(
-      nsTArray<RefPtr<mozilla::ServoStyleSheet>>& aSheets) = 0;
+      nsTArray<RefPtr<mozilla::StyleSheet>>& aSheets) = 0;
 
   /**
    * Replace the set of agent style sheets
    */
   virtual nsresult SetAgentStyleSheets(
-      const nsTArray<RefPtr<mozilla::ServoStyleSheet>>& aSheets) = 0;
+      const nsTArray<RefPtr<mozilla::StyleSheet>>& aSheets) = 0;
 
   /**
    * Add an override style sheet for this presentation
@@ -1514,8 +1519,7 @@ public:
   virtual void ScheduleViewManagerFlush(PaintType aType = PAINT_DEFAULT) = 0;
   virtual void ClearMouseCaptureOnView(nsView* aView) = 0;
   virtual bool IsVisible() = 0;
-  virtual void DispatchSynthMouseMove(mozilla::WidgetGUIEvent* aEvent,
-                                      bool aFlushOnHoverChange) = 0;
+  void DispatchSynthMouseMove(mozilla::WidgetGUIEvent* aEvent);
 
   virtual void AddSizeOfIncludingThis(nsWindowSizes& aWindowSizes) const = 0;
 

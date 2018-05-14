@@ -61,7 +61,7 @@ PlacesTreeView.prototype = {
     return this.__xulStore;
   },
 
-  QueryInterface: XPCOMUtils.generateQI(PTV_interfaces),
+  QueryInterface: ChromeUtils.generateQI(PTV_interfaces),
 
   // Bug 761494:
   // ----------
@@ -138,7 +138,7 @@ PlacesTreeView.prototype = {
       case Ci.nsINavHistoryQueryOptions.RESULTS_AS_DATE_QUERY:
       case Ci.nsINavHistoryQueryOptions.RESULTS_AS_SITE_QUERY:
       case Ci.nsINavHistoryQueryOptions.RESULTS_AS_DATE_SITE_QUERY:
-      case Ci.nsINavHistoryQueryOptions.RESULTS_AS_TAG_QUERY:
+      case Ci.nsINavHistoryQueryOptions.RESULTS_AS_TAGS_ROOT:
       case Ci.nsINavHistoryQueryOptions.RESULTS_AS_ROOTS_QUERY:
       case Ci.nsINavHistoryQueryOptions.RESULTS_AS_LEFT_PANE_QUERY:
         return false;
@@ -1789,7 +1789,7 @@ PlacesTreeView.prototype = {
     // have no reason to disallow renaming a shortcut to the Bookmarks Toolbar,
     // except for the one under All Bookmarks.
     if (PlacesUtils.nodeIsSeparator(node) || PlacesUtils.isRootItem(itemGuid) ||
-        PlacesUtils.isQueryGeneratedFolder(itemGuid))
+        PlacesUtils.isQueryGeneratedFolder(node))
       return false;
 
     return true;

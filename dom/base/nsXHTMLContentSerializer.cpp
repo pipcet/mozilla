@@ -12,7 +12,6 @@
 
 #include "nsXHTMLContentSerializer.h"
 
-#include "nsIDOMElement.h"
 #include "nsIContent.h"
 #include "nsIDocument.h"
 #include "nsElementTable.h"
@@ -821,7 +820,7 @@ nsXHTMLContentSerializer::HasNoChildren(nsIContent* aContent) {
        child;
        child = child->GetNextSibling()) {
 
-    if (!child->IsNodeOfType(nsINode::eTEXT))
+    if (!child->IsText())
       return false;
 
     if (child->TextLength())

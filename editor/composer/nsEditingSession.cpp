@@ -24,7 +24,6 @@
 #include "nsIControllerContext.h"       // for nsIControllerContext
 #include "nsIControllers.h"             // for nsIControllers
 #include "nsID.h"                       // for NS_GET_IID, etc
-#include "nsIDOMDocument.h"             // for nsIDOMDocument
 #include "nsHTMLDocument.h"             // for nsHTMLDocument
 #include "nsIDOMWindow.h"               // for nsIDOMWindow
 #include "nsIDocShell.h"                // for nsIDocShell
@@ -37,8 +36,6 @@
 #include "nsIPresShell.h"               // for nsIPresShell
 #include "nsIRefreshURI.h"              // for nsIRefreshURI
 #include "nsIRequest.h"                 // for nsIRequest
-#include "nsISelection.h"               // for nsISelection
-#include "nsISelectionPrivate.h"        // for nsISelectionPrivate
 #include "nsITimer.h"                   // for nsITimer, etc
 #include "nsITransactionManager.h"      // for nsITransactionManager
 #include "nsIWeakReference.h"           // for nsISupportsWeakReference, etc
@@ -665,7 +662,8 @@ nsEditingSession::OnStateChange(nsIWebProgress *aWebProgress,
 
         auto* piWindow = nsPIDOMWindowOuter::From(window);
         nsCOMPtr<nsIDocument> doc = piWindow->GetDoc();
-        nsHTMLDocument* htmlDoc = doc ? doc->AsHTMLDocument() : nullptr;
+        nsHTMLDocument* htmlDoc = doc && doc->IsHTMLOrXHTML()
+          ? doc->AsHTMLDocument() : nullptr;
         if (htmlDoc && htmlDoc->IsWriting()) {
           nsAutoString designMode;
           htmlDoc->GetDesignMode(designMode);

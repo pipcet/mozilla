@@ -24,7 +24,6 @@
 #include "nsIPresShell.h"
 #include "nsGkAtoms.h"
 #include "nsCSSProps.h"
-#include "nsCSSParser.h"
 #include "mozilla/EventListenerManager.h"
 #include "nsLayoutUtils.h"
 #include "nsSVGAnimatedTransformList.h"
@@ -57,7 +56,6 @@
 #include "mozilla/DeclarationBlockInlines.h"
 #include "mozilla/Unused.h"
 #include "mozilla/RestyleManager.h"
-#include "mozilla/RestyleManagerInlines.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -119,9 +117,7 @@ nsSVGElement::DidAnimateClass()
   if (shell) {
     nsPresContext* presContext = shell->GetPresContext();
     if (presContext) {
-      presContext->RestyleManager()
-                 ->AsServo()
-                 ->ClassAttributeWillBeChangedBySMIL(this);
+      presContext->RestyleManager()->ClassAttributeWillBeChangedBySMIL(this);
     }
   }
 
@@ -236,7 +232,7 @@ nsSVGElement::Init()
 // nsISupports methods
 
 NS_IMPL_ISUPPORTS_INHERITED(nsSVGElement, nsSVGElementBase,
-                            nsIDOMNode, nsIDOMElement)
+                            nsIDOMNode)
 
 //----------------------------------------------------------------------
 // Implementation
@@ -538,7 +534,7 @@ nsSVGElement::ParseAttribute(int32_t aNamespaceID,
           RefPtr<nsAtom> valAtom = NS_Atomize(aValue);
           rv = enumInfo.mEnums[i].SetBaseValueAtom(valAtom, this);
           if (NS_FAILED(rv)) {
-            enumInfo.Reset(i);
+            enumInfo.SetUnknownValue(i);
           } else {
             aResult.SetTo(valAtom);
             didSetResult = true;
@@ -626,6 +622,11 @@ nsSVGElement::ParseAttribute(int32_t aNamespaceID,
 
     if (aAttribute == nsGkAtoms::_class) {
       mClassAttribute.SetBaseValue(aValue, this, false);
+      aResult.ParseAtomArray(aValue);
+      return true;
+    }
+
+    if (aAttribute == nsGkAtoms::rel) {
       aResult.ParseAtomArray(aValue);
       return true;
     }
@@ -932,38 +933,38 @@ nsSVGElement::IsAttributeMapped(const nsAtom* name) const
 // PresentationAttributes-FillStroke
 /* static */ const Element::MappedAttributeEntry
 nsSVGElement::sFillStrokeMap[] = {
-  { nsGkAtoms::fill },
-  { nsGkAtoms::fill_opacity },
-  { nsGkAtoms::fill_rule },
-  { nsGkAtoms::paint_order },
-  { nsGkAtoms::stroke },
-  { nsGkAtoms::stroke_dasharray },
-  { nsGkAtoms::stroke_dashoffset },
-  { nsGkAtoms::stroke_linecap },
-  { nsGkAtoms::stroke_linejoin },
-  { nsGkAtoms::stroke_miterlimit },
-  { nsGkAtoms::stroke_opacity },
-  { nsGkAtoms::stroke_width },
-  { nsGkAtoms::vector_effect },
+  { &nsGkAtoms::fill },
+  { &nsGkAtoms::fill_opacity },
+  { &nsGkAtoms::fill_rule },
+  { &nsGkAtoms::paint_order },
+  { &nsGkAtoms::stroke },
+  { &nsGkAtoms::stroke_dasharray },
+  { &nsGkAtoms::stroke_dashoffset },
+  { &nsGkAtoms::stroke_linecap },
+  { &nsGkAtoms::stroke_linejoin },
+  { &nsGkAtoms::stroke_miterlimit },
+  { &nsGkAtoms::stroke_opacity },
+  { &nsGkAtoms::stroke_width },
+  { &nsGkAtoms::vector_effect },
   { nullptr }
 };
 
 // PresentationAttributes-Graphics
 /* static */ const Element::MappedAttributeEntry
 nsSVGElement::sGraphicsMap[] = {
-  { nsGkAtoms::clip_path },
-  { nsGkAtoms::clip_rule },
-  { nsGkAtoms::colorInterpolation },
-  { nsGkAtoms::cursor },
-  { nsGkAtoms::display },
-  { nsGkAtoms::filter },
-  { nsGkAtoms::image_rendering },
-  { nsGkAtoms::mask },
-  { nsGkAtoms::opacity },
-  { nsGkAtoms::pointer_events },
-  { nsGkAtoms::shape_rendering },
-  { nsGkAtoms::text_rendering },
-  { nsGkAtoms::visibility },
+  { &nsGkAtoms::clip_path },
+  { &nsGkAtoms::clip_rule },
+  { &nsGkAtoms::colorInterpolation },
+  { &nsGkAtoms::cursor },
+  { &nsGkAtoms::display },
+  { &nsGkAtoms::filter },
+  { &nsGkAtoms::image_rendering },
+  { &nsGkAtoms::mask },
+  { &nsGkAtoms::opacity },
+  { &nsGkAtoms::pointer_events },
+  { &nsGkAtoms::shape_rendering },
+  { &nsGkAtoms::text_rendering },
+  { &nsGkAtoms::visibility },
   { nullptr }
 };
 
@@ -971,95 +972,95 @@ nsSVGElement::sGraphicsMap[] = {
 /* static */ const Element::MappedAttributeEntry
 nsSVGElement::sTextContentElementsMap[] = {
   // Properties that we don't support are commented out.
-  // { nsGkAtoms::alignment_baseline },
-  // { nsGkAtoms::baseline_shift },
-  { nsGkAtoms::direction },
-  { nsGkAtoms::dominant_baseline },
-  { nsGkAtoms::letter_spacing },
-  { nsGkAtoms::text_anchor },
-  { nsGkAtoms::text_decoration },
-  { nsGkAtoms::unicode_bidi },
-  { nsGkAtoms::word_spacing },
-  { nsGkAtoms::writing_mode },
+  // { &nsGkAtoms::alignment_baseline },
+  // { &nsGkAtoms::baseline_shift },
+  { &nsGkAtoms::direction },
+  { &nsGkAtoms::dominant_baseline },
+  { &nsGkAtoms::letter_spacing },
+  { &nsGkAtoms::text_anchor },
+  { &nsGkAtoms::text_decoration },
+  { &nsGkAtoms::unicode_bidi },
+  { &nsGkAtoms::word_spacing },
+  { &nsGkAtoms::writing_mode },
   { nullptr }
 };
 
 // PresentationAttributes-FontSpecification
 /* static */ const Element::MappedAttributeEntry
 nsSVGElement::sFontSpecificationMap[] = {
-  { nsGkAtoms::font_family },
-  { nsGkAtoms::font_size },
-  { nsGkAtoms::font_size_adjust },
-  { nsGkAtoms::font_stretch },
-  { nsGkAtoms::font_style },
-  { nsGkAtoms::font_variant },
-  { nsGkAtoms::fontWeight },
+  { &nsGkAtoms::font_family },
+  { &nsGkAtoms::font_size },
+  { &nsGkAtoms::font_size_adjust },
+  { &nsGkAtoms::font_stretch },
+  { &nsGkAtoms::font_style },
+  { &nsGkAtoms::font_variant },
+  { &nsGkAtoms::fontWeight },
   { nullptr }
 };
 
 // PresentationAttributes-GradientStop
 /* static */ const Element::MappedAttributeEntry
 nsSVGElement::sGradientStopMap[] = {
-  { nsGkAtoms::stop_color },
-  { nsGkAtoms::stop_opacity },
+  { &nsGkAtoms::stop_color },
+  { &nsGkAtoms::stop_opacity },
   { nullptr }
 };
 
 // PresentationAttributes-Viewports
 /* static */ const Element::MappedAttributeEntry
 nsSVGElement::sViewportsMap[] = {
-  { nsGkAtoms::overflow },
-  { nsGkAtoms::clip },
+  { &nsGkAtoms::overflow },
+  { &nsGkAtoms::clip },
   { nullptr }
 };
 
 // PresentationAttributes-Makers
 /* static */ const Element::MappedAttributeEntry
 nsSVGElement::sMarkersMap[] = {
-  { nsGkAtoms::marker_end },
-  { nsGkAtoms::marker_mid },
-  { nsGkAtoms::marker_start },
+  { &nsGkAtoms::marker_end },
+  { &nsGkAtoms::marker_mid },
+  { &nsGkAtoms::marker_start },
   { nullptr }
 };
 
 // PresentationAttributes-Color
 /* static */ const Element::MappedAttributeEntry
 nsSVGElement::sColorMap[] = {
-  { nsGkAtoms::color },
+  { &nsGkAtoms::color },
   { nullptr }
 };
 
 // PresentationAttributes-Filters
 /* static */ const Element::MappedAttributeEntry
 nsSVGElement::sFiltersMap[] = {
-  { nsGkAtoms::colorInterpolationFilters },
+  { &nsGkAtoms::colorInterpolationFilters },
   { nullptr }
 };
 
 // PresentationAttributes-feFlood
 /* static */ const Element::MappedAttributeEntry
 nsSVGElement::sFEFloodMap[] = {
-  { nsGkAtoms::flood_color },
-  { nsGkAtoms::flood_opacity },
+  { &nsGkAtoms::flood_color },
+  { &nsGkAtoms::flood_opacity },
   { nullptr }
 };
 
 // PresentationAttributes-LightingEffects
 /* static */ const Element::MappedAttributeEntry
 nsSVGElement::sLightingEffectsMap[] = {
-  { nsGkAtoms::lighting_color },
+  { &nsGkAtoms::lighting_color },
   { nullptr }
 };
 
 // PresentationAttributes-mask
 /* static */ const Element::MappedAttributeEntry
 nsSVGElement::sMaskMap[] = {
-  { nsGkAtoms::mask_type },
+  { &nsGkAtoms::mask_type },
   { nullptr }
 };
 
 //----------------------------------------------------------------------
-// nsIDOMElement methods
+// Element methods
 
 // forwarded to Element implementations
 
@@ -1506,7 +1507,8 @@ nsSVGElement::GetLengthInfo()
   return LengthAttributesInfo(nullptr, nullptr, 0);
 }
 
-void nsSVGElement::LengthAttributesInfo::Reset(uint8_t aAttrEnum)
+void
+nsSVGElement::LengthAttributesInfo::Reset(uint8_t aAttrEnum)
 {
   mLengths[aAttrEnum].Init(mLengthInfo[aAttrEnum].mCtxType,
                            aAttrEnum,
@@ -1856,7 +1858,8 @@ nsSVGElement::GetNumberInfo()
   return NumberAttributesInfo(nullptr, nullptr, 0);
 }
 
-void nsSVGElement::NumberAttributesInfo::Reset(uint8_t aAttrEnum)
+void
+nsSVGElement::NumberAttributesInfo::Reset(uint8_t aAttrEnum)
 {
   mNumbers[aAttrEnum].Init(aAttrEnum,
                            mNumberInfo[aAttrEnum].mDefaultValue);
@@ -1918,7 +1921,8 @@ nsSVGElement::GetNumberPairInfo()
   return NumberPairAttributesInfo(nullptr, nullptr, 0);
 }
 
-void nsSVGElement::NumberPairAttributesInfo::Reset(uint8_t aAttrEnum)
+void
+nsSVGElement::NumberPairAttributesInfo::Reset(uint8_t aAttrEnum)
 {
   mNumberPairs[aAttrEnum].Init(aAttrEnum,
                                mNumberPairInfo[aAttrEnum].mDefaultValue1,
@@ -1967,7 +1971,8 @@ nsSVGElement::GetIntegerInfo()
   return IntegerAttributesInfo(nullptr, nullptr, 0);
 }
 
-void nsSVGElement::IntegerAttributesInfo::Reset(uint8_t aAttrEnum)
+void
+nsSVGElement::IntegerAttributesInfo::Reset(uint8_t aAttrEnum)
 {
   mIntegers[aAttrEnum].Init(aAttrEnum,
                             mIntegerInfo[aAttrEnum].mDefaultValue);
@@ -2029,7 +2034,8 @@ nsSVGElement::GetIntegerPairInfo()
   return IntegerPairAttributesInfo(nullptr, nullptr, 0);
 }
 
-void nsSVGElement::IntegerPairAttributesInfo::Reset(uint8_t aAttrEnum)
+void
+nsSVGElement::IntegerPairAttributesInfo::Reset(uint8_t aAttrEnum)
 {
   mIntegerPairs[aAttrEnum].Init(aAttrEnum,
                                 mIntegerPairInfo[aAttrEnum].mDefaultValue1,
@@ -2079,7 +2085,8 @@ nsSVGElement::GetAngleInfo()
   return AngleAttributesInfo(nullptr, nullptr, 0);
 }
 
-void nsSVGElement::AngleAttributesInfo::Reset(uint8_t aAttrEnum)
+void
+nsSVGElement::AngleAttributesInfo::Reset(uint8_t aAttrEnum)
 {
   mAngles[aAttrEnum].Init(aAttrEnum,
                           mAngleInfo[aAttrEnum].mDefaultValue,
@@ -2127,7 +2134,8 @@ nsSVGElement::GetBooleanInfo()
   return BooleanAttributesInfo(nullptr, nullptr, 0);
 }
 
-void nsSVGElement::BooleanAttributesInfo::Reset(uint8_t aAttrEnum)
+void
+nsSVGElement::BooleanAttributesInfo::Reset(uint8_t aAttrEnum)
 {
   mBooleans[aAttrEnum].Init(aAttrEnum,
                             mBooleanInfo[aAttrEnum].mDefaultValue);
@@ -2166,10 +2174,18 @@ nsSVGElement::GetEnumInfo()
   return EnumAttributesInfo(nullptr, nullptr, 0);
 }
 
-void nsSVGElement::EnumAttributesInfo::Reset(uint8_t aAttrEnum)
+void
+nsSVGElement::EnumAttributesInfo::Reset(uint8_t aAttrEnum)
 {
   mEnums[aAttrEnum].Init(aAttrEnum,
                          mEnumInfo[aAttrEnum].mDefaultValue);
+}
+
+void
+nsSVGElement::EnumAttributesInfo::SetUnknownValue(uint8_t aAttrEnum)
+{
+  // Fortunately in SVG every enum's unknown value is 0
+  mEnums[aAttrEnum].Init(aAttrEnum, 0);
 }
 
 void
@@ -2330,12 +2346,14 @@ nsSVGElement::GetStringInfo()
   return StringAttributesInfo(nullptr, nullptr, 0);
 }
 
-void nsSVGElement::StringAttributesInfo::Reset(uint8_t aAttrEnum)
+void
+nsSVGElement::StringAttributesInfo::Reset(uint8_t aAttrEnum)
 {
   mStrings[aAttrEnum].Init(aAttrEnum);
 }
 
-void nsSVGElement::GetStringBaseValue(uint8_t aAttrEnum, nsAString& aResult) const
+void
+nsSVGElement::GetStringBaseValue(uint8_t aAttrEnum, nsAString& aResult) const
 {
   nsSVGElement::StringAttributesInfo info = const_cast<nsSVGElement*>(this)->GetStringInfo();
 
@@ -2348,7 +2366,8 @@ void nsSVGElement::GetStringBaseValue(uint8_t aAttrEnum, nsAString& aResult) con
           *info.mStringInfo[aAttrEnum].mName, aResult);
 }
 
-void nsSVGElement::SetStringBaseValue(uint8_t aAttrEnum, const nsAString& aValue)
+void
+nsSVGElement::SetStringBaseValue(uint8_t aAttrEnum, const nsAString& aValue)
 {
   nsSVGElement::StringAttributesInfo info = GetStringInfo();
 
@@ -2386,7 +2405,7 @@ nsSVGElement::WillChangeStringList(bool aIsConditionalProcessingAttribute,
 {
   nsAtom* name;
   if (aIsConditionalProcessingAttribute) {
-    nsCOMPtr<SVGTests> tests(do_QueryInterface(static_cast<nsIDOMElement*>(this)));
+    nsCOMPtr<SVGTests> tests(do_QueryInterface(static_cast<nsIDOMNode*>(this)));
     name = tests->GetAttrName(aAttrEnum);
   } else {
     name = *GetStringListInfo().mStringListInfo[aAttrEnum].mName;

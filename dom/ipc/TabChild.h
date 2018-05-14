@@ -109,11 +109,10 @@ public:
   NS_FORWARD_SAFE_NSIMESSAGESENDER(mMessageManager)
   NS_DECL_NSICONTENTFRAMEMESSAGEMANAGER
 
-  nsresult
+  void
   GetEventTargetParent(EventChainPreVisitor& aVisitor) override
   {
     aVisitor.mForceContentDispatch = true;
-    return NS_OK;
   }
 
   virtual nsIPrincipal* GetPrincipal() override;
@@ -542,7 +541,7 @@ public:
   layers::LayersId GetLayersId() { return mLayersId; }
   Maybe<bool> IsLayersConnected() { return mLayersConnected; }
 
-  void DidComposite(uint64_t aTransactionId,
+  void DidComposite(mozilla::layers::TransactionId aTransactionId,
                     const TimeStamp& aCompositeStart,
                     const TimeStamp& aCompositeEnd);
 

@@ -14,6 +14,7 @@
 #include "mozilla/CheckedInt.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/HTMLCanvasElement.h"
+#include "mozilla/dom/Nullable.h"
 #include "mozilla/dom/TypedArray.h"
 #include "mozilla/EnumeratedArray.h"
 #include "mozilla/ErrorResult.h"
@@ -90,7 +91,6 @@ class Element;
 class ImageData;
 class OwningHTMLCanvasElementOrOffscreenCanvas;
 struct WebGLContextAttributes;
-template<typename> struct Nullable;
 } // namespace dom
 
 namespace gfx {
@@ -380,7 +380,7 @@ public:
     virtual already_AddRefed<mozilla::gfx::SourceSurface>
     GetSurfaceSnapshot(gfxAlphaType* out_alphaType) override;
 
-    virtual void SetIsOpaque(bool) override {};
+    virtual void SetOpaqueValueFromOpaqueAttr(bool) override {};
     bool GetIsOpaque() override { return !mOptions.alpha; }
     NS_IMETHOD SetContextOptions(JSContext* cx,
                                  JS::Handle<JS::Value> options,
@@ -514,7 +514,7 @@ public:
 
     // WebIDL WebGLRenderingContext API
     void Commit();
-    void GetCanvas(Nullable<dom::OwningHTMLCanvasElementOrOffscreenCanvas>& retval);
+    void GetCanvas(dom::Nullable<dom::OwningHTMLCanvasElementOrOffscreenCanvas>& retval);
 private:
     gfx::IntSize DrawingBufferSize(const char* funcName);
 public:

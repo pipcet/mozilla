@@ -5,9 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
- * Base class for all element classes; this provides an implementation
- * of DOM Core's nsIDOMElement, implements nsIContent, provides
- * utility methods for subclasses, and so forth.
+ * Base class for all element classes and DocumentFragment.
  */
 
 #include "mozilla/ArrayUtils.h"
@@ -24,7 +22,7 @@
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/HTMLEditor.h"
-#include "mozilla/ServoRestyleManager.h"
+#include "mozilla/RestyleManager.h"
 #include "mozilla/TextEditor.h"
 #include "mozilla/URLExtraData.h"
 #include "mozilla/dom/Attr.h"
@@ -34,7 +32,6 @@
 #include "mozilla/dom/Event.h"
 #include "nsIDocumentInlines.h"
 #include "nsIDocumentEncoder.h"
-#include "nsIDOMNodeList.h"
 #include "nsIContentIterator.h"
 #include "nsFocusManager.h"
 #include "nsILinkHandler.h"
@@ -48,7 +45,6 @@
 #include "nsStyleConsts.h"
 #include "nsString.h"
 #include "nsUnicharUtils.h"
-#include "nsIDOMEvent.h"
 #include "nsDOMCID.h"
 #include "nsIServiceManager.h"
 #include "nsDOMCSSAttrDeclaration.h"
@@ -150,7 +146,6 @@ NS_INTERFACE_MAP_BEGIN(nsIContent)
   // not doing anything anyway.
   NS_INTERFACE_MAP_ENTRY(nsIContent)
   NS_INTERFACE_MAP_ENTRY(nsINode)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMEventTarget)
   NS_INTERFACE_MAP_ENTRY(mozilla::dom::EventTarget)
   NS_INTERFACE_MAP_ENTRY_TEAROFF(nsISupportsWeakReference,
                                  new nsNodeSupportsWeakRefTearoff(this))
@@ -498,7 +493,7 @@ NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_END
 
 NS_INTERFACE_TABLE_HEAD(nsAttrChildContentList)
   NS_WRAPPERCACHE_INTERFACE_TABLE_ENTRY
-  NS_INTERFACE_TABLE(nsAttrChildContentList, nsINodeList, nsIDOMNodeList)
+  NS_INTERFACE_TABLE(nsAttrChildContentList, nsINodeList)
   NS_INTERFACE_TABLE_TO_MAP_SEGUE_CYCLE_COLLECTION(nsAttrChildContentList)
 NS_INTERFACE_MAP_END
 
@@ -611,34 +606,6 @@ FragmentOrElement::Children()
 
 //----------------------------------------------------------------------
 
-
-NS_IMPL_ISUPPORTS(nsNodeWeakReference,
-                  nsIWeakReference)
-
-nsNodeWeakReference::~nsNodeWeakReference()
-{
-  nsINode* node = static_cast<nsINode*>(mObject);
-
-  if (node) {
-    NS_ASSERTION(node->Slots()->mWeakReference == this,
-                 "Weak reference has wrong value");
-    node->Slots()->mWeakReference = nullptr;
-  }
-}
-
-NS_IMETHODIMP
-nsNodeWeakReference::QueryReferentFromScript(const nsIID& aIID, void** aInstancePtr)
-{
-  return QueryReferent(aIID, aInstancePtr);
-}
-
-size_t
-nsNodeWeakReference::SizeOfOnlyThis(mozilla::MallocSizeOf aMallocSizeOf) const
-{
-  return aMallocSizeOf(this);
-}
-
-
 NS_IMPL_CYCLE_COLLECTION(nsNodeSupportsWeakRefTearoff, mNode)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsNodeSupportsWeakRefTearoff)
@@ -728,7 +695,7 @@ FragmentOrElement::nsDOMSlots::Traverse(nsCycleCollectionTraversalCallback& aCb)
   aCb.NoteXPCOMChild(mAttributeMap.get());
 
   NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(aCb, "mSlots->mChildrenList");
-  aCb.NoteXPCOMChild(NS_ISUPPORTS_CAST(nsIDOMNodeList*, mChildrenList));
+  aCb.NoteXPCOMChild(NS_ISUPPORTS_CAST(nsINodeList*, mChildrenList));
 
   NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(aCb, "mSlots->mClassList");
   aCb.NoteXPCOMChild(mClassList.get());
@@ -818,7 +785,7 @@ FragmentOrElement::nsExtendedDOMSlots::Traverse(nsCycleCollectionTraversalCallba
   aCb.NoteXPCOMChild(mControllers);
 
   NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(aCb, "mExtendedSlots->mLabelsList");
-  aCb.NoteXPCOMChild(NS_ISUPPORTS_CAST(nsIDOMNodeList*, mLabelsList));
+  aCb.NoteXPCOMChild(NS_ISUPPORTS_CAST(nsINodeList*, mLabelsList));
 
   NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(aCb, "mExtendedSlots->mShadowRoot");
   aCb.NoteXPCOMChild(NS_ISUPPORTS_CAST(nsIContent*, mShadowRoot));
@@ -847,8 +814,8 @@ FragmentOrElement::FragmentOrElement(already_AddRefed<mozilla::dom::NodeInfo>&& 
 
 FragmentOrElement::~FragmentOrElement()
 {
-  NS_PRECONDITION(!IsInUncomposedDoc(),
-                  "Please remove this from the document properly");
+  MOZ_ASSERT(!IsInUncomposedDoc(),
+             "Please remove this from the document properly");
   if (GetParent()) {
     NS_RELEASE(mParent);
   }
@@ -895,7 +862,7 @@ FindChromeAccessOnlySubtreeOwner(EventTarget* aTarget)
   return node.forget();
 }
 
-nsresult
+void
 nsIContent::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
   //FIXME! Document how this event retargeting works, Bug 329124.
@@ -975,7 +942,7 @@ nsIContent::GetEventTargetParent(EventChainPreVisitor& aVisitor)
               aVisitor.SetParentTarget(nullptr, false);
               // Event should not propagate to non-anon content.
               aVisitor.mCanHandle = isAnonForEvents;
-              return NS_OK;
+              return;
             }
           }
         }
@@ -1079,7 +1046,7 @@ nsIContent::GetEventTargetParent(EventChainPreVisitor& aVisitor)
             // being false, but in Shadow DOM case mTarget really should
             // point to a node in Shadow DOM.
             aVisitor.mEvent->mTarget = aVisitor.mTargetInKnownToBeHandledScope;
-            return NS_OK;
+            return;
           }
 
           // Part of step 5. Retargeting target has happened already higher
@@ -1123,8 +1090,12 @@ nsIContent::GetEventTargetParent(EventChainPreVisitor& aVisitor)
             // being false, but in Shadow DOM case mTarget really should
             // point to a node in Shadow DOM.
             aVisitor.mEvent->mTarget = aVisitor.mTargetInKnownToBeHandledScope;
-            return NS_OK;
-          } else {
+            return;
+          } else if (targetInKnownToBeHandledScope) {
+            // Note, if targetInKnownToBeHandledScope is null,
+            // mTargetInKnownToBeHandledScope could be Window object in content
+            // page and we're in chrome document in the same process.
+
             // Step 11.6
             aVisitor.mRetargetedRelatedTarget = retargetedRelatedTarget;
           }
@@ -1137,8 +1108,6 @@ nsIContent::GetEventTargetParent(EventChainPreVisitor& aVisitor)
     // Inform that we're about to exit the current scope.
     aVisitor.mRelatedTargetRetargetedInCurrentScope = false;
   }
-
-  return NS_OK;
 }
 
 bool
@@ -1218,7 +1187,7 @@ FragmentOrElement::InsertChildBefore(nsIContent* aKid,
                                      nsIContent* aBeforeThis,
                                      bool aNotify)
 {
-  NS_PRECONDITION(aKid, "null ptr");
+  MOZ_ASSERT(aKid, "null ptr");
 
   int32_t index = aBeforeThis ? ComputeIndexOf(aBeforeThis) : GetChildCount();
   MOZ_ASSERT(index >= 0);
@@ -1231,7 +1200,7 @@ FragmentOrElement::InsertChildAt_Deprecated(nsIContent* aKid,
                                             uint32_t aIndex,
                                             bool aNotify)
 {
-  NS_PRECONDITION(aKid, "null ptr");
+  MOZ_ASSERT(aKid, "null ptr");
 
   return doInsertChildAt(aKid, aIndex, aNotify, mAttrsAndChildren);
 }
@@ -1469,10 +1438,9 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(FragmentOrElement)
     }
 
     if (tmp->IsHTMLElement() || tmp->IsSVGElement()) {
-      nsStaticAtom* const* props =
-        Element::HTMLSVGPropertiesToTraverseAndUnlink();
+      nsStaticAtom*** props = Element::HTMLSVGPropertiesToTraverseAndUnlink();
       for (uint32_t i = 0; props[i]; ++i) {
-        tmp->DeleteProperty(props[i]);
+        tmp->DeleteProperty(*props[i]);
       }
       if (tmp->MayHaveAnimations()) {
         nsAtom** effectProps = EffectSet::GetEffectSetPropertyAtoms();
@@ -1583,7 +1551,7 @@ FragmentOrElement::RemoveBlackMarkedNode(nsINode* aNode)
 static bool
 IsCertainlyAliveNode(nsINode* aNode, nsIDocument* aDoc)
 {
-  MOZ_ASSERT(aNode->GetUncomposedDoc() == aDoc);
+  MOZ_ASSERT(aNode->GetComposedDoc() == aDoc);
 
   // Marked to be in-CC-generation or if the document is an svg image that's
   // being kept alive by the image cache. (Note that an svg image's internal
@@ -1605,9 +1573,7 @@ FragmentOrElement::CanSkipInCC(nsINode* aNode)
     return false;
   }
 
-  //XXXsmaug Need to figure out in which cases Shadow DOM can be optimized out
-  //         from the CC graph.
-  nsIDocument* currentDoc = aNode->GetUncomposedDoc();
+  nsIDocument* currentDoc = aNode->GetComposedDoc();
   if (currentDoc && IsCertainlyAliveNode(aNode, currentDoc)) {
     return !NeedsScriptTraverse(aNode);
   }
@@ -1784,7 +1750,7 @@ FragmentOrElement::CanSkip(nsINode* aNode, bool aRemovingAllowed)
   }
 
   bool unoptimizable = aNode->UnoptimizableCCNode();
-  nsIDocument* currentDoc = aNode->GetUncomposedDoc();
+  nsIDocument* currentDoc = aNode->GetComposedDoc();
   if (currentDoc && IsCertainlyAliveNode(aNode, currentDoc) &&
       (!unoptimizable || NodeHasActiveFrame(currentDoc, aNode) ||
        OwnedByBindingManager(currentDoc, aNode))) {
@@ -1912,7 +1878,7 @@ FragmentOrElement::CanSkipThis(nsINode* aNode)
   if (aNode->HasKnownLiveWrapper()) {
     return true;
   }
-  nsIDocument* c = aNode->GetUncomposedDoc();
+  nsIDocument* c = aNode->GetComposedDoc();
   return
     ((c && IsCertainlyAliveNode(aNode, c)) || aNode->InCCBlackTree()) &&
     !NeedsScriptTraverse(aNode);
@@ -2035,11 +2001,10 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(FragmentOrElement)
       }
     }
     if (tmp->IsHTMLElement() || tmp->IsSVGElement()) {
-      nsStaticAtom* const* props =
-        Element::HTMLSVGPropertiesToTraverseAndUnlink();
+      nsStaticAtom*** props = Element::HTMLSVGPropertiesToTraverseAndUnlink();
       for (uint32_t i = 0; props[i]; ++i) {
         nsISupports* property =
-          static_cast<nsISupports*>(tmp->GetProperty(props[i]));
+          static_cast<nsISupports*>(tmp->GetProperty(*props[i]));
         cb.NoteXPCOMChild(property);
       }
       if (tmp->MayHaveAnimations()) {
@@ -2377,13 +2342,11 @@ FragmentOrElement::FireNodeRemovedForChildren()
     return;
   }
 
-  nsCOMPtr<nsIDocument> owningDoc = doc;
-
   nsCOMPtr<nsINode> child;
   for (child = GetFirstChild();
        child && child->GetParentNode() == this;
        child = child->GetNextSibling()) {
-    nsContentUtils::MaybeFireNodeRemoved(child, this, doc);
+    nsContentUtils::MaybeFireNodeRemoved(child, this);
   }
 }
 

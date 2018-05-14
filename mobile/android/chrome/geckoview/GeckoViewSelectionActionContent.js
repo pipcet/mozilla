@@ -10,14 +10,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   Services: "resource://gre/modules/Services.jsm",
 });
 
-XPCOMUtils.defineLazyGetter(this, "dump", () =>
-    ChromeUtils.import("resource://gre/modules/AndroidLog.jsm",
-                       {}).AndroidLog.d.bind(null, "ViewSelectionActionContent"));
-
-function debug(aMsg) {
-  // dump(aMsg);
-}
-
 // Dispatches GeckoView:ShowSelectionAction and GeckoView:HideSelectionAction to
 // the GeckoSession on accessible caret changes.
 class GeckoViewSelectionActionContent extends GeckoViewContentModule {
@@ -30,11 +22,11 @@ class GeckoViewSelectionActionContent extends GeckoViewContentModule {
 
     this._actions = [{
       id: "org.mozilla.geckoview.CUT",
-      predicate: e => !e.collapsed && e.selectionEditable,
+      predicate: e => !e.collapsed && e.selectionEditable && !this._isPasswordField(e),
       perform: _ => this._domWindowUtils.sendContentCommandEvent("cut"),
     }, {
       id: "org.mozilla.geckoview.COPY",
-      predicate: e => !e.collapsed,
+      predicate: e => !e.collapsed && !this._isPasswordField(e),
       perform: _ => this._domWindowUtils.sendContentCommandEvent("copy"),
     }, {
       id: "org.mozilla.geckoview.PASTE",
@@ -68,6 +60,18 @@ class GeckoViewSelectionActionContent extends GeckoViewContentModule {
   get _domWindowUtils() {
     return content.QueryInterface(Ci.nsIInterfaceRequestor)
                   .getInterface(Ci.nsIDOMWindowUtils);
+  }
+
+  _isPasswordField(aEvent) {
+    if (!aEvent.selectionEditable) {
+      return false;
+    }
+
+    const win = aEvent.target.defaultView;
+    const focus = aEvent.target.activeElement;
+    return win && win.HTMLInputElement &&
+           focus instanceof win.HTMLInputElement &&
+           !focus.mozIsTextField(/* excludePassword */ true);
   }
 
   _getSelectionController(aEvent) {
@@ -116,14 +120,14 @@ class GeckoViewSelectionActionContent extends GeckoViewContentModule {
     return offset;
   }
 
-  register() {
-    debug("register");
-    addEventListener("mozcaretstatechanged", this);
+  onEnable() {
+    debug `onEnable`;
+    addEventListener("mozcaretstatechanged", this, { mozSystemGroup: true });
   }
 
-  unregister() {
-    debug("unregister");
-    removeEventListener("mozcaretstatechanged", this);
+  onDisable() {
+    debug `onDisable`;
+    removeEventListener("mozcaretstatechanged", this, { mozSystemGroup: true });
   }
 
   /**
@@ -136,8 +140,7 @@ class GeckoViewSelectionActionContent extends GeckoViewContentModule {
     if (this._isActive && !aEvent.caretVisible) {
       // For mozcaretstatechanged, "visibilitychange" means the caret is hidden.
       reason = "visibilitychange";
-    } else if (this._isActive &&
-               !aEvent.collapsed &&
+    } else if (!aEvent.collapsed &&
                !aEvent.selectionVisible) {
       reason = "invisibleselection";
     } else if (aEvent.selectionEditable &&
@@ -150,7 +153,7 @@ class GeckoViewSelectionActionContent extends GeckoViewContentModule {
       reason = "visibilitychange";
     }
 
-    debug("handleEvent " + reason + " " + aEvent);
+    debug `handleEvent: ${reason}`;
 
     if (["longpressonemptycontent",
          "releasecaret",
@@ -161,13 +164,15 @@ class GeckoViewSelectionActionContent extends GeckoViewContentModule {
           action => action.predicate.call(this, aEvent));
 
       const offset = this._getFrameOffset(aEvent);
+      const password = this._isPasswordField(aEvent);
 
       const msg = {
         type: "GeckoView:ShowSelectionAction",
         seqNo: this._seqNo,
         collapsed: aEvent.collapsed,
         editable: aEvent.selectionEditable,
-        selection: aEvent.selectedTextContent,
+        password,
+        selection: password ? "" : aEvent.selectedTextContent,
         clientRect: !aEvent.boundingClientRect ? null : {
           left: aEvent.boundingClientRect.left + offset.left,
           top: aEvent.boundingClientRect.top + offset.top,
@@ -194,8 +199,6 @@ class GeckoViewSelectionActionContent extends GeckoViewContentModule {
       this._isActive = true;
       this._previousMessage = JSON.stringify(msg);
 
-      debug("onShowSelectionAction " + JSON.stringify(msg));
-
       // This event goes to GeckoViewSelectionAction.jsm, where the data is
       // further transformed and then sent to GeckoSession.
       this.eventDispatcher.sendRequest(msg, {
@@ -208,7 +211,7 @@ class GeckoViewSelectionActionContent extends GeckoViewContentModule {
           if (action) {
             action.perform.call(this, aEvent, response);
           } else {
-            dump("Invalid action " + response.id);
+            warn `Invalid action ${response.id}`;
           }
         },
         onError: _ => {
@@ -240,10 +243,11 @@ class GeckoViewSelectionActionContent extends GeckoViewContentModule {
       });
 
     } else {
-      dump("Unknown reason: " + reason);
+      warn `Unknown reason: ${reason}`;
     }
   }
 }
 
-var selectionActionListener =
-    new GeckoViewSelectionActionContent("GeckoViewSelectionAction", this);
+let {debug, warn} =
+    GeckoViewSelectionActionContent.initLogging("GeckoViewSelectionAction");
+let module = GeckoViewSelectionActionContent.create(this);

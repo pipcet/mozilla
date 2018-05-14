@@ -94,8 +94,6 @@ class nsIDocShellTreeItem;
 class nsIDocumentEncoder;
 class nsIDocumentObserver;
 class nsIDOMDocument;
-class nsIDOMElement;
-class nsIDOMNodeList;
 class nsIHTMLCollection;
 class nsILayoutHistoryState;
 class nsILoadContext;
@@ -1007,14 +1005,6 @@ public:
   }
 
   /**
-  * Set referrer policy CSP flag for this document.
-  */
-  void SetHasReferrerPolicyCSP(bool aHasReferrerPolicyCSP)
-  {
-    mHasReferrerPolicyCSP = aHasReferrerPolicyCSP;
-  }
-
-  /**
    * Set the mixed display content blocked flag for this document.
    */
   void SetHasMixedDisplayContentBlocked(bool aHasMixedDisplayContentBlocked)
@@ -1113,9 +1103,9 @@ public:
    * Called when the document was decoded as UTF-8 and decoder encountered no
    * errors.
    */
-  void DisableEncodingMenu()
+  void EnableEncodingMenu()
   {
-    mEncodingMenuDisabled = true;
+    mEncodingMenuDisabled = false;
   }
 
   /**
@@ -1791,7 +1781,7 @@ public:
    * aFrameElement is the frame element which contains the child-process
    * fullscreen document.
    */
-  nsresult RemoteFrameFullscreenChanged(nsIDOMElement* aFrameElement);
+  nsresult RemoteFrameFullscreenChanged(mozilla::dom::Element* aFrameElement);
 
   /**
    * Called when a frame in a remote child document has rolled back fullscreen
@@ -2367,7 +2357,7 @@ public:
                                float aBottomSize, float aLeftSize,
                                bool aIgnoreRootScrollFrame,
                                bool aFlushLayout,
-                               nsIDOMNodeList** aReturn);
+                               nsINodeList** aReturn);
 
   /**
    * See FlushSkinBindings on nsBindingManager
@@ -3266,8 +3256,21 @@ public:
 #endif
   void GetSelectedStyleSheetSet(nsAString& aSheetSet);
   void SetSelectedStyleSheetSet(const nsAString& aSheetSet);
-  void GetLastStyleSheetSet(nsAString& aSheetSet);
-  void GetPreferredStyleSheetSet(nsAString& aSheetSet);
+  void GetLastStyleSheetSet(nsAString& aSheetSet)
+  {
+    aSheetSet = mLastStyleSheetSet;
+  }
+  const nsString& GetCurrentStyleSheetSet() const
+  {
+    return mLastStyleSheetSet.IsEmpty()
+      ? mPreferredStyleSheetSet
+      : mLastStyleSheetSet;
+  }
+  void SetPreferredStyleSheetSet(const nsAString&);
+  void GetPreferredStyleSheetSet(nsAString& aSheetSet)
+  {
+    aSheetSet = mPreferredStyleSheetSet;
+  }
   mozilla::dom::DOMStringList* StyleSheetSets();
   void EnableStyleSheetsForSet(const nsAString& aSheetSet);
 
@@ -3348,9 +3351,23 @@ public:
   nsIHTMLCollection* Children();
   uint32_t ChildElementCount();
 
-  virtual nsHTMLDocument* AsHTMLDocument() { return nullptr; }
-  virtual mozilla::dom::SVGDocument* AsSVGDocument() { return nullptr; }
-  virtual mozilla::dom::XULDocument* AsXULDocument() { return nullptr; }
+  /**
+   * Asserts IsHTMLOrXHTML, and can't return null.
+   * Defined inline in nsHTMLDocument.h
+   */
+  inline nsHTMLDocument* AsHTMLDocument();
+
+  /**
+   * Asserts IsSVGDocument, and can't return null.
+   * Defined inline in SVGDocument.h
+   */
+  inline mozilla::dom::SVGDocument* AsSVGDocument();
+
+  /**
+   * Asserts IsXULDocument, and can't return null.
+   * Defined inline in XULDocument.h
+   */
+  inline mozilla::dom::XULDocument* AsXULDocument();
 
   /*
    * Given a node, get a weak reference to it and append that reference to
@@ -3889,9 +3906,6 @@ protected:
   // it's false only when we're in bfcache or unloaded.
   bool mVisible : 1;
 
-  // True if a document load has a CSP with referrer attached.
-  bool mHasReferrerPolicyCSP : 1;
-
   // True if our content viewer has been removed from the docshell
   // (it may still be displayed, but in zombie state). Form control data
   // has been saved.
@@ -4425,6 +4439,8 @@ protected:
 
   // Member to store out last-selected stylesheet set.
   nsString mLastStyleSheetSet;
+  nsString mPreferredStyleSheetSet;
+
   RefPtr<nsDOMStyleSheetSetList> mStyleSheetSetList;
 
   // We lazily calculate declaration blocks for SVG elements with mapped
@@ -4605,6 +4621,20 @@ nsINode::GetParentObject() const
     // don't use XBL scopes.
   p.mUseXBLScope = IsInAnonymousSubtree() && !IsAnonymousContentInSVGUseSubtree();
   return p;
+}
+
+inline nsIDocument*
+nsINode::AsDocument()
+{
+  MOZ_ASSERT(IsDocument());
+  return static_cast<nsIDocument*>(this);
+}
+
+inline const nsIDocument*
+nsINode::AsDocument() const
+{
+  MOZ_ASSERT(IsDocument());
+  return static_cast<const nsIDocument*>(this);
 }
 
 #endif /* nsIDocument_h___ */

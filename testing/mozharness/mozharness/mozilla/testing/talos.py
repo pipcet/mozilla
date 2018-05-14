@@ -476,7 +476,9 @@ class Talos(TestingMixin, MercurialScript, BlobUploadMixin, TooltoolMixin,
         self.install_mitmproxy()
 
         # download the recording set; will be overridden by the --no-download
-        if '--no-download' not in self.config['talos_extra_options']:
+        if ('talos_extra_options' in self.config and \
+            '--no-download' not in self.config['talos_extra_options']) or \
+            'talos_extra_options' not in self.config:
             self.download_mitmproxy_recording_set()
         else:
             self.info("Not downloading mitmproxy recording set because no-download was specified")
@@ -489,6 +491,7 @@ class Talos(TestingMixin, MercurialScript, BlobUploadMixin, TooltoolMixin,
         # now create the py3 venv
         self.py3_venv_configuration(python_path=self.py3_path, venv_path='py3venv')
         self.py3_create_venv()
+        self.py3_install_modules(["cffi==1.10.0"])
         requirements = [os.path.join(self.talos_path, 'talos', 'mitmproxy', 'mitmproxy_requirements.txt')]
         self.py3_install_requirement_files(requirements)
         # add py3 executables path to system path
@@ -506,7 +509,9 @@ class Talos(TestingMixin, MercurialScript, BlobUploadMixin, TooltoolMixin,
             self.mitmdump = os.path.join(mitmproxy_path, 'mitmdump')
             if not os.path.exists(self.mitmdump):
                 # download the mitmproxy release binary; will be overridden by the --no-download
-                if '--no-download' not in self.config['talos_extra_options']:
+                if ('talos_extra_options' in self.config and \
+                   '--no-download' not in self.config['talos_extra_options']) or \
+                   'talos_extra_options' not in self.config:
                     if 'osx' in self.platform_name():
                         _platform = 'osx'
                     else:
@@ -623,10 +628,7 @@ class Talos(TestingMixin, MercurialScript, BlobUploadMixin, TooltoolMixin,
             two_pass=True,
             editable=True,
         )
-        # require pip >= 1.5 so pip will prefer .whl files to install
-        super(Talos, self).create_virtualenv(
-            modules=['pip>=1.5']
-        )
+        super(Talos, self).create_virtualenv()
         # talos in harness requires what else is
         # listed in talos requirements.txt file.
         self.install_module(

@@ -22,9 +22,9 @@ var ContentPolicy = {
   _classID: Components.ID("938e5d24-9ccc-4b55-883e-c252a41f7ce9"),
   _contractID: "@mozilla.org/webrequest/policy;1",
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIContentPolicy,
-                                         Ci.nsIFactory,
-                                         Ci.nsISupportsWeakReference]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIContentPolicy,
+                                          Ci.nsIFactory,
+                                          Ci.nsISupportsWeakReference]),
 
   init() {
     let registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
@@ -127,7 +127,8 @@ var ContentPolicy = {
     }
 
     if (policyType == Ci.nsIContentPolicy.TYPE_SUBDOCUMENT ||
-        (node instanceof Ci.nsIDOMXULElement && node.localName == "browser")) {
+        (ChromeUtils.getClassName(node) == "XULElement" &&
+         node.localName == "browser")) {
       // Chrome sets frameId to the ID of the sub-window. But when
       // Firefox loads an iframe, it sets |node| to the <iframe>
       // element, whose window is the parent window. We adopt the

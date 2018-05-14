@@ -5,6 +5,7 @@
 ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
+  GeckoViewTelemetryController: "resource://gre/modules/GeckoViewTelemetryController.jsm",
   GeckoViewUtils: "resource://gre/modules/GeckoViewUtils.jsm",
   Services: "resource://gre/modules/Services.jsm",
 });
@@ -15,7 +16,7 @@ function GeckoViewStartup() {
 GeckoViewStartup.prototype = {
   classID: Components.ID("{8e993c34-fdd6-432c-967e-f995d888777f}"),
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsIObserver]),
 
   /**
    * Register resource://android as the APK root.
@@ -38,9 +39,6 @@ GeckoViewStartup.prototype = {
     switch (aTopic) {
       case "app-startup": {
         // Parent and content process.
-        Services.obs.addObserver(this, "chrome-document-global-created");
-        Services.obs.addObserver(this, "content-document-global-created");
-
         GeckoViewUtils.addLazyGetter(this, "GeckoViewPermission", {
           service: "@mozilla.org/content-permission/prompt;1",
           observers: [
@@ -54,11 +52,8 @@ GeckoViewStartup.prototype = {
           // Parent process only.
           this.setResourceSubstitutions();
 
-        } else {
-          // Content process only.
-          GeckoViewUtils.addLazyGetter(this, "GeckoViewPrompt", {
-            service: "@mozilla.org/prompter;1",
-          });
+          Services.mm.loadFrameScript(
+              "chrome://geckoview/content/GeckoViewPromptContent.js", true);
         }
         break;
       }
@@ -76,30 +71,22 @@ GeckoViewStartup.prototype = {
           ],
         });
 
-        GeckoViewUtils.addLazyGetter(this, "GeckoViewPrompt", {
-          service: "@mozilla.org/prompter;1",
-          mm: [
-            "GeckoView:Prompt",
-          ],
+        GeckoViewUtils.addLazyGetter(this, "GeckoViewRemoteDebugger", {
+          module: "resource://gre/modules/GeckoViewRemoteDebugger.jsm",
+          init: gvrd => gvrd.onInit(),
         });
-        break;
-      }
 
-      case "chrome-document-global-created":
-      case "content-document-global-created": {
-        let win = GeckoViewUtils.getChromeWindow(aSubject);
-        if (win !== aSubject) {
-          // Only attach to top-level windows.
-          return;
-        }
-
-        GeckoViewUtils.addLazyEventListener(win, ["click", "contextmenu"], {
-          handler: _ => this.GeckoViewPrompt,
-          options: {
-            capture: false,
-            mozSystemGroup: true,
-          },
+        GeckoViewUtils.addLazyPrefObserver({
+          name: "devtools.debugger.remote-enabled",
+          default: false,
+        }, {
+          handler: _ => this.GeckoViewRemoteDebugger,
         });
+
+        // This initializes Telemetry for GeckoView only in the parent process.
+        // The Telemetry initialization for the content process is performed in
+        // ContentProcessSingleton.js for consistency with Desktop Telemetry.
+        GeckoViewTelemetryController.setup();
         break;
       }
     }

@@ -7,10 +7,9 @@
 #define nsNavHistory_h_
 
 #include "nsINavHistoryService.h"
-#include "nsPIPlacesDatabase.h"
-#include "nsIBrowserHistory.h"
 #include "nsINavBookmarksService.h"
 #include "nsIFaviconService.h"
+#include "nsIGlobalHistory2.h"
 
 #include "nsIObserverService.h"
 #include "nsICollation.h"
@@ -78,8 +77,6 @@ class nsIAutoCompleteController;
 class nsNavHistory final : public nsSupportsWeakReference
                          , public nsINavHistoryService
                          , public nsIObserver
-                         , public nsIBrowserHistory
-                         , public nsPIPlacesDatabase
                          , public mozIStorageVacuumParticipant
 {
   friend class PlacesSQLQueryBuilder;
@@ -89,9 +86,7 @@ public:
 
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSINAVHISTORYSERVICE
-  NS_DECL_NSIBROWSERHISTORY
   NS_DECL_NSIOBSERVER
-  NS_DECL_NSPIPLACESDATABASE
   NS_DECL_MOZISTORAGEVACUUMPARTICIPANT
 
   /**
@@ -334,6 +329,12 @@ public:
   uint32_t GetRecentFlags(nsIURI *aURI);
 
   /**
+   * Whether there are visits.
+   * Note: This may cause synchronous I/O.
+   */
+  bool hasHistoryEntries();
+
+  /**
    * Registers a TRANSITION_EMBED visit for the session.
    *
    * @param aURI
@@ -351,11 +352,6 @@ public:
    * @return whether the page has a embed visit.
    */
   bool hasEmbedVisit(nsIURI* aURI);
-
-  /**
-   * Clears all registered embed visits.
-   */
-  void clearEmbedVisits();
 
   int32_t GetFrecencyAgedWeight(int32_t aAgeInDays) const
   {
@@ -512,9 +508,6 @@ protected:
    */
   nsresult DecayFrecency();
 
-  nsresult RemovePagesInternal(const nsCString& aPlaceIdsQueryString);
-  nsresult CleanupPlacesOnVisitsDelete(const nsCString& aPlaceIdsQueryString);
-
   /**
    * Loads all of the preferences that we use into member variables.
    *
@@ -552,8 +545,6 @@ protected:
   nsresult ResultsAsList(mozIStorageStatement* statement,
                          nsNavHistoryQueryOptions* aOptions,
                          nsCOMArray<nsNavHistoryResultNode>* aResults);
-
-  void TitleForDomain(const nsCString& domain, nsACString& aTitle);
 
   // observers
   nsMaybeWeakPtrArray<nsINavHistoryObserver> mObservers;

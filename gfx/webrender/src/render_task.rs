@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use api::{DeviceIntPoint, DeviceIntRect, DeviceIntSize, DeviceSize, ImageDescriptor, ImageFormat};
+use api::{DeviceIntPoint, DeviceIntRect, DeviceIntSize, DeviceSize, DeviceIntSideOffsets, ImageDescriptor, ImageFormat};
 #[cfg(feature = "pathfinder")]
 use api::FontRenderMode;
 use box_shadow::{BoxShadowCacheKey};
@@ -11,12 +11,14 @@ use clip_scroll_tree::CoordinateSystemId;
 use device::TextureFilter;
 #[cfg(feature = "pathfinder")]
 use euclid::{TypedPoint2D, TypedVector2D};
+use freelist::{FreeList, FreeListHandle, WeakFreeListHandle};
 use glyph_rasterizer::GpuGlyphCacheKey;
 use gpu_cache::{GpuCache, GpuCacheAddress, GpuCacheHandle};
-use gpu_types::{ImageSource, RasterizationSpace};
+use gpu_types::{ImageSource, RasterizationSpace, UvRectKind};
 use internal_types::{FastHashMap, SavedTargetIndex, SourceTexture};
 #[cfg(feature = "pathfinder")]
 use pathfinder_partitioner::mesh::Mesh;
+use picture::PictureCacheKey;
 use prim_store::{PrimitiveIndex, ImageCacheKey};
 #[cfg(feature = "debugger")]
 use print_tree::{PrintTreePrinter};
@@ -118,12 +120,18 @@ impl RenderTaskTree {
         pass.add_render_task(id, task.get_dynamic_size(), task.target_kind());
     }
 
+    pub fn prepare_for_render(&mut self) {
+        for task in &mut self.tasks {
+            task.prepare_for_render();
+        }
+    }
+
     pub fn get_task_address(&self, id: RenderTaskId) -> RenderTaskAddress {
         debug_assert_eq!(self.frame_id, id.1);
         RenderTaskAddress(id.0)
     }
 
-    pub fn build(&mut self) {
+    pub fn write_task_data(&mut self) {
         for task in &self.tasks {
             self.task_data.push(task.write_task_data());
         }
@@ -133,6 +141,11 @@ impl RenderTaskTree {
         let id = self.next_saved;
         self.next_saved.0 += 1;
         id
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn frame_id(&self) -> FrameId {
+        self.frame_id
     }
 }
 
@@ -156,7 +169,7 @@ impl ops::IndexMut<RenderTaskId> for RenderTaskTree {
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 pub enum RenderTaskLocation {
     Fixed(DeviceIntRect),
-    Dynamic(Option<(DeviceIntPoint, RenderTargetIndex)>, DeviceIntSize),
+    Dynamic(Option<(DeviceIntPoint, RenderTargetIndex)>, Option<DeviceIntSize>),
     TextureCache(SourceTexture, i32, DeviceIntRect),
 }
 
@@ -183,6 +196,7 @@ pub struct PictureTask {
     pub prim_index: PrimitiveIndex,
     pub content_origin: DeviceIntPoint,
     pub uv_rect_handle: GpuCacheHandle,
+    uv_rect_kind: UvRectKind,
 }
 
 #[derive(Debug)]
@@ -192,6 +206,7 @@ pub struct BlurTask {
     pub blur_std_deviation: f32,
     pub target_kind: RenderTargetKind,
     pub uv_rect_handle: GpuCacheHandle,
+    uv_rect_kind: UvRectKind,
 }
 
 impl BlurTask {
@@ -202,8 +217,8 @@ impl BlurTask {
     }
 }
 
-#[cfg(feature = "pathfinder")]
 #[derive(Debug)]
+#[cfg(feature = "pathfinder")]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct GlyphTask {
@@ -239,6 +254,7 @@ pub enum BlitSource {
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct BlitTask {
     pub source: BlitSource,
+    pub padding: DeviceIntSideOffsets,
 }
 
 #[derive(Debug)]
@@ -293,6 +309,7 @@ impl RenderTask {
         prim_index: PrimitiveIndex,
         content_origin: DeviceIntPoint,
         children: Vec<RenderTaskId>,
+        uv_rect_kind: UvRectKind,
     ) -> Self {
         RenderTask {
             children,
@@ -301,6 +318,7 @@ impl RenderTask {
                 prim_index,
                 content_origin,
                 uv_rect_handle: GpuCacheHandle::new(),
+                uv_rect_kind,
             }),
             clear_mode: ClearMode::Transparent,
             saved_index: None,
@@ -310,7 +328,7 @@ impl RenderTask {
     pub fn new_readback(screen_rect: DeviceIntRect) -> Self {
         RenderTask {
             children: Vec::new(),
-            location: RenderTaskLocation::Dynamic(None, screen_rect.size),
+            location: RenderTaskLocation::Dynamic(None, Some(screen_rect.size)),
             kind: RenderTaskKind::Readback(screen_rect),
             clear_mode: ClearMode::Transparent,
             saved_index: None,
@@ -319,6 +337,14 @@ impl RenderTask {
 
     pub fn new_blit(
         size: DeviceIntSize,
+        source: BlitSource,
+    ) -> Self {
+        RenderTask::new_blit_with_padding(size, &DeviceIntSideOffsets::zero(), source)
+    }
+
+    pub fn new_blit_with_padding(
+        mut size: DeviceIntSize,
+        padding: &DeviceIntSideOffsets,
         source: BlitSource,
     ) -> Self {
         let mut children = Vec::new();
@@ -332,11 +358,15 @@ impl RenderTask {
             children.push(task_id);
         }
 
+        size.width += padding.horizontal();
+        size.height += padding.vertical();
+
         RenderTask {
             children,
-            location: RenderTaskLocation::Dynamic(None, size),
+            location: RenderTaskLocation::Dynamic(None, Some(size)),
             kind: RenderTaskKind::Blit(BlitTask {
                 source,
+                padding: *padding,
             }),
             clear_mode: ClearMode::Transparent,
             saved_index: None,
@@ -377,7 +407,7 @@ impl RenderTask {
 
                         // Request a cacheable render task with a blurred, minimal
                         // sized box-shadow rect.
-                        info.cache_item = resource_cache.request_render_task(
+                        info.cache_handle = Some(resource_cache.request_render_task(
                             RenderTaskCacheKey {
                                 size: cache_size,
                                 kind: RenderTaskCacheKeyKind::BoxShadow(cache_key),
@@ -385,6 +415,7 @@ impl RenderTask {
                             gpu_cache,
                             render_tasks,
                             None,
+                            false,
                             |render_tasks| {
                                 // Draw the rounded rect.
                                 let mask_task = RenderTask::new_rounded_rect_mask(
@@ -406,9 +437,9 @@ impl RenderTask {
                                 let root_task_id = render_tasks.add(blur_render_task);
                                 children.push(root_task_id);
 
-                                (root_task_id, false)
+                                root_task_id
                             }
-                        );
+                        ));
                     }
                     ClipSource::Rectangle(..) |
                     ClipSource::RoundedRectangle(..) |
@@ -421,7 +452,7 @@ impl RenderTask {
 
         RenderTask {
             children,
-            location: RenderTaskLocation::Dynamic(None, outer_rect.size),
+            location: RenderTaskLocation::Dynamic(None, Some(outer_rect.size)),
             kind: RenderTaskKind::CacheMask(CacheMaskTask {
                 actual_rect: outer_rect,
                 clips,
@@ -438,7 +469,7 @@ impl RenderTask {
     ) -> Self {
         RenderTask {
             children: Vec::new(),
-            location: RenderTaskLocation::Dynamic(None, size),
+            location: RenderTaskLocation::Dynamic(None, Some(size)),
             kind: RenderTaskKind::ClipRegion(ClipRegionTask {
                 clip_data_address,
             }),
@@ -474,7 +505,10 @@ impl RenderTask {
     ) -> Self {
         // Adjust large std deviation value.
         let mut adjusted_blur_std_deviation = blur_std_deviation;
-        let blur_target_size = render_tasks[src_task_id].get_dynamic_size();
+        let (blur_target_size, uv_rect_kind) = {
+            let src_task = &render_tasks[src_task_id];
+            (src_task.get_dynamic_size(), src_task.uv_rect_kind())
+        };
         let mut adjusted_blur_target_size = blur_target_size;
         let mut downscaling_src_task_id = src_task_id;
         let mut scale_factor = 1.0;
@@ -496,11 +530,12 @@ impl RenderTask {
 
         let blur_task_v = RenderTask {
             children: vec![downscaling_src_task_id],
-            location: RenderTaskLocation::Dynamic(None, adjusted_blur_target_size),
+            location: RenderTaskLocation::Dynamic(None, Some(adjusted_blur_target_size)),
             kind: RenderTaskKind::VerticalBlur(BlurTask {
                 blur_std_deviation: adjusted_blur_std_deviation,
                 target_kind,
                 uv_rect_handle: GpuCacheHandle::new(),
+                uv_rect_kind,
             }),
             clear_mode,
             saved_index: None,
@@ -508,19 +543,18 @@ impl RenderTask {
 
         let blur_task_v_id = render_tasks.add(blur_task_v);
 
-        let blur_task_h = RenderTask {
+        RenderTask {
             children: vec![blur_task_v_id],
-            location: RenderTaskLocation::Dynamic(None, adjusted_blur_target_size),
+            location: RenderTaskLocation::Dynamic(None, Some(adjusted_blur_target_size)),
             kind: RenderTaskKind::HorizontalBlur(BlurTask {
                 blur_std_deviation: adjusted_blur_std_deviation,
                 target_kind,
                 uv_rect_handle: GpuCacheHandle::new(),
+                uv_rect_kind,
             }),
             clear_mode,
             saved_index: None,
-        };
-
-        blur_task_h
+        }
     }
 
     pub fn new_scaling(
@@ -530,7 +564,7 @@ impl RenderTask {
     ) -> Self {
         RenderTask {
             children: vec![src_task_id],
-            location: RenderTaskLocation::Dynamic(None, target_size),
+            location: RenderTaskLocation::Dynamic(None, Some(target_size)),
             kind: RenderTaskKind::Scaling(target_kind),
             clear_mode: match target_kind {
                 RenderTargetKind::Color => ClearMode::Transparent,
@@ -560,6 +594,31 @@ impl RenderTask {
             }),
             clear_mode: ClearMode::Transparent,
             saved_index: None,
+        }
+    }
+
+    fn uv_rect_kind(&self) -> UvRectKind {
+        match self.kind {
+            RenderTaskKind::CacheMask(..) |
+            RenderTaskKind::Readback(..) |
+            RenderTaskKind::Scaling(..) => {
+                unreachable!("bug: unexpected render task");
+            }
+
+            RenderTaskKind::Picture(ref task) => {
+                task.uv_rect_kind
+            }
+
+            RenderTaskKind::VerticalBlur(ref task) |
+            RenderTaskKind::HorizontalBlur(ref task) => {
+                task.uv_rect_kind
+            }
+
+            RenderTaskKind::ClipRegion(..) |
+            RenderTaskKind::Glyph(_) |
+            RenderTaskKind::Blit(..) => {
+                UvRectKind::Rect
+            }
         }
     }
 
@@ -632,14 +691,14 @@ impl RenderTask {
         }
     }
 
-    pub fn get_texture_handle(&self) -> &GpuCacheHandle {
+    pub fn get_texture_address(&self, gpu_cache: &GpuCache) -> GpuCacheAddress {
         match self.kind {
             RenderTaskKind::Picture(ref info) => {
-                &info.uv_rect_handle
+                gpu_cache.get_address(&info.uv_rect_handle)
             }
             RenderTaskKind::VerticalBlur(ref info) |
             RenderTaskKind::HorizontalBlur(ref info) => {
-                &info.uv_rect_handle
+                gpu_cache.get_address(&info.uv_rect_handle)
             }
             RenderTaskKind::ClipRegion(..) |
             RenderTaskKind::Readback(..) |
@@ -655,7 +714,10 @@ impl RenderTask {
     pub fn get_dynamic_size(&self) -> DeviceIntSize {
         match self.location {
             RenderTaskLocation::Fixed(..) => DeviceIntSize::zero(),
-            RenderTaskLocation::Dynamic(_, size) => size,
+            RenderTaskLocation::Dynamic(_, Some(size)) => size,
+            RenderTaskLocation::Dynamic(_, None) => {
+                panic!("bug: render task must have assigned size by now");
+            }
             RenderTaskLocation::TextureCache(_, _, rect) => rect.size,
         }
     }
@@ -680,6 +742,7 @@ impl RenderTask {
             //           to mark a task as unused explicitly. This
             //           would allow us to restore this debug check.
             RenderTaskLocation::Dynamic(Some((origin, target_index)), size) => {
+                let size = size.expect("bug: must be assigned a size by now");
                 (DeviceIntRect::new(origin, size), target_index)
             }
             RenderTaskLocation::Dynamic(None, _) => {
@@ -749,19 +812,26 @@ impl RenderTask {
         }
     }
 
-    pub fn prepare_for_render(
+    // Optionally, prepare the render task for drawing. This is executed
+    // after all resource cache items (textures and glyphs) have been
+    // resolved and can be queried. It also allows certain render tasks
+    // to defer calculating an exact size until now, if desired.
+    pub fn prepare_for_render(&mut self) {
+    }
+
+    pub fn write_gpu_blocks(
         &mut self,
         gpu_cache: &mut GpuCache,
     ) {
         let (target_rect, target_index) = self.get_target_rect();
 
-        let cache_handle = match self.kind {
+        let (cache_handle, uv_rect_kind) = match self.kind {
             RenderTaskKind::HorizontalBlur(ref mut info) |
             RenderTaskKind::VerticalBlur(ref mut info) => {
-                &mut info.uv_rect_handle
+                (&mut info.uv_rect_handle, info.uv_rect_kind)
             }
             RenderTaskKind::Picture(ref mut info) => {
-                &mut info.uv_rect_handle
+                (&mut info.uv_rect_handle, info.uv_rect_kind)
             }
             RenderTaskKind::Readback(..) |
             RenderTaskKind::Scaling(..) |
@@ -774,11 +844,15 @@ impl RenderTask {
         };
 
         if let Some(mut request) = gpu_cache.request(cache_handle) {
+            let p0 = target_rect.origin.to_f32();
+            let p1 = target_rect.bottom_right().to_f32();
+
             let image_source = ImageSource {
-                p0: target_rect.origin.to_f32(),
-                p1: target_rect.bottom_right().to_f32(),
+                p0,
+                p1,
                 texture_layer: target_index.0 as f32,
                 user_data: [0.0; 3],
+                uv_rect_kind,
             };
             image_source.write_gpu_blocks(&mut request);
         }
@@ -856,6 +930,7 @@ pub enum RenderTaskCacheKeyKind {
     Image(ImageCacheKey),
     #[allow(dead_code)]
     Glyph(GpuGlyphCacheKey),
+    Picture(PictureCacheKey),
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -866,29 +941,42 @@ pub struct RenderTaskCacheKey {
     pub kind: RenderTaskCacheKeyKind,
 }
 
+#[derive(Debug)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
-struct RenderTaskCacheEntry {
-    handle: TextureCacheHandle,
+pub struct RenderTaskCacheEntry {
+    pending_render_task_id: Option<RenderTaskId>,
+    user_data: Option<[f32; 3]>,
+    is_opaque: bool,
+    pub handle: TextureCacheHandle,
 }
+
+#[derive(Debug)]
+pub enum RenderTaskCacheMarker {}
 
 // A cache of render tasks that are stored in the texture
 // cache for usage across frames.
+#[derive(Debug)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct RenderTaskCache {
-    entries: FastHashMap<RenderTaskCacheKey, RenderTaskCacheEntry>,
+    map: FastHashMap<RenderTaskCacheKey, FreeListHandle<RenderTaskCacheMarker>>,
+    cache_entries: FreeList<RenderTaskCacheEntry, RenderTaskCacheMarker>,
 }
+
+pub type RenderTaskCacheEntryHandle = WeakFreeListHandle<RenderTaskCacheMarker>;
 
 impl RenderTaskCache {
     pub fn new() -> Self {
         RenderTaskCache {
-            entries: FastHashMap::default(),
+            map: FastHashMap::default(),
+            cache_entries: FreeList::new(),
         }
     }
 
     pub fn clear(&mut self) {
-        self.entries.clear();
+        self.map.clear();
+        self.cache_entries.clear();
     }
 
     pub fn begin_frame(
@@ -908,9 +996,91 @@ impl RenderTaskCache {
         // Nonetheless, we should remove stale entries
         // from here so that this hash map doesn't
         // grow indefinitely!
-        self.entries.retain(|_, value| {
-            texture_cache.is_allocated(&value.handle)
-        });
+        let mut keys_to_remove = Vec::new();
+
+        for (key, handle) in &self.map {
+            let entry = self.cache_entries.get(handle);
+            if !texture_cache.is_allocated(&entry.handle) {
+                keys_to_remove.push(key.clone())
+            }
+        }
+
+        for key in &keys_to_remove {
+            let handle = self.map.remove(key).unwrap();
+            self.cache_entries.free(handle);
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        gpu_cache: &mut GpuCache,
+        texture_cache: &mut TextureCache,
+        render_tasks: &mut RenderTaskTree,
+    ) {
+        // Iterate the list of render task cache entries,
+        // and allocate / update the texture cache location
+        // if the entry has been evicted or not yet allocated.
+        for (_, handle) in &self.map {
+            let entry = self.cache_entries.get_mut(handle);
+
+            if let Some(pending_render_task_id) = entry.pending_render_task_id.take() {
+                let render_task = &mut render_tasks[pending_render_task_id];
+                let target_kind = render_task.target_kind();
+
+                // Find out what size to alloc in the texture cache.
+                let size = match render_task.location {
+                    RenderTaskLocation::Fixed(..) |
+                    RenderTaskLocation::TextureCache(..) => {
+                        panic!("BUG: dynamic task was expected");
+                    }
+                    RenderTaskLocation::Dynamic(_, None) => {
+                        panic!("BUG: must have assigned size by now");
+                    }
+                    RenderTaskLocation::Dynamic(_, Some(size)) => size,
+                };
+
+                // Select the right texture page to allocate from.
+                let image_format = match target_kind {
+                    RenderTargetKind::Color => ImageFormat::BGRA8,
+                    RenderTargetKind::Alpha => ImageFormat::R8,
+                };
+
+                let descriptor = ImageDescriptor::new(
+                    size.width as u32,
+                    size.height as u32,
+                    image_format,
+                    entry.is_opaque,
+                    false,
+                );
+
+                // Allocate space in the texture cache, but don't supply
+                // and CPU-side data to be uploaded.
+                texture_cache.update(
+                    &mut entry.handle,
+                    descriptor,
+                    TextureFilter::Linear,
+                    None,
+                    entry.user_data.unwrap_or([0.0; 3]),
+                    None,
+                    gpu_cache,
+                    None,
+                    render_task.uv_rect_kind(),
+                );
+
+                // Get the allocation details in the texture cache, and store
+                // this in the render task. The renderer will draw this
+                // task into the appropriate layer and rect of the texture
+                // cache on this frame.
+                let (texture_id, texture_layer, uv_rect) =
+                    texture_cache.get_cache_location(&entry.handle);
+
+                render_task.location = RenderTaskLocation::TextureCache(
+                    texture_id,
+                    texture_layer,
+                    uv_rect.to_i32()
+                );
+            }
+        }
     }
 
     pub fn request_render_task<F>(
@@ -920,80 +1090,49 @@ impl RenderTaskCache {
         gpu_cache: &mut GpuCache,
         render_tasks: &mut RenderTaskTree,
         user_data: Option<[f32; 3]>,
+        is_opaque: bool,
         mut f: F,
-    ) -> Result<CacheItem, ()>
-         where F: FnMut(&mut RenderTaskTree) -> Result<(RenderTaskId, bool), ()> {
+    ) -> Result<RenderTaskCacheEntryHandle, ()>
+         where F: FnMut(&mut RenderTaskTree) -> Result<RenderTaskId, ()> {
         // Get the texture cache handle for this cache key,
         // or create one.
-        let cache_entry = self.entries
-                              .entry(key)
-                              .or_insert(RenderTaskCacheEntry {
-                                  handle: TextureCacheHandle::new(),
-                              });
+        let cache_entries = &mut self.cache_entries;
+        let entry_handle = self.map
+                               .entry(key)
+                               .or_insert_with(|| {
+                                    let entry = RenderTaskCacheEntry {
+                                        handle: TextureCacheHandle::new(),
+                                        pending_render_task_id: None,
+                                        user_data,
+                                        is_opaque,
+                                    };
+                                    cache_entries.insert(entry)
+                                });
+        let cache_entry = cache_entries.get_mut(entry_handle);
 
-        // Check if this texture cache handle is valid.
-        if texture_cache.request(&mut cache_entry.handle, gpu_cache) {
-            // Invoke user closure to get render task chain
-            // to draw this into the texture cache.
-            let (render_task_id, is_opaque) = try!(f(render_tasks));
-            let render_task = &mut render_tasks[render_task_id];
+        if cache_entry.pending_render_task_id.is_none() {
+            // Check if this texture cache handle is valid.
+            if texture_cache.request(&cache_entry.handle, gpu_cache) {
+                // Invoke user closure to get render task chain
+                // to draw this into the texture cache.
+                let render_task_id = try!(f(render_tasks));
 
-            // Select the right texture page to allocate from.
-            let image_format = match render_task.target_kind() {
-                RenderTargetKind::Color => ImageFormat::BGRA8,
-                RenderTargetKind::Alpha => ImageFormat::R8,
-            };
-
-            // Find out what size to alloc in the texture cache.
-            let size = match render_task.location {
-                RenderTaskLocation::Fixed(..) |
-                RenderTaskLocation::TextureCache(..) => {
-                    panic!("BUG: dynamic task was expected");
-                }
-                RenderTaskLocation::Dynamic(_, size) => size,
-            };
-
-            // TODO(gw): Support color tasks in the texture cache,
-            //           and perhaps consider if we can determine
-            //           if some tasks are opaque as an optimization.
-            let descriptor = ImageDescriptor::new(
-                size.width as u32,
-                size.height as u32,
-                image_format,
-                is_opaque,
-                false,
-            );
-
-            // Allocate space in the texture cache, but don't supply
-            // and CPU-side data to be uploaded.
-            texture_cache.update(
-                &mut cache_entry.handle,
-                descriptor,
-                TextureFilter::Linear,
-                None,
-                user_data.unwrap_or([0.0; 3]),
-                None,
-                gpu_cache,
-                None,
-            );
-
-            // Get the allocation details in the texture cache, and store
-            // this in the render task. The renderer will draw this
-            // task into the appropriate layer and rect of the texture
-            // cache on this frame.
-            let (texture_id, texture_layer, uv_rect) =
-                texture_cache.get_cache_location(&cache_entry.handle);
-
-            render_task.location = RenderTaskLocation::TextureCache(
-                texture_id,
-                texture_layer,
-                uv_rect.to_i32()
-            );
+                cache_entry.pending_render_task_id = Some(render_task_id);
+                cache_entry.user_data = user_data;
+                cache_entry.is_opaque = is_opaque;
+            }
         }
 
-        // Finally, return the texture cache handle that we know
-        // is now up to date.
-        Ok(texture_cache.get(&cache_entry.handle))
+        Ok(entry_handle.weak())
+    }
+
+    pub fn get_cache_entry(
+        &self,
+        handle: &RenderTaskCacheEntryHandle,
+    ) -> &RenderTaskCacheEntry {
+        self.cache_entries
+            .get_opt(handle)
+            .expect("bug: invalid render task cache handle")
     }
 
     #[allow(dead_code)]
@@ -1002,7 +1141,8 @@ impl RenderTaskCache {
                                           key: &RenderTaskCacheKey)
                                           -> CacheItem {
         // Get the texture cache handle for this cache key.
-        let cache_entry = self.entries.get(key).unwrap();
+        let handle = self.map.get(key).unwrap();
+        let cache_entry = self.cache_entries.get(handle);
         texture_cache.get(&cache_entry.handle)
     }
 
@@ -1011,7 +1151,8 @@ impl RenderTaskCache {
                                                    texture_cache: &TextureCache,
                                                    key: &RenderTaskCacheKey)
                                                    -> bool {
-        let cache_entry = self.entries.get(key).unwrap();
+        let handle = self.map.get(key).unwrap();
+        let cache_entry = self.cache_entries.get(handle);
         texture_cache.is_allocated(&cache_entry.handle)
     }
 }

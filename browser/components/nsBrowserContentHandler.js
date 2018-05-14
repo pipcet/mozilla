@@ -6,20 +6,16 @@ ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 ChromeUtils.import("resource://gre/modules/Services.jsm");
 ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 
-ChromeUtils.defineModuleGetter(this, "HeadlessShell",
-                               "resource:///modules/HeadlessShell.jsm");
-ChromeUtils.defineModuleGetter(this, "LaterRun",
-                               "resource:///modules/LaterRun.jsm");
-ChromeUtils.defineModuleGetter(this, "PrivateBrowsingUtils",
-                               "resource://gre/modules/PrivateBrowsingUtils.jsm");
-ChromeUtils.defineModuleGetter(this, "RecentWindow",
-                               "resource:///modules/RecentWindow.jsm");
-ChromeUtils.defineModuleGetter(this, "ShellService",
-                               "resource:///modules/ShellService.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
+  HeadlessShell: "resource:///modules/HeadlessShell.jsm",
+  LaterRun: "resource:///modules/LaterRun.jsm",
+  PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
+  ShellService: "resource:///modules/ShellService.jsm",
+  UpdatePing: "resource://gre/modules/UpdatePing.jsm"
+});
 XPCOMUtils.defineLazyServiceGetter(this, "WindowsUIUtils",
-                                   "@mozilla.org/windows-ui-utils;1", "nsIWindowsUIUtils");
-ChromeUtils.defineModuleGetter(this, "UpdatePing",
-                               "resource://gre/modules/UpdatePing.jsm");
+  "@mozilla.org/windows-ui-utils;1", "nsIWindowsUIUtils");
 
 function shouldLoadURI(aURI) {
   if (aURI && !aURI.schemeIs("chrome"))
@@ -290,10 +286,10 @@ nsBrowserContentHandler.prototype = {
   },
 
   /* nsISupports */
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsICommandLineHandler,
-                                         Ci.nsIBrowserHandler,
-                                         Ci.nsIContentHandler,
-                                         Ci.nsICommandLineValidator]),
+  QueryInterface: ChromeUtils.generateQI([Ci.nsICommandLineHandler,
+                                          Ci.nsIBrowserHandler,
+                                          Ci.nsIContentHandler,
+                                          Ci.nsICommandLineValidator]),
 
   /* nsICommandLineHandler */
   handle: function bch_handle(cmdLine) {
@@ -358,7 +354,12 @@ nsBrowserContentHandler.prototype = {
         if (isLocal(resolvedURI)) {
           // If the URI is local, we are sure it won't wrongly inherit chrome privs
           let features = "chrome,dialog=no,all" + this.getFeatures(cmdLine);
-          Services.ww.openWindow(null, resolvedURI.spec, "_blank", features, null);
+          // Provide 1 null argument, as openWindow has a different behavior
+          // when the arg count is 0.
+          let argArray = Cc["@mozilla.org/array;1"]
+                           .createInstance(Ci.nsIMutableArray);
+          argArray.appendElement(null);
+          Services.ww.openWindow(null, resolvedURI.spec, "_blank", features, argArray);
           cmdLine.preventDefault = true;
         } else {
           dump("*** Preventing load of web URI as chrome\n");
@@ -672,7 +673,7 @@ function handURIToExistingBrowser(uri, location, cmdLine, forcePrivate, triggeri
   // Unless using a private window is forced, open external links in private
   // windows only if we're in perma-private mode.
   var allowPrivate = forcePrivate || PrivateBrowsingUtils.permanentPrivateBrowsing;
-  var navWin = RecentWindow.getMostRecentBrowserWindow({private: allowPrivate});
+  var navWin = BrowserWindowTracker.getTopWindow({private: allowPrivate});
   if (!navWin) {
     // if we couldn't load it in an existing window, open a new one
     openBrowserWindow(cmdLine, uri.spec, null, forcePrivate);
@@ -696,13 +697,7 @@ nsDefaultCommandLineHandler.prototype = {
   classID: Components.ID("{47cd0651-b1be-4a0f-b5c4-10e5a573ef71}"),
 
   /* nsISupports */
-  QueryInterface: function dch_QI(iid) {
-    if (!iid.equals(Ci.nsISupports) &&
-        !iid.equals(Ci.nsICommandLineHandler))
-      throw Cr.NS_ERROR_NO_INTERFACE;
-
-    return this;
-  },
+  QueryInterface: ChromeUtils.generateQI(["nsICommandLineHandler"]),
 
   _haveProfile: false,
 
@@ -784,7 +779,7 @@ nsDefaultCommandLineHandler.prototype = {
           cmdLine.state != Ci.nsICommandLine.STATE_INITIAL_LAUNCH &&
           WindowsUIUtils.inTabletMode) {
         // In windows 10 tablet mode, do not create a new window, but reuse the existing one.
-        let win = RecentWindow.getMostRecentBrowserWindow();
+        let win = BrowserWindowTracker.getTopWindow();
         if (win) {
           win.focus();
           return;

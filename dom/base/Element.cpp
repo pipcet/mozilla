@@ -6,7 +6,7 @@
 
 /*
  * Base class for all element classes; this provides an implementation
- * of DOM Core's nsIDOMElement, implements nsIContent, provides
+ * of DOM Core's Element, implements nsIContent, provides
  * utility methods for subclasses, and so forth.
  */
 
@@ -26,7 +26,6 @@
 #include "mozilla/dom/NodeInfo.h"
 #include "nsIDocumentInlines.h"
 #include "mozilla/dom/DocumentTimeline.h"
-#include "nsIDOMNodeList.h"
 #include "nsIDOMDocument.h"
 #include "nsIContentIterator.h"
 #include "nsFlexContainerFrame.h"
@@ -41,7 +40,6 @@
 #include "nsStyleConsts.h"
 #include "nsString.h"
 #include "nsUnicharUtils.h"
-#include "nsIDOMEvent.h"
 #include "nsDOMCID.h"
 #include "nsIServiceManager.h"
 #include "nsDOMCSSAttrDeclaration.h"
@@ -69,7 +67,7 @@
 #include "mozilla/EventStates.h"
 #include "mozilla/InternalMutationEvent.h"
 #include "mozilla/MouseEvents.h"
-#include "mozilla/ServoRestyleManager.h"
+#include "mozilla/RestyleManager.h"
 #include "mozilla/SizeOfState.h"
 #include "mozilla/TextEditor.h"
 #include "mozilla/TextEvents.h"
@@ -120,7 +118,6 @@
 
 #include "mozAutoDocUpdate.h"
 
-#include "nsCSSParser.h"
 #include "nsDOMMutationObserver.h"
 #include "nsWrapperCacheInlines.h"
 #include "xpcpublic.h"
@@ -139,8 +136,8 @@
 #include "mozilla/dom/CSSPseudoElement.h"
 #include "mozilla/dom/DocumentFragment.h"
 #include "mozilla/dom/ElementBinding.h"
-#include "mozilla/dom/KeyframeEffect.h"
 #include "mozilla/dom/KeyframeEffectBinding.h"
+#include "mozilla/dom/KeyframeEffect.h"
 #include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/WindowBinding.h"
 #include "mozilla/dom/VRDisplay.h"
@@ -341,15 +338,14 @@ Element::TabIndex()
 void
 Element::Focus(mozilla::ErrorResult& aError)
 {
-  nsCOMPtr<nsIDOMElement> domElement = do_QueryInterface(this);
   nsFocusManager* fm = nsFocusManager::GetFocusManager();
   // Also other browsers seem to have the hack to not re-focus (and flush) when
   // the element is already focused.
-  if (fm && domElement) {
+  if (fm) {
     if (fm->CanSkipFocus(this)) {
       fm->NeedsFlushBeforeEventHandling(this);
     } else {
-      aError = fm->SetFocus(domElement, 0);
+      aError = fm->SetFocus(this, 0);
     }
   }
 }
@@ -1219,18 +1215,6 @@ Element::AttachShadow(const ShadowRootInit& aInit, ErrorResult& aError)
     return nullptr;
   }
 
-  return AttachShadowInternal(aInit.mMode, aError);
-}
-
-already_AddRefed<ShadowRoot>
-Element::CreateShadowRoot(ErrorResult& aError)
-{
-  return AttachShadowInternal(ShadowRootMode::Open, aError);
-}
-
-already_AddRefed<ShadowRoot>
-Element::AttachShadowInternal(ShadowRootMode aMode, ErrorResult& aError)
-{
   /**
    * 3. If context object is a shadow host, then throw
    *    an "InvalidStateError" DOMException.
@@ -1250,7 +1234,6 @@ Element::AttachShadowInternal(ShadowRootMode aMode, ErrorResult& aError)
   if (nsIDocument* doc = GetComposedDoc()) {
     if (nsIPresShell* shell = doc->GetShell()) {
       shell->DestroyFramesForAndRestyle(this);
-      MOZ_ASSERT(!shell->FrameConstructor()->GetDisplayContentsStyleFor(this));
     }
   }
   MOZ_ASSERT(!GetPrimaryFrame());
@@ -1261,7 +1244,7 @@ Element::AttachShadowInternal(ShadowRootMode aMode, ErrorResult& aError)
    *    and mode is init’s mode.
    */
   RefPtr<ShadowRoot> shadowRoot =
-    new ShadowRoot(this, aMode, nodeInfo.forget());
+    new ShadowRoot(this, aInit.mMode, nodeInfo.forget());
 
   shadowRoot->SetIsComposedDocParticipant(IsInComposedDoc());
 
@@ -1551,30 +1534,30 @@ Element::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                     nsIContent* aBindingParent,
                     bool aCompileEventHandlers)
 {
-  NS_PRECONDITION(aParent || aDocument, "Must have document if no parent!");
-  NS_PRECONDITION((NODE_FROM(aParent, aDocument)->OwnerDoc() == OwnerDoc()),
-                  "Must have the same owner document");
-  NS_PRECONDITION(!aParent || aDocument == aParent->GetUncomposedDoc(),
-                  "aDocument must be current doc of aParent");
-  NS_PRECONDITION(!GetUncomposedDoc(), "Already have a document.  Unbind first!");
+  MOZ_ASSERT(aParent || aDocument, "Must have document if no parent!");
+  MOZ_ASSERT((NODE_FROM(aParent, aDocument)->OwnerDoc() == OwnerDoc()),
+             "Must have the same owner document");
+  MOZ_ASSERT(!aParent || aDocument == aParent->GetUncomposedDoc(),
+             "aDocument must be current doc of aParent");
+  MOZ_ASSERT(!GetUncomposedDoc(), "Already have a document.  Unbind first!");
   // Note that as we recurse into the kids, they'll have a non-null parent.  So
   // only assert if our parent is _changing_ while we have a parent.
-  NS_PRECONDITION(!GetParent() || aParent == GetParent(),
-                  "Already have a parent.  Unbind first!");
-  NS_PRECONDITION(!GetBindingParent() ||
-                  aBindingParent == GetBindingParent() ||
-                  (!aBindingParent && aParent &&
-                   aParent->GetBindingParent() == GetBindingParent()),
-                  "Already have a binding parent.  Unbind first!");
-  NS_PRECONDITION(aBindingParent != this,
-                  "Content must not be its own binding parent");
-  NS_PRECONDITION(!IsRootOfNativeAnonymousSubtree() ||
-                  aBindingParent == aParent,
-                  "Native anonymous content must have its parent as its "
-                  "own binding parent");
-  NS_PRECONDITION(aBindingParent || !aParent ||
-                  aBindingParent == aParent->GetBindingParent(),
-                  "We should be passed the right binding parent");
+  MOZ_ASSERT(!GetParent() || aParent == GetParent(),
+             "Already have a parent.  Unbind first!");
+  MOZ_ASSERT(!GetBindingParent() ||
+             aBindingParent == GetBindingParent() ||
+             (!aBindingParent && aParent &&
+              aParent->GetBindingParent() == GetBindingParent()),
+             "Already have a binding parent.  Unbind first!");
+  MOZ_ASSERT(aBindingParent != this,
+             "Content must not be its own binding parent");
+  MOZ_ASSERT(!IsRootOfNativeAnonymousSubtree() ||
+             aBindingParent == aParent,
+             "Native anonymous content must have its parent as its "
+             "own binding parent");
+  MOZ_ASSERT(aBindingParent || !aParent ||
+             aBindingParent == aParent->GetBindingParent(),
+             "We should be passed the right binding parent");
 
 #ifdef MOZ_XUL
   // First set the binding parent
@@ -1858,7 +1841,7 @@ RemoveFromBindingManagerRunnable::Run()
 void
 Element::UnbindFromTree(bool aDeep, bool aNullParent)
 {
-  NS_PRECONDITION(aDeep || (!GetUncomposedDoc() && !GetBindingParent()),
+  MOZ_ASSERT(aDeep || (!GetUncomposedDoc() && !GetBindingParent()),
                   "Shallow unbind won't clear document and binding parent on "
                   "kids!");
 
@@ -2014,9 +1997,8 @@ Element::UnbindFromTree(bool aDeep, bool aNullParent)
           nsContentUtils::EnqueueLifecycleCallback(nsIDocument::eDisconnected,
                                                    this);
         } else {
-          // Remove an unresolved custom element that is a candidate for
-          // upgrade when a custom element is disconnected.
-          // We will make sure it's shadow-including tree order in bug 1326028.
+          // Remove an unresolved custom element that is a candidate for upgrade
+          // when a custom element is disconnected.
           nsContentUtils::UnregisterUnresolvedElement(this);
         }
       }
@@ -2166,7 +2148,7 @@ Element::FindAttributeDependence(const nsAtom* aAttribute,
   for (uint32_t mapindex = 0; mapindex < aMapCount; ++mapindex) {
     for (const MappedAttributeEntry* map = aMaps[mapindex];
          map->attribute; ++map) {
-      if (aAttribute == map->attribute) {
+      if (aAttribute == *map->attribute) {
         return true;
       }
     }
@@ -2236,9 +2218,9 @@ Element::DispatchEvent(nsPresContext* aPresContext,
                        bool aFullDispatch,
                        nsEventStatus* aStatus)
 {
-  NS_PRECONDITION(aTarget, "Must have target");
-  NS_PRECONDITION(aEvent, "Must have source event");
-  NS_PRECONDITION(aStatus, "Null out param?");
+  MOZ_ASSERT(aTarget, "Must have target");
+  MOZ_ASSERT(aEvent, "Must have source event");
+  MOZ_ASSERT(aStatus, "Null out param?");
 
   if (!aPresContext) {
     return NS_OK;
@@ -2265,9 +2247,9 @@ Element::DispatchClickEvent(nsPresContext* aPresContext,
                             const EventFlags* aExtraEventFlags,
                             nsEventStatus* aStatus)
 {
-  NS_PRECONDITION(aTarget, "Must have target");
-  NS_PRECONDITION(aSourceEvent, "Must have source event");
-  NS_PRECONDITION(aStatus, "Null out param?");
+  MOZ_ASSERT(aTarget, "Must have target");
+  MOZ_ASSERT(aSourceEvent, "Must have source event");
+  MOZ_ASSERT(aStatus, "Null out param?");
 
   WidgetMouseEvent event(aSourceEvent->IsTrusted(), eMouseClick,
                          aSourceEvent->mWidget, WidgetMouseEvent::eReal);
@@ -2340,7 +2322,7 @@ Element::SetEventHandler(nsAtom* aEventName,
     return NS_OK;
   }
 
-  NS_PRECONDITION(aEventName, "Must have event name!");
+  MOZ_ASSERT(aEventName, "Must have event name!");
   bool defer = true;
   EventListenerManager* manager =
     GetEventListenerManagerForAttr(aEventName, &defer);
@@ -2908,7 +2890,7 @@ Element::FindAttrValueIn(int32_t aNameSpaceID,
   const nsAttrValue* val = mAttrsAndChildren.GetAttr(aName, aNameSpaceID);
   if (val) {
     for (int32_t i = 0; aValues[i]; ++i) {
-      if (val->Equals(aValues[i], aCaseSensitive)) {
+      if (val->Equals(*aValues[i], aCaseSensitive)) {
         return i;
       }
     }
@@ -3229,7 +3211,7 @@ Element::CheckHandleEventForLinksPrecondition(EventChainVisitor& aVisitor,
   return IsLink(aURI);
 }
 
-nsresult
+void
 Element::GetEventTargetParentForLinks(EventChainPreVisitor& aVisitor)
 {
   // Optimisation: return early if this event doesn't interest us.
@@ -3241,16 +3223,14 @@ Element::GetEventTargetParentForLinks(EventChainPreVisitor& aVisitor)
   case eBlur:
     break;
   default:
-    return NS_OK;
+    return;
   }
 
   // Make sure we meet the preconditions before continuing
   nsCOMPtr<nsIURI> absURI;
   if (!CheckHandleEventForLinksPrecondition(aVisitor, getter_AddRefs(absURI))) {
-    return NS_OK;
+    return;
   }
-
-  nsresult rv = NS_OK;
 
   // We do the status bar updates in GetEventTargetParent so that the status bar
   // gets updated even if the event is consumed before we have a chance to set
@@ -3266,7 +3246,7 @@ Element::GetEventTargetParentForLinks(EventChainPreVisitor& aVisitor)
       nsAutoString target;
       GetLinkTarget(target);
       nsContentUtils::TriggerLink(this, aVisitor.mPresContext, absURI, target,
-                                  false, true, true);
+                                  /* click */ false, /* isTrusted */ true);
       // Make sure any ancestor links don't also TriggerLink
       aVisitor.mEvent->mFlags.mMultipleActionsPrevented = true;
     }
@@ -3276,19 +3256,18 @@ Element::GetEventTargetParentForLinks(EventChainPreVisitor& aVisitor)
     aVisitor.mEventStatus = nsEventStatus_eConsumeNoDefault;
     MOZ_FALLTHROUGH;
   case eBlur:
-    rv = LeaveLink(aVisitor.mPresContext);
-    if (NS_SUCCEEDED(rv)) {
-      aVisitor.mEvent->mFlags.mMultipleActionsPrevented = true;
+    {
+      nsresult rv = LeaveLink(aVisitor.mPresContext);
+      if (NS_SUCCEEDED(rv)) {
+        aVisitor.mEvent->mFlags.mMultipleActionsPrevented = true;
+      }
+      break;
     }
-    break;
 
   default:
     // switch not in sync with the optimization switch earlier in this function
     NS_NOTREACHED("switch statements not in sync");
-    return NS_ERROR_UNEXPECTED;
   }
-
-  return rv;
 }
 
 nsresult
@@ -3326,9 +3305,9 @@ Element::PostHandleEventForLinks(EventChainPostVisitor& aVisitor)
           nsIFocusManager* fm = nsFocusManager::GetFocusManager();
           if (fm) {
             aVisitor.mEvent->mFlags.mMultipleActionsPrevented = true;
-            nsCOMPtr<nsIDOMElement> elem = do_QueryInterface(this);
-            fm->SetFocus(elem, nsIFocusManager::FLAG_BYMOUSE |
-                               nsIFocusManager::FLAG_NOSCROLL);
+            RefPtr<Element> kungFuDeathGrip(this);
+            fm->SetFocus(kungFuDeathGrip, nsIFocusManager::FLAG_BYMOUSE |
+                                          nsIFocusManager::FLAG_NOSCROLL);
           }
 
           EventStateManager::SetActiveManager(
@@ -3379,7 +3358,7 @@ Element::PostHandleEventForLinks(EventChainPostVisitor& aVisitor)
         const InternalUIEvent* activeEvent = aVisitor.mEvent->AsUIEvent();
         MOZ_ASSERT(activeEvent);
         nsContentUtils::TriggerLink(this, aVisitor.mPresContext, absURI, target,
-                                    true, true, activeEvent->IsTrustable());
+                                    /* click */ true, activeEvent->IsTrustable());
         aVisitor.mEventStatus = nsEventStatus_eConsumeNoDefault;
       }
     }
@@ -3423,16 +3402,16 @@ nsDOMTokenListPropertyDestructor(void *aObject, nsAtom *aProperty,
   NS_RELEASE(list);
 }
 
-static nsStaticAtom* const sPropertiesToTraverseAndUnlink[] =
+static nsStaticAtom** sPropertiesToTraverseAndUnlink[] =
   {
-    nsGkAtoms::sandbox,
-    nsGkAtoms::sizes,
-    nsGkAtoms::dirAutoSetBy,
+    &nsGkAtoms::sandbox,
+    &nsGkAtoms::sizes,
+    &nsGkAtoms::dirAutoSetBy,
     nullptr
   };
 
 // static
-nsStaticAtom* const*
+nsStaticAtom***
 Element::HTMLSVGPropertiesToTraverseAndUnlink()
 {
   return sPropertiesToTraverseAndUnlink;
@@ -3443,10 +3422,10 @@ Element::GetTokenList(nsAtom* aAtom,
                       const DOMTokenListSupportedTokenArray aSupportedTokens)
 {
 #ifdef DEBUG
-  const nsStaticAtom* const* props = HTMLSVGPropertiesToTraverseAndUnlink();
+  nsStaticAtom*** props = HTMLSVGPropertiesToTraverseAndUnlink();
   bool found = false;
   for (uint32_t i = 0; props[i]; ++i) {
-    if (props[i] == aAtom) {
+    if (*props[i] == aAtom) {
       found = true;
       break;
     }
@@ -3797,7 +3776,7 @@ Element::GetAnimationsUnsorted(Element* aElement,
     return;
   }
 
-  for (KeyframeEffectReadOnly* effect : *effects) {
+  for (KeyframeEffect* effect : *effects) {
     MOZ_ASSERT(effect && effect->GetAnimation(),
                "Only effects associated with an animation should be "
                "added to an element's effect set");
@@ -3886,15 +3865,11 @@ Element::SetOuterHTML(const nsAString& aOuterHTML, ErrorResult& aError)
     context = NS_NewHTMLBodyElement(info.forget(), FROM_PARSER_FRAGMENT);
   }
 
-  nsCOMPtr<nsIDOMDocumentFragment> df;
-  aError = nsContentUtils::CreateContextualFragment(context,
-                                                    aOuterHTML,
-                                                    true,
-                                                    getter_AddRefs(df));
+  RefPtr<DocumentFragment> fragment =
+    nsContentUtils::CreateContextualFragment(context, aOuterHTML, true, aError);
   if (aError.Failed()) {
     return;
   }
-  nsCOMPtr<nsINode> fragment = do_QueryInterface(df);
   parent->ReplaceChild(*fragment, *this, aError);
 }
 
@@ -3971,16 +3946,11 @@ Element::InsertAdjacentHTML(const nsAString& aPosition, const nsAString& aText,
   }
 
   // couldn't parse directly
-  nsCOMPtr<nsIDOMDocumentFragment> df;
-  aError = nsContentUtils::CreateContextualFragment(destination,
-                                                    aText,
-                                                    true,
-                                                    getter_AddRefs(df));
+  RefPtr<DocumentFragment> fragment =
+    nsContentUtils::CreateContextualFragment(destination, aText, true, aError);
   if (aError.Failed()) {
     return;
   }
-
-  nsCOMPtr<nsINode> fragment = do_QueryInterface(df);
 
   // Suppress assertion about node removal mutation events that can't have
   // listeners anyway, because no one has had the chance to register mutation

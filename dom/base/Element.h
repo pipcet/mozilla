@@ -6,7 +6,7 @@
 
 /*
  * Base class for all element classes; this provides an implementation
- * of DOM Core's nsIDOMElement, implements nsIContent, provides
+ * of DOM Core's Element, implements nsIContent, provides
  * utility methods for subclasses, and so forth.
  */
 
@@ -18,7 +18,6 @@
 #include "mozilla/EventStates.h"           // for member
 #include "mozilla/ServoTypes.h"
 #include "mozilla/dom/DirectionalityUtils.h"
-#include "nsIDOMElement.h"
 #include "nsILinkHandler.h"
 #include "nsINodeList.h"
 #include "nsNodeUtils.h"
@@ -65,12 +64,16 @@ class nsDOMStringMap;
 namespace mozilla {
 class DeclarationBlock;
 class TextEditor;
+namespace css {
+  struct URLValue;
+} // namespace css
 namespace dom {
   struct AnimationFilter;
   struct ScrollIntoViewOptions;
   struct ScrollToOptions;
   class DOMIntersectionObserver;
   class DOMMatrixReadOnly;
+  class Element;
   class ElementOrCSSPseudoElement;
   class UnrestrictedDoubleOrKeyframeAnimationOptions;
   enum class CallerType : uint32_t;
@@ -79,6 +82,8 @@ namespace dom {
 } // namespace dom
 } // namespace mozilla
 
+// Declared here because of include hell.
+extern "C" bool Servo_Element_IsDisplayContents(const mozilla::dom::Element*);
 
 already_AddRefed<nsContentList>
 NS_GetContentList(nsINode* aRootNode,
@@ -598,22 +603,22 @@ protected:
   // those in EXTERNALLY_MANAGED_STATES.
   virtual void AddStates(EventStates aStates)
   {
-    NS_PRECONDITION(!aStates.HasAtLeastOneOfStates(INTRINSIC_STATES),
-                    "Should only be adding externally-managed states here");
+    MOZ_ASSERT(!aStates.HasAtLeastOneOfStates(INTRINSIC_STATES),
+               "Should only be adding externally-managed states here");
     AddStatesSilently(aStates);
     NotifyStateChange(aStates);
   }
   virtual void RemoveStates(EventStates aStates)
   {
-    NS_PRECONDITION(!aStates.HasAtLeastOneOfStates(INTRINSIC_STATES),
-                    "Should only be removing externally-managed states here");
+    MOZ_ASSERT(!aStates.HasAtLeastOneOfStates(INTRINSIC_STATES),
+               "Should only be removing externally-managed states here");
     RemoveStatesSilently(aStates);
     NotifyStateChange(aStates);
   }
   virtual void ToggleStates(EventStates aStates, bool aNotify)
   {
-    NS_PRECONDITION(!aStates.HasAtLeastOneOfStates(INTRINSIC_STATES),
-                    "Should only be removing externally-managed states here");
+    MOZ_ASSERT(!aStates.HasAtLeastOneOfStates(INTRINSIC_STATES),
+               "Should only be removing externally-managed states here");
     mState ^= aStates;
     if (aNotify) {
       NotifyStateChange(aStates);
@@ -803,7 +808,7 @@ public:
    * @return ATTR_MISSING, ATTR_VALUE_NO_MATCH or the non-negative index
    * indicating the first value of aValues that matched
    */
-  typedef nsStaticAtom* const AttrValuesArray;
+  typedef nsStaticAtom* const* const AttrValuesArray;
   int32_t FindAttrValueIn(int32_t aNameSpaceID,
                                   nsAtom* aName,
                                   AttrValuesArray* aValues,
@@ -964,7 +969,7 @@ public:
    * Attribute Mapping Helpers
    */
   struct MappedAttributeEntry {
-    const nsStaticAtom* const attribute;
+    nsStaticAtom** attribute;
   };
 
   /**
@@ -981,7 +986,7 @@ public:
     return FindAttributeDependence(aAttribute, aMaps, N);
   }
 
-  static nsStaticAtom* const* HTMLSVGPropertiesToTraverseAndUnlink();
+  static nsStaticAtom*** HTMLSVGPropertiesToTraverseAndUnlink();
 
 private:
   void DescribeAttribute(uint32_t index, nsAString& aOutDescription) const;
@@ -1260,9 +1265,6 @@ public:
   void SetSlot(const nsAString& aName, ErrorResult& aError);
   void GetSlot(nsAString& aName);
 
-  // [deprecated] Shadow DOM v0
-  already_AddRefed<ShadowRoot> CreateShadowRoot(ErrorResult& aError);
-
   ShadowRoot* GetShadowRoot() const
   {
     const nsExtendedDOMSlots* slots = GetExistingExtendedDOMSlots();
@@ -1434,6 +1436,11 @@ public:
   nsIFrame* GetPrimaryFrame(FlushType aType);
   // Work around silly C++ name hiding stuff
   nsIFrame* GetPrimaryFrame() const { return nsIContent::GetPrimaryFrame(); }
+
+  bool IsDisplayContents() const
+  {
+    return HasServoData() && Servo_Element_IsDisplayContents(this);
+  }
 
   const nsAttrValue* GetParsedAttr(nsAtom* aAttr) const
   {
@@ -1919,7 +1926,7 @@ protected:
   /**
    * Handle status bar updates before they can be cancelled.
    */
-  nsresult GetEventTargetParentForLinks(EventChainPreVisitor& aVisitor);
+  void GetEventTargetParentForLinks(EventChainPreVisitor& aVisitor);
 
   /**
    * Handle default actions for link event if the event isn't consumed yet.
@@ -2033,6 +2040,11 @@ inline const mozilla::dom::Element* nsINode::AsElement() const
 {
   MOZ_ASSERT(IsElement());
   return static_cast<const mozilla::dom::Element*>(this);
+}
+
+inline mozilla::dom::Element* nsINode::GetParentElement() const
+{
+  return mParent && mParent->IsElement() ? mParent->AsElement() : nullptr;
 }
 
 /**

@@ -192,7 +192,7 @@ RootAccessible::AddEventListeners()
                    * const* e_end = ArrayEnd(kEventTypes);
          e < e_end; ++e) {
       nsresult rv = nstarget->AddEventListener(NS_ConvertASCIItoUTF16(*e),
-                                               this, true, true, 2);
+                                               this, true, true);
       NS_ENSURE_SUCCESS(rv, rv);
     }
   }
@@ -208,8 +208,7 @@ RootAccessible::RemoveEventListeners()
     for (const char* const* e = kEventTypes,
                    * const* e_end = ArrayEnd(kEventTypes);
          e < e_end; ++e) {
-      nsresult rv = target->RemoveEventListener(NS_ConvertASCIItoUTF16(*e), this, true);
-      NS_ENSURE_SUCCESS(rv, rv);
+      target->RemoveEventListener(NS_ConvertASCIItoUTF16(*e), this, true);
     }
   }
 
@@ -231,11 +230,10 @@ RootAccessible::DocumentActivated(DocAccessible* aDocument)
 // nsIDOMEventListener
 
 NS_IMETHODIMP
-RootAccessible::HandleEvent(nsIDOMEvent* aDOMEvent)
+RootAccessible::HandleEvent(Event* aDOMEvent)
 {
   MOZ_ASSERT(aDOMEvent);
-  Event* event = aDOMEvent->InternalDOMEvent();
-  nsCOMPtr<nsINode> origTargetNode = do_QueryInterface(event->GetOriginalTarget());
+  nsCOMPtr<nsINode> origTargetNode = do_QueryInterface(aDOMEvent->GetOriginalTarget());
   if (!origTargetNode)
     return NS_OK;
 
@@ -254,7 +252,7 @@ RootAccessible::HandleEvent(nsIDOMEvent* aDOMEvent)
     // Root accessible exists longer than any of its descendant documents so
     // that we are guaranteed notification is processed before root accessible
     // is destroyed.
-    document->HandleNotification<RootAccessible, nsIDOMEvent>
+    document->HandleNotification<RootAccessible, Event>
       (this, &RootAccessible::ProcessDOMEvent, aDOMEvent);
   }
 
@@ -263,11 +261,11 @@ RootAccessible::HandleEvent(nsIDOMEvent* aDOMEvent)
 
 // RootAccessible protected
 void
-RootAccessible::ProcessDOMEvent(nsIDOMEvent* aDOMEvent)
+RootAccessible::ProcessDOMEvent(Event* aDOMEvent)
 {
   MOZ_ASSERT(aDOMEvent);
-  Event* event = aDOMEvent->InternalDOMEvent();
-  nsCOMPtr<nsINode> origTargetNode = do_QueryInterface(event->GetOriginalTarget());
+  nsCOMPtr<nsINode> origTargetNode =
+    do_QueryInterface(aDOMEvent->GetOriginalTarget());
 
   nsAutoString eventType;
   aDOMEvent->GetType(eventType);
@@ -653,11 +651,11 @@ RootAccessible::HandlePopupHidingEvent(nsINode* aPopupNode)
 
 #ifdef MOZ_XUL
 static void
-GetPropertyBagFromEvent(nsIDOMEvent* aEvent, nsIPropertyBag2** aPropertyBag)
+GetPropertyBagFromEvent(Event* aEvent, nsIPropertyBag2** aPropertyBag)
 {
   *aPropertyBag = nullptr;
 
-  CustomEvent* customEvent = aEvent->InternalDOMEvent()->AsCustomEvent();
+  CustomEvent* customEvent = aEvent->AsCustomEvent();
   if (!customEvent)
     return;
 
@@ -683,7 +681,7 @@ GetPropertyBagFromEvent(nsIDOMEvent* aEvent, nsIPropertyBag2** aPropertyBag)
 }
 
 void
-RootAccessible::HandleTreeRowCountChangedEvent(nsIDOMEvent* aEvent,
+RootAccessible::HandleTreeRowCountChangedEvent(Event* aEvent,
                                                XULTreeAccessible* aAccessible)
 {
   nsCOMPtr<nsIPropertyBag2> propBag;
@@ -705,7 +703,7 @@ RootAccessible::HandleTreeRowCountChangedEvent(nsIDOMEvent* aEvent,
 }
 
 void
-RootAccessible::HandleTreeInvalidatedEvent(nsIDOMEvent* aEvent,
+RootAccessible::HandleTreeInvalidatedEvent(Event* aEvent,
                                            XULTreeAccessible* aAccessible)
 {
   nsCOMPtr<nsIPropertyBag2> propBag;

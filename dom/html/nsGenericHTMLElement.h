@@ -9,7 +9,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/EventForwards.h"
 #include "nsMappedAttributeElement.h"
-#include "nsIDOMElement.h"
+#include "nsIDOMNode.h"
 #include "nsNameSpaceManager.h"  // for kNameSpaceID_None
 #include "nsIFormControl.h"
 #include "nsGkAtoms.h"
@@ -25,7 +25,6 @@ class nsIFormControlFrame;
 class nsIFrame;
 class nsILayoutHistoryState;
 class nsIURI;
-class nsPresState;
 struct nsSize;
 
 namespace mozilla {
@@ -35,6 +34,7 @@ class EventChainVisitor;
 class EventListenerManager;
 class EventStates;
 class TextEditor;
+class PresState;
 namespace dom {
 class HTMLFormElement;
 class HTMLMenuElement;
@@ -47,7 +47,7 @@ typedef nsMappedAttributeElement nsGenericHTMLElementBase;
  * A common superclass for HTML elements
  */
 class nsGenericHTMLElement : public nsGenericHTMLElementBase,
-                             public nsIDOMElement
+                             public nsIDOMNode
 {
 public:
   using Element::SetTabIndex;
@@ -301,8 +301,7 @@ public:
    */
   bool CheckHandleEventForAnchorsPreconditions(
          mozilla::EventChainVisitor& aVisitor);
-  nsresult GetEventTargetParentForAnchors(
-             mozilla::EventChainPreVisitor& aVisitor);
+  void GetEventTargetParentForAnchors(mozilla::EventChainPreVisitor& aVisitor);
   nsresult PostHandleEventForAnchors(mozilla::EventChainPostVisitor& aVisitor);
   bool IsHTMLLink(nsIURI** aURI) const;
 
@@ -699,22 +698,8 @@ protected:
   /**
    * Add/remove this element to the documents name cache
    */
-  void AddToNameTable(nsAtom* aName) {
-    NS_ASSERTION(HasName(), "Node doesn't have name?");
-    nsIDocument* doc = GetUncomposedDoc();
-    if (doc && !IsInAnonymousSubtree()) {
-      doc->AddToNameTable(this, aName);
-    }
-  }
-  void RemoveFromNameTable() {
-    if (HasName() && CanHaveName(NodeInfo()->NameAtom())) {
-      nsIDocument* doc = GetUncomposedDoc();
-      if (doc) {
-        doc->RemoveFromNameTable(this, GetParsedAttr(nsGkAtoms::name)->
-                                         GetAtomValue());
-      }
-    }
-  }
+  void AddToNameTable(nsAtom* aName);
+  void RemoveFromNameTable();
 
   /**
    * Register or unregister an access key to this element based on the
@@ -921,7 +906,7 @@ protected:
   ContentEditableTristate GetContentEditableValue() const
   {
     static const Element::AttrValuesArray values[] =
-      { nsGkAtoms::_false, nsGkAtoms::_true, nsGkAtoms::_empty, nullptr };
+      { &nsGkAtoms::_false, &nsGkAtoms::_true, &nsGkAtoms::_empty, nullptr };
 
     if (!MayHaveContentEditableAttr())
       return eInherit;
@@ -1019,7 +1004,7 @@ public:
     return NS_OK;
   }
 
-  virtual bool RestoreState(nsPresState* aState) override
+  virtual bool RestoreState(mozilla::PresState* aState) override
   {
     return false;
   }
@@ -1037,8 +1022,7 @@ public:
   virtual IMEState GetDesiredIMEState() override;
   virtual mozilla::EventStates IntrinsicState() const override;
 
-  virtual nsresult GetEventTargetParent(
-                     mozilla::EventChainPreVisitor& aVisitor) override;
+  void GetEventTargetParent(mozilla::EventChainPreVisitor& aVisitor) override;
   virtual nsresult PreHandleEvent(
                      mozilla::EventChainVisitor& aVisitor) override;
 
@@ -1186,7 +1170,7 @@ public:
    * Get the presentation state for a piece of content, or create it if it does
    * not exist.  Generally used by SaveState().
    */
-  nsPresState* GetPrimaryPresState();
+  mozilla::PresState* GetPrimaryPresState();
 
   /**
    * Get the layout history object for a particular piece of content.

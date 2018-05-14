@@ -1175,11 +1175,7 @@ BrowserPageActions.addSearchEngine = {
     if (!this.engines.length) {
       return;
     }
-    let title =
-      this.engines.length == 1 ?
-      this.strings.formatStringFromName("searchAddFoundEngine",
-                                        [this.engines[0].title], 1) :
-      this.strings.GetStringFromName("searchAddFoundEngineMenu");
+    let title = this.strings.GetStringFromName("searchAddFoundEngine2");
     this.action.setTitle(title, window);
     this.action.setIconURL(this.engines[0].icon, window);
   },
@@ -1238,7 +1234,7 @@ BrowserPageActions.addSearchEngine = {
     Services.search.addEngine(uri, null, image, false, {
       onSuccess: engine => {
         BrowserPageActionFeedback.show(this.action, {
-          text: this.strings.GetStringFromName("searchAddedFoundEngine"),
+          text: this.strings.GetStringFromName("searchAddedFoundEngine2"),
         });
       },
       onError(errorCode) {
@@ -1262,3 +1258,63 @@ BrowserPageActions.addSearchEngine = {
     });
   },
 };
+
+// share URL
+BrowserPageActions.shareURL = {
+  onShowingInPanel(buttonNode) {
+    this._cached = false;
+  },
+
+  onPlacedInPanel(buttonNode) {
+    let action = PageActions.actionForID("shareURL");
+    BrowserPageActions.takeActionTitleFromPanel(action);
+  },
+
+  onShowingSubview(panelViewNode) {
+    let bodyNode = panelViewNode.querySelector(".panel-subview-body");
+
+    // We cache the providers + the UI if the user selects the share
+    // panel multiple times while the panel is open.
+    if (this._cached && bodyNode.childNodes.length > 0) {
+      return;
+    }
+
+    let sharingService = this._sharingService;
+    let url = gBrowser.selectedBrowser.currentURI;
+    let currentURI = gURLBar.makeURIReadable(url).displaySpec;
+    let shareProviders = sharingService.getSharingProviders(currentURI);
+    let fragment = document.createDocumentFragment();
+
+    shareProviders.forEach(function(share) {
+      let item = document.createElement("toolbarbutton");
+      item.setAttribute("label", share.menuItemTitle);
+      item.setAttribute("share-name", share.name);
+      item.setAttribute("image", share.image);
+      item.classList.add("subviewbutton", "subviewbutton-iconic");
+
+      item.addEventListener("command", event => {
+        let shareName = event.target.getAttribute("share-name");
+        if (shareName) {
+          sharingService.shareUrl(shareName,
+                                  currentURI,
+                                  gBrowser.selectedBrowser.contentTitle);
+        }
+        PanelMultiView.hidePopup(BrowserPageActions.panelNode);
+      });
+
+      fragment.appendChild(item);
+    });
+
+    while (bodyNode.firstChild) {
+      bodyNode.firstChild.remove();
+    }
+    bodyNode.appendChild(fragment);
+    this._cached = true;
+  }
+};
+
+// Attach sharingService here so tests can override the implementation
+XPCOMUtils.defineLazyServiceGetter(BrowserPageActions.shareURL,
+                                   "_sharingService",
+                                   "@mozilla.org/widget/macsharingservice;1",
+                                   "nsIMacSharingService");

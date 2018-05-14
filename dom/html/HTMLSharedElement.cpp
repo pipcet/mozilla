@@ -101,8 +101,8 @@ HTMLSharedElement::IsAttributeMapped(const nsAtom* aAttribute) const
 {
   if (mNodeInfo->Equals(nsGkAtoms::dir)) {
     static const MappedAttributeEntry attributes[] = {
-      { nsGkAtoms::type },
-      // { nsGkAtoms::compact }, // XXX
+      { &nsGkAtoms::type },
+      // { &nsGkAtoms::compact }, // XXX
       { nullptr}
     };
 
@@ -120,7 +120,7 @@ HTMLSharedElement::IsAttributeMapped(const nsAtom* aAttribute) const
 static void
 SetBaseURIUsingFirstBaseWithHref(nsIDocument* aDocument, nsIContent* aMustMatch)
 {
-  NS_PRECONDITION(aDocument, "Need a document!");
+  MOZ_ASSERT(aDocument, "Need a document!");
 
   for (nsIContent* child = aDocument->GetFirstChild(); child;
        child = child->GetNextNode()) {
@@ -173,7 +173,7 @@ static void
 SetBaseTargetUsingFirstBaseWithTarget(nsIDocument* aDocument,
                                       nsIContent* aMustMatch)
 {
-  NS_PRECONDITION(aDocument, "Need a document!");
+  MOZ_ASSERT(aDocument, "Need a document!");
 
   for (nsIContent* child = aDocument->GetFirstChild(); child;
        child = child->GetNextNode()) {

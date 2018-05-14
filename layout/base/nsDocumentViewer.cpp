@@ -7,7 +7,7 @@
 /* container for a document and its presentation */
 
 #include "gfxContext.h"
-#include "mozilla/ServoRestyleManager.h"
+#include "mozilla/RestyleManager.h"
 #include "mozilla/ServoStyleSet.h"
 #include "nsAutoPtr.h"
 #include "nscore.h"
@@ -104,7 +104,6 @@
 #endif // NS_PRINTING
 
 //focus
-#include "nsIDOMEventTarget.h"
 #include "nsIDOMEventListener.h"
 #include "nsISelectionController.h"
 
@@ -119,6 +118,7 @@
 #include <stdio.h>
 
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/Event.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/dom/ScriptLoader.h"
 
@@ -750,9 +750,7 @@ nsDocumentViewer::InitPresentationStuff(bool aDoInitialReflow)
     return NS_ERROR_FAILURE;
   }
 
-  nsresult rv = selection->AddSelectionListener(mSelectionListener);
-  if (NS_FAILED(rv))
-    return rv;
+  selection->AddSelectionListener(mSelectionListener);
 
   // Save old listener so we can unregister it
   RefPtr<nsDocViewerFocusListener> oldFocusListener = mFocusListener;
@@ -2113,10 +2111,8 @@ nsDocumentViewer::Show(void)
       nsCOMPtr<nsIDocShellTreeItem> root;
       treeItem->GetSameTypeRootTreeItem(getter_AddRefs(root));
       nsCOMPtr<nsIWebNavigation> webNav = do_QueryInterface(root);
-      nsCOMPtr<nsISHistory> history;
-      webNav->GetSessionHistory(getter_AddRefs(history));
-      nsCOMPtr<nsISHistoryInternal> historyInt = do_QueryInterface(history);
-      if (historyInt) {
+      RefPtr<ChildSHistory> history = webNav->GetSessionHistory();
+      if (history) {
         int32_t prevIndex,loadedIndex;
         nsCOMPtr<nsIDocShell> docShell = do_QueryInterface(treeItem);
         docShell->GetPreviousTransIndex(&prevIndex);
@@ -2125,7 +2121,8 @@ nsDocumentViewer::Show(void)
         printf("About to evict content viewers: prev=%d, loaded=%d\n",
                prevIndex, loadedIndex);
 #endif
-        historyInt->EvictOutOfRangeContentViewers(loadedIndex);
+        history->LegacySHistoryInternal()->
+          EvictOutOfRangeContentViewers(loadedIndex);
       }
     }
   }
@@ -2346,56 +2343,13 @@ nsDocumentViewer::CreateStyleSet(nsIDocument* aDocument)
   }
 
   if (sheet) {
-    styleSet->AppendStyleSheet(SheetType::User, sheet->AsServo());
+    styleSet->AppendStyleSheet(SheetType::User, sheet);
   }
 
   // Append chrome sheets (scrollbars + forms).
-  bool shouldOverride = false;
-  // We don't want a docshell here for external resource docs, so just
-  // look at mContainer.
-  nsCOMPtr<nsIDocShell> ds(mContainer);
-  nsCOMPtr<nsIDOMEventTarget> chromeHandler;
-  nsCOMPtr<nsIURI> uri;
-  RefPtr<StyleSheet> chromeSheet;
-
-  if (ds) {
-    ds->GetChromeEventHandler(getter_AddRefs(chromeHandler));
-  }
-  if (chromeHandler) {
-    nsCOMPtr<Element> elt(do_QueryInterface(chromeHandler));
-    if (elt) {
-      nsCOMPtr<nsIURI> baseURI = elt->GetBaseURI();
-
-      nsAutoString sheets;
-      elt->GetAttribute(NS_LITERAL_STRING("usechromesheets"), sheets);
-      if (!sheets.IsEmpty() && baseURI) {
-        RefPtr<css::Loader> cssLoader =
-          new css::Loader(aDocument->GetDocGroup());
-
-        char *str = ToNewCString(sheets);
-        char *newStr = str;
-        char *token;
-        while ( (token = nsCRT::strtok(newStr, ", ", &newStr)) ) {
-          NS_NewURI(getter_AddRefs(uri), nsDependentCString(token), nullptr,
-                    baseURI);
-          if (!uri) continue;
-
-          cssLoader->LoadSheetSync(uri, &chromeSheet);
-          if (!chromeSheet) continue;
-
-          styleSet->PrependStyleSheet(SheetType::Agent, chromeSheet->AsServo());
-          shouldOverride = true;
-        }
-        free(str);
-      }
-    }
-  }
-
-  if (!shouldOverride) {
-    sheet = cache->ScrollbarsSheet();
-    if (sheet) {
-      styleSet->PrependStyleSheet(SheetType::Agent, sheet->AsServo());
-    }
+  sheet = cache->ScrollbarsSheet();
+  if (sheet) {
+    styleSet->PrependStyleSheet(SheetType::Agent, sheet);
   }
 
   if (!aDocument->IsSVGDocument()) {
@@ -2408,28 +2362,23 @@ nsDocumentViewer::CreateStyleSet(nsIDocument* aDocument)
     // an SVG document, and excluding xul.css which will be loaded on demand by
     // nsXULElement::BindToTree.)
 
-    sheet = cache->NumberControlSheet();
-    if (sheet) {
-      styleSet->PrependStyleSheet(SheetType::Agent, sheet->AsServo());
-    }
-
     sheet = cache->FormsSheet();
     if (sheet) {
-      styleSet->PrependStyleSheet(SheetType::Agent, sheet->AsServo());
+      styleSet->PrependStyleSheet(SheetType::Agent, sheet);
     }
 
     if (aDocument->LoadsFullXULStyleSheetUpFront()) {
       // This is the only place components.css gets loaded, unlike xul.css
       sheet = cache->XULComponentsSheet();
       if (sheet) {
-        styleSet->PrependStyleSheet(SheetType::Agent, sheet->AsServo());
+        styleSet->PrependStyleSheet(SheetType::Agent, sheet);
       }
 
       // nsXULElement::BindToTree loads xul.css on-demand if we don't load it
       // up-front here.
       sheet = cache->XULSheet();
       if (sheet) {
-        styleSet->PrependStyleSheet(SheetType::Agent, sheet->AsServo());
+        styleSet->PrependStyleSheet(SheetType::Agent, sheet);
       }
     }
 
@@ -2437,25 +2386,25 @@ nsDocumentViewer::CreateStyleSet(nsIDocument* aDocument)
     if (sheet) {
       // Load the minimal XUL rules for scrollbars and a few other XUL things
       // that non-XUL (typically HTML) documents commonly use.
-      styleSet->PrependStyleSheet(SheetType::Agent, sheet->AsServo());
+      styleSet->PrependStyleSheet(SheetType::Agent, sheet);
     }
 
     sheet = cache->CounterStylesSheet();
     if (sheet) {
-      styleSet->PrependStyleSheet(SheetType::Agent, sheet->AsServo());
+      styleSet->PrependStyleSheet(SheetType::Agent, sheet);
     }
 
     if (nsLayoutUtils::ShouldUseNoScriptSheet(aDocument)) {
       sheet = cache->NoScriptSheet();
       if (sheet) {
-        styleSet->PrependStyleSheet(SheetType::Agent, sheet->AsServo());
+        styleSet->PrependStyleSheet(SheetType::Agent, sheet);
       }
     }
 
     if (nsLayoutUtils::ShouldUseNoFramesSheet(aDocument)) {
       sheet = cache->NoFramesSheet();
       if (sheet) {
-        styleSet->PrependStyleSheet(SheetType::Agent, sheet->AsServo());
+        styleSet->PrependStyleSheet(SheetType::Agent, sheet);
       }
     }
 
@@ -2464,26 +2413,25 @@ nsDocumentViewer::CreateStyleSet(nsIDocument* aDocument)
 
     sheet = cache->HTMLSheet();
     if (sheet) {
-      styleSet->PrependStyleSheet(SheetType::Agent, sheet->AsServo());
+      styleSet->PrependStyleSheet(SheetType::Agent, sheet);
     }
 
-    styleSet->PrependStyleSheet(SheetType::Agent,
-                                cache->UASheet()->AsServo());
+    styleSet->PrependStyleSheet(SheetType::Agent, cache->UASheet());
   } else {
     // SVG documents may have scrollbars and need the scrollbar styling.
     sheet = cache->MinimalXULSheet();
     if (sheet) {
-      styleSet->PrependStyleSheet(SheetType::Agent, sheet->AsServo());
+      styleSet->PrependStyleSheet(SheetType::Agent, sheet);
     }
   }
 
   nsStyleSheetService* sheetService = nsStyleSheetService::GetInstance();
   if (sheetService) {
     for (StyleSheet* sheet : *sheetService->AgentStyleSheets()) {
-      styleSet->AppendStyleSheet(SheetType::Agent, sheet->AsServo());
+      styleSet->AppendStyleSheet(SheetType::Agent, sheet);
     }
     for (StyleSheet* sheet : Reversed(*sheetService->UserStyleSheets())) {
-      styleSet->PrependStyleSheet(SheetType::User, sheet->AsServo());
+      styleSet->PrependStyleSheet(SheetType::User, sheet);
     }
   }
 
@@ -2636,9 +2584,9 @@ nsDocumentViewer::FindContainerView()
 nsresult
 nsDocumentViewer::CreateDeviceContext(nsView* aContainerView)
 {
-  NS_PRECONDITION(!mPresShell && !mWindow,
-                  "This will screw up our existing presentation");
-  NS_PRECONDITION(mDocument, "Gotta have a document here");
+  MOZ_ASSERT(!mPresShell && !mWindow,
+             "This will screw up our existing presentation");
+  MOZ_ASSERT(mDocument, "Gotta have a document here");
 
   nsIDocument* doc = mDocument->GetDisplayDocument();
   if (doc) {
@@ -2693,7 +2641,9 @@ NS_IMETHODIMP nsDocumentViewer::ClearSelection()
     return NS_ERROR_FAILURE;
   }
 
-  return selection->CollapseToStart();
+  ErrorResult rv;
+  selection->CollapseToStart(rv);
+  return rv.StealNSResult();
 }
 
 NS_IMETHODIMP nsDocumentViewer::SelectAll()
@@ -3709,7 +3659,7 @@ NS_IMETHODIMP nsDocumentViewer::GetInImage(bool* aInImage)
   return NS_OK;
 }
 
-NS_IMETHODIMP nsDocViewerSelectionListener::NotifySelectionChanged(nsIDOMDocument *, nsISelection *, int16_t aReason)
+NS_IMETHODIMP nsDocViewerSelectionListener::NotifySelectionChanged(nsIDocument *, Selection *, int16_t aReason)
 {
   if (!mDocViewer) {
     return NS_OK;
@@ -3727,8 +3677,7 @@ NS_IMETHODIMP nsDocViewerSelectionListener::NotifySelectionChanged(nsIDOMDocumen
   nsCOMPtr<nsPIDOMWindowOuter> domWindow = theDoc->GetWindow();
   if (!domWindow) return NS_ERROR_FAILURE;
 
-  bool selectionCollapsed;
-  selection->GetIsCollapsed(&selectionCollapsed);
+  bool selectionCollapsed = selection->IsCollapsed();
   // We only call UpdateCommands when the selection changes from collapsed to
   // non-collapsed or vice versa, however we skip the initializing collapse. We
   // might need another update string for simple selection changes, but that
@@ -3754,7 +3703,7 @@ nsDocViewerFocusListener::nsDocViewerFocusListener()
 nsDocViewerFocusListener::~nsDocViewerFocusListener(){}
 
 nsresult
-nsDocViewerFocusListener::HandleEvent(nsIDOMEvent* aEvent)
+nsDocViewerFocusListener::HandleEvent(Event* aEvent)
 {
   NS_ENSURE_STATE(mDocViewer);
 

@@ -33,13 +33,12 @@
 #include "nsGkAtoms.h"
 #include "nsCSSAnonBoxes.h"
 #include "nsIPresShell.h"
-#include "nsIDOMElement.h"
 #include "nsIScriptError.h"
 #include "nsFrameManager.h"
 #include "nsError.h"
 #include "nsCSSFrameConstructor.h"
 #include "mozilla/Range.h"
-#include "mozilla/ServoRestyleManager.h"
+#include "mozilla/RestyleManager.h"
 #include "mozilla/ServoStyleSet.h"
 #include "nsDisplayList.h"
 #include "nsIScrollableFrame.h"
@@ -134,7 +133,7 @@ nsTableFrame::GetParentComputedStyle(nsIFrame** aProviderFrame) const
   // Since our parent, the table wrapper frame, returned this frame, we
   // must return whatever our parent would normally have returned.
 
-  NS_PRECONDITION(GetParent(), "table constructed without table wrapper");
+  MOZ_ASSERT(GetParent(), "table constructed without table wrapper");
   if (!mContent->GetParent() && !Style()->GetPseudo()) {
     // We're the root.  We have no ComputedStyle parent.
     *aProviderFrame = nullptr;
@@ -157,10 +156,10 @@ nsTableFrame::Init(nsIContent*       aContent,
                    nsContainerFrame* aParent,
                    nsIFrame*         aPrevInFlow)
 {
-  NS_PRECONDITION(!mCellMap, "Init called twice");
-  NS_PRECONDITION(!mTableLayoutStrategy, "Init called twice");
-  NS_PRECONDITION(!aPrevInFlow || aPrevInFlow->IsTableFrame(),
-                  "prev-in-flow must be of same type");
+  MOZ_ASSERT(!mCellMap, "Init called twice");
+  MOZ_ASSERT(!mTableLayoutStrategy, "Init called twice");
+  MOZ_ASSERT(!aPrevInFlow || aPrevInFlow->IsTableFrame(),
+             "prev-in-flow must be of same type");
 
   // Let the base class do its processing
   nsContainerFrame::Init(aContent, aParent, aPrevInFlow);
@@ -435,7 +434,7 @@ nsTableFrame::GetEffectiveRowSpan(int32_t                 aRowIndex,
                                   const nsTableCellFrame& aCell) const
 {
   nsTableCellMap* cellMap = GetCellMap();
-  NS_PRECONDITION (nullptr != cellMap, "bad call, cellMap not yet allocated.");
+  MOZ_ASSERT(nullptr != cellMap, "bad call, cellMap not yet allocated.");
 
   return cellMap->GetEffectiveRowSpan(aRowIndex, aCell.ColIndex());
 }
@@ -718,8 +717,8 @@ nsTableFrame::AppendAnonymousColFrames(nsTableColGroupFrame* aColGroupFrame,
                                        nsTableColType        aColType,
                                        bool                  aAddToTable)
 {
-  NS_PRECONDITION(aColGroupFrame, "null frame");
-  NS_PRECONDITION(aColType != eColAnonymousCol, "Shouldn't happen");
+  MOZ_ASSERT(aColGroupFrame, "null frame");
+  MOZ_ASSERT(aColType != eColAnonymousCol, "Shouldn't happen");
   MOZ_ASSERT(aNumColsToAdd > 0, "We should be adding _something_.");
 
   nsIPresShell *shell = PresShell();
@@ -786,8 +785,8 @@ nsTableFrame::MatchCellMapToColCache(nsTableCellMap* aCellMap)
 void
 nsTableFrame::DidResizeColumns()
 {
-  NS_PRECONDITION(!GetPrevInFlow(),
-                  "should only be called on first-in-flow");
+  MOZ_ASSERT(!GetPrevInFlow(), "should only be called on first-in-flow");
+
   if (mBits.mResizedColumns)
     return; // already marked
 
@@ -1095,7 +1094,7 @@ int32_t
 nsTableFrame::CollectRows(nsIFrame*                   aFrame,
                           nsTArray<nsTableRowFrame*>& aCollection)
 {
-  NS_PRECONDITION(aFrame, "null frame");
+  MOZ_ASSERT(aFrame, "null frame");
   int32_t numRows = 0;
   for (nsIFrame* childFrame : aFrame->PrincipalChildList()) {
     aCollection.AppendElement(static_cast<nsTableRowFrame*>(childFrame));
@@ -1295,6 +1294,7 @@ nsDisplayTableBorderCollapse::CreateWebRenderCommands(mozilla::wr::DisplayListBu
 {
   static_cast<nsTableFrame *>(mFrame)->CreateWebRenderCommandsForBCBorders(aBuilder,
                                                                           aSc,
+                                                                          mVisibleRect,
                                                                           ToReferenceFrame());
   return true;
 }
@@ -1771,16 +1771,15 @@ nsTableFrame::GetPrefISize(gfxContext *aRenderingContext)
 }
 
 /* virtual */ nsIFrame::IntrinsicISizeOffsetData
-nsTableFrame::IntrinsicISizeOffsets()
+nsTableFrame::IntrinsicISizeOffsets(nscoord aPercentageBasis)
 {
-  IntrinsicISizeOffsetData result = nsContainerFrame::IntrinsicISizeOffsets();
+  IntrinsicISizeOffsetData result =
+    nsContainerFrame::IntrinsicISizeOffsets(aPercentageBasis);
 
   result.hMargin = 0;
-  result.hPctMargin = 0;
 
   if (IsBorderCollapse()) {
     result.hPadding = 0;
-    result.hPctPadding = 0;
 
     WritingMode wm = GetWritingMode();
     LogicalMargin outerBC = GetIncludedOuterBCBorder(wm);
@@ -2371,7 +2370,7 @@ void
 nsTableFrame::PushChildren(const RowGroupArray& aRowGroups,
                            int32_t aPushFrom)
 {
-  NS_PRECONDITION(aPushFrom > 0, "pushing first child");
+  MOZ_ASSERT(aPushFrom > 0, "pushing first child");
 
   // extract the frames from the array into a sibling list
   nsFrameList frames;
@@ -5028,8 +5027,9 @@ GetColorAndStyle(const nsIFrame* aFrame,
                  nscolor* aColor,
                  BCPixelSize* aWidth = nullptr)
 {
-  NS_PRECONDITION(aFrame, "null frame");
-  NS_PRECONDITION(aStyle && aColor, "null argument");
+  MOZ_ASSERT(aFrame, "null frame");
+  MOZ_ASSERT(aStyle && aColor, "null argument");
+
   // initialize out arg
   *aColor = 0;
   if (aWidth) {
@@ -8030,12 +8030,13 @@ nsTableFrame::PaintBCBorders(DrawTarget& aDrawTarget, const nsRect& aDirtyRect)
 void
 nsTableFrame::CreateWebRenderCommandsForBCBorders(wr::DisplayListBuilder& aBuilder,
                                                   const mozilla::layers::StackingContextHelper& aSc,
+                                                  const nsRect& aVisibleRect,
                                                   const nsPoint& aOffsetToReferenceFrame)
 {
   BCPaintBorderAction action(aBuilder, aSc, aOffsetToReferenceFrame);
-  // We always draw whole table border for webrender. Passing the table rect as
+  // We always draw whole table border for webrender. Passing the visible rect
   // dirty rect.
-  IterateBCBorders(action, GetRect());
+  IterateBCBorders(action, aVisibleRect - aOffsetToReferenceFrame);
 
   LayoutDeviceRect allBorderRect;
   wr::BorderSide wrSide[4];
@@ -8091,7 +8092,7 @@ nsTableFrame::RowHasSpanningCells(int32_t aRowIndex, int32_t aNumEffCols)
 {
   bool result = false;
   nsTableCellMap* cellMap = GetCellMap();
-  NS_PRECONDITION (cellMap, "bad call, cellMap not yet allocated.");
+  MOZ_ASSERT (cellMap, "bad call, cellMap not yet allocated.");
   if (cellMap) {
     result = cellMap->RowHasSpanningCells(aRowIndex, aNumEffCols);
   }
@@ -8103,7 +8104,7 @@ nsTableFrame::RowIsSpannedInto(int32_t aRowIndex, int32_t aNumEffCols)
 {
   bool result = false;
   nsTableCellMap* cellMap = GetCellMap();
-  NS_PRECONDITION (cellMap, "bad call, cellMap not yet allocated.");
+  MOZ_ASSERT (cellMap, "bad call, cellMap not yet allocated.");
   if (cellMap) {
     result = cellMap->RowIsSpannedInto(aRowIndex, aNumEffCols);
   }

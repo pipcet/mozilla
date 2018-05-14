@@ -1046,7 +1046,7 @@ LexicalEnvironmentObject::recreate(JSContext* cx, Handle<LexicalEnvironmentObjec
 bool
 LexicalEnvironmentObject::isExtensible() const
 {
-    return nonProxyIsExtensible();
+    return NativeObject::isExtensible();
 }
 
 Value
@@ -1418,7 +1418,7 @@ static void
 ReportOptimizedOut(JSContext* cx, HandleId id)
 {
     JSAutoByteString printable;
-    if (ValueToPrintable(cx, IdToValue(id), &printable)) {
+    if (ValueToPrintableLatin1(cx, IdToValue(id), &printable)) {
         JS_ReportErrorNumberLatin1(cx, GetErrorMessage, nullptr, JSMSG_DEBUG_OPTIMIZED_OUT,
                                    printable.ptr());
     }
@@ -3382,7 +3382,7 @@ js::CheckCanDeclareGlobalBinding(JSContext* cx, Handle<GlobalObject*> global,
     if (!desc.object()) {
         // 8.1.14.15 step 6.
         // 8.1.14.16 step 5.
-        if (global->nonProxyIsExtensible())
+        if (global->isExtensible())
             return true;
 
         ReportCannotDeclareGlobalBinding(cx, name, "global is non-extensible");

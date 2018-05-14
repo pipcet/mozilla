@@ -15,7 +15,8 @@ use values::generics::CounterStyleOrNone;
 
 /// Specified and computed `list-style-type` property.
 #[cfg(feature = "gecko")]
-#[derive(Clone, Debug, Eq, MallocSizeOf, PartialEq, ToComputedValue, ToCss)]
+#[derive(Clone, Debug, Eq, MallocSizeOf, PartialEq, SpecifiedValueInfo,
+         ToComputedValue, ToCss)]
 pub enum ListStyleType {
     /// <counter-style> | none
     CounterStyle(CounterStyleOrNone),
@@ -61,13 +62,15 @@ impl ListStyleType {
 impl Parse for ListStyleType {
     fn parse<'i, 't>(
         context: &ParserContext,
-        input: &mut Parser<'i, 't>
+        input: &mut Parser<'i, 't>,
     ) -> Result<Self, ParseError<'i>> {
         if let Ok(style) = input.try(|i| CounterStyleOrNone::parse(context, i)) {
-            return Ok(ListStyleType::CounterStyle(style))
+            return Ok(ListStyleType::CounterStyle(style));
         }
 
-        Ok(ListStyleType::String(input.expect_string()?.as_ref().to_owned()))
+        Ok(ListStyleType::String(
+            input.expect_string()?.as_ref().to_owned(),
+        ))
     }
 }
 
@@ -75,8 +78,10 @@ impl Parse for ListStyleType {
 ///
 /// FIXME(emilio): It's a shame that this allocates all the time it's computed,
 /// probably should just be refcounted.
-#[derive(Clone, Debug, MallocSizeOf, PartialEq, ToComputedValue)]
-pub struct Quotes(pub Box<[(Box<str>, Box<str>)]>);
+/// FIXME This can probably derive ToCss.
+#[derive(Clone, Debug, MallocSizeOf, PartialEq, SpecifiedValueInfo,
+         ToComputedValue)]
+pub struct Quotes(#[css(if_empty = "none")] pub Box<[(Box<str>, Box<str>)]>);
 
 impl ToCss for Quotes {
     fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
@@ -90,7 +95,7 @@ impl ToCss for Quotes {
                 l.to_css(dest)?;
                 dest.write_char(' ')?;
                 r.to_css(dest)?;
-            }
+            },
             None => return dest.write_str("none"),
         }
 
@@ -106,24 +111,27 @@ impl ToCss for Quotes {
 }
 
 impl Parse for Quotes {
-    fn parse<'i, 't>(_: &ParserContext, input: &mut Parser<'i, 't>) -> Result<Quotes, ParseError<'i>> {
-        if input.try(|input| input.expect_ident_matching("none")).is_ok() {
-            return Ok(Quotes(Vec::new().into_boxed_slice()))
+    fn parse<'i, 't>(
+        _: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Quotes, ParseError<'i>> {
+        if input
+            .try(|input| input.expect_ident_matching("none"))
+            .is_ok()
+        {
+            return Ok(Quotes(Vec::new().into_boxed_slice()));
         }
 
         let mut quotes = Vec::new();
         loop {
             let location = input.current_source_location();
             let first = match input.next() {
-                Ok(&Token::QuotedString(ref value)) => {
-                    value.as_ref().to_owned().into_boxed_str()
-                },
+                Ok(&Token::QuotedString(ref value)) => value.as_ref().to_owned().into_boxed_str(),
                 Ok(t) => return Err(location.new_unexpected_token_error(t.clone())),
                 Err(_) => break,
             };
 
-            let second =
-                input.expect_string()?.as_ref().to_owned().into_boxed_str();
+            let second = input.expect_string()?.as_ref().to_owned().into_boxed_str();
             quotes.push((first, second))
         }
 

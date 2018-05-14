@@ -9,7 +9,7 @@
 #include "nsImageMap.h"
 
 #include "mozilla/dom/Element.h"
-#include "mozilla/dom/Event.h" // for nsIDOMEvent::InternalDOMEvent()
+#include "mozilla/dom/Event.h" // for Event
 #include "mozilla/dom/HTMLAreaElement.h"
 #include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/UniquePtr.h"
@@ -793,10 +793,10 @@ void
 nsImageMap::AddArea(HTMLAreaElement* aArea)
 {
   static Element::AttrValuesArray strings[] =
-    {nsGkAtoms::rect, nsGkAtoms::rectangle,
-     nsGkAtoms::circle, nsGkAtoms::circ,
-     nsGkAtoms::_default,
-     nsGkAtoms::poly, nsGkAtoms::polygon,
+    {&nsGkAtoms::rect, &nsGkAtoms::rectangle,
+     &nsGkAtoms::circle, &nsGkAtoms::circ,
+     &nsGkAtoms::_default,
+     &nsGkAtoms::poly, &nsGkAtoms::polygon,
      nullptr};
 
   UniquePtr<Area> area;
@@ -977,7 +977,7 @@ nsImageMap::ParentChainChanged(nsIContent* aContent)
 }
 
 nsresult
-nsImageMap::HandleEvent(nsIDOMEvent* aEvent)
+nsImageMap::HandleEvent(Event* aEvent)
 {
   nsAutoString eventType;
   aEvent->GetType(eventType);
@@ -986,8 +986,7 @@ nsImageMap::HandleEvent(nsIDOMEvent* aEvent)
              "Unexpected event type");
 
   //Set which one of our areas changed focus
-  nsCOMPtr<nsIContent> targetContent = do_QueryInterface(
-    aEvent->InternalDOMEvent()->GetTarget());
+  nsCOMPtr<nsIContent> targetContent = do_QueryInterface(aEvent->GetTarget());
   if (!targetContent) {
     return NS_OK;
   }

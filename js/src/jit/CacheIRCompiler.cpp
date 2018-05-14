@@ -924,7 +924,7 @@ CacheIRWriter::copyStubData(uint8_t* dest) const
             InitGCPtr<JSString*>(destWords, field.asWord());
             break;
           case StubField::Type::Id:
-            InitGCPtr<jsid>(destWords, field.asWord());
+            AsGCPtr<jsid>(destWords)->init(jsid::fromRawBits(field.asWord()));
             break;
           case StubField::Type::RawInt64:
           case StubField::Type::DOMExpandoGeneration:
@@ -1896,6 +1896,8 @@ CacheIRCompiler::emitTruncateDoubleToUInt32()
     masm.bind(&truncateABICall);
     LiveRegisterSet save(GeneralRegisterSet::Volatile(), liveVolatileFloatRegs());
     save.takeUnchecked(FloatReg0);
+    // Bug 1451976
+    save.takeUnchecked(FloatReg0.asSingle());
     masm.PushRegsInMask(save);
 
     masm.setupUnalignedABICall(res);
@@ -2930,6 +2932,40 @@ CacheIRCompiler::emitCallObjectHasSparseElementResult()
     masm.loadTypedOrValue(Address(masm.getStackPointer(), 0), output);
     masm.adjustStack(sizeof(Value));
     return true;
+}
+
+/*
+ * Move a constant value into register dest.
+ */
+void CacheIRCompiler::EmitLoadStubFieldConstant(StubFieldOffset val, Register dest) {
+    MOZ_ASSERT(mode_ == Mode::Ion);
+    switch (val.getStubFieldType()) {
+      case StubField::Type::Shape:
+        masm.movePtr(ImmGCPtr(shapeStubField(val.getOffset())),dest);
+        break;
+      case StubField::Type::String:
+        masm.movePtr(ImmGCPtr(stringStubField(val.getOffset())), dest);
+        break;
+      default:
+            MOZ_CRASH("Unhandled stub field constant type");
+    }
+}
+
+/*
+ * After this is done executing, dest contains the value; either through a constant load
+ * or through the load from the stub data.
+ *
+ * The current policy is that Baseline will use loads from the stub data (to allow IC
+ * sharing), where as Ion doesn't share ICs, and so we can safely use constants in the
+ * IC.
+ */
+void CacheIRCompiler::EmitLoadStubField(StubFieldOffset val, Register dest) {
+    if (stubFieldPolicy_ == StubFieldPolicy::Constant) {
+        EmitLoadStubFieldConstant(val, dest);
+    } else {
+        Address load(ICStubReg, stubDataOffset_ + val.getOffset());
+        masm.loadPtr(load, dest);
+    }
 }
 
 bool

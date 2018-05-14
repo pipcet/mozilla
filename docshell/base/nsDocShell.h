@@ -17,6 +17,7 @@
 
 #include "mozilla/dom/ProfileTimelineMarkerBinding.h"
 #include "mozilla/gfx/Matrix.h"
+#include "mozilla/dom/ChildSHistory.h"
 
 #include "nsIAuthPromptProvider.h"
 #include "nsIBaseWindow.h"
@@ -209,6 +210,7 @@ public:
                          nsIInputStream* aPostDataStream,
                          int64_t aPostDataStreamLength,
                          nsIInputStream* aHeadersDataStream,
+                         bool aIsUserTriggered,
                          bool aIsTrusted,
                          nsIPrincipal* aTriggeringPrincipal) override;
   NS_IMETHOD OnLinkClickSync(nsIContent* aContent,
@@ -221,6 +223,7 @@ public:
                              bool aNoOpenerImplied = false,
                              nsIDocShell** aDocShell = 0,
                              nsIRequest** aRequest = 0,
+                             bool aIsUserTriggered = false,
                              nsIPrincipal* aTriggeringPrincipal = nullptr) override;
   NS_IMETHOD OnOverLink(nsIContent* aContent,
                         nsIURI* aURI,
@@ -231,7 +234,7 @@ public:
   // are shared with nsIDocShell (appID, etc.) and can't be declared twice.
   NS_IMETHOD GetAssociatedWindow(mozIDOMWindowProxy**) override;
   NS_IMETHOD GetTopWindow(mozIDOMWindowProxy**) override;
-  NS_IMETHOD GetTopFrameElement(nsIDOMElement**) override;
+  NS_IMETHOD GetTopFrameElement(mozilla::dom::Element**) override;
   NS_IMETHOD GetNestedFrameId(uint64_t*) override;
   NS_IMETHOD GetIsContent(bool*) override;
   NS_IMETHOD GetUsePrivateBrowsing(bool*) override;
@@ -874,7 +877,6 @@ private: // member functions
   nsresult PersistLayoutHistoryState();
   nsresult LoadHistoryEntry(nsISHEntry* aEntry, uint32_t aLoadType);
   nsresult SetBaseUrlForWyciwyg(nsIContentViewer* aContentViewer);
-  nsresult GetRootSessionHistory(nsISHistory** aReturn);
   nsresult GetHttpChannel(nsIChannel* aChannel, nsIHttpChannel** aReturn);
   nsresult ConfirmRepost(bool* aRepost);
   nsresult GetPromptAndStringBundle(nsIPrompt** aPrompt,
@@ -883,9 +885,16 @@ private: // member functions
   nsresult SetCurScrollPosEx(int32_t aCurHorizontalPos,
                              int32_t aCurVerticalPos);
 
+  already_AddRefed<mozilla::dom::ChildSHistory> GetRootSessionHistory();
+
   inline bool UseErrorPages()
   {
     return (mObserveErrorPages ? sUseErrorPages : mUseErrorPages);
+  }
+
+  bool CSSErrorReportingEnabled() const
+  {
+    return mCSSErrorReportingEnabled;
   }
 
 private: // data members
@@ -922,7 +931,7 @@ private: // data members
   nsCOMPtr<nsIDOMStorageManager> mSessionStorageManager;
   nsCOMPtr<nsIContentViewer> mContentViewer;
   nsCOMPtr<nsIWidget> mParentWidget;
-  nsCOMPtr<nsISHistory> mSessionHistory;
+  RefPtr<mozilla::dom::ChildSHistory> mSessionHistory;
   nsCOMPtr<nsIGlobalHistory2> mGlobalHistory;
   nsCOMPtr<nsIWebBrowserFind> mFind;
   nsCOMPtr<nsICommandManager> mCommandManager;
@@ -1106,6 +1115,7 @@ private: // data members
   bool mAllowContentRetargetingOnChildren : 1;
   bool mUseErrorPages : 1;
   bool mObserveErrorPages : 1;
+  bool mCSSErrorReportingEnabled : 1;
   bool mAllowAuth : 1;
   bool mAllowKeywordFixup : 1;
   bool mIsOffScreenBrowser : 1;

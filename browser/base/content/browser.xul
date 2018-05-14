@@ -332,12 +332,18 @@
     </panel>
 
     <menupopup id="toolbar-context-menu"
-               onpopupshowing="onViewToolbarsPopupShowing(event, document.getElementById('viewToolbarsMenuSeparator'));">
+               onpopupshowing="onViewToolbarsPopupShowing(event, document.getElementById('viewToolbarsMenuSeparator')); UpdateDownloadsAutoHide(this)">
       <menuitem oncommand="gCustomizeMode.addToPanel(document.popupNode)"
                 accesskey="&customizeMenu.pinToOverflowMenu.accesskey;"
                 label="&customizeMenu.pinToOverflowMenu.label;"
                 contexttype="toolbaritem"
                 class="customize-context-moveToPanel"/>
+      <menuitem oncommand="onDownloadsAutoHideChange(event)"
+                type="checkbox"
+                accesskey="&customizeMenu.autoHideDownloadsButton.accesskey;"
+                label="&customizeMenu.autoHideDownloadsButton.label;"
+                contexttype="toolbaritem"
+                class="customize-context-autoHide"/>
       <menuitem oncommand="gCustomizeMode.removeFromArea(document.popupNode)"
                 accesskey="&customizeMenu.removeFromToolbar.accesskey;"
                 label="&customizeMenu.removeFromToolbar.label;"
@@ -440,7 +446,8 @@
            copyURL-title="&pageAction.copyLink.label;"
            emailLink-title="&emailPageCmd.label;"
            sendToDevice-title="&pageAction.sendTabToDevice.label;"
-           sendToDevice-notReadyTitle="&sendToDevice.syncNotReady.label;">
+           sendToDevice-notReadyTitle="&sendToDevice.syncNotReady.label;"
+           shareURL-title="&pageAction.shareUrl.label;">
       <panelmultiview id="pageActionPanelMultiView"
                       mainViewId="pageActionPanelMainView"
                       viewCacheId="appMenu-viewCache">
@@ -639,8 +646,7 @@
              customizable="true"
              mode="icons"
              aria-label="&tabsToolbar.label;"
-             context="toolbar-context-menu"
-             collapsed="true">
+             context="toolbar-context-menu">
       <hbox class="titlebar-placeholder" type="pre-tabs"
             skipintoolbarset="true"/>
 
@@ -666,7 +672,7 @@
                      removable="true"/>
 
       <toolbarbutton id="alltabs-button"
-                     class="toolbarbutton-1 chromeclass-toolbar-additional tabs-alltabs-button"
+                     class="toolbarbutton-1 chromeclass-toolbar-additional tabs-alltabs-button badged-button"
                      type="menu"
                      label="&listAllTabs.label;"
                      tooltiptext="&listAllTabs.label;"
@@ -777,6 +783,7 @@
                      class="chromeclass-location" overflows="false">
             <textbox id="urlbar" flex="1"
                      placeholder="&urlbar.placeholder2;"
+                     defaultPlaceholder="&urlbar.placeholder2;"
                      focused="true"
                      type="autocomplete"
                      autocompletesearch="unifiedcomplete"
@@ -1109,12 +1116,10 @@
                                    BookmarkingUI.attachPlacesView(event, this);"
                    tooltip="bhTooltip" popupsinherittooltip="true">
           <menuitem id="BMB_viewBookmarksSidebar"
-                    class="subviewbutton"
-                    label="&viewBookmarksSidebar2.label;"
-                    type="checkbox"
-                    oncommand="SidebarUI.toggle('viewBookmarksSidebar');">
-            <observes element="viewBookmarksSidebar" attribute="checked"/>
-          </menuitem>
+                    class="menuitem-iconic subviewbutton"
+                    label-show="&viewBookmarksSidebar2.label;"
+                    label-hide="&hideBookmarksSidebar.label;"
+                    oncommand="SidebarUI.toggle('viewBookmarksSidebar');"/>
           <!-- NB: temporary solution for bug 985024, this should go away soon. -->
           <menuitem id="BMB_bookmarksShowAllTop"
                     class="menuitem-iconic subviewbutton"
@@ -1133,11 +1138,10 @@
                                          new PlacesMenu(event, 'place:folder=TOOLBAR',
                                                         PlacesUIUtils.getViewForNode(this.parentNode.parentNode).options);">
               <menuitem id="BMB_viewBookmarksToolbar"
-                        placesanonid="view-toolbar"
-                        toolbarId="PersonalToolbar"
-                        type="checkbox"
-                        oncommand="onViewToolbarCommand(event)"
-                        label="&viewBookmarksToolbar.label;"/>
+                        class="menuitem-iconic subviewbutton"
+                        label-show="&viewBookmarksToolbar.label;"
+                        label-hide="&hideBookmarksToolbar.label;"
+                        oncommand="BookmarkingUI.toggleBookmarksToolbar();"/>
               <menuseparator/>
               <!-- Bookmarks toolbar items -->
             </menupopup>

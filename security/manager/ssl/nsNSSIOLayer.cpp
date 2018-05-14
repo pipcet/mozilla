@@ -34,8 +34,10 @@
 #include "nsIWebProgressListener.h"
 #include "nsNSSCertHelper.h"
 #include "nsNSSComponent.h"
+#include "nsNSSHelper.h"
 #include "nsPrintfCString.h"
 #include "nsServiceManagerUtils.h"
+#include "pkix/pkixnss.h"
 #include "pkix/pkixtypes.h"
 #include "prmem.h"
 #include "prnetdb.h"
@@ -1983,6 +1985,8 @@ nsConvertCANamesToStrings(const UniquePLArenaPool& arena, char** caNameStrings,
         }
 
         if (headerlen + contentlen != dername->len) {
+            Telemetry::ScalarAdd(Telemetry::ScalarID::SECURITY_CLIENT_CERT,
+                                 NS_LITERAL_STRING("compat"), 1);
             // This must be from an enterprise 2.x server, which sent
             // incorrectly formatted der without the outer wrapper of type and
             // length. Fix it up by adding the top level header.
@@ -2143,6 +2147,9 @@ nsNSS_SSLGetClientAuthData(void* arg, PRFileDesc* socket,
     return SECFailure;
   }
 
+  Telemetry::ScalarAdd(Telemetry::ScalarID::SECURITY_CLIENT_CERT,
+                       NS_LITERAL_STRING("requested"), 1);
+
   RefPtr<nsNSSSocketInfo> info(
     BitwiseCast<nsNSSSocketInfo*, PRFilePrivate*>(socket->higher->secret));
 
@@ -2188,6 +2195,8 @@ nsNSS_SSLGetClientAuthData(void* arg, PRFileDesc* socket,
   } else if (*runnable->mPRetCert || *runnable->mPRetKey) {
     // Make joinConnection prohibit joining after we've sent a client cert
     info->SetSentClientCert();
+    Telemetry::ScalarAdd(Telemetry::ScalarID::SECURITY_CLIENT_CERT,
+                         NS_LITERAL_STRING("sent"), 1);
   }
 
   return runnable->mRV;

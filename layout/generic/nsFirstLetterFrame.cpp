@@ -15,7 +15,6 @@
 #include "mozilla/ServoStyleSet.h"
 #include "nsFrameManager.h"
 #include "mozilla/RestyleManager.h"
-#include "mozilla/RestyleManagerInlines.h"
 #include "nsPlaceholderFrame.h"
 #include "nsCSSFrameConstructor.h"
 
@@ -308,7 +307,7 @@ nsFirstLetterFrame::CreateContinuationForFloatingParent(nsPresContext* aPresCont
 {
   NS_ASSERTION(IsFloating(),
                "can only call this on floating first letter frames");
-  NS_PRECONDITION(aContinuation, "bad args");
+  MOZ_ASSERT(aContinuation, "bad args");
 
   *aContinuation = nullptr;
 
@@ -378,7 +377,7 @@ nsFirstLetterFrame::DrainOverflowFrames(nsPresContext* aPresContext)
   if (kid) {
     nsIContent* kidContent = kid->GetContent();
     if (kidContent) {
-      NS_ASSERTION(kidContent->IsNodeOfType(nsINode::eTEXT),
+      NS_ASSERTION(kidContent->IsText(),
                    "should contain only text nodes");
       ComputedStyle* parentSC;
       if (prevInFlow) {

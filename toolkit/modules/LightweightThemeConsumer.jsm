@@ -12,7 +12,7 @@ const toolkitVariableMap = [
   ["--lwt-accent-color", {
     lwtProperty: "accentcolor",
     processColor(rgbaChannels, element) {
-      if (!rgbaChannels) {
+      if (!rgbaChannels || rgbaChannels.a == 0) {
         return "white";
       }
       // Remove the alpha channel
@@ -29,7 +29,7 @@ const toolkitVariableMap = [
         return null;
       }
       const {r, g, b, a} = rgbaChannels;
-      const luminance = 0.2125 * r + 0.7154 * g + 0.0721 * b;
+      const luminance = _getLuminance(r, g, b);
       element.setAttribute("lwthemetextcolor", luminance <= 110 ? "dark" : "bright");
       element.setAttribute("lwtheme", "true");
       return `rgba(${r}, ${g}, ${b}, ${a})` || "black";
@@ -43,6 +43,26 @@ const toolkitVariableMap = [
   }],
   ["--arrowpanel-border-color", {
     lwtProperty: "popup_border"
+  }],
+  ["--lwt-toolbar-field-background-color", {
+    lwtProperty: "toolbar_field"
+  }],
+  ["--lwt-toolbar-field-color", {
+    lwtProperty: "toolbar_field_text",
+    processColor(rgbaChannels, element) {
+      if (!rgbaChannels) {
+        element.removeAttribute("lwt-toolbar-field-brighttext");
+        return null;
+      }
+      const {r, g, b, a} = rgbaChannels;
+      const luminance = _getLuminance(r, g, b);
+      if (luminance <= 110) {
+        element.removeAttribute("lwt-toolbar-field-brighttext");
+      } else {
+        element.setAttribute("lwt-toolbar-field-brighttext", "true");
+      }
+      return `rgba(${r}, ${g}, ${b}, ${a})`;
+    }
   }],
 ];
 
@@ -62,6 +82,8 @@ function LightweightThemeConsumer(aDocument) {
   var temp = {};
   ChromeUtils.import("resource://gre/modules/LightweightThemeManager.jsm", temp);
   this._update(temp.LightweightThemeManager.currentThemeForDisplay);
+
+  this._win.addEventListener("resolutionchange", this);
   this._win.addEventListener("unload", this, { once: true });
 }
 
@@ -107,8 +129,14 @@ LightweightThemeConsumer.prototype = {
 
   handleEvent(aEvent) {
     switch (aEvent.type) {
+      case "resolutionchange":
+        if (this._active) {
+          this._update(this._lastData);
+        }
+        break;
       case "unload":
         Services.obs.removeObserver(this, "lightweight-theme-styling-update");
+        this._win.removeEventListener("resolutionchange", this);
         this._win = this._doc = null;
         break;
     }
@@ -133,7 +161,7 @@ LightweightThemeConsumer.prototype = {
       root.removeAttribute("lwtheme-image");
     }
 
-    let active = !!aData.accentcolor;
+    let active = aData.accentcolor || aData.headerURL;
     this._active = active;
 
     if (aData.icons) {
@@ -204,14 +232,15 @@ function _sanitizeCSSColor(doc, cssColor) {
   if (!cssColor) {
     return null;
   }
-  // style.color normalizes color values and rejects invalid ones, so a
+  const HTML_NS = "http://www.w3.org/1999/xhtml";
+  // style.color normalizes color values and makes invalid ones black, so a
   // simple round trip gets us a sanitized color value.
-  let span = doc.createElementNS("http://www.w3.org/1999/xhtml", "span");
+  let div = doc.createElementNS(HTML_NS, "div");
+  div.style.color = "black";
+  let span = doc.createElementNS(HTML_NS, "span");
   span.style.color = cssColor;
+  div.appendChild(span);
   cssColor = doc.defaultView.getComputedStyle(span).color;
-  if (cssColor == "rgba(0, 0, 0, 0)") {
-    return null;
-  }
   return cssColor;
 }
 
@@ -225,6 +254,10 @@ function _parseRGBA(aColorString) {
     r: rgba[0],
     g: rgba[1],
     b: rgba[2],
-    a: rgba[3] || 1,
+    a: 3 in rgba ? rgba[3] : 1,
   };
+}
+
+function _getLuminance(r, g, b) {
+  return 0.2125 * r + 0.7154 * g + 0.0721 * b;
 }

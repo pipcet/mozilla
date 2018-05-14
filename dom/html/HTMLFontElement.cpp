@@ -10,7 +10,6 @@
 #include "nsAttrValueInlines.h"
 #include "nsMappedAttributes.h"
 #include "nsContentUtils.h"
-#include "nsCSSParser.h"
 
 NS_IMPL_NS_NEW_HTML_ELEMENT(Font)
 
@@ -98,9 +97,9 @@ NS_IMETHODIMP_(bool)
 HTMLFontElement::IsAttributeMapped(const nsAtom* aAttribute) const
 {
   static const MappedAttributeEntry attributes[] = {
-    { nsGkAtoms::face },
-    { nsGkAtoms::size },
-    { nsGkAtoms::color },
+    { &nsGkAtoms::face },
+    { &nsGkAtoms::size },
+    { &nsGkAtoms::color },
     { nullptr }
   };
 

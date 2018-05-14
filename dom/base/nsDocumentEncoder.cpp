@@ -20,8 +20,6 @@
 #include "nsIContentSerializer.h"
 #include "mozilla/Encoding.h"
 #include "nsIOutputStream.h"
-#include "nsIDOMElement.h"
-#include "nsIDOMNodeList.h"
 #include "nsRange.h"
 #include "nsIDOMDocument.h"
 #include "nsGkAtoms.h"
@@ -30,7 +28,6 @@
 #include "nsIScriptGlobalObject.h"
 #include "nsIScriptSecurityManager.h"
 #include "mozilla/dom/Selection.h"
-#include "nsISelectionPrivate.h"
 #include "nsITransferable.h" // for kUnicodeMime
 #include "nsContentUtils.h"
 #include "nsElementTable.h"
@@ -101,21 +98,30 @@ protected:
 
   bool IsVisibleNode(nsINode* aNode)
   {
-    NS_PRECONDITION(aNode, "");
+    MOZ_ASSERT(aNode, "null node");
 
     if (mFlags & SkipInvisibleContent) {
       // Treat the visibility of the ShadowRoot as if it were
       // the host content.
-      nsCOMPtr<nsIContent> content = do_QueryInterface(aNode);
-      if (ShadowRoot* shadowRoot = ShadowRoot::FromNodeOrNull(content)) {
-        content = shadowRoot->GetHost();
+      //
+      // FIXME(emilio): I suspect instead of this a bunch of the GetParent()
+      // calls here should be doing GetFlattenedTreeParent, then this condition
+      // should be unreachable...
+      if (ShadowRoot* shadowRoot = ShadowRoot::FromNode(aNode)) {
+        aNode = shadowRoot->GetHost();
       }
 
-      if (content) {
-        nsIFrame* frame = content->GetPrimaryFrame();
+      if (aNode->IsContent()) {
+        nsIFrame* frame = aNode->AsContent()->GetPrimaryFrame();
         if (!frame) {
-          if (aNode->IsNodeOfType(nsINode::eTEXT)) {
+          if (aNode->IsElement() && aNode->AsElement()->IsDisplayContents()) {
+            return true;
+          }
+          if (aNode->IsText()) {
             // We have already checked that our parent is visible.
+            //
+            // FIXME(emilio): Text not assigned to a <slot> in Shadow DOM should
+            // probably return false...
             return true;
           }
           if (aNode->IsHTMLElement(nsGkAtoms::rp)) {
@@ -126,7 +132,7 @@ protected:
           return false;
         }
         bool isVisible = frame->StyleVisibility()->IsVisible();
-        if (!isVisible && aNode->IsNodeOfType(nsINode::eTEXT))
+        if (!isVisible && aNode->IsText())
           return false;
       }
     }
@@ -281,9 +287,9 @@ nsDocumentEncoder::SetWrapColumn(uint32_t aWC)
 }
 
 NS_IMETHODIMP
-nsDocumentEncoder::SetSelection(nsISelection* aSelection)
+nsDocumentEncoder::SetSelection(Selection* aSelection)
 {
-  mSelection = aSelection->AsSelection();
+  mSelection = aSelection;
   return NS_OK;
 }
 
@@ -543,10 +549,8 @@ nsDocumentEncoder::SerializeToStringIterative(nsINode* aNode,
 
         // Handle template element. If the parent is a template's content,
         // then adjust the parent to be the template element.
-        if (current && current != aNode &&
-            current->NodeType() == nsINode::DOCUMENT_FRAGMENT_NODE) {
-          DocumentFragment* frag = static_cast<DocumentFragment*>(current);
-          nsIContent* host = frag->GetHost();
+        if (current && current != aNode && current->IsDocumentFragment()) {
+          nsIContent* host = current->AsDocumentFragment()->GetHost();
           if (host && host->IsHTMLElement(nsGkAtoms::_template)) {
             current = host;
           }
@@ -631,7 +635,7 @@ nsDocumentEncoder::FlushText(nsAString& aString, bool aForce)
 
 static bool IsTextNode(nsINode *aNode)
 {
-  return aNode && aNode->IsNodeOfType(nsINode::eTEXT);
+  return aNode && aNode->IsText();
 }
 
 nsresult
@@ -1151,7 +1155,7 @@ public:
   NS_IMETHOD Init(nsIDOMDocument* aDocument, const nsAString& aMimeType, uint32_t aFlags) override;
 
   // overridden methods from nsDocumentEncoder
-  NS_IMETHOD SetSelection(nsISelection* aSelection) override;
+  NS_IMETHOD SetSelection(Selection* aSelection) override;
   NS_IMETHOD EncodeToStringWithContext(nsAString& aContextString,
                                        nsAString& aInfoString,
                                        nsAString& aEncodedString) override;
@@ -1231,7 +1235,7 @@ nsHTMLCopyEncoder::Init(nsIDOMDocument* aDocument,
 }
 
 NS_IMETHODIMP
-nsHTMLCopyEncoder::SetSelection(nsISelection* aSelection)
+nsHTMLCopyEncoder::SetSelection(Selection* aSelection)
 {
   // check for text widgets: we need to recognize these so that
   // we don't tweak the selection to be outside of the magic
@@ -1240,8 +1244,7 @@ nsHTMLCopyEncoder::SetSelection(nsISelection* aSelection)
   if (!aSelection)
     return NS_ERROR_NULL_POINTER;
 
-  Selection* selection = aSelection->AsSelection();
-  uint32_t rangeCount = selection->RangeCount();
+  uint32_t rangeCount = aSelection->RangeCount();
 
   // if selection is uninitialized return
   if (!rangeCount) {
@@ -1251,11 +1254,14 @@ nsHTMLCopyEncoder::SetSelection(nsISelection* aSelection)
   // we'll just use the common parent of the first range.  Implicit assumption
   // here that multi-range selections are table cell selections, in which case
   // the common parent is somewhere in the table and we don't really care where.
-  RefPtr<nsRange> range = selection->GetRangeAt(0);
-  if (!range) {
-    // XXXbz can this happen given rangeCount > 0?
-    return NS_ERROR_NULL_POINTER;
-  }
+  //
+  // FIXME(emilio, bug 1455894): This assumption is already wrong, and will
+  // probably be more wrong in a Shadow DOM world...
+  //
+  // We should be able to write this as "Find the common ancestor of the
+  // selection, then go through the flattened tree and serialize the selected
+  // nodes", effectively serializing the composed tree.
+  RefPtr<nsRange> range = aSelection->GetRangeAt(0);
   nsINode* commonParent = range->GetCommonAncestor();
 
   for (nsCOMPtr<nsIContent> selContent(do_QueryInterface(commonParent));
@@ -1314,7 +1320,7 @@ nsHTMLCopyEncoder::SetSelection(nsISelection* aSelection)
   // normalize selection if we are not in a widget
   if (mIsTextWidget)
   {
-    mSelection = selection;
+    mSelection = aSelection;
     mMimeType.AssignLiteral("text/plain");
     return NS_OK;
   }
@@ -1326,7 +1332,7 @@ nsHTMLCopyEncoder::SetSelection(nsISelection* aSelection)
   nsCOMPtr<nsIHTMLDocument> htmlDoc = do_QueryInterface(mDocument);
   if (!(htmlDoc && mDocument->IsHTMLDocument())) {
     mIsTextWidget = true;
-    mSelection = selection;
+    mSelection = aSelection;
     // mMimeType is set to text/plain when encoding starts.
     return NS_OK;
   }
@@ -1338,7 +1344,7 @@ nsHTMLCopyEncoder::SetSelection(nsISelection* aSelection)
 
   // loop thru the ranges in the selection
   for (uint32_t rangeIdx = 0; rangeIdx < rangeCount; ++rangeIdx) {
-    range = selection->GetRangeAt(rangeIdx);
+    range = aSelection->GetRangeAt(rangeIdx);
     NS_ENSURE_TRUE(range, NS_ERROR_FAILURE);
     RefPtr<nsRange> myRange = range->CloneRange();
     MOZ_ASSERT(myRange);
@@ -1746,7 +1752,7 @@ nsHTMLCopyEncoder::GetChildAt(nsINode *aParent, int32_t aOffset)
     return resultNode;
 
   nsCOMPtr<nsIContent> content = do_QueryInterface(aParent);
-  NS_PRECONDITION(content, "null content in nsHTMLCopyEncoder::GetChildAt");
+  MOZ_ASSERT(content, "null content in nsHTMLCopyEncoder::GetChildAt");
 
   resultNode = content->GetChildAt_Deprecated(aOffset);
 

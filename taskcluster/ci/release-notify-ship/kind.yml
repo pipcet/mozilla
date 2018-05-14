@@ -36,9 +36,8 @@ job-defaults:
          by-project:
             mozilla-beta: ["release-signoff@mozilla.org"]
             mozilla-release: ["release-signoff@mozilla.org"]
+            mozilla-esr60: ["release-signoff@mozilla.org"]
             try: ["{task_def[metadata][owner]}"]
-            maple: ["release+tcstaging@mozilla.com"]
-            birch: ["release+tcstaging@mozilla.com"]
             default: []
 
 jobs:

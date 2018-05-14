@@ -45,7 +45,6 @@ class nsAutoCauseReflowNotifier;
 class AutoPointerEventTargetUpdater;
 
 namespace mozilla {
-class ServoStyleSheet;
 
 namespace dom {
 class Element;
@@ -88,9 +87,9 @@ public:
 
   void UpdatePreferenceStyles() override;
 
-  NS_IMETHOD GetSelection(RawSelectionType aRawSelectionType,
-                          nsISelection** aSelection) override;
-  dom::Selection* GetDOMSelection(RawSelectionType aRawSelectionType) override;
+  NS_IMETHOD GetSelectionFromScript(RawSelectionType aRawSelectionType,
+                                    dom::Selection** aSelection) override;
+  dom::Selection* GetSelection(RawSelectionType aRawSelectionType) override;
 
   dom::Selection* GetCurrentSelection(SelectionType aSelectionType) override;
 
@@ -159,9 +158,9 @@ public:
   void UnsuppressPainting() override;
 
   nsresult GetAgentStyleSheets(
-      nsTArray<RefPtr<ServoStyleSheet>>& aSheets) override;
+      nsTArray<RefPtr<StyleSheet>>& aSheets) override;
   nsresult SetAgentStyleSheets(
-      const nsTArray<RefPtr<ServoStyleSheet>>& aSheets) override;
+      const nsTArray<RefPtr<StyleSheet>>& aSheets) override;
 
   nsresult AddOverrideStyleSheet(StyleSheet* aSheet) override;
   nsresult RemoveOverrideStyleSheet(StyleSheet* aSheet) override;
@@ -237,15 +236,13 @@ public:
                                     WidgetEvent* aEvent,
                                     nsEventStatus* aStatus) override;
   nsresult HandleDOMEventWithTarget(nsIContent* aTargetContent,
-                                    nsIDOMEvent* aEvent,
+                                    dom::Event* aEvent,
                                     nsEventStatus* aStatus) override;
   bool ShouldIgnoreInvalidation() override;
   void WillPaint() override;
   void WillPaintWindow() override;
   void DidPaintWindow() override;
   void ScheduleViewManagerFlush(PaintType aType = PAINT_DEFAULT) override;
-  void DispatchSynthMouseMove(WidgetGUIEvent* aEvent,
-                              bool aFlushOnHoverChange) override;
   void ClearMouseCaptureOnView(nsView* aView) override;
   bool IsVisible() override;
 
@@ -544,7 +541,7 @@ private:
    */
   already_AddRefed<SourceSurface>
   PaintRangePaintInfo(const nsTArray<UniquePtr<RangePaintInfo>>& aItems,
-                      nsISelection* aSelection,
+                      dom::Selection* aSelection,
                       nsIntRegion* aRegion,
                       nsRect aArea,
                       const LayoutDeviceIntPoint aPoint,
@@ -697,7 +694,7 @@ private:
 
   // Get the selected item and coordinates in device pixels relative to root
   // document's root view for element, first ensuring the element is onscreen
-  void GetCurrentItemAndPositionForElement(nsIDOMElement *aCurrentEl,
+  void GetCurrentItemAndPositionForElement(dom::Element* aFocusedElement,
                                            nsIContent **aTargetToUse,
                                            LayoutDeviceIntPoint& aTargetPt,
                                            nsIWidget *aRootWidget);
@@ -873,6 +870,14 @@ private:
 
   // Whether we have ever handled a user input event
   bool mHasHandledUserInput : 1;
+
+#ifdef NIGHTLY_BUILD
+  // Whether we should dispatch keypress events even for non-printable keys
+  // for keeping backward compatibility.
+  bool mForceDispatchKeyPressEventsForNonPrintableKeys : 1;
+  // Whether mForceDispatchKeyPressEventsForNonPrintableKeys is initialized.
+  bool mInitializedForceDispatchKeyPressEventsForNonPrintableKeys : 1;
+#endif // #ifdef NIGHTLY_BUILD
 
   static bool sDisableNonTestMouseEvents;
 

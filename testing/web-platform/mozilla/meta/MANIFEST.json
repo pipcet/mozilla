@@ -415,6 +415,12 @@
    ]
   },
   "testharness": {
+   "baselinecoverage/wpt_baselinecoverage.html": [
+    [
+     "/_mozilla/baselinecoverage/wpt_baselinecoverage.html",
+     {}
+    ]
+   ],
    "dom/classList.html": [
     [
      "/_mozilla/dom/classList.html",
@@ -469,9 +475,21 @@
      {}
     ]
    ],
+   "editor/cloning_attributes.html": [
+    [
+     "/_mozilla/editor/cloning_attributes.html",
+     {}
+    ]
+   ],
    "editor/initial_selection_on_focus.html": [
     [
      "/_mozilla/editor/initial_selection_on_focus.html",
+     {}
+    ]
+   ],
+   "editor/joining_nodes.html": [
+    [
+     "/_mozilla/editor/joining_nodes.html",
      {}
     ]
    ],
@@ -980,6 +998,10 @@
    "74e16eb87ecdfeb2dfc28f36e0c73a584abdf9c2",
    "support"
   ],
+  "baselinecoverage/wpt_baselinecoverage.html": [
+   "8deca29e7b82fc7ef4c11d2a16e8611dfb8cf487",
+   "testharness"
+  ],
   "dom/classList.html": [
    "17c65652a2943738a0cc5152aec737f243a02d3d",
    "testharness"
@@ -1028,8 +1050,16 @@
    "67a981ba2a4d08b684947ed42aba6648dcd262b4",
    "testharness"
   ],
+  "editor/cloning_attributes.html": [
+   "257023d742dd84a93816e05d24f380e27405db66",
+   "testharness"
+  ],
   "editor/initial_selection_on_focus.html": [
    "06948dbf72160a7de5a0baaa2f6cf1bb54fbeb8f",
+   "testharness"
+  ],
+  "editor/joining_nodes.html": [
+   "048cf7d99acdecb927f97c4554c4d04ca8b15a8a",
    "testharness"
   ],
   "fetch/api/redirect/redirect-referrer-mixed-content.js": [

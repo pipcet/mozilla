@@ -19,7 +19,6 @@
 #include "nsAttrAndChildArray.h"          // member
 #include "nsCycleCollectionParticipant.h" // NS_DECL_CYCLE_*
 #include "nsIContent.h"                   // base class
-#include "nsIWeakReference.h"             // base class
 #include "nsNodeUtils.h"                  // class member nsNodeUtils::CloneNodeImpl
 #include "nsIHTMLCollection.h"
 #include "nsDataHashtable.h"
@@ -44,34 +43,6 @@ struct CustomElementData;
 class Element;
 } // namespace dom
 } // namespace mozilla
-
-/**
- * A class that implements nsIWeakReference
- */
-
-class nsNodeWeakReference final : public nsIWeakReference
-{
-public:
-  explicit nsNodeWeakReference(nsINode* aNode)
-    : nsIWeakReference(aNode)
-  {
-  }
-
-  // nsISupports
-  NS_DECL_ISUPPORTS
-
-  // nsIWeakReference
-  NS_DECL_NSIWEAKREFERENCE
-  virtual size_t SizeOfOnlyThis(mozilla::MallocSizeOf aMallocSizeOf) const override;
-
-  void NoticeNodeDestruction()
-  {
-    mObject = nullptr;
-  }
-
-private:
-  ~nsNodeWeakReference();
-};
 
 /**
  * Tearoff to use for nodes to implement nsISupportsWeakReference
@@ -99,8 +70,8 @@ private:
 };
 
 /**
- * A generic base class for DOM elements, implementing many nsIContent,
- * nsIDOMNode and nsIDOMElement methods.
+ * A generic base class for DOM elements and document fragments,
+ * implementing many nsIContent, nsIDOMNode and Element methods.
  */
 namespace mozilla {
 namespace dom {

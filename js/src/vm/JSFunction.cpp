@@ -567,7 +567,7 @@ fun_resolve(JSContext* cx, HandleObject obj, HandleId id, bool* resolvedp)
 template<XDRMode mode>
 XDRResult
 js::XDRInterpretedFunction(XDRState<mode>* xdr, HandleScope enclosingScope,
-                           HandleScriptSource sourceObject, MutableHandleFunction objp)
+                           HandleScriptSourceObject sourceObject, MutableHandleFunction objp)
 {
     enum FirstWordFlag {
         HasAtom             = 0x1,
@@ -684,11 +684,11 @@ js::XDRInterpretedFunction(XDRState<mode>* xdr, HandleScope enclosingScope,
 }
 
 template XDRResult
-js::XDRInterpretedFunction(XDRState<XDR_ENCODE>*, HandleScope, HandleScriptSource,
+js::XDRInterpretedFunction(XDRState<XDR_ENCODE>*, HandleScope, HandleScriptSourceObject,
                            MutableHandleFunction);
 
 template XDRResult
-js::XDRInterpretedFunction(XDRState<XDR_DECODE>*, HandleScope, HandleScriptSource,
+js::XDRInterpretedFunction(XDRState<XDR_DECODE>*, HandleScope, HandleScriptSourceObject,
                            MutableHandleFunction);
 
 /* ES6 (04-25-16) 19.2.3.6 Function.prototype [ @@hasInstance ] */
@@ -792,7 +792,7 @@ JSFunction::trace(JSTracer* trc)
         // Functions can be be marked as interpreted despite having no script
         // yet at some points when parsing, and can be lazy with no lazy script
         // for self-hosted code.
-        if (hasScript() && !hasUncompiledScript())
+        if (hasScript() && !hasUncompletedScript())
             TraceManuallyBarrieredEdge(trc, &u.scripted.s.script_, "script");
         else if (isInterpretedLazy() && u.scripted.s.lazy_)
             TraceManuallyBarrieredEdge(trc, &u.scripted.s.lazy_, "lazyScript");
@@ -848,7 +848,7 @@ CreateFunctionPrototype(JSContext* cx, JSProtoKey key)
     size_t sourceLen = strlen(rawSource);
     size_t begin = 9;
     MOZ_ASSERT(rawSource[begin] == '(');
-    mozilla::UniquePtr<char16_t[], JS::FreePolicy> source(InflateString(cx, rawSource, sourceLen));
+    UniqueTwoByteChars source(InflateString(cx, rawSource, sourceLen));
     if (!source)
         return nullptr;
 
@@ -864,7 +864,7 @@ CreateFunctionPrototype(JSContext* cx, JSProtoKey key)
            .setNoScriptRval(true);
     if (!ss->initFromOptions(cx, options))
         return nullptr;
-    RootedScriptSource sourceObject(cx, ScriptSourceObject::create(cx, ss));
+    RootedScriptSourceObject sourceObject(cx, ScriptSourceObject::create(cx, ss));
     if (!sourceObject || !ScriptSourceObject::initFromOptions(cx, sourceObject, options))
         return nullptr;
 
@@ -1616,10 +1616,10 @@ JSFunction::createScriptForLazilyInterpretedFunction(JSContext* cx, HandleFuncti
         MOZ_ASSERT(lazy->scriptSource()->hasSourceData());
 
         // Parse and compile the script from source.
-        size_t lazyLength = lazy->end() - lazy->begin();
+        size_t lazyLength = lazy->sourceEnd() - lazy->sourceStart();
         UncompressedSourceCache::AutoHoldEntry holder;
         ScriptSource::PinnedChars chars(cx, lazy->scriptSource(), holder,
-                                        lazy->begin(), lazyLength);
+                                        lazy->sourceStart(), lazyLength);
         if (!chars.get())
             return false;
 
@@ -1655,7 +1655,7 @@ JSFunction::createScriptForLazilyInterpretedFunction(JSContext* cx, HandleFuncti
 
         // XDR the newly delazified function.
         if (script->scriptSource()->hasEncoder()) {
-            RootedScriptSource sourceObject(cx, lazy->sourceObject());
+            RootedScriptSourceObject sourceObject(cx, &lazy->sourceObject());
             if (!script->scriptSource()->xdrEncodeFunction(cx, fun, sourceObject))
                 return false;
         }
@@ -2141,11 +2141,10 @@ NewFunctionClone(JSContext* cx, HandleFunction fun, NewObjectKind newKind,
             return nullptr;
     }
 
-    JSObject* cloneobj = NewObjectWithClassProto(cx, &JSFunction::class_, cloneProto,
-                                                 allocKind, newKind);
-    if (!cloneobj)
+    RootedFunction clone(cx);
+    clone = NewObjectWithClassProto<JSFunction>(cx, cloneProto, allocKind, newKind);
+    if (!clone)
         return nullptr;
-    RootedFunction clone(cx, &cloneobj->as<JSFunction>());
 
     // JSFunction::HAS_INFERRED_NAME can be set at compile-time and at
     // runtime. In the latter case we should actually clear the flag before

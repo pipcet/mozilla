@@ -7,14 +7,15 @@
 #include <functional>
 #include <stdint.h>
 
+#include "CubebUtils.h"
 #include "ImageContainer.h"
 #include "MediaContainerType.h"
-#include "MediaPrefs.h"
 #include "MediaResource.h"
 #include "TimeUnits.h"
 #include "VorbisUtils.h"
 #include "mozilla/Base64.h"
 #include "mozilla/SharedThreadPool.h"
+#include "mozilla/StaticPrefs.h"
 #include "mozilla/SystemGroup.h"
 #include "mozilla/TaskCategory.h"
 #include "mozilla/TaskQueue.h"
@@ -167,17 +168,24 @@ void DownmixStereoToMono(mozilla::AudioDataValue* aBuffer,
   }
 }
 
-uint32_t DecideAudioPlaybackChannels(const AudioInfo& info)
+uint32_t
+DecideAudioPlaybackChannels(const AudioInfo& info)
 {
-  if (MediaPrefs::MonoAudio()) {
+  if (StaticPrefs::accessibility_monoaudio_enable()) {
     return 1;
   }
 
-  if (MediaPrefs::AudioSinkForceStereo()) {
+  if (StaticPrefs::MediaForcestereoEnabled()) {
     return 2;
   }
 
   return info.mChannels;
+}
+
+bool
+IsDefaultPlaybackDeviceMono()
+{
+  return CubebUtils::MaxNumberOfChannels() == 1;
 }
 
 bool

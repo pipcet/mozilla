@@ -82,6 +82,26 @@ async function test_cookie_settings({
      "Cookie behavior pref lock status should be what is expected");
   is(Services.prefs.prefIsLocked("network.cookie.lifetimePolicy"), cookieSettingsLocked,
      "Cookie lifetime pref lock status should be what is expected");
+
+  let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, "about:preferences");
+  // eslint-disable-next-line no-shadow
+  await ContentTask.spawn(tab.linkedBrowser, {cookiesEnabled, cookieSettingsLocked}, async function({cookiesEnabled, cookieSettingsLocked}) {
+    let acceptThirdPartyLabel = content.document.getElementById("acceptThirdPartyLabel");
+    let acceptThirdPartyMenu = content.document.getElementById("acceptThirdPartyMenu");
+    let keepUntilLabel = content.document.getElementById("keepUntil");
+    let keepUntilMenu = content.document.getElementById("keepCookiesUntil");
+
+    let expectControlsDisabled = !cookiesEnabled || cookieSettingsLocked;
+    is(acceptThirdPartyLabel.disabled, expectControlsDisabled,
+       "\"Accept Third Party Cookies\" Label disabled status should match expected");
+    is(acceptThirdPartyMenu.disabled, expectControlsDisabled,
+       "\"Accept Third Party Cookies\" Menu disabled status should match expected");
+    is(keepUntilLabel.disabled, expectControlsDisabled,
+       "\"Keep Cookies Until\" Label disabled status should match expected");
+    is(keepUntilMenu.disabled, expectControlsDisabled,
+       "\"Keep Cookies Until\" Menu disabled status should match expected");
+  });
+  BrowserTestUtils.removeTab(tab);
 }
 
 add_task(async function test_initial_state() {
@@ -132,7 +152,7 @@ add_task(async function test_third_party_disabled() {
   await setupPolicyEngineWithJson({
     "policies": {
       "Cookies": {
-        "AcceptThirdParty": "none"
+        "AcceptThirdParty": "never"
       }
     }
   });
@@ -151,7 +171,7 @@ add_task(async function test_disabled_and_third_party_disabled() {
     "policies": {
       "Cookies": {
         "Default": false,
-        "AcceptThirdParty": "none"
+        "AcceptThirdParty": "never"
       }
     }
   });
@@ -170,7 +190,7 @@ add_task(async function test_disabled_and_third_party_disabled_locked() {
     "policies": {
       "Cookies": {
         "Default": false,
-        "AcceptThirdParty": "none",
+        "AcceptThirdParty": "never",
         "Locked": true
       }
     }
@@ -245,7 +265,7 @@ add_task(async function test_disabled_cookie_expire_locked() {
     "policies": {
       "Cookies": {
         "Default": false,
-        "AcceptThirdParty": "none",
+        "AcceptThirdParty": "never",
         "ExpireAtSessionEnd": true,
         "Locked": true
       }

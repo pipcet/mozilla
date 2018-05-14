@@ -16,7 +16,7 @@ use values::serialize_atom_identifier;
 /// An [image].
 ///
 /// [image]: https://drafts.csswg.org/css-images/#image-values
-#[derive(Clone, MallocSizeOf, PartialEq, ToComputedValue)]
+#[derive(Clone, MallocSizeOf, PartialEq, SpecifiedValueInfo, ToComputedValue)]
 pub enum Image<Gradient, MozImageRect, ImageUrl> {
     /// A `<url()>` image.
     Url(ImageUrl),
@@ -26,6 +26,7 @@ pub enum Image<Gradient, MozImageRect, ImageUrl> {
     /// A `-moz-image-rect` image.  Also fairly large and rare.
     Rect(Box<MozImageRect>),
     /// A `-moz-element(# <element-id>)`
+    #[css(function = "-moz-element")]
     Element(Atom),
     /// A paint worklet image.
     /// <https://drafts.css-houdini.org/css-paint-api/>
@@ -64,7 +65,11 @@ pub enum GradientKind<LineDirection, Length, LengthOrPercentage, Position, Angle
     /// A linear gradient.
     Linear(LineDirection),
     /// A radial gradient.
-    Radial(EndingShape<Length, LengthOrPercentage>, Position, Option<Angle>),
+    Radial(
+        EndingShape<Length, LengthOrPercentage>,
+        Position,
+        Option<Angle>,
+    ),
 }
 
 /// A radial gradient's ending shape.
@@ -97,8 +102,7 @@ pub enum Ellipse<LengthOrPercentage> {
 /// <https://drafts.csswg.org/css-images/#typedef-extent-keyword>
 #[allow(missing_docs)]
 #[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
-#[derive(Clone, Copy, Debug, Eq, MallocSizeOf, Parse, PartialEq)]
-#[derive(ToComputedValue, ToCss)]
+#[derive(Clone, Copy, Debug, Eq, MallocSizeOf, Parse, PartialEq, ToComputedValue, ToCss)]
 pub enum ShapeExtent {
     ClosestSide,
     FarthestSide,
@@ -141,6 +145,8 @@ pub struct PaintWorklet {
     pub arguments: Vec<Arc<custom_properties::SpecifiedValue>>,
 }
 
+impl ::style_traits::SpecifiedValueInfo for PaintWorklet { }
+
 impl ToCss for PaintWorklet {
     fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
     where
@@ -161,7 +167,8 @@ impl ToCss for PaintWorklet {
 /// `-moz-image-rect(<uri>, top, right, bottom, left);`
 #[allow(missing_docs)]
 #[css(comma, function)]
-#[derive(Clone, Debug, MallocSizeOf, PartialEq, ToComputedValue, ToCss)]
+#[derive(Clone, Debug, MallocSizeOf, PartialEq, SpecifiedValueInfo,
+         ToComputedValue, ToCss)]
 pub struct MozImageRect<NumberOrPercentage, MozImageRectUrl> {
     pub url: MozImageRectUrl,
     pub top: NumberOrPercentage,
@@ -182,7 +189,10 @@ where
 }
 
 impl<G, R, U> ToCss for Image<G, R, U>
-    where G: ToCss, R: ToCss, U: ToCss
+where
+    G: ToCss,
+    R: ToCss,
+    U: ToCss,
 {
     fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
     where
@@ -204,7 +214,13 @@ impl<G, R, U> ToCss for Image<G, R, U>
 }
 
 impl<D, L, LoP, P, C, A> ToCss for Gradient<D, L, LoP, P, C, A>
-    where D: LineDirection, L: ToCss, LoP: ToCss, P: ToCss, C: ToCss, A: ToCss
+where
+    D: LineDirection,
+    L: ToCss,
+    LoP: ToCss,
+    P: ToCss,
+    C: ToCss,
+    A: ToCss,
 {
     fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
     where
@@ -222,8 +238,9 @@ impl<D, L, LoP, P, C, A> ToCss for Gradient<D, L, LoP, P, C, A>
         dest.write_str(self.kind.label())?;
         dest.write_str("-gradient(")?;
         let mut skip_comma = match self.kind {
-            GradientKind::Linear(ref direction)
-                if direction.points_downwards(self.compat_mode) => true,
+            GradientKind::Linear(ref direction) if direction.points_downwards(self.compat_mode) => {
+                true
+            },
             GradientKind::Linear(ref direction) => {
                 direction.to_css(dest, self.compat_mode)?;
                 false
@@ -231,9 +248,7 @@ impl<D, L, LoP, P, C, A> ToCss for Gradient<D, L, LoP, P, C, A>
             GradientKind::Radial(ref shape, ref position, ref angle) => {
                 let omit_shape = match *shape {
                     EndingShape::Ellipse(Ellipse::Extent(ShapeExtent::Cover)) |
-                    EndingShape::Ellipse(Ellipse::Extent(ShapeExtent::FarthestCorner)) => {
-                        true
-                    },
+                    EndingShape::Ellipse(Ellipse::Extent(ShapeExtent::FarthestCorner)) => true,
                     _ => false,
                 };
                 if self.compat_mode == CompatMode::Modern {
@@ -284,7 +299,8 @@ pub trait LineDirection {
 
     /// Serialises this direction according to the compatibility mode.
     fn to_css<W>(&self, dest: &mut CssWriter<W>, compat_mode: CompatMode) -> fmt::Result
-        where W: Write;
+    where
+        W: Write;
 }
 
 impl<L> ToCss for Circle<L>
@@ -296,17 +312,14 @@ where
         W: Write,
     {
         match *self {
-            Circle::Extent(ShapeExtent::FarthestCorner) |
-            Circle::Extent(ShapeExtent::Cover) => {
+            Circle::Extent(ShapeExtent::FarthestCorner) | Circle::Extent(ShapeExtent::Cover) => {
                 dest.write_str("circle")
             },
             Circle::Extent(keyword) => {
                 dest.write_str("circle ")?;
                 keyword.to_css(dest)
             },
-            Circle::Radius(ref length) => {
-                length.to_css(dest)
-            },
+            Circle::Radius(ref length) => length.to_css(dest),
         }
     }
 }

@@ -4,8 +4,11 @@
 
 <%namespace name="helpers" file="/helpers.mako.rs" />
 
-<%helpers:shorthand name="overflow" sub_properties="overflow-x overflow-y"
-                    spec="https://drafts.csswg.org/css-overflow/#propdef-overflow">
+<%helpers:shorthand
+    name="overflow"
+    sub_properties="overflow-x overflow-y"
+    spec="https://drafts.csswg.org/css-overflow/#propdef-overflow"
+>
     use properties::longhands::overflow_x::parse as parse_overflow;
     % if product == "gecko":
         use properties::longhands::overflow_x::SpecifiedValue;
@@ -42,20 +45,23 @@
                 return moz_kw_found
             }
         % endif
-        let overflow = parse_overflow(context, input)?;
+        let overflow_x = parse_overflow(context, input)?;
+        let overflow_y =
+            input.try(|i| parse_overflow(context, i)).unwrap_or(overflow_x);
         Ok(expanded! {
-            overflow_x: overflow,
-            overflow_y: overflow,
+            overflow_x: overflow_x,
+            overflow_y: overflow_y,
         })
     }
 
     impl<'a> ToCss for LonghandsToSerialize<'a>  {
         fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result where W: fmt::Write {
-            if self.overflow_x == self.overflow_y {
-                self.overflow_x.to_css(dest)
-            } else {
-                Ok(())
+            self.overflow_x.to_css(dest)?;
+            if self.overflow_x != self.overflow_y {
+                dest.write_char(' ')?;
+                self.overflow_y.to_css(dest)?;
             }
+            Ok(())
         }
     }
 </%helpers:shorthand>
@@ -111,7 +117,8 @@ macro_rules! try_parse_one {
     };
 }
 
-<%helpers:shorthand name="transition" extra_prefixes="moz webkit"
+<%helpers:shorthand name="transition"
+                    extra_prefixes="moz:layout.css.prefixes.transitions webkit"
                     sub_properties="transition-property transition-duration
                                     transition-timing-function
                                     transition-delay"
@@ -251,7 +258,8 @@ macro_rules! try_parse_one {
     }
 </%helpers:shorthand>
 
-<%helpers:shorthand name="animation" extra_prefixes="moz webkit"
+<%helpers:shorthand name="animation"
+                    extra_prefixes="moz:layout.css.prefixes.animations webkit"
                     sub_properties="animation-name animation-duration
                                     animation-timing-function animation-delay
                                     animation-iteration-count animation-direction

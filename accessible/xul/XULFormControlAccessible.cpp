@@ -21,7 +21,6 @@
 #include "nsIDOMXULCheckboxElement.h"
 #include "nsIDOMXULMenuListElement.h"
 #include "nsIDOMXULSelectCntrlItemEl.h"
-#include "nsIDOMXULTextboxElement.h"
 #include "nsIEditor.h"
 #include "nsIFrame.h"
 #include "nsITextControlFrame.h"
@@ -104,14 +103,9 @@ XULButtonAccessible::NativeState()
     if (type.EqualsLiteral("checkbox") || type.EqualsLiteral("radio")) {
       state |= states::CHECKABLE;
       bool checked = false;
-      int32_t checkState = 0;
       xulButtonElement->GetChecked(&checked);
       if (checked) {
         state |= states::PRESSED;
-        xulButtonElement->GetCheckState(&checkState);
-        if (checkState == nsIDOMXULButtonElement::CHECKSTATE_MIXED) {
-          state |= states::MIXED;
-        }
       }
     }
   }
@@ -193,7 +187,7 @@ bool
 XULButtonAccessible::ContainsMenu() const
 {
   static Element::AttrValuesArray strings[] =
-    {nsGkAtoms::menu, nsGkAtoms::menuButton, nullptr};
+    {&nsGkAtoms::menu, &nsGkAtoms::menuButton, nullptr};
 
   return mContent->AsElement()->FindAttrValueIn(kNameSpaceID_None,
                                                 nsGkAtoms::type,
@@ -341,10 +335,6 @@ XULCheckboxAccessible::NativeState()
     xulCheckboxElement->GetChecked(&checked);
     if (checked) {
       state |= states::CHECKED;
-      int32_t checkState = 0;
-      xulCheckboxElement->GetCheckState(&checkState);
-      if (checkState == nsIDOMXULCheckboxElement::CHECKSTATE_MIXED)
-        state |= states::MIXED;
     }
   }
 

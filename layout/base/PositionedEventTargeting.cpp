@@ -248,7 +248,7 @@ GetClickableAncestor(nsIFrame* aFrame, nsAtom* stopAt = nullptr, nsAutoString* a
     }
 
     static Element::AttrValuesArray clickableRoles[] =
-      { nsGkAtoms::button, nsGkAtoms::key, nullptr };
+      { &nsGkAtoms::button, &nsGkAtoms::key, nullptr };
     if (content->IsElement() &&
         content->AsElement()->FindAttrValueIn(kNameSpaceID_None, nsGkAtoms::role,
                                               clickableRoles, eIgnoreCase) >= 0) {
@@ -509,11 +509,11 @@ IsElementClickableAndReadable(nsIFrame* aFrame, WidgetGUIEvent* aEvent, const Ev
   if (content) {
     nsINodeList* childNodes = content->ChildNodes();
     uint32_t childNodeCount = childNodes->Length();
-    if ((content->IsNodeOfType(nsINode::eTEXT)) ||
+    if ((content->IsText()) ||
       // click occurs on the text inside <a></a> or other clickable tags with text inside
 
       (childNodeCount == 1 && childNodes->Item(0) &&
-        childNodes->Item(0)->IsNodeOfType(nsINode::eTEXT))) {
+        childNodes->Item(0)->IsText())) {
       // The click occurs on an element with only one text node child. In this case, the font size
       // can be tested.
       // The number of child nodes is tested to avoid the following cases (See bug 1172488):

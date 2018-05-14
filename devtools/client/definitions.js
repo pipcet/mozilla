@@ -25,6 +25,7 @@ loader.lazyGetter(this, "StoragePanel", () => require("devtools/client/storage/p
 loader.lazyGetter(this, "ScratchpadPanel", () => require("devtools/client/scratchpad/scratchpad-panel").ScratchpadPanel);
 loader.lazyGetter(this, "DomPanel", () => require("devtools/client/dom/dom-panel").DomPanel);
 loader.lazyGetter(this, "AccessibilityPanel", () => require("devtools/client/accessibility/accessibility-panel").AccessibilityPanel);
+loader.lazyGetter(this, "ApplicationPanel", () => require("devtools/client/application/panel").ApplicationPanel);
 
 // Other dependencies
 loader.lazyRequireGetter(this, "CommandUtils", "devtools/client/shared/developer-toolbar", true);
@@ -99,13 +100,14 @@ Tools.webConsole = {
   id: "webconsole",
   accesskey: l10n("webConsoleCmd.accesskey"),
   ordinal: 2,
-  oldWebConsoleURL: "chrome://devtools/content/webconsole/webconsole.xul",
-  newWebConsoleURL: "chrome://devtools/content/webconsole/webconsole.html",
+  url: "chrome://devtools/content/webconsole/webconsole.html",
+  get browserConsoleUsesHTML() {
+    return Services.prefs.getBoolPref("devtools.browserconsole.html");
+  },
   get browserConsoleURL() {
-    if (Services.prefs.getBoolPref("devtools.browserconsole.new-frontend-enabled")) {
-      return "chrome://devtools/content/webconsole/browserconsole.xul";
-    }
-    return Tools.webConsole.oldWebConsoleURL;
+    return this.browserConsoleUsesHTML ?
+      "chrome://devtools/content/webconsole/webconsole.html" :
+      "chrome://devtools/content/webconsole/browserconsole.xul";
   },
   icon: "chrome://devtools/skin/images/tool-webconsole.svg",
   label: l10n("ToolboxTabWebconsole.label"),
@@ -136,19 +138,6 @@ Tools.webConsole = {
     return new WebConsolePanel(iframeWindow, toolbox);
   }
 };
-function switchWebconsole() {
-  if (Services.prefs.getBoolPref("devtools.webconsole.new-frontend-enabled")) {
-    Tools.webConsole.url = Tools.webConsole.newWebConsoleURL;
-  } else {
-    Tools.webConsole.url = Tools.webConsole.oldWebConsoleURL;
-  }
-}
-switchWebconsole();
-
-Services.prefs.addObserver(
-  "devtools.webconsole.new-frontend-enabled",
-  { observe: switchWebconsole }
-);
 
 Tools.jsdebugger = {
   id: "jsdebugger",
@@ -450,9 +439,7 @@ Tools.accessibility = {
   label: l10n("accessibility.label"),
   panelLabel: l10n("accessibility.panelLabel"),
   get tooltip() {
-    return l10n("accessibility.tooltip",
-      (osString == "Darwin" ? "Cmd+Opt+" : "Ctrl+Shift+") +
-      l10n("accessibility.commandkey"));
+    return l10n("accessibility.tooltip2");
   },
   inMenu: true,
 
@@ -462,6 +449,27 @@ Tools.accessibility = {
 
   build(iframeWindow, toolbox) {
     return new AccessibilityPanel(iframeWindow, toolbox);
+  }
+};
+
+Tools.application = {
+  id: "application",
+  ordinal: 15,
+  visibilityswitch: "devtools.application.enabled",
+  icon: "chrome://devtools/skin/images/tool-application.svg",
+  url: "chrome://devtools/content/application/index.html",
+  label: "Application",
+  panelLabel: "Application",
+  tooltip: "Application",
+  inMenu: false,
+  hiddenInOptions: true,
+
+  isTargetSupported: function(target) {
+    return target.isLocalTab;
+  },
+
+  build: function(iframeWindow, toolbox) {
+    return new ApplicationPanel(iframeWindow, toolbox);
   }
 };
 
@@ -481,6 +489,7 @@ var defaultTools = [
   Tools.memory,
   Tools.dom,
   Tools.accessibility,
+  Tools.application,
 ];
 
 exports.defaultTools = defaultTools;
@@ -510,22 +519,6 @@ exports.defaultThemes = [
 // addons that have manually inserted toolbarbuttons into DOM.
 // (By default, supported target is only local tab)
 exports.ToolboxButtons = [
-  { id: "command-button-splitconsole",
-    description: l10n("toolbox.buttons.splitconsole", "Esc"),
-    isTargetSupported: target => !target.isAddon,
-    onClick(event, toolbox) {
-      toolbox.toggleSplitConsole();
-    },
-    isChecked(toolbox) {
-      return toolbox.splitConsole;
-    },
-    setup(toolbox, onChange) {
-      toolbox.on("split-console", onChange);
-    },
-    teardown(toolbox, onChange) {
-      toolbox.off("split-console", onChange);
-    }
-  },
   { id: "command-button-paintflashing",
     description: l10n("toolbox.buttons.paintflashing"),
     isTargetSupported: target => target.isLocalTab,

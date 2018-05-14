@@ -34,7 +34,10 @@
 #include "mozilla/dom/CSSBinding.h"
 #include "mozilla/dom/CSSRuleBinding.h"
 #include "mozilla/dom/DirectoryBinding.h"
+#include "mozilla/dom/DOMParserBinding.h"
 #include "mozilla/dom/DOMPrefs.h"
+#include "mozilla/dom/ElementBinding.h"
+#include "mozilla/dom/EventBinding.h"
 #include "mozilla/dom/IndexedDatabaseManager.h"
 #include "mozilla/dom/Fetch.h"
 #include "mozilla/dom/FileBinding.h"
@@ -56,6 +59,7 @@
 #include "mozilla/dom/URLBinding.h"
 #include "mozilla/dom/URLSearchParamsBinding.h"
 #include "mozilla/dom/XMLHttpRequest.h"
+#include "mozilla/dom/XMLSerializerBinding.h"
 #include "mozilla/dom/FormDataBinding.h"
 #include "mozilla/DeferredFinalize.h"
 
@@ -810,6 +814,12 @@ xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj)
             CSSRule = true;
         } else if (!strcmp(name.ptr(), "Directory")) {
             Directory = true;
+        } else if (!strcmp(name.ptr(), "DOMParser")) {
+            DOMParser = true;
+        } else if (!strcmp(name.ptr(), "Element")) {
+            Element = true;
+        } else if (!strcmp(name.ptr(), "Event")) {
+            Event = true;
         } else if (!strcmp(name.ptr(), "File")) {
             File = true;
         } else if (!strcmp(name.ptr(), "FileReader")) {
@@ -832,6 +842,8 @@ xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj)
             URLSearchParams = true;
         } else if (!strcmp(name.ptr(), "XMLHttpRequest")) {
             XMLHttpRequest = true;
+        } else if (!strcmp(name.ptr(), "XMLSerializer")) {
+            XMLSerializer = true;
         } else if (!strcmp(name.ptr(), "atob")) {
             atob = true;
         } else if (!strcmp(name.ptr(), "btoa")) {
@@ -882,6 +894,18 @@ xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj)
         !dom::DirectoryBinding::GetConstructorObject(cx))
         return false;
 
+    if (DOMParser &&
+        !dom::DOMParserBinding::GetConstructorObject(cx))
+        return false;
+
+    if (Element &&
+        !dom::ElementBinding::GetConstructorObject(cx))
+        return false;
+
+    if (Event &&
+        !dom::EventBinding::GetConstructorObject(cx))
+        return false;
+
     if (File &&
         !dom::FileBinding::GetConstructorObject(cx))
         return false;
@@ -923,6 +947,10 @@ xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj)
 
     if (XMLHttpRequest &&
         !dom::XMLHttpRequestBinding::GetConstructorObject(cx))
+        return false;
+
+    if (XMLSerializer &&
+        !dom::XMLSerializerBinding::GetConstructorObject(cx))
         return false;
 
     if (atob &&
@@ -1008,7 +1036,7 @@ xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp, nsISupports* prin
     if (options.sameZoneAs)
         creationOptions.setExistingZone(js::UncheckedUnwrap(options.sameZoneAs));
     else if (options.freshZone)
-        creationOptions.setNewZoneInSystemZoneGroup();
+        creationOptions.setNewZone();
     else
         creationOptions.setSystemZone();
 

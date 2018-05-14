@@ -24,16 +24,10 @@
 #include "nsContentUtils.h"
 #include "nsReadableUtils.h"
 #include "nsHTMLCSSStyleSheet.h"
-#include "nsCSSParser.h"
 #include "nsStyledElement.h"
 #include "nsIURI.h"
 #include "nsIDocument.h"
 #include <algorithm>
-
-#ifdef LoadImage
-// Undefine LoadImage to prevent naming conflict with Windows.
-#undef LoadImage
-#endif
 
 using namespace mozilla;
 
@@ -305,11 +299,6 @@ nsAttrValue::SetTo(const nsAttrValue& aOther)
       NS_ADDREF(cont->mValue.mURL = otherCont->mValue.mURL);
       break;
     }
-    case eImage:
-    {
-      NS_ADDREF(cont->mValue.mImage = otherCont->mValue.mImage);
-      break;
-    }
     case eAtomArray:
     {
       if (!EnsureEmptyAtomArray() ||
@@ -416,7 +405,7 @@ nsAttrValue::SetTo(already_AddRefed<DeclarationBlock> aValue,
 }
 
 void
-nsAttrValue::SetTo(css::URLValue* aValue, const nsAString* aSerialized)
+nsAttrValue::SetTo(nsIURI* aValue, const nsAString* aSerialized)
 {
   MiscContainer* cont = EnsureEmptyMiscContainer();
   NS_ADDREF(cont->mValue.mURL = aValue);
@@ -748,7 +737,7 @@ nsAttrValue::GetAsAtom() const
 const nsCheapString
 nsAttrValue::GetStringValue() const
 {
-  NS_PRECONDITION(Type() == eString, "wrong type");
+  MOZ_ASSERT(Type() == eString, "wrong type");
 
   return nsCheapString(static_cast<nsStringBuffer*>(GetPtr()));
 }
@@ -769,7 +758,7 @@ nsAttrValue::GetColorValue(nscolor& aColor) const
 void
 nsAttrValue::GetEnumString(nsAString& aResult, bool aRealTag) const
 {
-  NS_PRECONDITION(Type() == eEnum, "wrong type");
+  MOZ_ASSERT(Type() == eEnum, "wrong type");
 
   uint32_t allEnumBits =
     (BaseType() == eIntegerBase) ? static_cast<uint32_t>(GetIntInternal())
@@ -811,8 +800,8 @@ nsAttrValue::GetAtomCount() const
 nsAtom*
 nsAttrValue::AtomAt(int32_t aIndex) const
 {
-  NS_PRECONDITION(aIndex >= 0, "Index must not be negative");
-  NS_PRECONDITION(GetAtomCount() > uint32_t(aIndex), "aIndex out of range");
+  MOZ_ASSERT(aIndex >= 0, "Index must not be negative");
+  MOZ_ASSERT(GetAtomCount() > uint32_t(aIndex), "aIndex out of range");
 
   if (BaseType() == eAtomBase) {
     return GetAtomValue();
@@ -878,10 +867,7 @@ nsAttrValue::HashValue() const
     {
       return NS_PTR_TO_INT32(cont->mValue.mCSSDeclaration);
     }
-    // Intentionally identical, so that loading the image does not change the
-    // hash code.
     case eURL:
-    case eImage:
     {
       nsString str;
       ToString(str);
@@ -991,10 +977,6 @@ nsAttrValue::Equals(const nsAttrValue& aOther) const
     case eURL:
     {
       return thisCont->mValue.mURL == otherCont->mValue.mURL;
-    }
-    case eImage:
-    {
-      return thisCont->mValue.mImage == otherCont->mValue.mImage;
     }
     case eAtomArray:
     {
@@ -1418,8 +1400,8 @@ nsAttrValue::ParseEnumValue(const nsAString& aValue,
   }
 
   if (aDefaultValue) {
-    NS_PRECONDITION(aTable <= aDefaultValue && aDefaultValue < tableEntry,
-                    "aDefaultValue not inside aTable?");
+    MOZ_ASSERT(aTable <= aDefaultValue && aDefaultValue < tableEntry,
+               "aDefaultValue not inside aTable?");
     SetIntValueAndType(EnumTableEntryToValue(aTable, aDefaultValue),
                        eEnum, &aValue);
     return true;
@@ -1461,7 +1443,7 @@ bool
 nsAttrValue::ParseIntWithBounds(const nsAString& aString,
                                 int32_t aMin, int32_t aMax)
 {
-  NS_PRECONDITION(aMin < aMax, "bad boundaries");
+  MOZ_ASSERT(aMin < aMax, "bad boundaries");
 
   ResetIfSet();
 
@@ -1681,28 +1663,6 @@ nsAttrValue::ParseIntMarginValue(const nsAString& aString)
   return true;
 }
 
-void
-nsAttrValue::LoadImage(nsIDocument* aDocument)
-{
-  NS_ASSERTION(Type() == eURL, "wrong type");
-
-  MiscContainer* cont = GetMiscContainer();
-  mozilla::css::URLValue* url = cont->mValue.mURL;
-
-  NS_ASSERTION(!url->IsStringEmpty(),
-               "How did we end up with an empty string for eURL");
-
-  mozilla::css::ImageValue* image =
-      mozilla::css::ImageValue::CreateFromURLValue(url,
-                                                   aDocument,
-                                                   mozilla::CORSMode::CORS_NONE);
-
-  NS_ADDREF(image);
-  cont->mValue.mImage = image;
-  NS_RELEASE(url);
-  cont->mType = eImage;
-}
-
 bool
 nsAttrValue::ParseStyleAttribute(const nsAString& aString,
                                  nsIPrincipal* aMaybeScriptedPrincipal,
@@ -1869,11 +1829,6 @@ nsAttrValue::ClearMiscContainer()
           NS_RELEASE(cont->mValue.mURL);
           break;
         }
-        case eImage:
-        {
-          NS_RELEASE(cont->mValue.mImage);
-          break;
-        }
         case eAtomArray:
         {
           delete cont->mValue.mAtomArray;
@@ -2010,4 +1965,3 @@ nsAttrValue::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
 
   return n;
 }
-

@@ -8,7 +8,6 @@
 #include "nsGlobalWindowCommands.h"
 
 #include "nsIComponentManager.h"
-#include "nsIDOMElement.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsCRT.h"
@@ -241,7 +240,7 @@ AdjustFocusAfterCaretMove(nsPIDOMWindowOuter* aWindow)
   // adjust the focus to the new caret position
   nsIFocusManager* fm = nsFocusManager::GetFocusManager();
   if (fm) {
-    nsCOMPtr<nsIDOMElement> result;
+    RefPtr<dom::Element> result;
     fm->MoveFocus(aWindow, nullptr, nsIFocusManager::MOVEFOCUS_CARET,
                   nsIFocusManager::FLAG_NOSCROLL, getter_AddRefs(result));
   }
@@ -563,13 +562,10 @@ nsClipboardCommand::DoCommand(const char *aCommandName, nsISupports *aContext)
     dom::Selection *sel =
       presShell->GetCurrentSelection(SelectionType::eNormal);
     NS_ENSURE_TRUE(sel, NS_ERROR_FAILURE);
-    sel->CollapseToEnd();
+    sel->CollapseToEnd(IgnoreErrors());
   }
 
-  if (actionTaken) {
-    return NS_OK;
-  }
-  return NS_ERROR_FAILURE;
+  return actionTaken ? NS_OK : NS_SUCCESS_DOM_NO_OPERATION;
 }
 
 NS_IMETHODIMP

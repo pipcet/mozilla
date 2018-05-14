@@ -22,11 +22,9 @@ if CONFIG['MOZ_PLACES']:
         'mozIPlacesAutoComplete.idl',
         'mozIPlacesPendingOperation.idl',
         'nsIAnnotationService.idl',
-        'nsIBrowserHistory.idl',
         'nsIFaviconService.idl',
         'nsINavBookmarksService.idl',
         'nsITaggingService.idl',
-        'nsPIPlacesDatabase.idl',
     ]
 
     EXPORTS.mozilla.places = [

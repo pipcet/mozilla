@@ -18,7 +18,6 @@ const sampleRDFManifest = {
 };
 
 createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
-startupManager();
 
 BootstrapMonitor.init();
 
@@ -53,6 +52,8 @@ function waitForBootstrapEvent(expectedEvent, addonId) {
 // Install a temporary add-on with no existing add-on present.
 // Restart and make sure it has gone away.
 add_task(async function() {
+  await promiseStartupManager();
+
   let extInstallCalled = false;
   AddonManager.addInstallListener({
     onExternalInstall: (aInstall) => {
@@ -170,7 +171,7 @@ add_task(async function() {
       };
 
       let target;
-      if (packed) {
+      if (!packed) {
         target = tempdir.clone();
         target.append(ID);
 
@@ -213,6 +214,8 @@ add_task(async function() {
 
       addon = await promiseAddonByID(ID);
 
+      let signedState = packed ? AddonManager.SIGNEDSTATE_PRIVILEGED : AddonManager.SIGNEDSTATE_UNKNOWN;
+
       // temporary add-on is installed and started
       Assert.notEqual(addon, null);
       Assert.equal(addon.version, newversion);
@@ -221,7 +224,7 @@ add_task(async function() {
       Assert.ok(!addon.appDisabled);
       Assert.ok(addon.isActive);
       Assert.equal(addon.type, "extension");
-      Assert.equal(addon.signedState, mozinfo.addon_signing ? AddonManager.SIGNEDSTATE_PRIVILEGED : AddonManager.SIGNEDSTATE_NOT_REQUIRED);
+      Assert.equal(addon.signedState, mozinfo.addon_signing ? signedState : AddonManager.SIGNEDSTATE_NOT_REQUIRED);
 
       // Now restart, the temporary addon will go away which should
       // be the opposite action (ie, if the temporary addon was an
@@ -365,7 +368,7 @@ add_task(async function() {
   BootstrapMonitor.checkAddonStarted(ID, "1.0");
 
   let tempdir = gTmpD.clone();
-  writeInstallRDFToDir({
+  await promiseWriteInstallRDFToDir({
     id: ID,
     version: "2.0",
     bootstrap: true,
@@ -429,10 +432,11 @@ add_task(async function() {
   Assert.ok(!addon.appDisabled);
   Assert.ok(addon.isActive);
   Assert.equal(addon.type, "extension");
-  Assert.equal(addon.signedState, mozinfo.addon_signing ? AddonManager.SIGNEDSTATE_PRIVILEGED : AddonManager.SIGNEDSTATE_NOT_REQUIRED);
+  Assert.equal(addon.signedState, mozinfo.addon_signing ? AddonManager.SIGNEDSTATE_UNKNOWN : AddonManager.SIGNEDSTATE_NOT_REQUIRED);
 
   addon.uninstall();
 
+  await new Promise(executeSoon);
   addon = await promiseAddonByID(ID);
 
   BootstrapMonitor.checkAddonInstalled(ID);
@@ -462,8 +466,7 @@ add_task(async function() {
 add_task(async function() {
   const tempdir = gTmpD.clone();
 
-  writeInstallRDFToDir(sampleRDFManifest, tempdir,
-                       "bootstrap1@tests.mozilla.org", "bootstrap.js");
+  await promiseWriteInstallRDFToDir(sampleRDFManifest, tempdir, "bootstrap1@tests.mozilla.org", "bootstrap.js");
 
   const unpackedAddon = tempdir.clone();
   unpackedAddon.append(ID);
@@ -474,7 +477,7 @@ add_task(async function() {
 
   // Increment the version number, re-install it, and make sure it
   // gets marked as an upgrade.
-  writeInstallRDFToDir(Object.assign({}, sampleRDFManifest, {
+  await promiseWriteInstallRDFToDir(Object.assign({}, sampleRDFManifest, {
     version: "2.0"
   }), tempdir, "bootstrap1@tests.mozilla.org");
 
@@ -514,8 +517,7 @@ add_task(async function() {
 add_task(async function() {
   const tempdir = gTmpD.clone();
 
-  writeInstallRDFToDir(sampleRDFManifest, tempdir,
-                       "bootstrap1@tests.mozilla.org", "bootstrap.js");
+  await promiseWriteInstallRDFToDir(sampleRDFManifest, tempdir, "bootstrap1@tests.mozilla.org", "bootstrap.js");
 
   const unpackedAddon = tempdir.clone();
   unpackedAddon.append(ID);
@@ -526,7 +528,7 @@ add_task(async function() {
 
   // Decrement the version number, re-install, and make sure
   // it gets marked as a downgrade.
-  writeInstallRDFToDir(Object.assign({}, sampleRDFManifest, {
+  await promiseWriteInstallRDFToDir(Object.assign({}, sampleRDFManifest, {
     version: "0.8"
   }), tempdir, "bootstrap1@tests.mozilla.org");
 
@@ -564,8 +566,7 @@ add_task(async function() {
 add_task(async function() {
   const tempdir = gTmpD.clone();
 
-  writeInstallRDFToDir(sampleRDFManifest, tempdir,
-                       "bootstrap1@tests.mozilla.org", "bootstrap.js");
+  await promiseWriteInstallRDFToDir(sampleRDFManifest, tempdir, "bootstrap1@tests.mozilla.org", "bootstrap.js");
 
   const unpackedAddon = tempdir.clone();
   unpackedAddon.append(ID);
@@ -633,7 +634,7 @@ add_task(async function() {
   BootstrapMonitor.checkAddonNotStarted(ID);
 
   let tempdir = gTmpD.clone();
-  writeInstallRDFToDir({
+  await promiseWriteInstallRDFToDir({
     id: ID,
     version: "2.0",
     bootstrap: true,
@@ -677,12 +678,13 @@ add_task(async function() {
   Assert.ok(!tempAddon.appDisabled);
   Assert.ok(tempAddon.isActive);
   Assert.equal(tempAddon.type, "extension");
-  Assert.equal(tempAddon.signedState, mozinfo.addon_signing ? AddonManager.SIGNEDSTATE_PRIVILEGED : AddonManager.SIGNEDSTATE_NOT_REQUIRED);
+  Assert.equal(tempAddon.signedState, mozinfo.addon_signing ? AddonManager.SIGNEDSTATE_UNKNOWN : AddonManager.SIGNEDSTATE_NOT_REQUIRED);
 
   tempAddon.uninstall();
   unpacked_addon.remove(true);
 
   addon.userDisabled = false;
+  await new Promise(executeSoon);
   addon = await promiseAddonByID(ID);
 
   BootstrapMonitor.checkAddonInstalled(ID, "1.0");
@@ -757,38 +759,4 @@ add_task(async function() {
   equal(addon.temporarilyInstalled, false);
 
   await promiseRestartManager();
-});
-
-// Check that WebExtensions experiments can only be installed temporarily
-// in builds that allow legacy extensions.
-add_task(async function() {
-  AddonTestUtils.usePrivilegedSignatures = false;
-
-  const API_ID = "apiexperiment@tests.mozilla.org";
-  let xpi = createTempXPIFile({
-    id: API_ID,
-    name: "WebExtension Experiment",
-    version: "1.0",
-    type: 256,
-    targetApplications: [{
-      id: "xpcshell@tests.mozilla.org",
-      minVersion: "1",
-      maxVersion: "1"
-    }],
-  });
-
-  let addon = null;
-  try {
-    await AddonManager.installTemporaryAddon(xpi);
-    addon = await promiseAddonByID(API_ID);
-  } catch (err) {
-    // fall through, level addon null
-  }
-
-  if (AppConstants.MOZ_ALLOW_LEGACY_EXTENSIONS) {
-    notEqual(addon, null, "Temporary install of WebExtension experiment succeeded");
-    addon.uninstall();
-  } else {
-    equal(addon, null, "Temporary install of WebExtension experiment was not allowed");
-  }
 });

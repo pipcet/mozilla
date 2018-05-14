@@ -156,8 +156,7 @@ private:
                             EmptyString(), nullptr, ports);
     event->SetTrusted(true);
 
-    bool dummy;
-    mPort->DispatchEvent(static_cast<dom::Event*>(event.get()), &dummy);
+    mPort->DispatchEvent(*event);
 
     return NS_OK;
   }
@@ -298,8 +297,8 @@ MessagePort::Initialize(const nsID& aUUID,
       StrongWorkerRef::Create(workerPrivate, "MessagePort",
                               [self]() { self->CloseForced(); });
     if (NS_WARN_IF(!strongWorkerRef)) {
-      // The worker is shutting down. Let's return an already closed port.
-      mState = eStateDisentangledForClose;
+      // The worker is shutting down.
+      aRv.Throw(NS_ERROR_FAILURE);
       return;
     }
 
@@ -954,8 +953,7 @@ MessagePort::DispatchError()
     MessageEvent::Constructor(this, NS_LITERAL_STRING("messageerror"), init);
   event->SetTrusted(true);
 
-  bool dummy;
-  DispatchEvent(event, &dummy);
+  DispatchEvent(*event);
 }
 
 } // namespace dom

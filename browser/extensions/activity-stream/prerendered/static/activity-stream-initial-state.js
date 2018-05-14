@@ -1,4 +1,4 @@
-// Note - this is a generated file.
+// Note - this is a generated static file.
 window.gActivityStreamPrerenderedState = {
   "TopSites": {
     "initialized": false,
@@ -16,12 +16,11 @@ window.gActivityStreamPrerenderedState = {
     "initialized": true,
     "values": {
       "migrationExpired": true,
-      "showTopSites": true,
+      "feeds.topsites": true,
       "showSearch": true,
       "topSitesRows": 1,
       "feeds.section.topstories": true,
       "feeds.section.highlights": true,
-      "enableWideLayout": true,
       "sectionOrder": "topsites,topstories,highlights",
       "collapsed": false
     }

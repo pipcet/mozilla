@@ -682,6 +682,11 @@ html|*.urlbar-input:-moz-lwtheme::placeholder,
   text-shadow: none;
 }
 
+.browserContainer > findbar:-moz-lwtheme {
+  background-color: var(--toolbar-bgcolor);
+  color: var(--toolbar-color, -moz-DialogText);
+}
+
 /* Tabstrip */
 
 #TabsToolbar {
@@ -693,8 +698,8 @@ html|*.urlbar-input:-moz-lwtheme::placeholder,
 
 @media (-moz-windows-default-theme: 0) {
   /* For high contrast themes. */
-  tabbrowser,
-  :root[privatebrowsingmode=temporary] tabbrowser {
+  #tabbrowser-tabpanels,
+  :root[privatebrowsingmode=temporary] #tabbrowser-tabpanels {
     background-color: -moz-default-background-color;
   }
 }
@@ -1115,7 +1120,3 @@ panel[touchmode] .PanelUI-subView #appMenu-zoom-controls > .subviewbutton-iconic
   padding-bottom: .9167em;
 }
 
-/* Prevent movement in the restore-tabs-button when it's clicked. */
-.restore-tabs-button:hover:active:not([disabled="true"]) {
-  padding: 3px;
-}

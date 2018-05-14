@@ -17,6 +17,8 @@
 #include "js/TypeDecls.h"
 #include "js/Utility.h"
 
+extern MOZ_COLD JS_PUBLIC_API(void) JS_ReportOutOfMemory(JSContext* cx);
+
 namespace js {
 
 enum class AllocFunction {
@@ -45,7 +47,7 @@ class SystemAllocPolicy
     }
 };
 
-JS_FRIEND_API(void) ReportOutOfMemory(JSContext* cx);
+MOZ_COLD JS_FRIEND_API(void) ReportOutOfMemory(JSContext* cx);
 
 /*
  * Allocation policy that calls the system memory functions and reports errors

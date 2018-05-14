@@ -152,8 +152,11 @@ class MacroAssemblerMIPS : public MacroAssemblerMIPSShared
     void ma_pop(FloatRegister f);
     void ma_push(FloatRegister f);
 
-    void ma_cmp_set(Register dst, Register lhs, ImmPtr imm, Condition c) {
+    void ma_cmp_set(Register dst, Register lhs, ImmWord imm, Condition c) {
         ma_cmp_set(dst, lhs, Imm32(uint32_t(imm.value)), c);
+    }
+    void ma_cmp_set(Register dst, Register lhs, ImmPtr imm, Condition c) {
+        ma_cmp_set(dst, lhs, ImmWord(uintptr_t(imm.value)), c);
     }
     void ma_cmp_set(Register dst, Register lhs, Address addr, Condition c) {
         MOZ_ASSERT(lhs != ScratchRegister);
@@ -454,8 +457,7 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
   public:
     void moveValue(const Value& val, Register type, Register data);
 
-    CodeOffsetJump backedgeJump(RepatchLabel* label, Label* documentation = nullptr);
-    CodeOffsetJump jumpWithPatch(RepatchLabel* label, Label* documentation = nullptr);
+    CodeOffsetJump jumpWithPatch(RepatchLabel* label);
 
     void loadUnboxedValue(Address address, MIRType type, AnyRegister dest) {
         if (dest.isFloat())

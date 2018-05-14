@@ -173,7 +173,6 @@
 #include "ds/Nestable.h"
 #include "frontend/BytecodeCompiler.h"
 #include "frontend/FullParseHandler.h"
-#include "frontend/LanguageExtensions.h"
 #include "frontend/NameAnalysisTypes.h"
 #include "frontend/NameCollections.h"
 #include "frontend/ParseContext.h"
@@ -199,7 +198,7 @@ public:
     template<typename ParseHandler, typename CharT>
     SourceParseContext(GeneralParser<ParseHandler, CharT>* prs, SharedContext* sc,
                        Directives* newDirectives)
-      : ParseContext(prs->context, prs->pc, sc, prs->anyChars, prs->usedNames, newDirectives,
+      : ParseContext(prs->context, prs->pc, sc, prs->tokenStream, prs->usedNames, newDirectives,
                      mozilla::IsSame<ParseHandler, FullParseHandler>::value)
     { }
 };
@@ -248,7 +247,7 @@ enum AwaitHandling : uint8_t { AwaitIsName, AwaitIsKeyword, AwaitIsModuleKeyword
 template <class ParseHandler, typename CharT>
 class AutoAwaitIsKeyword;
 
-class ParserBase
+class MOZ_STACK_CLASS ParserBase
   : public StrictModeGetter,
     private JS::AutoGCRooter
 {
@@ -277,6 +276,8 @@ class ParserBase
 
     ScriptSource*       ss;
 
+    RootedScriptSourceObject sourceObject;
+
     /* Root atoms and objects allocated for the parsed tree. */
     AutoKeepAtoms       keepAtoms;
 
@@ -302,7 +303,8 @@ class ParserBase
     template<class, typename> friend class AutoAwaitIsKeyword;
 
     ParserBase(JSContext* cx, LifoAlloc& alloc, const ReadOnlyCompileOptions& options,
-               bool foldConstants, UsedNameTracker& usedNames);
+               bool foldConstants, UsedNameTracker& usedNames,
+               ScriptSourceObject* sourceObject);
     ~ParserBase();
 
     bool checkOptions();
@@ -333,8 +335,6 @@ class ParserBase
     void errorNoOffset(unsigned errorNumber, ...);
 
     bool isValidStrictBinding(PropertyName* name);
-
-    void addTelemetry(DeprecatedLanguageExtension e);
 
     bool hasValidSimpleStrictParameterNames();
 
@@ -396,6 +396,8 @@ class ParserBase
     bool leaveInnerFunction(ParseContext* outerpc);
 
     JSAtom* prefixAccessorName(PropertyType propType, HandleAtom propAtom);
+
+    MOZ_MUST_USE bool setSourceMapInfo();
 };
 
 inline
@@ -434,7 +436,7 @@ enum FunctionCallBehavior {
 };
 
 template <class ParseHandler>
-class PerHandlerParser
+class MOZ_STACK_CLASS PerHandlerParser
   : public ParserBase
 {
   private:
@@ -466,7 +468,8 @@ class PerHandlerParser
   protected:
     PerHandlerParser(JSContext* cx, LifoAlloc& alloc, const ReadOnlyCompileOptions& options,
                      bool foldConstants, UsedNameTracker& usedNames,
-                     LazyScript* lazyOuterFunction);
+                     LazyScript* lazyOuterFunction,
+                     ScriptSourceObject* sourceObject);
 
     static Node null() { return ParseHandler::null(); }
 
@@ -539,9 +542,6 @@ class PerHandlerParser
     inline void clearAbortedSyntaxParse();
 
   public:
-    void prepareNodeForMutation(Node node) { handler.prepareNodeForMutation(node); }
-    void freeTree(Node node) { handler.freeTree(node); }
-
     bool isValidSimpleAssignmentTarget(Node node,
                                        FunctionCallBehavior behavior = ForbidAssignmentToFunctionCalls);
 
@@ -616,8 +616,6 @@ PerHandlerParser<FullParseHandler>::clearAbortedSyntaxParse()
 {
 }
 
-enum class ExpressionClosure { Allowed, Forbidden };
-
 template<class Parser>
 class ParserAnyCharsAccess
 {
@@ -642,7 +640,7 @@ template <class ParseHandler, typename CharT>
 class Parser;
 
 template <class ParseHandler, typename CharT>
-class GeneralParser
+class MOZ_STACK_CLASS GeneralParser
   : public PerHandlerParser<ParseHandler>
 {
   public:
@@ -873,7 +871,8 @@ class GeneralParser
     GeneralParser(JSContext* cx, LifoAlloc& alloc, const ReadOnlyCompileOptions& options,
                   const CharT* chars, size_t length, bool foldConstants,
                   UsedNameTracker& usedNames, SyntaxParser* syntaxParser,
-                  LazyScript* lazyOuterFunction);
+                  LazyScript* lazyOuterFunction,
+                  ScriptSourceObject* sourceObject);
 
     inline void setAwaitHandling(AwaitHandling awaitHandling);
 
@@ -974,8 +973,8 @@ class GeneralParser
     Node functionStmt(uint32_t toStringStart,
                       YieldHandling yieldHandling, DefaultHandling defaultHandling,
                       FunctionAsyncKind asyncKind = FunctionAsyncKind::SyncFunction);
-    Node functionExpr(uint32_t toStringStart, ExpressionClosure expressionClosureHandling,
-                      InvokedPrediction invoked, FunctionAsyncKind asyncKind);
+    Node functionExpr(uint32_t toStringStart, InvokedPrediction invoked,
+                      FunctionAsyncKind asyncKind);
 
     Node statement(YieldHandling yieldHandling);
     bool maybeParseDirective(Node list, Node pn, bool* cont);
@@ -1094,24 +1093,20 @@ class GeneralParser
     Node assignExprWithoutYieldOrAwait(YieldHandling yieldHandling);
     Node yieldExpression(InHandling inHandling);
     Node condExpr(InHandling inHandling, YieldHandling yieldHandling,
-                  TripledotHandling tripledotHandling, ExpressionClosure expressionClosureHandling,
-                  PossibleError* possibleError,
+                  TripledotHandling tripledotHandling, PossibleError* possibleError,
                   InvokedPrediction invoked = PredictUninvoked);
     Node orExpr(InHandling inHandling, YieldHandling yieldHandling,
-                TripledotHandling tripledotHandling, ExpressionClosure expressionClosureHandling,
-                PossibleError* possibleError,
+                TripledotHandling tripledotHandling, PossibleError* possibleError,
                 InvokedPrediction invoked = PredictUninvoked);
     Node unaryExpr(YieldHandling yieldHandling, TripledotHandling tripledotHandling,
-                   ExpressionClosure expressionClosureHandling,
                    PossibleError* possibleError = nullptr,
                    InvokedPrediction invoked = PredictUninvoked);
-    Node memberExpr(YieldHandling yieldHandling, TripledotHandling tripledotHandling,
-                    ExpressionClosure expressionClosureHandling, TokenKind tt,
+    Node memberExpr(YieldHandling yieldHandling, TripledotHandling tripledotHandling, TokenKind tt,
                     bool allowCallSyntax = true, PossibleError* possibleError = nullptr,
                     InvokedPrediction invoked = PredictUninvoked);
     Node primaryExpr(YieldHandling yieldHandling, TripledotHandling tripledotHandling,
-                     ExpressionClosure expressionClosureHandling, TokenKind tt,
-                     PossibleError* possibleError, InvokedPrediction invoked = PredictUninvoked);
+                     TokenKind tt, PossibleError* possibleError,
+                     InvokedPrediction invoked = PredictUninvoked);
     Node exprInParens(InHandling inHandling, YieldHandling yieldHandling,
                       TripledotHandling tripledotHandling, PossibleError* possibleError = nullptr);
 
@@ -1258,7 +1253,7 @@ class GeneralParser
 };
 
 template <typename CharT>
-class Parser<SyntaxParseHandler, CharT> final
+class MOZ_STACK_CLASS Parser<SyntaxParseHandler, CharT> final
   : public GeneralParser<SyntaxParseHandler, CharT>
 {
     using Base = GeneralParser<SyntaxParseHandler, CharT>;
@@ -1368,7 +1363,7 @@ class Parser<SyntaxParseHandler, CharT> final
 };
 
 template <typename CharT>
-class Parser<FullParseHandler, CharT> final
+class MOZ_STACK_CLASS Parser<FullParseHandler, CharT> final
   : public GeneralParser<FullParseHandler, CharT>
 {
     using Base = GeneralParser<FullParseHandler, CharT>;
@@ -1608,6 +1603,10 @@ mozilla::Maybe<VarScope::Data*>
 NewVarScopeData(JSContext* context, ParseContext::Scope& scope, LifoAlloc& alloc, ParseContext* pc);
 mozilla::Maybe<LexicalScope::Data*>
 NewLexicalScopeData(JSContext* context, ParseContext::Scope& scope, LifoAlloc& alloc, ParseContext* pc);
+
+JSFunction*
+AllocNewFunction(JSContext* cx, HandleAtom atom, FunctionSyntaxKind kind, GeneratorKind generatorKind, FunctionAsyncKind asyncKind,
+                 HandleObject proto, bool isSelfHosting = false, bool inFunctionBox = false);
 
 } /* namespace frontend */
 } /* namespace js */

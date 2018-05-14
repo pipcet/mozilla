@@ -16,7 +16,6 @@
 
 #include <stddef.h>
 
-#include "frontend/LanguageExtensions.h"
 #include "gc/Barrier.h"
 #include "gc/NurseryAwareHashMap.h"
 #include "gc/Zone.h"
@@ -654,7 +653,7 @@ struct JSCompartment
     JS::CompartmentBehaviors& behaviors() { return behaviors_; }
     const JS::CompartmentBehaviors& behaviors() const { return behaviors_; }
 
-    JSRuntime* runtimeFromActiveCooperatingThread() const {
+    JSRuntime* runtimeFromMainThread() const {
         MOZ_ASSERT(js::CurrentThreadCanAccessRuntime(runtime_));
         return runtime_;
     }
@@ -957,9 +956,7 @@ struct JSCompartment
         return allocationMetadataBuilder;
     }
     void setAllocationMetadataBuilder(const js::AllocationMetadataBuilder* builder);
-    void forgetAllocationMetadataBuilder() {
-        allocationMetadataBuilder = nullptr;
-    }
+    void forgetAllocationMetadataBuilder();
     void setNewObjectMetadata(JSContext* cx, JS::HandleObject obj);
     void clearObjectMetadata();
     const void* addressOfMetadataBuilder() const {
@@ -1186,16 +1183,6 @@ struct JSCompartment
     static const size_t IterResultObjectDoneSlot = 1;
     js::NativeObject* getOrCreateIterResultTemplateObject(JSContext* cx);
 
-  private:
-    // Used for collecting telemetry on SpiderMonkey's deprecated language extensions.
-    bool sawDeprecatedLanguageExtension[size_t(js::DeprecatedLanguageExtension::Count)];
-
-    void reportTelemetry();
-
-  public:
-    void addTelemetry(const char* filename, js::DeprecatedLanguageExtension e);
-
-  public:
     // Aggregated output used to collect JSScript hit counts when code coverage
     // is enabled.
     js::coverage::LCovCompartment lcovOutput;

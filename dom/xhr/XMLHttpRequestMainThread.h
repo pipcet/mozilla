@@ -251,8 +251,6 @@ public:
   virtual size_t
     SizeOfEventTargetIncludingThis(MallocSizeOf aMallocSizeOf) const override;
 
-  NS_REALLY_FORWARD_NSIDOMEVENTTARGET(XMLHttpRequestEventTarget)
-
   // states
   virtual uint16_t ReadyState() const override;
 
@@ -468,12 +466,6 @@ public:
   void DispatchProgressEvent(DOMEventTargetHelper* aTarget,
                              const ProgressEventType aType,
                              int64_t aLoaded, int64_t aTotal);
-
-  // This is called by nsXULTemplateQueryProcessorXML.
-  nsresult Init(nsIPrincipal* aPrincipal,
-                nsIGlobalObject* aGlobalObject,
-                nsIURI* aBaseURI,
-                nsILoadGroup* aLoadGroup);
 
   void SetRequestObserver(nsIRequestObserver* aObserver);
 
@@ -861,7 +853,7 @@ class nsXHRParseEndListener : public nsIDOMEventListener
 {
 public:
   NS_DECL_ISUPPORTS
-  NS_IMETHOD HandleEvent(nsIDOMEvent *event) override
+  NS_IMETHOD HandleEvent(Event *event) override
   {
     if (mXHR) {
       mXHR->OnBodyParseEnd();

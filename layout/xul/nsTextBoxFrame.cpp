@@ -22,7 +22,6 @@
 #include "nsMenuBarListener.h"
 #include "nsString.h"
 #include "nsIServiceManager.h"
-#include "nsIDOMElement.h"
 #include "nsIDOMXULLabelElement.h"
 #include "mozilla/EventStateManager.h"
 #include "nsITheme.h"
@@ -235,8 +234,8 @@ nsTextBoxFrame::UpdateAttributes(nsAtom*         aAttribute,
 
     if (aAttribute == nullptr || aAttribute == nsGkAtoms::crop) {
         static Element::AttrValuesArray strings[] =
-          {nsGkAtoms::left, nsGkAtoms::start, nsGkAtoms::center,
-           nsGkAtoms::right, nsGkAtoms::end, nsGkAtoms::none, nullptr};
+          {&nsGkAtoms::left, &nsGkAtoms::start, &nsGkAtoms::center,
+           &nsGkAtoms::right, &nsGkAtoms::end, &nsGkAtoms::none, nullptr};
         CroppingStyle cropType;
         switch (mContent->AsElement()->FindAttrValueIn(kNameSpaceID_None,
                                                        nsGkAtoms::crop, strings,
@@ -428,8 +427,7 @@ nsTextBoxFrame::DrawText(gfxContext&         aRenderingContext,
         if (aOverrideColor) {
           color = *aOverrideColor;
         } else {
-          color = context->StyleColor()->
-            CalcComplexColor(styleText->mTextDecorationColor);
+          color = styleText->mTextDecorationColor.CalcColor(context);
         }
         uint8_t style = styleText->mTextDecorationStyle;
 

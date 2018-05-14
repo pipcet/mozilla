@@ -139,16 +139,6 @@ class CompartmentChecker
             check(i);
     }
 
-    void check(const ValueArray& arr) {
-        for (size_t i = 0; i < arr.length; i++)
-            check(arr.array[i]);
-    }
-
-    void check(const JSValueArray& arr) {
-        for (size_t i = 0; i < arr.length; i++)
-            check(arr.array[i]);
-    }
-
     void check(const JS::HandleValueArray& arr) {
         for (size_t i = 0; i < arr.length(); i++)
             check(arr[i]);
@@ -402,7 +392,7 @@ CheckForInterrupt(JSContext* cx)
     MOZ_ASSERT(!cx->isExceptionPending());
     // Add an inline fast-path since we have to check for interrupts in some hot
     // C++ loops of library builtins.
-    if (MOZ_UNLIKELY(cx->hasPendingInterrupt()))
+    if (MOZ_UNLIKELY(cx->hasAnyPendingInterrupt()))
         return cx->handleInterrupt();
 
     JS_INTERRUPT_POSSIBLY_FAIL();

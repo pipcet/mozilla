@@ -2,21 +2,16 @@
 const LEGACY_PREF = "extensions.legacy.enabled";
 
 createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "1");
-startupManager();
 
 add_task(async function test_disable() {
+  await promiseStartupManager();
+
   let legacy = [
     {
       id: "bootstrap@tests.mozilla.org",
       name: "Bootstrap add-on",
       version: "1.0",
       bootstrap: true,
-    },
-    {
-      id: "apiexperiment@tests.mozilla.org",
-      name: "WebExtension Experiment",
-      version: "1.0",
-      type: 256,
     },
   ];
 

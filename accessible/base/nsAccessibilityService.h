@@ -51,19 +51,18 @@ SelectionManager* SelectionMgr();
 ApplicationAccessible* ApplicationAcc();
 xpcAccessibleApplication* XPCApplicationAcc();
 
-typedef Accessible* (New_Accessible)(nsIContent* aContent, Accessible* aContext);
+typedef Accessible* (New_Accessible)(Element* aElement, Accessible* aContext);
 
-// These fields are not `nsStaticAtom* const` because MSVC doesn't like it.
 struct MarkupAttrInfo {
-  nsStaticAtom* name;
-  nsStaticAtom* value;
+  nsStaticAtom** name;
+  nsStaticAtom** value;
 
-  nsStaticAtom* DOMAttrName;
-  nsStaticAtom* DOMAttrValue;
+  nsStaticAtom** DOMAttrName;
+  nsStaticAtom** DOMAttrValue;
 };
 
 struct HTMLMarkupMapInfo {
-  const nsStaticAtom* const tag;
+  nsStaticAtom** tag;
   New_Accessible* new_func;
   a11y::role role;
   MarkupAttrInfo attrs[4];
@@ -71,7 +70,7 @@ struct HTMLMarkupMapInfo {
 
 #ifdef MOZ_XUL
 struct XULMarkupMapInfo {
-  const nsStaticAtom* const tag;
+  nsStaticAtom** tag;
   New_Accessible* new_func;
 };
 #endif
@@ -164,8 +163,9 @@ public:
    * Notification used to update the accessible tree when new content is
    * inserted.
    */
-  void ContentRangeInserted(nsIPresShell* aPresShell, nsIContent* aContainer,
-                            nsIContent* aStartChild, nsIContent* aEndChild);
+  void ContentRangeInserted(nsIPresShell* aPresShell,
+                            nsIContent* aStartChild,
+                            nsIContent* aEndChild);
 
   /**
    * Notification used to update the accessible tree when content is removed.

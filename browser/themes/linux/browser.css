@@ -450,6 +450,11 @@ notification[value="translation"] menulist > .menulist-dropmarker {
   text-shadow: none;
 }
 
+.browserContainer > findbar:-moz-lwtheme {
+  background-color: var(--toolbar-bgcolor);
+  color: var(--toolbar-color, -moz-DialogText);
+}
+
 /* Tabstrip */
 
 %include ../shared/tabs.inc.css
@@ -628,11 +633,6 @@ notification[value="translation"] menulist > .menulist-dropmarker {
   border-radius: inherit;
 }
 
-/* Prevent movement in the restore-tabs-button when it's clicked. */
-.restore-tabs-button:hover:active:not([disabled="true"]) {
-  padding: 3px;
-}
-
 /* Hide the titlebar explicitly on versions of GTK+ where
  * it's rendered by window manager. */
 @media (-moz-gtk-csd-available: 0) {
@@ -650,11 +650,11 @@ notification[value="translation"] menulist > .menulist-dropmarker {
     visibility: visible;
   }
 
+  :root[tabsintitlebar] > #titlebar {
+    -moz-appearance: -moz-window-titlebar-maximized;
+  }
   :root[tabsintitlebar][sizemode="normal"] > #titlebar {
     -moz-appearance: -moz-window-titlebar;
-  }
-  :root[tabsintitlebar][sizemode="maximized"] > #titlebar {
-    -moz-appearance: -moz-window-titlebar-maximized;
   }
 
   /* Add extra space to titlebar for dragging */
@@ -674,7 +674,8 @@ notification[value="translation"] menulist > .menulist-dropmarker {
   /* Make #TabsToolbar transparent as we style underlying #titlebar with
    * -moz-window-titlebar (Gtk+ theme).
    */
-  :root[tabsintitlebar] #TabsToolbar,
+  :root[tabsintitlebar][sizemode="normal"]:not([inFullscreen]) #TabsToolbar,
+  :root[tabsintitlebar][sizemode="maximized"] #TabsToolbar,
   :root[tabsintitlebar] #toolbar-menubar {
     -moz-appearance: none;
   }

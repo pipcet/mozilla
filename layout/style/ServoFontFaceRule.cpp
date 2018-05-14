@@ -66,15 +66,6 @@ ServoFontFaceRuleDecl::GetPropertyValue(const nsAString& aPropName,
   return NS_OK;
 }
 
-already_AddRefed<dom::CSSValue>
-ServoFontFaceRuleDecl::GetPropertyCSSValue(const nsAString& aPropName,
-                                           ErrorResult& aRv)
-{
-  // ??? nsDOMCSSDeclaration returns null/NS_OK, but that seems wrong.
-  aRv.Throw(NS_ERROR_NOT_IMPLEMENTED);
-  return nullptr;
-}
-
 NS_IMETHODIMP
 ServoFontFaceRuleDecl::RemoveProperty(const nsAString& aPropName,
                                       nsAString& aResult)
@@ -152,16 +143,6 @@ ServoFontFaceRuleDecl::WrapObject(JSContext *cx, JS::Handle<JSObject*> aGivenPro
 // -------------------------------------------
 // ServoFontFaceRule
 //
-
-/* virtual */ already_AddRefed<css::Rule>
-ServoFontFaceRule::Clone() const
-{
-  RefPtr<RawServoFontFaceRule> rule = Servo_FontFaceRule_Clone(Raw()).Consume();
-  RefPtr<css::Rule> clone = new ServoFontFaceRule(rule.forget(),
-                                                  GetLineNumber(),
-                                                  GetColumnNumber());
-  return clone.forget();
-}
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(ServoFontFaceRule)
 

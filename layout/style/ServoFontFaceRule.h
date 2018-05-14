@@ -21,10 +21,6 @@ public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSIDOMCSSSTYLEDECLARATION_HELPER
 
-  already_AddRefed<dom::CSSValue>
-  GetPropertyCSSValue(const nsAString& aProp, ErrorResult& aRv) final;
-  using nsICSSDeclaration::GetPropertyCSSValue;
-
   nsINode* GetParentObject() final;
   void IndexedGetter(uint32_t aIndex, bool& aFound, nsAString& aPropName) final;
 
@@ -74,7 +70,6 @@ public:
   nsICSSDeclaration* Style();
 
   // Methods of mozilla::css::Rule
-  already_AddRefed<css::Rule> Clone() const final;
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
     const final;
 

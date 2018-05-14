@@ -90,8 +90,8 @@ nsInProcessTabChildGlobal::DoSendAsyncMessage(JSContext* aCx,
 nsInProcessTabChildGlobal::nsInProcessTabChildGlobal(nsIDocShell* aShell,
                                                      nsIContent* aOwner,
                                                      nsFrameMessageManager* aChrome)
-: ContentFrameMessageManager(aChrome),
-  mDocShell(aShell), mInitialized(false), mLoadingScript(false),
+: ContentFrameMessageManager(new nsFrameMessageManager(this)),
+  mDocShell(aShell), mLoadingScript(false),
   mPreventEventsEscaping(false),
   mOwner(aOwner), mChromeMessageManager(aChrome)
 {
@@ -123,17 +123,22 @@ nsInProcessTabChildGlobal::MarkForCC()
   MessageManagerGlobal::MarkForCC();
 }
 
-nsresult
+bool
 nsInProcessTabChildGlobal::Init()
 {
-#ifdef DEBUG
-  nsresult rv =
-#endif
-  InitTabChildGlobal();
-  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "Couldn't initialize nsInProcessTabChildGlobal");
-  mMessageManager = new nsFrameMessageManager(this);
-  return NS_OK;
+  // If you change this, please change GetCompartmentName() in XPCJSContext.cpp
+  // accordingly.
+  nsAutoCString id;
+  id.AssignLiteral("inProcessTabChildGlobal");
+  nsIURI* uri = mOwner->OwnerDoc()->GetDocumentURI();
+  if (uri) {
+    nsAutoCString u;
+    nsresult rv = uri->GetSpec(u);
+    NS_ENSURE_SUCCESS(rv, false);
+    id.AppendLiteral("?ownedBy=");
+    id.Append(u);
+  }
+  return InitChildGlobalInternal(id);
 }
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(nsInProcessTabChildGlobal)
@@ -257,7 +262,7 @@ nsInProcessTabChildGlobal::GetOwnerContent()
   return mOwner;
 }
 
-nsresult
+void
 nsInProcessTabChildGlobal::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
   aVisitor.mForceContentDispatch = true;
@@ -278,7 +283,7 @@ nsInProcessTabChildGlobal::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 
   if (mPreventEventsEscaping) {
     aVisitor.SetParentTarget(nullptr, false);
-    return NS_OK;
+    return;
   }
 
   if (mIsBrowserFrame &&
@@ -293,27 +298,6 @@ nsInProcessTabChildGlobal::GetEventTargetParent(EventChainPreVisitor& aVisitor)
   } else {
     aVisitor.SetParentTarget(mOwner, false);
   }
-
-  return NS_OK;
-}
-
-nsresult
-nsInProcessTabChildGlobal::InitTabChildGlobal()
-{
-  // If you change this, please change GetCompartmentName() in XPCJSContext.cpp
-  // accordingly.
-  nsAutoCString id;
-  id.AssignLiteral("inProcessTabChildGlobal");
-  nsIURI* uri = mOwner->OwnerDoc()->GetDocumentURI();
-  if (uri) {
-    nsAutoCString u;
-    nsresult rv = uri->GetSpec(u);
-    NS_ENSURE_SUCCESS(rv, rv);
-    id.AppendLiteral("?ownedBy=");
-    id.Append(u);
-  }
-  NS_ENSURE_STATE(InitChildGlobalInternal(id));
-  return NS_OK;
 }
 
 class nsAsyncScriptLoad : public Runnable
@@ -345,10 +329,6 @@ nsInProcessTabChildGlobal::LoadFrameScript(const nsAString& aURL, bool aRunInGlo
   if (!nsContentUtils::IsSafeToRunScript()) {
     nsContentUtils::AddScriptRunner(new nsAsyncScriptLoad(this, aURL, aRunInGlobalScope));
     return;
-  }
-  if (!mInitialized) {
-    mInitialized = true;
-    Init();
   }
   bool tmp = mLoadingScript;
   mLoadingScript = true;

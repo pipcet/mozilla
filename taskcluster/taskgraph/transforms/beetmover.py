@@ -14,6 +14,7 @@ from taskgraph.util.scriptworker import (get_beetmover_bucket_scope,
                                          get_beetmover_action_scope,
                                          get_phase,
                                          get_worker_type_for_scope)
+from taskgraph.util.taskcluster import get_artifact_prefix
 from taskgraph.transforms.task import task_description_schema
 from voluptuous import Any, Required, Optional
 
@@ -91,22 +92,12 @@ _MOBILE_UPSTREAM_ARTIFACTS_UNSIGNED_EN_US = [
 # with a beetmover patch in https://github.com/mozilla-releng/beetmoverscript/.
 # See example in bug 1348286
 _MOBILE_UPSTREAM_ARTIFACTS_UNSIGNED_MULTI = [
-    "target.common.tests.zip",
-    "target.cppunittest.tests.zip",
     "target.json",
-    "target.mochitest.tests.zip",
     "target.mozinfo.json",
-    "target.reftest.tests.zip",
-    "target.talos.tests.zip",
-    "target.awsy.tests.zip",
     "target.test_packages.json",
     "target.txt",
-    "target.web-platform.tests.tar.gz",
-    "target.xpcshell.tests.zip",
     "target_info.txt",
-    "mozharness.zip",
     "robocop.apk",
-    "target.jsshell.zip",
 ]
 # Until bug 1331141 is fixed, if you are adding any new artifacts here that
 # need to be transfered to S3, please be aware you also need to follow-up
@@ -145,12 +136,14 @@ UPSTREAM_ARTIFACT_UNSIGNED_PATHS = {
         "host/bin/mar",
         "host/bin/mbsdiff",
     ],
-    'linux64-source': [
-    ],
-    'linux64-devedition-source': [
-    ],
-    'linux64-fennec-source': [
-    ],
+    'linux64-asan-reporter-nightly':
+        # ASan reporter builds don't generate the regular crashreporter symbol
+        # packages, so we shouldn't try to beetmove them
+        filter(lambda a: a != 'target.crashreporter-symbols.zip',
+               _DESKTOP_UPSTREAM_ARTIFACTS_UNSIGNED_EN_US + [
+                    "host/bin/mar",
+                    "host/bin/mbsdiff",
+                ]),
     'android-x86-nightly': _MOBILE_UPSTREAM_ARTIFACTS_UNSIGNED_EN_US,
     'android-aarch64-nightly': _MOBILE_UPSTREAM_ARTIFACTS_UNSIGNED_EN_US,
     'android-api-16-nightly': _MOBILE_UPSTREAM_ARTIFACTS_UNSIGNED_EN_US,
@@ -214,17 +207,9 @@ UPSTREAM_ARTIFACT_SIGNED_PATHS = {
         "target.tar.bz2",
         "target.tar.bz2.asc",
     ],
-    'linux64-source': [
-        "source.tar.xz",
-        "source.tar.xz.asc",
-    ],
-    'linux64-devedition-source': [
-        "source.tar.xz",
-        "source.tar.xz.asc",
-    ],
-    'linux64-fennec-source': [
-        "source.tar.xz",
-        "source.tar.xz.asc",
+    'linux64-asan-reporter-nightly': _DESKTOP_UPSTREAM_ARTIFACTS_SIGNED_EN_US + [
+        "target.tar.bz2",
+        "target.tar.bz2.asc",
     ],
     'android-x86-nightly': ["en-US/target.apk"],
     'android-aarch64-nightly': ["en-US/target.apk"],
@@ -291,6 +276,14 @@ UPSTREAM_ARTIFACT_SIGNED_PATHS = {
     ],
 
 }
+# Until bug 1331141 is fixed, if you are adding any new artifacts here that
+# need to be transfered to S3, please be aware you also need to follow-up
+# with a beetmover patch in https://github.com/mozilla-releng/beetmoverscript/.
+# See example in bug 1348286
+UPSTREAM_SOURCE_ARTIFACTS = [
+    "source.tar.xz",
+    "source.tar.xz.asc",
+]
 
 # Voluptuous uses marker objects as dictionary *keys*, but they are not
 # comparable, so we cast all of the keys back to regular strings
@@ -393,15 +386,26 @@ def make_task_description(config, jobs):
         yield task
 
 
-def generate_upstream_artifacts(signing_task_ref, build_task_ref, platform,
+def generate_upstream_artifacts(job, signing_task_ref, build_task_ref, platform,
                                 locale=None):
     build_mapping = UPSTREAM_ARTIFACT_UNSIGNED_PATHS
     signing_mapping = UPSTREAM_ARTIFACT_SIGNED_PATHS
 
-    artifact_prefix = 'public/build'
+    artifact_prefix = get_artifact_prefix(job)
     if locale:
-        artifact_prefix = 'public/build/{}'.format(locale)
+        artifact_prefix = '{}/{}'.format(artifact_prefix, locale)
         platform = "{}-l10n".format(platform)
+
+    if platform.endswith("-source"):
+        return [
+            {
+                "taskId": {"task-reference": signing_task_ref},
+                "taskType": "signing",
+                "paths": ["{}/{}".format(artifact_prefix, p)
+                          for p in UPSTREAM_SOURCE_ARTIFACTS],
+                "locale": locale or "en-US",
+            }
+        ]
 
     upstream_artifacts = []
 
@@ -447,11 +451,8 @@ def craft_release_properties(config, job):
     params = config.params
     build_platform = job['attributes']['build_platform']
     build_platform = build_platform.replace('-nightly', '')
-    if 'fennec-source' in build_platform:
-        # XXX This case is hardcoded to match the current implementation in beetmover
-        build_platform = 'android-api-16'
-    else:
-        build_platform = build_platform.replace('-source', '')
+    if build_platform.endswith("-source"):
+        build_platform = build_platform.replace('-source', '-release')
 
     # XXX This should be explicitly set via build attributes or something
     if 'android' in job['label'] or 'fennec' in job['label']:
@@ -497,7 +498,7 @@ def make_task_worker(config, jobs):
             'implementation': 'beetmover',
             'release-properties': craft_release_properties(config, job),
             'upstream-artifacts': generate_upstream_artifacts(
-                signing_task_ref, build_task_ref, platform, locale
+                job, signing_task_ref, build_task_ref, platform, locale
             )
         }
 

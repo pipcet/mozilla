@@ -1325,6 +1325,26 @@ CodeGenerator::visitRoundF(LRoundF* lir)
 }
 
 void
+CodeGenerator::visitTrunc(LTrunc* lir)
+{
+    FloatRegister input = ToFloatRegister(lir->input());
+    Register output = ToRegister(lir->output());
+    Label bail;
+    masm.trunc(input, output, &bail);
+    bailoutFrom(&bail, lir->snapshot());
+}
+
+void
+CodeGenerator::visitTruncF(LTruncF* lir)
+{
+    FloatRegister input = ToFloatRegister(lir->input());
+    Register output = ToRegister(lir->output());
+    Label bail;
+    masm.truncf(input, output, &bail);
+    bailoutFrom(&bail, lir->snapshot());
+}
+
+void
 CodeGeneratorARM::emitRoundDouble(FloatRegister src, Register dest, Label* fail)
 {
     ScratchDoubleScope scratch(masm);
@@ -1430,6 +1450,8 @@ CodeGenerator::visitUnbox(LUnbox* unbox)
     // inputs.
     MUnbox* mir = unbox->mir();
     Register type = ToRegister(unbox->type());
+    Register payload = ToRegister(unbox->payload());
+    Register output = ToRegister(unbox->output());
 
     mozilla::Maybe<ScratchRegisterScope> scratch;
     scratch.emplace(masm);
@@ -1448,6 +1470,11 @@ CodeGenerator::visitUnbox(LUnbox* unbox)
         masm.bind(&ok);
 #endif
     }
+
+    // Note: If spectreValueMasking is disabled, then this instruction will
+    // default to a no-op as long as the lowering allocate the same register for
+    // the output and the payload.
+    masm.unboxNonDouble(ValueOperand(type, payload), output, ValueTypeFromMIRType(mir->type()));
 }
 
 void

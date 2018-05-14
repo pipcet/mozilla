@@ -21,12 +21,6 @@ ChromeUtils.import("resource://gre/modules/ExtensionCommon.jsm");
 
 global.EventEmitter = ExtensionUtils.EventEmitter;
 global.EventManager = ExtensionCommon.EventManager;
-global.InputEventManager = class extends EventManager {
-  constructor(...args) {
-    super(...args);
-    this.inputHandling = true;
-  }
-};
 
 /* globals DEFAULT_STORE, PRIVATE_STORE, CONTAINER_STORE */
 
@@ -80,3 +74,13 @@ global.isValidCookieStoreId = function(storeId) {
          isPrivateCookieStoreId(storeId) ||
          isContainerCookieStoreId(storeId);
 };
+
+function makeStartupPromise(event) {
+  return ExtensionUtils.promiseObserved(event).then(() => {});
+}
+
+// browserPaintedPromise and browserStartupPromise are promises that
+// resolve after the first browser window is painted and after browser
+// windows have been restored, respectively.
+global.browserPaintedPromise = makeStartupPromise("browser-delayed-startup-finished");
+global.browserStartupPromise = makeStartupPromise("sessionstore-windows-restored");

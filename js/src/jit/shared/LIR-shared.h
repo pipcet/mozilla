@@ -1613,40 +1613,14 @@ class LRotateI64 : public details::RotateBase<INT64_PIECES, INT64_PIECES + 1, 1>
 
 class LInterruptCheck : public LInstructionHelper<0, 0, 0>
 {
-    Label* oolEntry_;
-
-    // Whether this is an implicit interrupt check. Implicit interrupt checks
-    // use a patchable backedge and signal handlers instead of an explicit
-    // cx->interrupt check.
-    bool implicit_;
-
   public:
     LIR_HEADER(InterruptCheck)
 
     LInterruptCheck()
-      : LInstructionHelper(classOpcode),
-        oolEntry_(nullptr),
-        implicit_(false)
+      : LInstructionHelper(classOpcode)
     {}
-
-    Label* oolEntry() {
-        MOZ_ASSERT(implicit_);
-        return oolEntry_;
-    }
-
-    void setOolEntry(Label* oolEntry) {
-        MOZ_ASSERT(implicit_);
-        oolEntry_ = oolEntry;
-    }
     MInterruptCheck* mir() const {
         return mir_->toInterruptCheck();
-    }
-
-    void setImplicit() {
-        implicit_ = true;
-    }
-    bool implicit() const {
-        return implicit_;
     }
 };
 
@@ -4216,6 +4190,47 @@ class LPowV : public LCallInstructionHelper<BOX_PIECES, 2 * BOX_PIECES, 0>
 
     static const size_t ValueInput = 0;
     static const size_t PowerInput = BOX_PIECES;
+};
+
+// Sign value of an integer.
+class LSignI : public LInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(SignI)
+    explicit LSignI(const LAllocation& input)
+      : LInstructionHelper(classOpcode)
+    {
+        setOperand(0, input);
+    }
+};
+
+// Sign value of a double.
+class LSignD : public LInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(SignD)
+    explicit LSignD(const LAllocation& input)
+      : LInstructionHelper(classOpcode)
+    {
+        setOperand(0, input);
+    }
+};
+
+// Sign value of a double with expected int32 result.
+class LSignDI : public LInstructionHelper<1, 1, 1>
+{
+  public:
+    LIR_HEADER(SignDI)
+    explicit LSignDI(const LAllocation& input, const LDefinition& temp)
+      : LInstructionHelper(classOpcode)
+    {
+        setOperand(0, input);
+        setTemp(0, temp);
+    }
+
+    const LDefinition* temp() {
+        return getTemp(0);
+    }
 };
 
 class LMathFunctionD : public LCallInstructionHelper<1, 1, 1>
@@ -7880,6 +7895,34 @@ class LRoundF : public LInstructionHelper<1, 1, 1>
     }
 };
 
+// Truncates a double precision number and converts it to an int32.
+// Implements Math.trunc().
+class LTrunc : public LInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(Trunc)
+
+    explicit LTrunc(const LAllocation& num)
+      : LInstructionHelper(classOpcode)
+    {
+        setOperand(0, num);
+    }
+};
+
+// Truncates a single precision number and converts it to an int32.
+// Implements Math.trunc().
+class LTruncF : public LInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(TruncF)
+
+    explicit LTruncF(const LAllocation& num)
+      : LInstructionHelper(classOpcode)
+    {
+        setOperand(0, num);
+    }
+};
+
 // Rounds a double precision number accordingly to mir()->roundingMode(),
 // and keeps a double output.
 class LNearbyInt : public LInstructionHelper<1, 1, 0>
@@ -9083,6 +9126,30 @@ class LHasClass : public LInstructionHelper<1, 1, 0>
     }
     MHasClass* mir() const {
         return mir_->toHasClass();
+    }
+};
+
+class LGuardToClass : public LInstructionHelper<1, 1, 1>
+{
+  public:
+    LIR_HEADER(GuardToClass);
+    explicit LGuardToClass(const LAllocation& lhs, const LDefinition& temp)
+      : LInstructionHelper(classOpcode)
+    {
+        setOperand(0, lhs);
+        setTemp(0, temp);
+    }
+
+    const LAllocation* lhs() {
+        return getOperand(0);
+    }
+
+    const LDefinition* temp() {
+        return getTemp(0);
+    }
+
+    MGuardToClass* mir() const {
+        return mir_->toGuardToClass();
     }
 };
 

@@ -522,11 +522,6 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleColor
   void FinishStyle(nsPresContext*, const nsStyleColor*) {}
   const static bool kHasFinishStyle = false;
 
-  nscolor CalcComplexColor(const mozilla::StyleComplexColor& aColor) const {
-    return mozilla::LinearBlendColors(aColor.mColor, mColor,
-                                      aColor.mForegroundRatio);
-  }
-
   nsChangeHint CalcDifference(const nsStyleColor& aNewData) const;
 
   // Don't add ANY members to this struct!  We can achieve caching in the rule
@@ -658,6 +653,7 @@ struct nsStyleImageLayers {
 
   struct Layer {
     typedef mozilla::StyleGeometryBox StyleGeometryBox;
+    typedef mozilla::StyleImageLayerAttachment StyleImageLayerAttachment;
 
     nsStyleImage  mImage;         // [reset]
     mozilla::Position mPosition;  // [reset]
@@ -665,12 +661,13 @@ struct nsStyleImageLayers {
     StyleGeometryBox  mClip;      // [reset] See nsStyleConsts.h
     MOZ_INIT_OUTSIDE_CTOR
       StyleGeometryBox mOrigin;   // [reset] See nsStyleConsts.h
-    uint8_t       mAttachment;    // [reset] See nsStyleConsts.h
+    StyleImageLayerAttachment mAttachment;
+                                  // [reset] See nsStyleConsts.h
                                   // background-only property
                                   // This property is used for background layer
                                   // only. For a mask layer, it should always
                                   // be the initial value, which is
-                                  // NS_STYLE_IMAGELAYER_ATTACHMENT_SCROLL.
+                                  // StyleImageLayerAttachment::Scroll.
     uint8_t       mBlendMode;     // [reset] See nsStyleConsts.h
                                   // background-only property
                                   // This property is used for background layer
@@ -1507,8 +1504,8 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStylePosition
   nsStyleGridLine mGridColumnEnd;
   nsStyleGridLine mGridRowStart;
   nsStyleGridLine mGridRowEnd;
-  nsStyleCoord    mGridColumnGap;       // [reset] coord, percent, calc
-  nsStyleCoord    mGridRowGap;          // [reset] coord, percent, calc
+  nsStyleCoord    mColumnGap;       // [reset] normal, coord, percent, calc
+  nsStyleCoord    mRowGap;          // [reset] normal, coord, percent, calc
 
   // FIXME: Logical-coordinate equivalents to these WidthDepends... and
   // HeightDepends... methods have been introduced (see below); we probably
@@ -2353,6 +2350,9 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleDisplay
   // The threshold used for extracting a shape from shape-outside: <image>.
   float mShapeImageThreshold = 0.0f; // [reset]
 
+  // The margin around a shape-outside: <image>.
+  nsStyleCoord mShapeMargin;
+
   mozilla::StyleShapeSource mShapeOutside; // [reset]
 
   bool IsBlockInsideStyle() const {
@@ -2616,6 +2616,16 @@ enum nsStyleContentType {
   eStyleContentType_Uninitialized
 };
 
+struct nsStyleContentAttr {
+  RefPtr<nsAtom> mName; // Non-null.
+  RefPtr<nsAtom> mNamespaceURL; // May be null.
+
+  bool operator==(const nsStyleContentAttr& aOther) const
+  {
+    return mName == aOther.mName && mNamespaceURL == aOther.mNamespaceURL;
+  }
+};
+
 class nsStyleContentData
 {
 public:
@@ -2639,10 +2649,15 @@ public:
 
   char16_t* GetString() const
   {
-    MOZ_ASSERT(mType == eStyleContentType_String ||
-               mType == eStyleContentType_Attr);
+    MOZ_ASSERT(mType == eStyleContentType_String);
     return mContent.mString;
   }
+
+  const nsStyleContentAttr* GetAttr() const {
+    MOZ_ASSERT(mType == eStyleContentType_Attr);
+    MOZ_ASSERT(mContent.mAttr);
+    return mContent.mAttr;
+   }
 
   struct CounterFunction
   {
@@ -2695,8 +2710,7 @@ public:
 
   void SetString(nsStyleContentType aType, const char16_t* aString)
   {
-    MOZ_ASSERT(aType == eStyleContentType_String ||
-               aType == eStyleContentType_Attr);
+    MOZ_ASSERT(aType == eStyleContentType_String);
     MOZ_ASSERT(aString);
     MOZ_ASSERT(mType == eStyleContentType_Uninitialized,
                "should only initialize nsStyleContentData once");
@@ -2731,6 +2745,7 @@ private:
   nsStyleContentType mType;
   union {
     char16_t *mString;
+    nsStyleContentAttr* mAttr;
     nsStyleImageRequest* mImage;
     CounterFunction* mCounters;
   } mContent;
@@ -2916,7 +2931,6 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleColumn
 
   uint32_t     mColumnCount; // [reset] see nsStyleConsts.h
   nsStyleCoord mColumnWidth; // [reset] coord, auto
-  nsStyleCoord mColumnGap;   // [reset] <length-percentage> | normal
 
   mozilla::StyleComplexColor mColumnRuleColor; // [reset]
   uint8_t      mColumnRuleStyle;  // [reset]
@@ -3242,20 +3256,6 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVGReset
   uint8_t          mDominantBaseline; // [reset] see nsStyleConsts.h
   uint8_t          mVectorEffect;     // [reset] see nsStyleConsts.h
   uint8_t          mMaskType;         // [reset] see nsStyleConsts.h
-};
-
-// XXX This can be removed once the old style system is gone.
-struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleVariables
-{
-  nsStyleVariables();
-  explicit nsStyleVariables(const nsPresContext* aContext);
-  nsStyleVariables(const nsStyleVariables& aSource);
-  ~nsStyleVariables();
-  void FinishStyle(nsPresContext*, const nsStyleVariables*) {}
-  const static bool kHasFinishStyle = false;
-
-  nsChangeHint CalcDifference(const nsStyleVariables& aNewData) const;
-
 };
 
 struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleEffects

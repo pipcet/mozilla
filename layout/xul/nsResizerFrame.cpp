@@ -10,7 +10,6 @@
 #include "nsResizerFrame.h"
 #include "nsIContent.h"
 #include "nsIDocument.h"
-#include "nsIDOMNodeList.h"
 #include "nsGkAtoms.h"
 #include "nsNameSpaceManager.h"
 
@@ -494,10 +493,10 @@ nsResizerFrame::Direction
 nsResizerFrame::GetDirection()
 {
   static const Element::AttrValuesArray strings[] =
-    {nsGkAtoms::topleft,    nsGkAtoms::top,    nsGkAtoms::topright,
-     nsGkAtoms::left,                          nsGkAtoms::right,
-     nsGkAtoms::bottomleft, nsGkAtoms::bottom, nsGkAtoms::bottomright,
-     nsGkAtoms::bottomstart,                   nsGkAtoms::bottomend,
+    {&nsGkAtoms::topleft,    &nsGkAtoms::top,    &nsGkAtoms::topright,
+     &nsGkAtoms::left,                           &nsGkAtoms::right,
+     &nsGkAtoms::bottomleft, &nsGkAtoms::bottom, &nsGkAtoms::bottomright,
+     &nsGkAtoms::bottomstart,                    &nsGkAtoms::bottomend,
      nullptr};
 
   static const Direction directions[] =

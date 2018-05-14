@@ -7,6 +7,8 @@
 #include "mozilla/dom/HTMLHRElement.h"
 #include "mozilla/dom/HTMLHRElementBinding.h"
 
+#include "nsCSSProps.h"
+
 NS_IMPL_NS_NEW_HTML_ELEMENT(HR)
 
 namespace mozilla {
@@ -171,11 +173,11 @@ NS_IMETHODIMP_(bool)
 HTMLHRElement::IsAttributeMapped(const nsAtom* aAttribute) const
 {
   static const MappedAttributeEntry attributes[] = {
-    { nsGkAtoms::align },
-    { nsGkAtoms::width },
-    { nsGkAtoms::size },
-    { nsGkAtoms::color },
-    { nsGkAtoms::noshade },
+    { &nsGkAtoms::align },
+    { &nsGkAtoms::width },
+    { &nsGkAtoms::size },
+    { &nsGkAtoms::color },
+    { &nsGkAtoms::noshade },
     { nullptr },
   };
 

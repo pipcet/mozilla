@@ -1354,18 +1354,14 @@ class ParseNodeAllocator
 {
   public:
     explicit ParseNodeAllocator(JSContext* cx, LifoAlloc& alloc)
-      : cx(cx), alloc(alloc), freelist(nullptr)
+      : cx(cx), alloc(alloc)
     {}
 
     void* allocNode();
-    void freeNode(ParseNode* pn);
-    ParseNode* freeTree(ParseNode* pn);
-    void prepareNodeForMutation(ParseNode* pn);
 
   private:
     JSContext* cx;
     LifoAlloc& alloc;
-    ParseNode* freelist;
 };
 
 inline bool
@@ -1438,23 +1434,10 @@ AccessorTypeToJSOp(AccessorType atype)
     }
 }
 
-enum FunctionSyntaxKind
+enum class FunctionSyntaxKind
 {
-    // A non-arrow function expression that is a PrimaryExpression and *also* a
-    // complete AssignmentExpression.  For example, in
-    //
-    //   var x = (function y() {});
-    //
-    // |y| is such a function expression.
-    AssignmentExpression,
-
-    // A non-arrow function expression that is a PrimaryExpression but *not* a
-    // complete AssignmentExpression.  For example, in
-    //
-    //   var x = (1 + function y() {});
-    //
-    // |y| is such a function expression.
-    PrimaryExpression,
+    // A non-arrow function expression.
+    Expression,
 
     // A named function appearing as a Statement.
     Statement,
@@ -1468,22 +1451,19 @@ enum FunctionSyntaxKind
 };
 
 static inline bool
-IsFunctionExpression(FunctionSyntaxKind kind)
-{
-    return kind == AssignmentExpression || kind == PrimaryExpression;
-}
-
-static inline bool
 IsConstructorKind(FunctionSyntaxKind kind)
 {
-    return kind == ClassConstructor || kind == DerivedClassConstructor;
+    return kind == FunctionSyntaxKind::ClassConstructor ||
+           kind == FunctionSyntaxKind::DerivedClassConstructor;
 }
 
 static inline bool
 IsMethodDefinitionKind(FunctionSyntaxKind kind)
 {
-    return kind == Method || IsConstructorKind(kind) ||
-           kind == Getter || kind == Setter;
+    return IsConstructorKind(kind) ||
+           kind == FunctionSyntaxKind::Method ||
+           kind == FunctionSyntaxKind::Getter ||
+           kind == FunctionSyntaxKind::Setter;
 }
 
 static inline ParseNode*

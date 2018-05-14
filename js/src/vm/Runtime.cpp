@@ -31,6 +31,7 @@
 #include "gc/PublicIterators.h"
 #include "jit/arm/Simulator-arm.h"
 #include "jit/arm64/vixl/Simulator-vixl.h"
+#include "jit/IonBuilder.h"
 #include "jit/JitCompartment.h"
 #include "jit/mips32/Simulator-mips32.h"
 #include "jit/mips64/Simulator-mips64.h"
@@ -215,7 +216,7 @@ JSRuntime::init(JSContext* cx, uint32_t maxbytes, uint32_t maxNurseryBytes)
     if (!gc.init(maxbytes, maxNurseryBytes))
         return false;
 
-    ScopedJSDeletePtr<Zone> atomsZone(js_new<Zone>(this, nullptr));
+    ScopedJSDeletePtr<Zone> atomsZone(js_new<Zone>(this));
     if (!atomsZone || !atomsZone->init(true))
         return false;
 
@@ -281,7 +282,7 @@ JSRuntime::destroyRuntime()
          * Finish any in-progress GCs first. This ensures the parseWaitingOnGC
          * list is empty in CancelOffThreadParses.
          */
-        JSContext* cx = TlsContext.get();
+        JSContext* cx = mainContextFromOwnThread();
         if (JS::IsIncrementalGCInProgress(cx))
             FinishGC(cx);
 
@@ -291,7 +292,7 @@ JSRuntime::destroyRuntime()
         /*
          * Cancel any pending, in progress or completed Ion compilations and
          * parse tasks. Waiting for wasm and compression tasks is done
-         * synchronously (on the active thread or during parse tasks), so no
+         * synchronously (on the main thread or during parse tasks), so no
          * explicit canceling is needed for these.
          */
         CancelOffThreadIonCompile(this);
@@ -420,14 +421,17 @@ JSRuntime::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::Runtim
 
     if (jitRuntime_) {
         jitRuntime_->execAlloc().addSizeOfCode(&rtSizes->code);
-        jitRuntime_->backedgeExecAlloc().addSizeOfCode(&rtSizes->code);
+
+        // Sizes of the IonBuilders we are holding for lazy linking
+        for (auto builder : jitRuntime_->ionLazyLinkList(this))
+            rtSizes->jitLazyLink += builder->sizeOfExcludingThis(mallocSizeOf);
     }
 
     rtSizes->wasmRuntime += wasmInstances.lock()->sizeOfExcludingThis(mallocSizeOf);
 }
 
 static bool
-InvokeInterruptCallback(JSContext* cx)
+HandleInterrupt(JSContext* cx, bool invokeCallback)
 {
     MOZ_ASSERT(cx->requestDepth >= 1);
     MOZ_ASSERT(!cx->compartment()->isAtomsCompartment());
@@ -436,7 +440,11 @@ InvokeInterruptCallback(JSContext* cx)
 
     // A worker thread may have requested an interrupt after finishing an Ion
     // compilation.
-    jit::AttachFinishedCompilations(cx->zone()->group(), cx);
+    jit::AttachFinishedCompilations(cx);
+
+    // Don't call the interrupt callback if we only interrupted for GC or Ion.
+    if (!invokeCallback)
+        return true;
 
     // Important: Additional callbacks can occur inside the callback handler
     // if it re-enters the JS engine. The embedding must ensure that the
@@ -498,22 +506,19 @@ InvokeInterruptCallback(JSContext* cx)
 }
 
 void
-JSContext::requestInterrupt(InterruptMode mode)
+JSContext::requestInterrupt(InterruptReason reason)
 {
-    interrupt_ = true;
+    interruptBits_ |= uint32_t(reason);
     jitStackLimit = UINTPTR_MAX;
 
-    if (mode == JSContext::RequestInterruptUrgent) {
+    if (reason == InterruptReason::CallbackUrgent) {
         // If this interrupt is urgent (slow script dialog for instance), take
         // additional steps to interrupt corner cases where the above fields are
-        // not regularly polled. Wake ilooping Ion code, irregexp JIT code and
-        // Atomics.wait()
-        interruptRegExpJit_ = true;
+        // not regularly polled.
         FutexThread::lock();
         if (fx.isWaiting())
             fx.wake(FutexThread::WakeForJSInterrupt);
         fx.unlock();
-        jit::InterruptRunningCode(this);
         wasm::InterruptRunningCode(this);
     }
 }
@@ -522,11 +527,13 @@ bool
 JSContext::handleInterrupt()
 {
     MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtime()));
-    if (interrupt_ || jitStackLimit == UINTPTR_MAX) {
-        interrupt_ = false;
-        interruptRegExpJit_ = false;
+    if (hasAnyPendingInterrupt() || jitStackLimit == UINTPTR_MAX) {
+        bool invokeCallback =
+            hasPendingInterrupt(InterruptReason::CallbackUrgent) ||
+            hasPendingInterrupt(InterruptReason::CallbackCanWait);
+        interruptBits_ = 0;
         resetJitStackLimit();
-        return InvokeInterruptCallback(this);
+        return HandleInterrupt(this, invokeCallback);
     }
     return true;
 }
@@ -796,19 +803,19 @@ JSRuntime::destroyAtomsAddedWhileSweepingTable()
 void
 JSRuntime::setUsedByHelperThread(Zone* zone)
 {
-    MOZ_ASSERT(!zone->group()->usedByHelperThread());
+    MOZ_ASSERT(!zone->usedByHelperThread());
     MOZ_ASSERT(!zone->wasGCStarted());
-    zone->group()->setUsedByHelperThread();
+    zone->setUsedByHelperThread();
     numActiveHelperThreadZones++;
 }
 
 void
 JSRuntime::clearUsedByHelperThread(Zone* zone)
 {
-    MOZ_ASSERT(zone->group()->usedByHelperThread());
-    zone->group()->clearUsedByHelperThread();
+    MOZ_ASSERT(zone->usedByHelperThread());
+    zone->clearUsedByHelperThread();
     numActiveHelperThreadZones--;
-    JSContext* cx = TlsContext.get();
+    JSContext* cx = mainContextFromOwnThread();
     if (gc.fullGCForAtomsRequested() && cx->canCollectAtoms())
         gc.triggerFullGCForAtoms(cx);
 }
@@ -824,7 +831,7 @@ js::CurrentThreadCanAccessZone(Zone* zone)
 {
     // Helper thread zones can only be used by their owning thread.
     if (zone->usedByHelperThread())
-        return zone->group()->ownedByCurrentHelperThread();
+        return zone->ownedByCurrentHelperThread();
 
     // Other zones can only be accessed by the runtime's active context.
     return CurrentThreadCanAccessRuntime(zone->runtime_);

@@ -10,8 +10,6 @@
 #include "nsContentCID.h"
 #include "nsIContent.h"
 #include "nsIDOMNode.h"
-#include "nsIDOMNodeList.h"
-#include "nsISelection.h"
 #include "nsISelectionController.h"
 #include "nsIFrame.h"
 #include "nsITextControlFrame.h"
@@ -21,12 +19,12 @@
 #include "nsAtom.h"
 #include "nsServiceManagerUtils.h"
 #include "nsUnicharUtils.h"
-#include "nsIDOMElement.h"
 #include "nsCRT.h"
 #include "nsRange.h"
 #include "nsContentUtils.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/TextEditor.h"
+#include "mozilla/dom/Element.h"
 
 using namespace mozilla;
 
@@ -389,11 +387,9 @@ nsFindContentIterator::SetupInnerIterator(nsIContent* aContent)
     return;
   }
 
-  nsCOMPtr<nsIDOMElement> rootElement;
-  textEditor->GetRootElement(getter_AddRefs(rootElement));
+  RefPtr<dom::Element> rootElement = textEditor->GetRoot();
 
-  nsCOMPtr<nsINode> rootNode = do_QueryInterface(rootElement);
-  if (!rootNode) {
+  if (!rootElement) {
     return;
   }
 
@@ -407,7 +403,7 @@ nsFindContentIterator::SetupInnerIterator(nsIContent* aContent)
   mInnerIterator = do_CreateInstance(kCPreContentIteratorCID);
 
   if (mInnerIterator) {
-    innerRange->SelectNodeContents(*rootNode, IgnoreErrors());
+    innerRange->SelectNodeContents(*rootElement, IgnoreErrors());
 
     // fix up the inner bounds, we may have to only lookup a portion
     // of the text control if the current node is a boundary point
@@ -494,7 +490,7 @@ DumpNode(nsIDOMNode* aNode)
   nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
   nsString nodeName = node->NodeName();
   nsCOMPtr<nsIContent> textContent(do_QueryInterface(aNode));
-  if (textContent && textContent->IsNodeOfType(nsINode::eTEXT)) {
+  if (textContent && textContent->IsText()) {
     nsAutoString newText;
     textContent->AppendTextTo(newText);
     printf(">>>> Text node (node name %s): '%s'\n",
@@ -666,7 +662,7 @@ nsFind::NextNode(nsRange* aSearchRange,
     printf(":::::: Got the first node ");
     DumpNode(dnode);
 #endif
-    if (content && content->IsNodeOfType(nsINode::eTEXT) &&
+    if (content && content->IsText() &&
         !SkipNode(content)) {
       mIterNode = content;
       // Also set mIterOffset if appropriate:
@@ -727,7 +723,7 @@ nsFind::NextNode(nsRange* aSearchRange,
       continue;
     }
 
-    if (content->IsNodeOfType(nsINode::eTEXT)) {
+    if (content->IsText()) {
       break;
     }
 #ifdef DEBUG_FIND
@@ -795,8 +791,8 @@ nsFind::PeekNextChar(nsRange* aSearchRange,
     tc = do_QueryInterface(mIterNode);
 
     // Get the block parent.
-    nsCOMPtr<nsIDOMNode> blockParent;
-    rv = GetBlockParent(mIterNode->AsDOMNode(), getter_AddRefs(blockParent));
+    nsCOMPtr<nsINode> blockParent;
+    rv = GetBlockParent(mIterNode, getter_AddRefs(blockParent));
     if (NS_FAILED(rv))
       return L'\0';
 
@@ -859,7 +855,7 @@ nsFind::SkipNode(nsIContent* aContent)
 #ifdef HAVE_BIDI_ITERATOR
   // We may not need to skip comment nodes, now that IsTextNode distinguishes
   // them from real text nodes.
-  return aContent->IsNodeOfType(nsINode::eCOMMENT) ||
+  return aContent->IsComment() ||
          aContent->IsAnyOfHTMLElements(sScriptAtom, sNoframesAtom, sSelectAtom);
 
 #else /* HAVE_BIDI_ITERATOR */
@@ -869,7 +865,7 @@ nsFind::SkipNode(nsIContent* aContent)
 
   nsIContent* content = aContent;
   while (content) {
-    if (aContent->IsNodeOfType(nsINode::eCOMMENT) ||
+    if (aContent->IsComment() ||
         content->IsAnyOfHTMLElements(nsGkAtoms::script,
                                      nsGkAtoms::noframes,
                                      nsGkAtoms::select)) {
@@ -895,17 +891,13 @@ nsFind::SkipNode(nsIContent* aContent)
 }
 
 nsresult
-nsFind::GetBlockParent(nsIDOMNode* aNode, nsIDOMNode** aParent)
+nsFind::GetBlockParent(nsINode* aNode, nsINode** aParent)
 {
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  // non-nsCOMPtr temporary so we don't keep addrefing/releasing as we
-  // go up the tree.
-  nsINode* curNode = node;
+  nsINode* curNode = aNode;
   while (curNode) {
     nsIContent* parent = curNode->GetParent();
     if (parent && IsBlockNode(parent)) {
-      *aParent = parent->AsDOMNode();
-      NS_ADDREF(*aParent);
+      *aParent = do_AddRef(parent).take();
       return NS_OK;
     }
     curNode = parent;
@@ -1030,8 +1022,8 @@ nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
       // We have a new text content. If its block parent is different from the
       // block parent of the last text content, then we need to clear the match
       // since we don't want to find across block boundaries.
-      nsCOMPtr<nsIDOMNode> blockParent;
-      GetBlockParent(mIterNode->AsDOMNode(), getter_AddRefs(blockParent));
+      nsCOMPtr<nsINode> blockParent;
+      GetBlockParent(mIterNode, getter_AddRefs(blockParent));
 #ifdef DEBUG_FIND
       printf("New node: old blockparent = %p, new = %p\n",
              (void*)mLastBlockParent.get(), (void*)blockParent.get());

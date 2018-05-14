@@ -10,6 +10,7 @@
 #include "AccessibleCaretEventHub.h"
 #include "AccessibleCaretLogger.h"
 #include "mozilla/AsyncEventDispatcher.h"
+#include "mozilla/AutoRestore.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/NodeFilterBinding.h"
@@ -135,8 +136,8 @@ AccessibleCaretManager::Terminate()
 }
 
 nsresult
-AccessibleCaretManager::OnSelectionChanged(nsIDOMDocument* aDoc,
-                                           nsISelection* aSel, int16_t aReason)
+AccessibleCaretManager::OnSelectionChanged(nsIDocument* aDoc,
+                                           Selection* aSel, int16_t aReason)
 {
   Selection* selection = GetSelection();
   AC_LOG("%s: aSel: %p, GetSelection(): %p, aReason: %d", __FUNCTION__,
@@ -768,7 +769,7 @@ AccessibleCaretManager::GetFrameSelection() const
   nsFocusManager* fm = nsFocusManager::GetFocusManager();
   MOZ_ASSERT(fm);
 
-  nsIContent* focusedContent = fm->GetFocusedContent();
+  nsIContent* focusedContent = fm->GetFocusedElement();
   if (!focusedContent) {
     // For non-editable content
     return mPresShell->FrameSelection();
@@ -860,7 +861,8 @@ AccessibleCaretManager::ChangeFocusToOrClearOldFocus(nsIFrame* aFrame) const
   if (aFrame) {
     nsIContent* focusableContent = aFrame->GetContent();
     MOZ_ASSERT(focusableContent, "Focusable frame must have content!");
-    nsCOMPtr<nsIDOMElement> focusableElement = do_QueryInterface(focusableContent);
+    RefPtr<Element> focusableElement =
+      focusableContent->IsElement() ? focusableContent->AsElement() : nullptr;
     fm->SetFocus(focusableElement, nsIFocusManager::FLAG_BYMOUSE);
   } else {
     nsPIDOMWindowOuter* win = mPresShell->GetDocument()->GetWindow();
@@ -962,7 +964,8 @@ AccessibleCaretManager::ExtendPhoneNumberSelection(const nsAString& aDirection) 
     // Extend the selection by one char.
     selection->Modify(NS_LITERAL_STRING("extend"),
                       aDirection,
-                      NS_LITERAL_STRING("character"));
+                      NS_LITERAL_STRING("character"),
+                      IgnoreErrors());
     if (IsTerminated()) {
       return;
     }

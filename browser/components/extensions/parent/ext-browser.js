@@ -8,8 +8,8 @@
 
 ChromeUtils.defineModuleGetter(this, "PrivateBrowsingUtils",
                                "resource://gre/modules/PrivateBrowsingUtils.jsm");
-ChromeUtils.defineModuleGetter(this, "RecentWindow",
-                               "resource:///modules/RecentWindow.jsm");
+ChromeUtils.defineModuleGetter(this, "BrowserWindowTracker",
+                               "resource:///modules/BrowserWindowTracker.jsm");
 
 var {
   ExtensionError,
@@ -31,7 +31,7 @@ const getSender = (extension, target, sender) => {
     // page-open listener below).
     tabId = sender.tabId;
     delete sender.tabId;
-  } else if (target instanceof Ci.nsIDOMXULElement ||
+  } else if (ExtensionUtils.instanceOf(target, "XULElement") ||
              ExtensionUtils.instanceOf(target, "HTMLIFrameElement")) {
     tabId = tabTracker.getBrowserData(target).tabId;
   }
@@ -64,7 +64,7 @@ extensions.on("page-shutdown", (type, context) => {
       return;
     }
     let {gBrowser} = context.xulBrowser.ownerGlobal;
-    if (gBrowser) {
+    if (gBrowser && gBrowser.getTabForBrowser) {
       let nativeTab = gBrowser.getTabForBrowser(context.xulBrowser);
       if (nativeTab) {
         gBrowser.removeTab(nativeTab);
@@ -96,6 +96,29 @@ global.makeWidgetId = id => {
   id = id.toLowerCase();
   // FIXME: This allows for collisions.
   return id.replace(/[^a-z0-9_-]/g, "_");
+};
+
+global.waitForTabLoaded = (tab, url) => {
+  return new Promise(resolve => {
+    windowTracker.addListener("progress", {
+      onLocationChange(browser, webProgress, request, locationURI, flags) {
+        if (webProgress.isTopLevel
+            && browser.ownerGlobal.gBrowser.getTabForBrowser(browser) == tab
+            && (!url || locationURI.spec == url)) {
+          windowTracker.removeListener("progress", this);
+          resolve();
+        }
+      },
+    });
+  });
+};
+
+global.replaceUrlInTab = (gBrowser, tab, url) => {
+  let loaded = waitForTabLoaded(tab, url);
+  gBrowser.loadURI(url, {
+    flags: Ci.nsIWebNavigation.LOAD_FLAGS_REPLACE_HISTORY,
+  });
+  return loaded;
 };
 
 // Manages tab-specific context data, and dispatching tab select events
@@ -165,37 +188,9 @@ class WindowTracker extends WindowTrackerBase {
    *        @readonly
    */
   get topNormalWindow() {
-    return RecentWindow.getMostRecentBrowserWindow({allowPopups: false});
+    return BrowserWindowTracker.getTopWindow({allowPopups: false});
   }
 }
-
-/**
- * An event manager API provider which listens for a DOM event in any browser
- * window, and calls the given listener function whenever an event is received.
- * That listener function receives a `fire` object, which it can use to dispatch
- * events to the extension, and a DOM event object.
- *
- * @param {BaseContext} context
- *        The extension context which the event manager belongs to.
- * @param {string} name
- *        The API name of the event manager, e.g.,"runtime.onMessage".
- * @param {string} event
- *        The name of the DOM event to listen for.
- * @param {function} listener
- *        The listener function to call when a DOM event is received.
- */
-global.WindowEventManager = class extends EventManager {
-  constructor(context, name, event, listener) {
-    super(context, name, fire => {
-      let listener2 = listener.bind(null, fire);
-
-      windowTracker.addListener(event, listener2);
-      return () => {
-        windowTracker.removeListener(event, listener2);
-      };
-    });
-  }
-};
 
 class TabTracker extends TabTrackerBase {
   constructor() {

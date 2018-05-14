@@ -9,7 +9,6 @@
 
 #include "mozilla/dom/DocumentFragment.h"
 #include "mozilla/dom/DocumentOrShadowRoot.h"
-#include "mozilla/ServoStyleRuleMap.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsIdentifierMapEntry.h"
@@ -22,6 +21,7 @@ class nsXBLPrototypeBinding;
 namespace mozilla {
 
 class EventChainPreVisitor;
+class ServoStyleRuleMap;
 
 namespace css {
 class Rule;
@@ -188,7 +188,7 @@ public:
 
   void SetIsComposedDocParticipant(bool aIsComposedDocParticipant);
 
-  nsresult GetEventTargetParent(EventChainPreVisitor& aVisitor) override;
+  void GetEventTargetParent(EventChainPreVisitor& aVisitor) override;
 
 protected:
   // FIXME(emilio): This will need to become more fine-grained.

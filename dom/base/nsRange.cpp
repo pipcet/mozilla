@@ -14,7 +14,6 @@
 #include "nsString.h"
 #include "nsReadableUtils.h"
 #include "nsIDOMNode.h"
-#include "nsIDOMDocumentFragment.h"
 #include "nsIContent.h"
 #include "nsIDocument.h"
 #include "nsError.h"
@@ -61,7 +60,7 @@ nsRange::GetDocGroup() const
 
 static void InvalidateAllFrames(nsINode* aNode)
 {
-  NS_PRECONDITION(aNode, "bad arg");
+  MOZ_ASSERT(aNode, "bad arg");
 
   nsIFrame* frame = nullptr;
   switch (aNode->NodeType()) {
@@ -200,7 +199,7 @@ struct IsItemInRangeComparator
 nsRange::IsNodeSelected(nsINode* aNode, uint32_t aStartOffset,
                         uint32_t aEndOffset)
 {
-  NS_PRECONDITION(aNode, "bad arg");
+  MOZ_ASSERT(aNode, "bad arg");
 
   nsINode* n = GetNextRangeCommonAncestor(aNode);
   NS_ASSERTION(n || !aNode->IsSelectionDescendant(),
@@ -462,7 +461,7 @@ static void UnmarkDescendants(nsINode* aNode)
 void
 nsRange::RegisterCommonAncestor(nsINode* aNode)
 {
-  NS_PRECONDITION(aNode, "bad arg");
+  MOZ_ASSERT(aNode, "bad arg");
 
   MOZ_DIAGNOSTIC_ASSERT(IsInSelection(), "registering range not in selection");
 
@@ -483,7 +482,7 @@ nsRange::RegisterCommonAncestor(nsINode* aNode)
 void
 nsRange::UnregisterCommonAncestor(nsINode* aNode, bool aIsUnlinking)
 {
-  NS_PRECONDITION(aNode, "bad arg");
+  MOZ_ASSERT(aNode, "bad arg");
   NS_ASSERTION(aNode->IsCommonAncestorForRangeInSelection(), "wrong node");
   MOZ_DIAGNOSTIC_ASSERT(aNode == mRegisteredCommonAncestor, "wrong node");
   LinkedList<nsRange>* ranges = aNode->GetExistingCommonAncestorRanges();
@@ -965,29 +964,32 @@ nsRange::DoSetRange(const RawRangeBoundary& aStart,
                     const RawRangeBoundary& aEnd,
                     nsINode* aRoot, bool aNotInsertedYet)
 {
-  NS_PRECONDITION((aStart.IsSet() && aEnd.IsSet() && aRoot) ||
-                  (!aStart.IsSet() && !aEnd.IsSet() && !aRoot),
-                  "Set all or none");
-  NS_PRECONDITION(!aRoot || aNotInsertedYet ||
-                  (nsContentUtils::ContentIsDescendantOf(aStart.Container(), aRoot) &&
-                   nsContentUtils::ContentIsDescendantOf(aEnd.Container(), aRoot) &&
-                   aRoot == IsValidBoundary(aStart.Container()) &&
-                   aRoot == IsValidBoundary(aEnd.Container())),
-                  "Wrong root");
-  NS_PRECONDITION(!aRoot ||
-                  (aStart.Container()->IsContent() &&
-                   aEnd.Container()->IsContent() &&
-                   aRoot ==
-                    static_cast<nsIContent*>(aStart.Container())->GetBindingParent() &&
-                   aRoot ==
-                    static_cast<nsIContent*>(aEnd.Container())->GetBindingParent()) ||
-                  (!aRoot->GetParentNode() &&
-                   (aRoot->IsNodeOfType(nsINode::eDOCUMENT) ||
-                    aRoot->IsNodeOfType(nsINode::eATTRIBUTE) ||
-                    aRoot->IsNodeOfType(nsINode::eDOCUMENT_FRAGMENT) ||
-                     /*For backward compatibility*/
-                    aRoot->IsContent())),
-                  "Bad root");
+  MOZ_ASSERT((aStart.IsSet() && aEnd.IsSet() && aRoot) ||
+             (!aStart.IsSet() && !aEnd.IsSet() && !aRoot),
+             "Set all or none");
+
+  MOZ_ASSERT(!aRoot || aNotInsertedYet ||
+             (nsContentUtils::ContentIsDescendantOf(aStart.Container(), aRoot) &&
+              nsContentUtils::ContentIsDescendantOf(aEnd.Container(), aRoot) &&
+              aRoot == IsValidBoundary(aStart.Container()) &&
+              aRoot == IsValidBoundary(aEnd.Container())),
+             "Wrong root");
+
+  MOZ_ASSERT(!aRoot ||
+             (aStart.Container()->IsContent() &&
+              aEnd.Container()->IsContent() &&
+              aRoot ==
+               static_cast<nsIContent*>(aStart.Container())->GetBindingParent() &&
+              aRoot ==
+               static_cast<nsIContent*>(aEnd.Container())->GetBindingParent()) ||
+             (!aRoot->GetParentNode() &&
+              (aRoot->IsDocument() ||
+               aRoot->IsAttr() ||
+               aRoot->IsDocumentFragment() ||
+                /*For backward compatibility*/
+               aRoot->IsContent())),
+             "Bad root");
+
   if (mRoot != aRoot) {
     if (mRoot) {
       mRoot->RemoveMutationObserver(this);
@@ -1209,7 +1211,7 @@ nsRange::ComputeRootNode(nsINode* aNode, bool aMaySpanAnonymousSubtrees)
 
   root = aNode->SubtreeRoot();
 
-  NS_ASSERTION(!root->IsNodeOfType(nsINode::eDOCUMENT),
+  NS_ASSERTION(!root->IsDocument(),
                "GetUncomposedDoc should have returned a doc");
 
   // We allow this because of backward compatibility.
@@ -2724,8 +2726,8 @@ nsRange::SurroundContents(nsINode& aNewParent, ErrorResult& aRv)
   // INVALID_STATE_ERROR: Raised if the Range partially selects a non-text
   // node.
   if (mStart.Container() != mEnd.Container()) {
-    bool startIsText = mStart.Container()->IsNodeOfType(nsINode::eTEXT);
-    bool endIsText = mEnd.Container()->IsNodeOfType(nsINode::eTEXT);
+    bool startIsText = mStart.Container()->IsText();
+    bool endIsText = mEnd.Container()->IsText();
     nsINode* startGrandParent = mStart.Container()->GetParentNode();
     nsINode* endGrandParent = mEnd.Container()->GetParentNode();
     if (!((startIsText && endIsText &&
@@ -3074,9 +3076,8 @@ nsRange::CollectClientRectsAndText(nsLayoutUtils::RectCallback* aCollector,
 
   if (iter.IsDone()) {
     // the range is collapsed, only continue if the cursor is in a text node
-    nsCOMPtr<nsIContent> content = do_QueryInterface(aStartContainer);
-    if (content && content->IsNodeOfType(nsINode::eTEXT)) {
-      nsTextFrame* textFrame = GetTextFrameForContent(content, aFlushLayout);
+    if (aStartContainer->IsText()) {
+      nsTextFrame* textFrame = GetTextFrameForContent(aStartContainer->AsText(), aFlushLayout);
       if (textFrame) {
         int32_t outOffset;
         nsIFrame* outFrame;
@@ -3104,7 +3105,7 @@ nsRange::CollectClientRectsAndText(nsLayoutUtils::RectCallback* aCollector,
     nsCOMPtr<nsIContent> content = do_QueryInterface(node);
     if (!content)
       continue;
-    if (content->IsNodeOfType(nsINode::eTEXT)) {
+    if (content->IsText()) {
        if (node == startContainer) {
          int32_t offset = startContainer == endContainer ?
            static_cast<int32_t>(aEndOffset) : content->GetText()->GetLength();
@@ -3223,7 +3224,7 @@ nsRange::GetUsedFontFaces(nsTArray<nsAutoPtr<InspectorFontFace>>& aResult,
       continue;
     }
 
-    if (content->IsNodeOfType(nsINode::eTEXT)) {
+    if (content->IsText()) {
        if (node == startContainer) {
          int32_t offset = startContainer == endContainer ?
            mEnd.Offset() : content->GetText()->GetLength();
@@ -3300,7 +3301,7 @@ nsRange::Constructor(const GlobalObject& aGlobal,
 
 static bool ExcludeIfNextToNonSelectable(nsIContent* aContent)
 {
-  return aContent->IsNodeOfType(nsINode::eTEXT) &&
+  return aContent->IsText() &&
     aContent->HasFlag(NS_CREATE_FRAME_IF_NON_WHITESPACE);
 }
 
@@ -3573,7 +3574,7 @@ nsRange::GetInnerTextNoFlush(DOMString& aValue, ErrorResult& aError,
 {
   InnerTextAccumulator result(aValue);
 
-  if (aContainer->IsNodeOfType(nsINode::eTEXT)) {
+  if (aContainer->IsText()) {
     AppendTransformedText(result, aContainer);
     return;
   }
@@ -3594,7 +3595,7 @@ nsRange::GetInnerTextNoFlush(DOMString& aValue, ErrorResult& aError,
     nsIFrame* f = currentNode->GetPrimaryFrame();
     bool isVisibleAndNotReplaced = IsVisibleAndNotInReplacedElement(f);
     if (currentState == AT_NODE) {
-      bool isText = currentNode->IsNodeOfType(nsINode::eTEXT);
+      bool isText = currentNode->IsText();
       if (isText && currentNode->GetParent()->IsHTMLElement(nsGkAtoms::rp) &&
           ElementIsVisibleNoFlush(currentNode->GetParent()->AsElement())) {
         nsAutoString str;

@@ -835,7 +835,12 @@ nsHtml5StreamParser::WriteStreamBytes(const uint8_t* aFromSegment,
     bool hadErrors;
     Tie(result, read, written, hadErrors) =
       mUnicodeDecoder->DecodeToUTF16(src, dst, false);
-    mHasHadErrors |= hadErrors;
+    if (hadErrors && !mHasHadErrors) {
+      mHasHadErrors = true;
+      if (mEncoding == UTF_8_ENCODING) {
+        mTreeBuilder->TryToEnableEncodingMenu();
+      }
+    }
     src = src.From(read);
     totalRead += read;
     mLastBuffer->AdvanceEnd(written);
@@ -881,7 +886,7 @@ nsHtml5StreamParser::OnStartRequest(nsIRequest* aRequest, nsISupports* aContext)
 {
   MOZ_RELEASE_ASSERT(STREAM_NOT_STARTED == mStreamState,
                      "Got OnStartRequest when the stream had already started.");
-  NS_PRECONDITION(
+  MOZ_ASSERT(
     !mExecutor->HasStarted(),
     "Got OnStartRequest at the wrong stage in the executor life cycle.");
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
@@ -1086,7 +1091,12 @@ nsHtml5StreamParser::DoStopRequest()
     bool hadErrors;
     Tie(result, read, written, hadErrors) =
       mUnicodeDecoder->DecodeToUTF16(src, dst, true);
-    mHasHadErrors |= hadErrors;
+    if (hadErrors && !mHasHadErrors) {
+      mHasHadErrors = true;
+      if (mEncoding == UTF_8_ENCODING) {
+        mTreeBuilder->TryToEnableEncodingMenu();
+      }
+    }
     MOZ_ASSERT(read == 0, "How come an empty span was read form?");
     mLastBuffer->AdvanceEnd(written);
     if (result == kOutputFull) {
@@ -1442,9 +1452,6 @@ nsHtml5StreamParser::ParseAvailableData()
               return;
             }
             mAtEOF = true;
-            if (mEncoding == UTF_8_ENCODING && !mHasHadErrors) {
-              mTreeBuilder->TryToDisableEncodingMenu();
-            }
             if (mCharsetSource < kCharsetFromMetaTag) {
               if (mInitialEncodingWasFromParentFrame) {
                 // Unfortunately, this check doesn't take effect for

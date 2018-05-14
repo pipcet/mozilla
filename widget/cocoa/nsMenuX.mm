@@ -31,7 +31,6 @@
 #include "nsIDocumentObserver.h"
 #include "nsIComponentManager.h"
 #include "nsIRollupListener.h"
-#include "nsIDOMElement.h"
 #include "nsBindingManager.h"
 #include "nsIServiceManager.h"
 #include "nsXULPopupManager.h"
@@ -521,7 +520,7 @@ void nsMenuX::LoadMenuItem(nsIContent* inMenuItemContent)
     itemType = eSeparatorMenuItemType;
   } else if (inMenuItemContent->IsElement()) {
     static Element::AttrValuesArray strings[] =
-  {nsGkAtoms::checkbox, nsGkAtoms::radio, nullptr};
+  {&nsGkAtoms::checkbox, &nsGkAtoms::radio, nullptr};
     switch (inMenuItemContent->AsElement()->FindAttrValueIn(kNameSpaceID_None,
                                                             nsGkAtoms::type,
                                                             strings, eCaseMatters)) {

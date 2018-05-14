@@ -40,6 +40,7 @@
 #include "nsFocusManager.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/EventStateManager.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/HTMLEditor.h"
 #include "mozilla/TextEditor.h"
@@ -54,17 +55,17 @@ using namespace mozilla::a11y;
 ////////////////////////////////////////////////////////////////////////////////
 // Static member initialization
 
-static nsStaticAtom* const kRelationAttrs[] =
+static nsStaticAtom** kRelationAttrs[] =
 {
-  nsGkAtoms::aria_labelledby,
-  nsGkAtoms::aria_describedby,
-  nsGkAtoms::aria_details,
-  nsGkAtoms::aria_owns,
-  nsGkAtoms::aria_controls,
-  nsGkAtoms::aria_flowto,
-  nsGkAtoms::aria_errormessage,
-  nsGkAtoms::_for,
-  nsGkAtoms::control
+  &nsGkAtoms::aria_labelledby,
+  &nsGkAtoms::aria_describedby,
+  &nsGkAtoms::aria_details,
+  &nsGkAtoms::aria_owns,
+  &nsGkAtoms::aria_controls,
+  &nsGkAtoms::aria_flowto,
+  &nsGkAtoms::aria_errormessage,
+  &nsGkAtoms::_for,
+  &nsGkAtoms::control
 };
 
 static const uint32_t kRelationAttrsLen = ArrayLength(kRelationAttrs);
@@ -324,7 +325,8 @@ DocAccessible::TakeFocus()
 {
   // Focus the document.
   nsFocusManager* fm = nsFocusManager::GetFocusManager();
-  nsCOMPtr<nsIDOMElement> newFocus;
+  RefPtr<dom::Element> newFocus;
+  AutoHandlingUserInputStatePusher inputStatePusher(true, nullptr, mDocumentNode);
   fm->MoveFocus(mDocumentNode->GetWindow(), nullptr,
                 nsFocusManager::MOVEFOCUS_ROOT, 0, getter_AddRefs(newFocus));
 }
@@ -1472,7 +1474,7 @@ DocAccessible::DoInitialUpdate()
 
 #if defined(XP_WIN)
         IAccessibleHolder holder(CreateHolderFromAccessible(WrapNotNull(this)));
-        MOZ_DIAGNOSTIC_ASSERT(!holder.IsNull());
+        MOZ_ASSERT(!holder.IsNull());
         int32_t childID = AccessibleWrap::GetChildIDFor(this);
 #else
         int32_t holder = 0, childID = 0;
@@ -1557,7 +1559,7 @@ DocAccessible::AddDependentIDsFor(Accessible* aRelProvider, nsAtom* aRelAttr)
     return;
 
   for (uint32_t idx = 0; idx < kRelationAttrsLen; idx++) {
-    nsStaticAtom* relAttr = kRelationAttrs[idx];
+    nsAtom* relAttr = *kRelationAttrs[idx];
     if (aRelAttr && aRelAttr != relAttr)
       continue;
 
@@ -1629,8 +1631,8 @@ DocAccessible::RemoveDependentIDsFor(Accessible* aRelProvider,
     return;
 
   for (uint32_t idx = 0; idx < kRelationAttrsLen; idx++) {
-    nsStaticAtom* relAttr = kRelationAttrs[idx];
-    if (aRelAttr && aRelAttr != kRelationAttrs[idx])
+    nsAtom* relAttr = *kRelationAttrs[idx];
+    if (aRelAttr && aRelAttr != *kRelationAttrs[idx])
       continue;
 
     IDRefsIterator iter(this, relProviderElm, relAttr);
