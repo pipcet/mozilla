@@ -11,6 +11,7 @@
 #include "builtin/Eval.h"
 #include "builtin/SelfHostingDefines.h"
 #include "builtin/String.h"
+#include "builtin/TestingFunctions.h"
 #include "frontend/BytecodeCompiler.h"
 #include "jit/InlinableNatives.h"
 #include "js/UniquePtr.h"
@@ -24,7 +25,6 @@
 #include "vm/Shape-inl.h"
 #include "vm/UnboxedObject-inl.h"
 
-#include "builtin/TestingFunctions.h"
 
 using namespace js;
 
